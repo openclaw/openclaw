@@ -10,7 +10,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { hasAnyAuthProfileStoreSource } from "../agents/auth-profiles.js";
+import {
+  hasAnyAuthProfileStoreSource,
+  hasAuthProfileStoreSourceForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider,
+} from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProvider,
@@ -137,6 +141,19 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  if (providerConfig?.auth === "aws-sdk") {
+    return true;
+  }
+  const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, provider);
+  const profileIds =
+    orderedProfileIds ?? (cfg.auth?.profiles ? Object.keys(cfg.auth.profiles) : []);
+  return profileIds.some((profileId) =>
+    isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId }),
+  );
 }
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
@@ -403,9 +420,16 @@ export async function noteMemorySearchHealth(
       error?: string;
       skipped?: boolean;
     };
+    noteFn?: typeof note;
+    includeWorkspaceMemoryHealth?: boolean;
+    skipQmdBinaryProbe?: boolean;
+    skipAuthProfileResolution?: boolean;
   },
 ): Promise<void> {
-  await noteWorkspaceMemoryHealth(cfg);
+  const noteFn = opts?.noteFn ?? note;
+  if (opts?.includeWorkspaceMemoryHealth !== false) {
+    await noteWorkspaceMemoryHealth(cfg);
+  }
 
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
@@ -413,7 +437,7 @@ export async function noteMemorySearchHealth(
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
-    note("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
     return;
   }
   const provider =
@@ -429,43 +453,46 @@ export async function noteMemorySearchHealth(
     if (hasActiveAlternateMemoryPluginSlot(cfg)) {
       return;
     }
-    note("No active memory plugin is registered for the current config.", "Memory search");
+    noteFn("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
   if (backendConfig.backend === "qmd") {
-    const qmdCheck = await checkQmdBinaryAvailability({
-      command: backendConfig.qmd?.command ?? "qmd",
-      env: process.env,
-      cwd: resolveAgentWorkspaceDir(cfg, agentId),
-    });
-    if (!qmdCheck.available) {
-      const workspaceProbeFailed = resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
-      const probeError = qmdCheck.error.trim();
-      note(
-        [
-          workspaceProbeFailed
-            ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
-            : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
-          probeError ? `Probe error: ${probeError}` : null,
-          "",
-          "Fix (pick one):",
-          workspaceProbeFailed
-            ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
-            : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
-          workspaceProbeFailed
-            ? "- Verify the resolved workspace path for the affected agent before retrying."
-            : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
-          `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
-          "",
-          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        "Memory search",
-      );
+    if (opts?.skipQmdBinaryProbe !== true) {
+      const qmdCheck = await checkQmdBinaryAvailability({
+        command: backendConfig.qmd?.command ?? "qmd",
+        env: process.env,
+        cwd: resolveAgentWorkspaceDir(cfg, agentId),
+      });
+      if (!qmdCheck.available) {
+        const workspaceProbeFailed =
+          resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
+        const probeError = qmdCheck.error.trim();
+        noteFn(
+          [
+            workspaceProbeFailed
+              ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
+              : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+            probeError ? `Probe error: ${probeError}` : null,
+            "",
+            "Fix (pick one):",
+            workspaceProbeFailed
+              ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
+              : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
+            workspaceProbeFailed
+              ? "- Verify the resolved workspace path for the affected agent before retrying."
+              : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+            `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+            "",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          "Memory search",
+        );
+      }
     }
     if (resolved.sources?.includes("sessions") && cfg.memory?.qmd?.sessions?.enabled !== true) {
-      note(
+      noteFn(
         [
           "QMD memory backend is configured and the default agent resolves memorySearch.sources with sessions,",
           "but QMD session transcript export is not enabled (memory.qmd.sessions.enabled is not true).",
@@ -497,7 +524,7 @@ export async function noteMemorySearchHealth(
       return;
     }
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
-    note(
+    noteFn(
       [
         hasExplicitLocalModel
           ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
@@ -524,7 +551,7 @@ export async function noteMemorySearchHealth(
     isOpenAICompatibleMemoryProvider(provider, cfg) &&
     !resolveOpenAICompatibleMemoryBaseUrl(provider, cfg, resolved.remote?.baseUrl)
   ) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
         "Set agents.defaults.memorySearch.remote.baseUrl to the /v1 endpoint for your embeddings server.",
@@ -540,7 +567,7 @@ export async function noteMemorySearchHealth(
   }
 
   if (isOpenAICompatibleMemoryProvider(provider, cfg) && !normalizeOptionalString(resolved.model)) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
         "Set agents.defaults.memorySearch.model to the embedding model id your server expects.",
@@ -570,7 +597,7 @@ export async function noteMemorySearchHealth(
       return;
     }
     const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-    note(
+    noteFn(
       [
         gatewayProbeWarning
           ? `Memory search provider "${provider}" is configured, but the gateway reports embeddings are not ready.`
@@ -586,12 +613,17 @@ export async function noteMemorySearchHealth(
   }
 
   // Remote provider — check for API key. Legacy provider: "auto" resolves to OpenAI.
-  if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
+  if (
+    hasRemoteApiKey ||
+    (await hasApiKeyForProvider(provider, cfg, agentDir, {
+      skipProfileResolution: opts?.skipAuthProfileResolution === true,
+    }))
+  ) {
     return;
   }
 
   if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
-    note(
+    noteFn(
       [
         `Memory search provider is set to "${provider}" but the API key was not found in the CLI environment.`,
         "The running gateway reports memory embeddings are ready for the default agent.",
@@ -604,7 +636,7 @@ export async function noteMemorySearchHealth(
   const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
   const envVar = resolvePrimaryMemoryProviderEnvVar(provider);
 
-  note(
+  noteFn(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
       `Semantic recall will not work without a valid API key.`,
@@ -648,6 +680,7 @@ async function hasApiKeyForProvider(
   provider: string,
   cfg: OpenClawConfig,
   agentDir: string,
+  opts?: { skipProfileResolution?: boolean },
 ): Promise<boolean> {
   const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
   const authProviderId = metadata?.authProviderId ?? provider;
@@ -656,6 +689,17 @@ async function hasApiKeyForProvider(
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
   ) {
     return true;
+  }
+  if (opts?.skipProfileResolution === true) {
+    if (authProviderId === "amazon-bedrock") {
+      return hasConfiguredAwsSdkAuthForProvider(authProviderId, cfg);
+    }
+    const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, authProviderId);
+    return orderedProfileIds === undefined
+      ? hasAuthProfileStoreSourceForProvider(authProviderId, agentDir)
+      : hasAuthProfileStoreSourceForProvider(authProviderId, agentDir, {
+          profileIds: orderedProfileIds,
+        });
   }
   if (authProviderId !== "amazon-bedrock" && !hasAnyAuthProfileStoreSource(agentDir)) {
     return false;

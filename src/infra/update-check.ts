@@ -1,6 +1,7 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
@@ -125,10 +126,10 @@ async function fetchPublicNpmPackageTargetStatus(params: {
         error: `HTTP ${res.status}`,
       };
     }
-    const json = (await res.json()) as {
+    const json = await readProviderJsonResponse<{
       version?: unknown;
       engines?: { node?: unknown };
-    };
+    }>(res, "npm package target status");
     return {
       target: params.target,
       version: toOptionalTrimmedString(json.version),

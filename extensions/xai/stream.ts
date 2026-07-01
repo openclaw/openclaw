@@ -115,6 +115,47 @@ function isReplayableInputImagePart(
   );
 }
 
+function describeXaiFunctionOutputMediaPlaceholder(
+  parts: Array<Record<string, unknown>>,
+): string | undefined {
+  let hasImage = false;
+  let hasAudio = false;
+  let hasOtherMedia = false;
+
+  for (const part of parts) {
+    const type = typeof part.type === "string" ? part.type : "";
+    const mimeType =
+      typeof part.mimeType === "string"
+        ? part.mimeType
+        : typeof part.mime_type === "string"
+          ? part.mime_type
+          : typeof part.mediaType === "string"
+            ? part.mediaType
+            : typeof part.contentType === "string"
+              ? part.contentType
+              : "";
+    const normalizedMime = mimeType.toLowerCase();
+    if (type.includes("image") || normalizedMime.startsWith("image/")) {
+      hasImage = true;
+    } else if (type.includes("audio") || normalizedMime.startsWith("audio/")) {
+      hasAudio = true;
+    } else if (type !== "input_text") {
+      hasOtherMedia = true;
+    }
+  }
+
+  if ((hasImage && hasAudio) || hasOtherMedia) {
+    return "(see attached media)";
+  }
+  if (hasAudio) {
+    return "(see attached audio)";
+  }
+  if (hasImage) {
+    return "(see attached image)";
+  }
+  return undefined;
+}
+
 function normalizeXaiResponsesFunctionCallOutput(
   item: unknown,
   includeImages: boolean,
@@ -143,11 +184,12 @@ function normalizeXaiResponsesFunctionCallOutput(
       )
     : [];
   const hadNonTextParts = outputParts.some((part) => part.type !== "input_text");
+  const mediaPlaceholder = describeXaiFunctionOutputMediaPlaceholder(outputParts);
 
   return {
     normalizedItem: {
       ...itemObj,
-      output: textOutput || (hadNonTextParts ? "(see attached image)" : ""),
+      output: textOutput || mediaPlaceholder || (hadNonTextParts ? "(see attached media)" : ""),
     },
     imageParts,
   };

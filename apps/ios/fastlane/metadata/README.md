@@ -44,7 +44,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 
 ## Notes
 
-- Locale files live under `metadata/en-US/`.
+- Locale files live under `metadata/<locale>/`, for example `metadata/en-US/` and `metadata/sv-SE/`. Each locale directory should use the public metadata filenames consumed by the `ios metadata` lane.
 - `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; after changelog updates, run `pnpm ios:version:sync`.
 - `apps/ios/APP-REVIEW-NOTES.md` is rendered to `apps/ios/build/app-review/APP-REVIEW-NOTES.pdf` and uploaded as the App Review attachment when metadata is uploaded.
 - Release notes resolve from `## <pinned iOS version>` first, then fall back to `## Unreleased` while a TestFlight train is still in progress.

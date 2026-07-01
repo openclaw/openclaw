@@ -1292,6 +1292,8 @@ export const zh_CN: TranslationMap = {
     settings: "聊天设置",
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
+    commentaryToggle: "在最终答案后保留评述",
+    commentaryLabel: "评述",
     autoScrollMode: "自动滚动模式",
     autoScrollAlways: "始终",
     autoScrollNearBottom: "接近底部",
@@ -1336,6 +1338,11 @@ export const zh_CN: TranslationMap = {
       retry: "重试",
       retrySend: "重试发送",
       retryQueuedMessage: "重试排队消息",
+    },
+    pairingQrExpired: {
+      title: "配对二维码已过期",
+      reason: "再次运行 /pair qr 以生成新的设置代码。",
+      badge: "已过期",
     },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",

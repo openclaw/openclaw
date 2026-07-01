@@ -52,6 +52,7 @@ private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecke
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let connectError: [String: Any]?
     private var _state: URLSessionTask.State = .suspended
     private var connectRequestId: String?
     private var connectAuth: [String: Any]?
@@ -60,8 +61,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
 
-    init(helloAuth: [String: Any]? = nil) {
+    init(helloAuth: [String: Any]? = nil, connectError: [String: Any]? = nil) {
         self.helloAuth = helloAuth
+        self.connectError = connectError
     }
 
     var state: URLSessionTask.State {
@@ -133,9 +135,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         for _ in 0..<50 {
             let id = self.lock.withLock { self.connectRequestId }
             if let id {
+                if let connectError {
+                    return .data(Self.connectErrorData(id: id, error: connectError))
+                }
                 return .data(Self.connectOkData(id: id, auth: self.helloAuth))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        if let connectError {
+            return .data(Self.connectErrorData(id: "connect", error: connectError))
         }
         return .data(Self.connectOkData(id: "connect", auth: self.helloAuth))
     }
@@ -206,16 +214,28 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
+
+    private static func connectErrorData(id: String, error: [String: Any]) -> Data {
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": false,
+            "error": error,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+    }
 }
 
 private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let connectError: [String: Any]?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var makeCount = 0
 
-    init(helloAuth: [String: Any]? = nil) {
+    init(helloAuth: [String: Any]? = nil, connectError: [String: Any]? = nil) {
         self.helloAuth = helloAuth
+        self.connectError = connectError
     }
 
     func snapshotMakeCount() -> Int {
@@ -230,7 +250,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         _ = url
         return self.lock.withLock {
             self.makeCount += 1
-            let task = FakeGatewayWebSocketTask(helloAuth: self.helloAuth)
+            let task = FakeGatewayWebSocketTask(helloAuth: self.helloAuth, connectError: self.connectError)
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
         }
@@ -424,6 +444,66 @@ struct GatewayNodeSessionTests {
         #expect(auth["password"] as? String == "shared-password")
         #expect(auth["bootstrapToken"] == nil)
         #expect(auth["token"] == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `connect failure preserves protocol mismatch details`() async throws {
+        let session = FakeGatewayWebSocketSession(connectError: [
+            "code": "INVALID_REQUEST",
+            "message": "protocol mismatch",
+            "details": [
+                "code": "PROTOCOL_MISMATCH",
+                "clientMinProtocol": 4,
+                "clientMaxProtocol": 4,
+                "expectedProtocol": 5,
+                "minimumProbeProtocol": 4,
+            ],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: "shared-token",
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+            Issue.record("connect unexpectedly succeeded")
+        } catch let error as GatewayConnectAuthError {
+            #expect(error.detail == .protocolMismatch)
+            #expect(error.clientMinProtocol == 4)
+            #expect(error.clientMaxProtocol == 4)
+            #expect(error.expectedProtocol == 5)
+            #expect(error.minimumProbeProtocol == 4)
+
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .protocolMismatch)
+            #expect(problem?.owner == .iphone)
+            #expect(problem?
+                .message == "This app is older than the gateway. Update OpenClaw on this device, then retry.")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == false)
+        } catch {
+            Issue.record("unexpected error type: \(error)")
+        }
 
         await gateway.disconnect()
     }

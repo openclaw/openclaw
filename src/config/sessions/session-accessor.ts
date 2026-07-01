@@ -19,7 +19,6 @@ import type {
   SessionTranscriptUpdate,
   SessionTranscriptUpdateTarget,
 } from "../../sessions/transcript-events.js";
-import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
@@ -37,6 +36,7 @@ import {
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
@@ -909,7 +909,7 @@ export async function updateResolvedSessionEntry<T>(
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   if (scope.clone === false || scope.readConsistency === "latest") {
-    const store = loadSessionStore(resolveAccessStorePath(scope), {
+    const store = loadSessionStore(resolveSessionStorePathForScope(scope), {
       ...(scope.clone === false ? { clone: false } : {}),
       ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
       ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
@@ -923,7 +923,7 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
     return Object.entries(
-      loadSessionStore(resolveAccessStorePath({ ...scope, sessionKey: "" }), {
+      loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
         clone: false,
         ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
       }),
@@ -1114,7 +1114,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const storePath = resolveAccessStorePath(scope);
+  const storePath = resolveSessionStorePathForScope(scope);
   return await updateSessionStore(storePath, async (store) => {
     const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
     const created = await createEntry({
@@ -1245,7 +1245,7 @@ export async function updateSessionEntry(
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
   return await updateFileSessionStoreEntry({
-    storePath: resolveAccessStorePath(scope),
+    storePath: resolveSessionStorePathForScope(scope),
     sessionKey: scope.sessionKey,
     skipMaintenance: options.skipMaintenance,
     takeCacheOwnership: options.takeCacheOwnership,
@@ -1258,7 +1258,7 @@ export async function updateSessionEntry(
 export function resolveSessionAbortTarget(
   scope: SessionAccessScope,
 ): SessionAbortTargetIdentity | null {
-  const store = loadSessionStore(resolveAccessStorePath(scope));
+  const store = loadSessionStore(resolveSessionStorePathForScope(scope));
   const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
   if (!resolved.existing) {
     return null;
@@ -1279,7 +1279,7 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  const storePath = resolveAccessStorePath(params.scope);
+  const storePath = resolveSessionStorePathForScope(params.scope);
   let canPersistSingleEntry = false;
   let resolvedTarget: SessionAbortTargetResult | null = null;
   try {
@@ -2683,7 +2683,7 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
 function snapshotTemporarySessionMapping(
   scope: SessionAccessScope,
 ): TemporarySessionMappingSnapshot {
-  const storePath = resolveAccessStorePath(scope);
+  const storePath = resolveSessionStorePathForScope(scope);
   try {
     const store = loadSessionStore(storePath, { skipCache: true });
     const entry = store[scope.sessionKey];
@@ -2752,17 +2752,6 @@ async function archivePreviousSessionTranscript(params: {
     sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     archivedTranscripts,
-  });
-}
-
-function resolveAccessStorePath(scope: SessionAccessScope): string {
-  if (scope.storePath) {
-    return scope.storePath;
-  }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  return resolveStorePath(getRuntimeConfig().session?.store, {
-    agentId,
-    env: scope.env,
   });
 }
 

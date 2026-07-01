@@ -137,6 +137,7 @@ type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  sendTarget: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
   typingTargetMessageId?: string;
@@ -161,6 +162,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     cfg,
     agentId,
     chatId,
+    sendTarget,
     replyToMessageId,
     typingTargetMessageId: explicitTypingTargetMessageId,
     skipReplyToInMessages,
@@ -270,6 +272,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
+  let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
@@ -392,8 +395,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
-          replyToMessageId,
+        const streamingTarget = sendTarget
+          .replace(/^(feishu|lark):/i, "")
+          .replace(/^(chat|user|group|dm|open_id):/i, "")
+          .trim();
+        await streaming.start(streamingTarget, resolveReceiveIdType(sendTarget), {
+          replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
@@ -519,7 +526,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       send: async ({ mediaUrl }) => {
         const result = await sendMediaFeishu({
           cfg,
-          to: chatId,
+          to: sendTarget,
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -536,7 +543,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
-                to: chatId,
+                to: sendTarget,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
@@ -563,7 +570,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 sendChunk: async ({ chunk }) => {
                   await sendMessageFeishu({
                     cfg,
-                    to: chatId,
+                    to: sendTarget,
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
@@ -589,7 +596,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     await sendMessageFeishu({
       cfg,
-      to: chatId,
+      to: sendTarget,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
       replyToMessageId: sendReplyToMessageId,
       replyInThread: effectiveReplyInThread,
@@ -632,6 +639,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
+          sentIndependentBlockText = false;
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -711,8 +719,36 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
+            // streaming-card fallback content or send them as independent
+            // messages for true progressive delivery.
             if (!useStreamingCard) {
+              if (coreBlockStreamingEnabled) {
+                // Reuse normal text chunking, but notify mentions only on the first visible chunk.
+                const isFirstBlock = !sentIndependentBlockText;
+                await sendChunkedTextReply({
+                  text,
+                  useCard: false,
+                  infoKind: "block",
+                  sendChunk: async ({ chunk, isFirst }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: sendTarget,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      allowTopLevelReplyFallback,
+                      accountId,
+                      ...(isFirstBlock && isFirst && mentionTargets?.length
+                        ? { mentions: mentionTargets }
+                        : {}),
+                    });
+                  },
+                });
+                sentIndependentBlockText = true;
+                if (hasMedia) {
+                  await sendMediaReplies(payload);
+                }
+              }
               return;
             }
             startStreaming();
@@ -761,7 +797,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
                   cfg,
-                  to: chatId,
+                  to: sendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
@@ -780,7 +816,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
-                  to: chatId,
+                  to: sendTarget,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,

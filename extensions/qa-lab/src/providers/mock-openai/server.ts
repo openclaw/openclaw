@@ -170,6 +170,21 @@ const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
+  /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
+  /upload-file action to send a PNG with caption\s+((?:WHATSAPP_QA_AGENT_UPLOAD|WHATSAPP_QA_GROUP_AGENT_UPLOAD)_[A-Z0-9]+)/i;
+const QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_PENDING_HISTORY_TRIGGER_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL =
+  "Chat history since last reply (untrusted, for context):";
+const QA_WHATSAPP_BROADCAST_PROMPT_RE = /\bopenclawqa broadcast fanout check\s+([A-Z0-9_]+)\b/i;
+const QA_WHATSAPP_RUNTIME_AGENT_RE = /\bRuntime:\s*[^\n]*\bagent=([A-Za-z0-9_-]+)/i;
+const QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE = /\bWHATSAPP_QA_ACTIVATION_ALWAYS_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE = /\bWHATSAPP_QA_REPLY_TO_BOT_SEED_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_REPLY_TO_BOT_TRIGGER_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -190,7 +205,7 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
-const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
+const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -252,7 +267,7 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
-  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+  if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
   return QA_AUDIO_TRANSCRIPTION_TEXT;
@@ -639,6 +654,111 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
     texts.push(inputText);
   }
   return texts.join("\n");
+}
+
+function buildWhatsAppPendingHistoryReply(allInputText: string) {
+  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
+  if (!triggerMatch?.[1]) {
+    return undefined;
+  }
+  const suffix = triggerMatch[1];
+  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
+  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
+  const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
+  const contextSentinelPattern = new RegExp(
+    `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
+    "u",
+  );
+  if (
+    !quietMarkerPattern.test(priorGroupContext) ||
+    !contextSentinelPattern.test(priorGroupContext)
+  ) {
+    return "WHATSAPP_QA_PENDING_HISTORY_MISSING_CONTEXT";
+  }
+  return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
+}
+
+function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
+  const blocks = extractJsonBlocksByLabel(
+    beforeTrigger,
+    QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
+  );
+  return blocks
+    .flatMap((block) => {
+      if (!Array.isArray(block)) {
+        return [];
+      }
+      return block.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return [];
+        }
+        const body = (entry as Record<string, unknown>)["body"];
+        return typeof body === "string" ? [body] : [];
+      });
+    })
+    .join("\n");
+}
+
+function extractJsonBlocksByLabel(text: string, label: string): unknown[] {
+  const blockRe = new RegExp(
+    `${escapeRegExp(label)}\\s*\\n\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``,
+    "gu",
+  );
+  const blocks: unknown[] = [];
+  for (const match of text.matchAll(blockRe)) {
+    const rawJson = match[1];
+    if (!rawJson) {
+      continue;
+    }
+    try {
+      blocks.push(JSON.parse(rawJson) as unknown);
+    } catch {
+      // The mock only trusts the exact structured block emitted by the inbound
+      // prompt builder; malformed user text must not satisfy this QA oracle.
+    }
+  }
+  return blocks;
+}
+
+function buildWhatsAppBroadcastReply(allInputText: string) {
+  const promptMatch = QA_WHATSAPP_BROADCAST_PROMPT_RE.exec(allInputText);
+  const token = promptMatch?.[1];
+  if (!token) {
+    return undefined;
+  }
+  const agentId = QA_WHATSAPP_RUNTIME_AGENT_RE.exec(allInputText)?.[1];
+  if (agentId === "main") {
+    return `${token}_MAIN`;
+  }
+  if (agentId === "qa-second") {
+    return `${token}_SECOND`;
+  }
+  return "WHATSAPP_QA_BROADCAST_AGENT_CONTEXT_MISSING";
+}
+
+function buildWhatsAppGroupDispatchReply(allInputText: string) {
+  const activationMatch = QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE.exec(allInputText);
+  if (activationMatch?.[1]) {
+    return `WHATSAPP_QA_ACTIVATION_ALWAYS_${activationMatch[1]}`;
+  }
+  const triggerMatch = QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE.exec(allInputText);
+  if (triggerMatch?.[0]) {
+    return triggerMatch[0];
+  }
+  return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
+}
+
+function buildWhatsAppBatchedReply(allInputText: string) {
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+  const suffix = finalMatch?.[1];
+  if (!suffix) {
+    return undefined;
+  }
+  const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
+  if (!allInputText.includes(firstMarker)) {
+    return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
+  }
+  return finalMatch[0];
 }
 
 function countImageInputs(value: unknown): number {
@@ -2243,6 +2363,48 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  if (whatsAppPendingHistoryReply) {
+    return buildAssistantEvents(whatsAppPendingHistoryReply);
+  }
+  const whatsAppBroadcastReply = buildWhatsAppBroadcastReply(allInputText);
+  if (whatsAppBroadcastReply) {
+    return buildAssistantEvents(whatsAppBroadcastReply);
+  }
+  const whatsAppGroupDispatchReply = buildWhatsAppGroupDispatchReply(allInputText);
+  if (whatsAppGroupDispatchReply) {
+    return buildAssistantEvents(whatsAppGroupDispatchReply);
+  }
+  const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
+  if (whatsAppBatchedReply) {
+    return buildAssistantEvents(whatsAppBatchedReply);
+  }
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "react",
+        emoji: "👍",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
+  const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
+  if (whatsAppUploadMatch?.[1]) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "upload-file",
+        buffer: TINY_PNG_BASE64,
+        caption: whatsAppUploadMatch[1],
+        contentType: "image/png",
+        filename: "whatsapp-qa-agent-upload.png",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
   if (
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
@@ -2615,7 +2777,7 @@ async function buildResponsesPayload(
   if (/memory tools check/i.test(allInputText)) {
     if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "project codename ORBIT-9",
+        query: "hidden project codename",
         maxResults: 3,
       });
     }

@@ -1,6 +1,7 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import OpenAI from "openai";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -142,16 +143,57 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 
 describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
-    const model = createAzureResponsesModel();
-    await expect(
-      testing.processResponsesStream(
+    vi.useFakeTimers();
+    try {
+      const model = createAzureResponsesModel();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = testing.processResponsesStream(
         neverYieldsStream(),
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
         model,
-        { firstEventTimeoutMs: 1 },
-      ),
-    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = createDeepSeekCompletionsModel();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = testing.processOpenAICompletionsStream(
+        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
+        createAssistantOutput(model),
+        model,
+        { push: vi.fn() },
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
@@ -396,6 +438,52 @@ describe("openai transport stream", () => {
       reasoningTokens: 3,
       totalTokens: 9,
     });
+  });
+
+  it("prices Responses cache writes separately from ordinary input", async () => {
+    const model = {
+      ...createAzureResponsesModel(),
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"azure-openai-responses">;
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-cache-write",
+            status: "completed",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 10,
+              total_tokens: 110,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expectRecordFields(output.usage, {
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    expect(output.usage.cost.input).toBeCloseTo(0.00025);
+    expect(output.usage.cost.output).toBeCloseTo(0.0003);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
   it("backfills Azure Responses completed message output when item events are absent", async () => {
@@ -5189,6 +5277,74 @@ describe("openai transport stream", () => {
         image_url: "data:image/png;base64,aW1n",
       },
     ]);
+  });
+
+  it("serializes structured tool result content (e.g. json blocks) into Responses function_call_output text", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_lookup",
+                name: "lookup",
+                arguments: { query: "price" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_lookup",
+            toolName: "lookup",
+            content: [{ type: "json", payload: { price: 42, currency: "USD" } }],
+            isError: false,
+            timestamp: 2,
+          },
+          { role: "user", content: "continue", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+    };
+
+    const output = params.input?.find((item) => item.type === "function_call_output");
+    expect(output).toBeDefined();
+    expect(output?.call_id).toBe("call_lookup");
+    const outputText = output?.output as string;
+    expect(typeof outputText).toBe("string");
+    expect(outputText).toContain("price");
+    expect(outputText).toContain("42");
+    expect(outputText).not.toBe("(see attached image)");
   });
 
   it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {

@@ -1860,6 +1860,10 @@
               {
                 "group": "Release and CI",
                 "pages": [
+                  {
+                    "group": "Release notes",
+                    "pages": ["releases/index", "releases/2026.6.11"]
+                  },
                   "maturity/scorecard",
                   "maturity/taxonomy",
                   "reference/RELEASING",

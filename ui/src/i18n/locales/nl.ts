@@ -1335,6 +1335,8 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
+    commentaryToggle: "Commentaar na het uiteindelijke antwoord behouden",
+    commentaryLabel: "Commentaar",
     autoScrollMode: "Automatisch scrollen",
     autoScrollAlways: "Altijd",
     autoScrollNearBottom: "Bijna onderaan",
@@ -1379,6 +1381,11 @@ export const nl: TranslationMap = {
       retry: "Opnieuw proberen",
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
+    },
+    pairingQrExpired: {
+      title: "Koppelings-QR verlopen",
+      reason: "Voer /pair qr opnieuw uit om een nieuwe installatiecode te genereren.",
+      badge: "Verlopen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

@@ -811,6 +811,17 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.messageThreadId).toBeUndefined();
   });
 
+  it("suppresses the fallback reply when a plugin command returns suppressReply: true", async () => {
+    const { handler } = registerPlugCommand({
+      result: { suppressReply: true },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("uses bot topic capability for Telegram plugin command DM topic session keys", async () => {
     const { handler } = registerPlugCommand();
 

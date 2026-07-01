@@ -153,6 +153,36 @@ describe("SessionManager.open", () => {
     expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
   });
 
+  it("does not continue a different cwd from a colliding session directory", async () => {
+    const dir = await makeTempDir();
+    const cwdA = "/home/alice/dev/client/app";
+    const cwdB = "/home/alice/dev/client-app";
+    const sessionA = path.join(dir, "session-a.jsonl");
+    const sessionB = path.join(dir, "session-b.jsonl");
+    const headerA = buildSessionHeader(cwdA, "session-a");
+    const headerB = buildSessionHeader(cwdB, "session-b");
+
+    await fs.writeFile(sessionA, `${JSON.stringify(headerA)}\n`, "utf8");
+    await fs.writeFile(sessionB, `${JSON.stringify(headerB)}\n`, "utf8");
+    await fs.utimes(
+      sessionA,
+      new Date("2026-06-18T00:00:00.000Z"),
+      new Date("2026-06-18T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      sessionB,
+      new Date("2026-06-18T00:00:01.000Z"),
+      new Date("2026-06-18T00:00:01.000Z"),
+    );
+
+    expect(findMostRecentSession(dir)).toBe(sessionB);
+    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
+    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
+    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
+      expect.objectContaining({ path: sessionA, cwd: cwdA }),
+    ]);
+  });
+
   it("skips oversized recent session headers instead of hiding valid sessions", async () => {
     const dir = await makeTempDir();
     const validSessionFile = path.join(dir, "valid-session.jsonl");

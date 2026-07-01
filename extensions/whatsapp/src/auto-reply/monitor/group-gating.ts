@@ -78,12 +78,16 @@ function shouldWarnForGroupDrop(warnKey: string): boolean {
   return true;
 }
 
-function isOwnerSender(baseMentionConfig: MentionConfig, msg: AdmittedWebInboundMessage) {
-  const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
+function isOwnerSender(
+  baseMentionConfig: MentionConfig,
+  msg: AdmittedWebInboundMessage,
+  authDir?: string,
+) {
+  const sender = normalizeE164(getSenderIdentity(msg, authDir).e164 ?? "");
   if (!sender) {
     return false;
   }
-  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg).e164 ?? undefined);
+  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg, authDir).e164 ?? undefined);
   return owners.includes(sender);
 }
 
@@ -187,7 +191,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
-  const owner = isOwnerSender(baseMentionConfig, params.msg);
+  const owner = isOwnerSender(baseMentionConfig, params.msg, params.authDir);
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {

@@ -144,6 +144,30 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("records exec approval followup suppression metadata", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+    expectFields(snapshot.summary.byType, {
+      "exec.approval.followup_suppressed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
+  });
+
   it("summarizes inbound delivery proof events without message content", () => {
     startDiagnosticStabilityRecorder();
 

@@ -19,6 +19,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -1902,15 +1903,27 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
   if (light.enabled && light.limit > 0) {
-    await runLightDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: light,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-      detachNarratives: params.detachNarratives,
-    });
+    try {
+      await runLightDreaming({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        config: light,
+        logger: params.logger,
+        subagent: params.subagent,
+        nowMs: sweepNowMs,
+        detachNarratives: params.detachNarratives,
+      });
+    } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir: params.workspaceDir,
+        phase: "light",
+        error: formatErrorMessage(err),
+        storageMode: light.storage.mode,
+        nowMs: sweepNowMs,
+        logger: params.logger,
+      });
+      throw err;
+    }
   }
 
   const rem = resolveMemoryRemDreamingConfig({
@@ -1918,15 +1931,27 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
   });
   if (rem.enabled && rem.limit > 0) {
-    await runRemDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: rem,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-      detachNarratives: params.detachNarratives,
-    });
+    try {
+      await runRemDreaming({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        config: rem,
+        logger: params.logger,
+        subagent: params.subagent,
+        nowMs: sweepNowMs,
+        detachNarratives: params.detachNarratives,
+      });
+    } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir: params.workspaceDir,
+        phase: "rem",
+        error: formatErrorMessage(err),
+        storageMode: rem.storage.mode,
+        nowMs: sweepNowMs,
+        logger: params.logger,
+      });
+      throw err;
+    }
   }
 }
 
@@ -1977,6 +2002,13 @@ async function runPhaseIfTriggered(
         });
       }
     } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir,
+        phase: params.phase,
+        error: formatErrorMessage(err),
+        storageMode: params.config.storage.mode,
+        logger: params.logger,
+      });
       params.logger.error(
         `memory-core: ${params.phase} dreaming failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
       );

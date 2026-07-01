@@ -30,6 +30,7 @@ import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -691,12 +692,16 @@ function toChatMessages(
     }
 
     const toolContent: ContentChunk[] = [];
-    const textResult = msg.content
-      .filter((part) => part.type === "text")
-      .map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
-      .join("\n");
+    const textResult = extractToolResultText(msg.content);
+    const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
     const hasImages = msg.content.some((part) => part.type === "image");
-    const toolText = buildToolResultText(textResult, hasImages, supportsImages, msg.isError);
+    const toolText = buildToolResultText(
+      textResult,
+      mediaPlaceholder,
+      hasImages,
+      supportsImages,
+      msg.isError,
+    );
     toolContent.push({ type: "text", text: toolText });
     for (const part of msg.content) {
       if (!supportsImages) {
@@ -723,6 +728,7 @@ function toChatMessages(
 
 function buildToolResultText(
   text: string,
+  mediaPlaceholder: string | undefined,
   hasImages: boolean,
   supportsImages: boolean,
   isError: boolean,
@@ -736,13 +742,15 @@ function buildToolResultText(
     return `${errorPrefix}${trimmed}${imageSuffix}`;
   }
 
-  if (hasImages) {
-    if (supportsImages) {
-      return isError ? "[tool error] (see attached image)" : "(see attached image)";
+  if (mediaPlaceholder) {
+    if (!hasImages || supportsImages) {
+      return `${errorPrefix}${mediaPlaceholder}`;
     }
-    return isError
-      ? "[tool error] (image omitted: model does not support images)"
-      : "(image omitted: model does not support images)";
+    const omitted =
+      mediaPlaceholder === "(see attached media)"
+        ? "(media omitted: model does not support images)"
+        : "(image omitted: model does not support images)";
+    return `${errorPrefix}${omitted}`;
   }
 
   return isError ? "[tool error] (no tool output)" : "(no tool output)";

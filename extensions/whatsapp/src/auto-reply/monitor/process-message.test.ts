@@ -95,7 +95,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
   return {
     ...actual,
-    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppGroupHistory: (params: { history: unknown[] }) => params.history,
     resolveVisibleWhatsAppReplyContext: () => null,
   };
 });
@@ -222,13 +222,19 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(
+  overrides: {
+    cfg?: unknown;
+    groupHistories?: Map<string, unknown[]>;
+    msg?: unknown;
+  } = {},
+) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
-    groupHistories: new Map(),
+    groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
@@ -343,6 +349,38 @@ describe("processMessage group system prompt wiring", () => {
       rawBody: "please inspect `/tmp/foo`",
     });
     expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
+  });
+
+  it("passes pending group history from the history window into inbound context", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const groupHistories = new Map<string, unknown[]>([
+      [
+        "whatsapp:default:group:123@g.us",
+        [
+          {
+            sender: "Alice (+15550002222)",
+            body: "quiet pending context",
+            timestamp: 1710000000,
+            id: "quiet-msg-1",
+            senderJid: "15550002222@s.whatsapp.net",
+          },
+        ],
+      ],
+    ]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+      groupHistory: [
+        {
+          sender: "Alice (+15550002222)",
+          body: "quiet pending context",
+          timestamp: 1710000000,
+          id: "quiet-msg-1",
+          senderJid: "15550002222@s.whatsapp.net",
+        },
+      ],
+    });
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {

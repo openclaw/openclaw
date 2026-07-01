@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
@@ -42,7 +43,7 @@ export type PairingSetupCommandResult = {
 
 export type PairingSetupCommandRunner = (
   argv: string[],
-  opts: { timeoutMs: number },
+  opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
 export type ResolvePairingSetupOptions = {
@@ -218,10 +219,6 @@ function resolveScheme(
   return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
 }
 
-function isPrivateIPv4(address: string): boolean {
-  return isRfc1918Ipv4Address(address);
-}
-
 function isTailnetIPv4(address: string): boolean {
   return isCarrierGradeNatIpv4Address(address);
 }
@@ -236,12 +233,6 @@ function pickIPv4Matching(
       matches,
     }) ?? null
   );
-}
-
-function pickLanIPv4(
-  networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
-): string | null {
-  return pickIPv4Matching(networkInterfaces, isPrivateIPv4);
 }
 
 function pickTailnetIPv4(
@@ -349,13 +340,20 @@ async function resolveGatewayUrl(
     return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
+  const advertisedLanHost =
+    cfg.gateway?.bind === "lan"
+      ? await resolveAdvertisedLanHost({
+          networkInterfaces: opts.networkInterfaces,
+          runCommandWithTimeout: opts.runCommandWithTimeout,
+        })
+      : null;
   const bindResult = resolveGatewayBindUrl({
     bind: cfg.gateway?.bind,
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
     pickTailnetHost: () => pickTailnetIPv4(opts.networkInterfaces),
-    pickLanHost: () => pickLanIPv4(opts.networkInterfaces),
+    pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
     return bindResult;

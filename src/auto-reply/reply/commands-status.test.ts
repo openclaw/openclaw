@@ -963,6 +963,69 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("uses the Codex app-server account before OpenAI env labels on Codex harness status", async () => {
+    registerStatusCodexHarness();
+
+    await withTempHome(
+      async (dir) => {
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        const codexHome = path.join(agentDir, "codex-home");
+        fs.mkdirSync(codexHome, { recursive: true });
+        fs.writeFileSync(
+          path.join(codexHome, "auth.json"),
+          JSON.stringify({
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "codex-access-token",
+              refresh_token: "codex-refresh-token",
+            },
+          }),
+          "utf-8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-codex-home-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("Runtime: OpenAI Codex");
+        expect(normalized).toContain("oauth (codex-cli)");
+        expect(normalized).not.toContain("api-key (env: OPENAI_API_KEY)");
+      },
+      {
+        env: {
+          OPENAI_API_KEY: "status-env-key-placeholder",
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
   it("uses Codex usage for bare codex models running on the Codex harness", async () => {
     registerStatusCodexHarness();
 

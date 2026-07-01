@@ -42,6 +42,7 @@ import type {
   GatewayServiceEnvironmentValueSource,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
 import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
@@ -480,6 +481,9 @@ type SystemdServiceInfo = {
   mainPid?: number;
   execMainStatus?: number;
   execMainCode?: string;
+  result?: string;
+  nRestarts?: number;
+  startLimitBurst?: number;
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;
@@ -515,6 +519,24 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   if (execMainCode) {
     info.execMainCode = execMainCode;
   }
+  const result = entries.result;
+  if (result) {
+    info.result = result;
+  }
+  const nRestartsValue = entries.nrestarts;
+  if (nRestartsValue) {
+    const nRestarts = parseStrictInteger(nRestartsValue);
+    if (nRestarts !== undefined) {
+      info.nRestarts = nRestarts;
+    }
+  }
+  const startLimitBurstValue = entries.startlimitburst;
+  if (startLimitBurstValue) {
+    const startLimitBurst = parseStrictInteger(startLimitBurstValue);
+    if (startLimitBurst !== undefined) {
+      info.startLimitBurst = startLimitBurst;
+    }
+  }
   const unit = entries.id;
   if (unit) {
     info.unit = unit;
@@ -545,9 +567,13 @@ export type SystemdUnitScope = "system" | "user";
 async function execSystemctl(
   args: string[],
   env?: GatewayServiceEnv,
+  timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return await execFileUtf8("systemctl", args, {
     env: env ? resolveSystemctlProcessEnv(env) : process.env,
+    // A wedged systemd socket can leave `systemctl` blocked forever; the timeout
+    // kills the child so status reads fail soft instead of hanging the command.
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
   });
 }
 
@@ -735,6 +761,7 @@ function shouldFallbackToMachineUserScope(detail: string): boolean {
 async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
+  timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
@@ -743,13 +770,14 @@ async function execSystemctlUser(
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
-      return await execSystemctl([...machineScopeArgs, ...args], env);
+      return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
     }
   }
 
   const directResult = await execSystemctl(
     [...resolveSystemctlDirectUserScopeArgs(), ...args],
     env,
+    timeoutMs,
   );
   if (directResult.code === 0) {
     return directResult;
@@ -764,7 +792,7 @@ async function execSystemctlUser(
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args], env);
+  return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
 }
 
 export async function isSystemdUserServiceAvailable(
@@ -795,8 +823,11 @@ export async function isSystemdUnitActive(
   return res.code === 0;
 }
 
-async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
-  const res = await execSystemctlUser(env, ["status"]);
+async function assertSystemdAvailable(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  timeoutMs?: number,
+) {
+  const res = await execSystemctlUser(env, ["status"], timeoutMs);
   if (res.code === 0) {
     return;
   }
@@ -1184,6 +1215,13 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
+    if (params.action === "restart") {
+      // systemd latches a unit into failed/start-limit-hit after it crashes faster
+      // than StartLimitBurst allows and then stops auto-restarting it. Clear the
+      // latch first so an operator restart can recover a crash-looped gateway;
+      // reset-failed is idempotent and a no-op on a healthy unit.
+      await execSystemctl(["reset-failed", unitName], env);
+    }
     const res = await execSystemctl([params.action, unitName], env);
     if (res.code !== 0) {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -1192,6 +1230,11 @@ async function runSystemdServiceAction(params: {
     return;
   }
   await assertSystemdAvailable(env);
+  if (params.action === "restart") {
+    // Clear any failed/start-limit-hit latch before restart so a crash-looped
+    // gateway recovers (see system-scope branch above). Idempotent on healthy units.
+    await execSystemctlUser(env, ["reset-failed", unitName]);
+  }
   const res = await execSystemctlUser(env, [params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -1232,8 +1275,8 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   }
   const res =
     installed.scope === "system"
-      ? await execSystemctl(["is-enabled", installed.unitName], env)
-      : await execSystemctlUser(env, ["is-enabled", installed.unitName]);
+      ? await execSystemctl(["is-enabled", installed.unitName], env, args.timeoutMs)
+      : await execSystemctlUser(env, ["is-enabled", installed.unitName], args.timeoutMs);
   if (res.code === 0) {
     return true;
   }
@@ -1246,11 +1289,13 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  const timeoutMs = opts?.timeoutMs;
   const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
   if (installed?.scope !== "system") {
     try {
-      await assertSystemdAvailable(env);
+      await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
       return {
         status: "unknown",
@@ -1264,12 +1309,12 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ];
   const res =
     installed?.scope === "system"
-      ? await execSystemctl(showArgs, env)
-      : await execSystemctlUser(env, showArgs);
+      ? await execSystemctl(showArgs, env, timeoutMs)
+      : await execSystemctlUser(env, showArgs, timeoutMs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
@@ -1294,6 +1339,9 @@ export async function readSystemdServiceRuntime(
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,
       memoryCurrent: parsed.memoryCurrent,
+      result: parsed.result,
+      nRestarts: parsed.nRestarts,
+      startLimitBurst: parsed.startLimitBurst,
     },
   };
 }

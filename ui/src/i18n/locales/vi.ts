@@ -1321,6 +1321,8 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
+    commentaryToggle: "Giữ lại bình luận sau câu trả lời cuối cùng",
+    commentaryLabel: "Bình luận",
     autoScrollMode: "Chế độ tự động cuộn",
     autoScrollAlways: "Luôn luôn",
     autoScrollNearBottom: "Gần cuối",
@@ -1365,6 +1367,11 @@ export const vi: TranslationMap = {
       retry: "Thử lại",
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
+    },
+    pairingQrExpired: {
+      title: "Mã QR ghép nối đã hết hạn",
+      reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",
+      badge: "Đã hết hạn",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

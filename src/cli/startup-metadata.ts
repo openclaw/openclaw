@@ -42,4 +42,3 @@ export const testing = {
     startupMetadataByPath.clear();
   },
 };
-export { testing as __testing };

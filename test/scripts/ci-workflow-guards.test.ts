@@ -9,6 +9,8 @@ const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
+const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
+const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -116,6 +118,30 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("keeps locale refresh bots from cancelling active refresh matrices", () => {
+    const controlUiWorkflow = parse(readFileSync(CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "utf8"));
+    const source = readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8");
+    const workflow = parse(source);
+    const refresh = workflow.jobs.refresh;
+    const commitStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Commit and push locale artifact",
+    );
+
+    expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
+    expect(refresh.strategy.matrix.locale).toContain("sv");
+    expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
+    expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
   });
 
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
@@ -396,12 +422,19 @@ describe("ci workflow guards", () => {
   });
 
   it("bounds platform checkout fetches without GNU timeout", () => {
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
+
+    expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
     for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
@@ -412,6 +445,10 @@ describe("ci workflow guards", () => {
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
+      );
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain(
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );

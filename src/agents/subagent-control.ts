@@ -605,6 +605,11 @@ export async function steerControlledSubagentRun(params: {
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    // Preserve the steered instruction so that restart redispatch rewraps the
+    // new message rather than the stale pre-steer task. Persisting the older
+    // task would cause `recoverOrphanedSubagentSessions` to re-issue the
+    // original instruction after a crash, silently dropping the user's steer.
+    task: params.message,
   });
   if (!replaced) {
     clearSubagentRunSteerRestart(params.entry.runId);

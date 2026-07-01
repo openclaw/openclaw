@@ -131,7 +131,10 @@ export async function buildCodexPluginThreadConfig(
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
     await refreshAppInventoryNow(params, appCache, {
-      forceRefetch: true,
+      // OpenClaw is missing its process-local snapshot, but Codex may already
+      // have a current inventory. Avoid rebuilding the entire remote catalog
+      // during thread startup; post-install and readiness repair still force.
+      forceRefetch: false,
       reason: "initial_missing",
       targetAppIds: collectInventoryOwnedAppIds(inventory),
     });
@@ -269,6 +272,9 @@ export async function buildCodexPluginThreadConfig(
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
       };
+      if (record.policy.destructiveApprovalMode === "always") {
+        appConfig.approvals_reviewer = "user";
+      }
       apps[app.id] = appConfig;
       policyApps[app.id] = {
         configKey: record.policy.configKey,
@@ -367,6 +373,31 @@ function buildDisabledAppsConfigPatch(): JsonObject {
       },
     },
   };
+}
+
+/** Rebuilds the safe per-thread apps patch persisted with a Codex thread binding. */
+export function buildCodexPluginAppsConfigPatchFromPolicyContext(
+  policyContext: PluginAppPolicyContext,
+): JsonObject {
+  const apps: JsonObject = {
+    _default: {
+      enabled: false,
+      destructive_enabled: false,
+      open_world_enabled: false,
+    },
+  };
+  for (const [appId, policy] of Object.entries(policyContext.apps).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    apps[appId] = {
+      enabled: true,
+      destructive_enabled: policy.allowDestructiveActions,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
+      ...(policy.destructiveApprovalMode === "always" ? { approvals_reviewer: "user" } : {}),
+    };
+  }
+  return { apps };
 }
 
 function buildPluginAppPolicyContext(

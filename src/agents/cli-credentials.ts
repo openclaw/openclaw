@@ -140,6 +140,14 @@ function resolveCodexHomePath(codexHome?: string) {
   }
 }
 
+function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (authMode) {
+    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
+  }
+  return typeof data.OPENAI_API_KEY !== "string";
+}
+
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
   const baseDir = homeDir ?? resolveUserPath("~");
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
@@ -514,6 +522,9 @@ export function readCodexCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
+  if (!codexAuthJsonUsesChatGptTokens(data)) {
+    return null;
+  }
   const tokens = data.tokens as Record<string, unknown> | undefined;
   if (!tokens || typeof tokens !== "object") {
     return null;

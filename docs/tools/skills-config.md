@@ -321,6 +321,17 @@ different visible skill set per agent.
   defaults — they do not merge. Set to `[]` to expose no skills for that agent.
 </ParamField>
 
+<Warning>
+  Agent skill allowlists are a visibility and loading filter for OpenClaw skill
+  discovery, prompts, slash-command discovery, sandbox sync, and skill
+  snapshots. They are not a shell-time authorization boundary. If an agent can
+  run host `exec`, that shell can still run external clients or read host files
+  that are visible to the execution user, including MCP client registries such
+  as `~/.openclaw/skills/config/mcporter.json`. For per-agent MCP isolation,
+  combine skill allowlists with sandbox/OS-user isolation, deny or tightly
+  allowlist host exec, and prefer per-agent credentials at the MCP server.
+</Warning>
+
 ## Workshop (`skills.workshop`)
 
 <ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">

@@ -120,6 +120,15 @@ function clearActiveDeferralPolls(): void {
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
+  // Cancel any in-progress deferred channel reload so it doesn't race with
+  // the restart to start the same channel (e.g. telegram double-spawn).
+  void import("../gateway/server-reload-handlers.js")
+    .then((mod) => {
+      mod.abortPendingChannelReloads();
+    })
+    .catch(() => {
+      // Best-effort: the module may not be loaded in minimal/test gateways.
+    });
 }
 
 export type RestartAuditInfo = {

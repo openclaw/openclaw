@@ -1334,6 +1334,8 @@ export const ja_JP: TranslationMap = {
     settings: "チャット設定",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
+    commentaryToggle: "最終回答の後にコメントを残す",
+    commentaryLabel: "コメント",
     autoScrollMode: "自動スクロールモード",
     autoScrollAlways: "常に",
     autoScrollNearBottom: "下部付近",
@@ -1378,6 +1380,11 @@ export const ja_JP: TranslationMap = {
       retry: "再試行",
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
+    },
+    pairingQrExpired: {
+      title: "ペアリングQRの有効期限が切れました",
+      reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",
+      badge: "期限切れ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

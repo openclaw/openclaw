@@ -59,6 +59,7 @@ let package = Package(
             ],
             exclude: [
                 "Resources/Info.plist",
+                "Resources/Localizable.xcstrings",
             ],
             resources: [
                 .copy("Resources/OpenClaw.icns"),

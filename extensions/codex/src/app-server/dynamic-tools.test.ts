@@ -402,6 +402,53 @@ describe("createCodexDynamicToolBridge", () => {
     expect(updatedResult.success).toBe(true);
   });
 
+  it("treats get_goal read statuses (found / missing) as successful dynamic tool calls", async () => {
+    const onFoundResult = vi.fn();
+    const foundBridge = createBridgeWithToolResult(
+      "get_goal",
+      textToolResult('{\n  "status": "found"\n}', {
+        status: "found",
+        goal: { objective: "ship the fix", status: "active" },
+      }),
+    );
+    const foundResult = await foundBridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-found",
+        namespace: null,
+        tool: "get_goal",
+        arguments: {},
+      },
+      { onAgentToolResult: onFoundResult },
+    );
+    expect(foundResult.success).toBe(true);
+    expect(onFoundResult).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "get_goal", isError: false }),
+    );
+
+    const onMissingResult = vi.fn();
+    const missingBridge = createBridgeWithToolResult(
+      "get_goal",
+      textToolResult('{\n  "status": "missing"\n}', { status: "missing" }),
+    );
+    const missingResult = await missingBridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-missing",
+        namespace: null,
+        tool: "get_goal",
+        arguments: {},
+      },
+      { onAgentToolResult: onMissingResult },
+    );
+    expect(missingResult.success).toBe(true);
+    expect(onMissingResult).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "get_goal", isError: false }),
+    );
+  });
+
   it("keeps available and registered schemas paired with their tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
