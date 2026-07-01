@@ -148,6 +148,14 @@ describe("signal reply-to config", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("rejects unreachable Signal channel reply-to overrides", () => {
+    const result = SignalConfigSchema.safeParse({
+      replyToModeByChatType: { channel: "off" },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("Discord mentionAliases schema", () => {

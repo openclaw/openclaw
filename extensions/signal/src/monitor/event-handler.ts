@@ -29,6 +29,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -39,6 +40,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
@@ -116,6 +118,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     commandBody: string;
     timestamp?: number;
     messageId?: string;
+    isBatched?: boolean;
     mediaPath?: string;
     mediaType?: string;
     mediaPaths?: string[];
@@ -194,6 +197,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyThreading = resolveBatchedReplyThreadingPolicy(
+      resolveSignalReplyToMode({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        chatType: entry.isGroup ? "group" : "direct",
+      }),
+      entry.isBatched === true,
+    );
     const media =
       entry.mediaPaths && entry.mediaPaths.length > 0
         ? entry.mediaPaths.map((path, index) => ({
@@ -261,6 +272,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media,
       extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
+        ReplyThreading: replyThreading,
       },
     });
 
@@ -298,6 +310,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
       });
 
+    const nativeReplyContext = {
+      replyToId: ctxPayload.ReplyToId,
+      author: entry.senderRecipient,
+      body: entry.nativeReplyBody ?? entry.bodyText,
+      state: { hasReplied: false },
+    };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
@@ -313,11 +331,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
-          replyContext: {
-            replyToId: ctxPayload.ReplyToId,
-            author: entry.senderRecipient,
-            body: entry.nativeReplyBody ?? entry.bodyText,
-          },
+          replyContext: nativeReplyContext,
           chatType: entry.isGroup ? "group" : "direct",
         });
       },
@@ -452,6 +466,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
+        isBatched: true,
         nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
         mediaPath: undefined,
         mediaType: undefined,

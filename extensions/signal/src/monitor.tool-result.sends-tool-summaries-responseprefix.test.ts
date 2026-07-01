@@ -211,6 +211,197 @@ describe("monitorSignalProvider tool results", () => {
     }
   });
 
+  it("uses native quote metadata only on the first implicit payload when configured", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "first",
+      }),
+    );
+    replyMock.mockResolvedValue([{ text: "first reply" }, { text: "second reply" }]);
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(2);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "quote me",
+    });
+    expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it.each([
+    ["status", { isStatusNotice: true }],
+    ["fallback", { isFallbackNotice: true }],
+    ["compaction", { isCompactionNotice: true }],
+  ] as const)(
+    "does not let %s notices consume the first native quote slot",
+    async (_name, flag) => {
+      setSignalToolResultTestConfig(
+        createSignalToolResultConfig({
+          autoStart: false,
+          replyToMode: "first",
+        }),
+      );
+      replyMock.mockResolvedValue([{ text: "working", ...flag }, { text: "final reply" }]);
+
+      await receiveSignalPayloads({
+        payloads: [
+          {
+            envelope: {
+              sourceNumber: "+15550001111",
+              sourceName: "Ada",
+              timestamp: 1700000000001,
+              dataMessage: {
+                message: "quote me",
+              },
+            },
+          },
+        ],
+      });
+
+      await vi.waitFor(() => {
+        expect(sendMock).toHaveBeenCalledTimes(2);
+      });
+      for (const call of sendMock.mock.calls) {
+        expect(call[2]).toMatchObject({
+          replyToId: "1700000000001",
+          replyToAuthor: "+15550001111",
+          replyToBody: "quote me",
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["status", { isStatusNotice: true }],
+    ["fallback", { isFallbackNotice: true }],
+    ["compaction", { isCompactionNotice: true }],
+  ] as const)(
+    "keeps %s notices quoted after the first normal native reply",
+    async (_name, flag) => {
+      setSignalToolResultTestConfig(
+        createSignalToolResultConfig({
+          autoStart: false,
+          replyToMode: "first",
+        }),
+      );
+      replyMock.mockResolvedValue([{ text: "final reply" }, { text: "still working", ...flag }]);
+
+      await receiveSignalPayloads({
+        payloads: [
+          {
+            envelope: {
+              sourceNumber: "+15550001111",
+              sourceName: "Ada",
+              timestamp: 1700000000001,
+              dataMessage: {
+                message: "quote me",
+              },
+            },
+          },
+        ],
+      });
+
+      await vi.waitFor(() => {
+        expect(sendMock).toHaveBeenCalledTimes(2);
+      });
+      for (const call of sendMock.mock.calls) {
+        expect(call[2]).toMatchObject({
+          replyToId: "1700000000001",
+          replyToAuthor: "+15550001111",
+          replyToBody: "quote me",
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["status", { isStatusNotice: true }],
+    ["fallback", { isFallbackNotice: true }],
+    ["compaction", { isCompactionNotice: true }],
+  ] as const)("does not quote %s notices when native quote mode is off", async (_name, flag) => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "off",
+      }),
+    );
+    replyMock.mockResolvedValue([{ text: "working", ...flag }]);
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("does not implicitly quote a single-message batched-mode turn", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "batched",
+      }),
+    );
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
   it("passes inbound Signal quote metadata to media replies", async () => {
     replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
 
@@ -295,6 +486,76 @@ describe("monitorSignalProvider tool results", () => {
   it("does not reconstruct native quote metadata when replyToMode strips threading", async () => {
     setSignalToolResultTestConfig(
       createSignalToolResultConfig({ autoStart: false, replyToMode: "off" }),
+    );
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("lets direct chat replyToMode override channel default quote settings", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "all",
+        replyToModeByChatType: { direct: "off" },
+      }),
+    );
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("lets account replyToMode override channel chat-type quote settings", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToModeByChatType: { direct: "all" },
+        accounts: {
+          default: {
+            replyToMode: "off",
+          },
+        },
+      }),
     );
     replyMock.mockResolvedValue({ text: "final reply" });
 

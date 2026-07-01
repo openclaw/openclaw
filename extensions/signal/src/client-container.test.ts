@@ -17,6 +17,21 @@ import {
 
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
+
+function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (bytes.byteLength > 0) {
+          controller.enqueue(bytes);
+        }
+        controller.close();
+      },
+    }),
+  };
+}
+
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
@@ -223,7 +238,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ version: "1.0" }),
+      ...bodyStream(JSON.stringify({ version: "1.0" })),
     });
 
     const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
@@ -236,7 +251,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 201,
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     await containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST", {
@@ -259,7 +274,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 201,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerRestRequest(
@@ -289,7 +304,7 @@ describe("containerRestRequest", () => {
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
-      text: async () => "Server error details",
+      ...bodyStream("Server error details"),
     });
 
     await expect(
@@ -297,11 +312,24 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow("Signal REST 500: Server error details");
   });
 
+  it("bounds REST error response bodies before reporting failures", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream("x".repeat(20_000)),
+    });
+
+    await expect(
+      containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST"),
+    ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
+  });
+
   it("handles empty response body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
@@ -312,7 +340,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "{}",
+      ...bodyStream("{}"),
     });
 
     await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080", timeoutMs: 5000 });
@@ -332,7 +360,7 @@ describe("containerRestRequest", () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => "{}",
+        ...bodyStream("{}"),
       });
 
       await containerRestRequest("/v1/about", {
@@ -357,7 +385,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
     });
 
     const result = await containerSendMessage({
@@ -382,7 +410,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
     });
 
     await containerSendMessage({
@@ -405,7 +433,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "not-a-number" }),
+      ...bodyStream(JSON.stringify({ timestamp: "not-a-number" })),
     });
 
     await expect(
@@ -424,7 +452,7 @@ describe("containerSendMessage", () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ timestamp }),
+        ...bodyStream(JSON.stringify({ timestamp })),
       });
 
       await expect(
@@ -442,7 +470,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -463,7 +491,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -482,7 +510,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -511,7 +539,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -613,7 +641,7 @@ describe("containerRpcRequest send", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
     });
 
     await containerRpcRequest(
@@ -622,9 +650,9 @@ describe("containerRpcRequest send", () => {
         account: "+14259798283",
         recipient: ["+15550001111"],
         message: "Hello world",
-        "quote-timestamp": 1699999999999,
-        "quote-author": "+15550002222",
-        "quote-message": "original",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "+15550002222",
+        quoteMessage: "original",
       },
       { baseUrl: "http://localhost:8080" },
     );
@@ -633,6 +661,56 @@ describe("containerRpcRequest send", () => {
     expect(body.quote_timestamp).toBe(1699999999999);
     expect(body.quote_author).toBe("+15550002222");
     expect(body.quote_message).toBe("original");
+  });
+
+  it("strips uuid prefixes from native quote authors", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "uuid:author-uuid",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_author).toBe("author-uuid");
+  });
+
+  it("ignores malformed native quote params at the container boundary", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: "not-a-timestamp",
+        quoteAuthor: ["+15550002222"],
+        quoteMessage: { text: "original" },
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body).not.toHaveProperty("quote_timestamp");
+    expect(body).not.toHaveProperty("quote_author");
+    expect(body).not.toHaveProperty("quote_message");
   });
 });
 
@@ -854,7 +932,7 @@ describe("containerRestRequest edge cases", () => {
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     await expect(
@@ -866,12 +944,12 @@ describe("containerRestRequest edge cases", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "not-valid-json",
+      ...bodyStream("not-valid-json"),
     });
 
     await expect(
       containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Signal REST returned malformed JSON");
   });
 });
 
@@ -924,7 +1002,7 @@ describe("containerSendReaction", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerSendReaction({
@@ -960,7 +1038,7 @@ describe("containerRpcRequest reactions", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerRpcRequest(
@@ -992,7 +1070,7 @@ describe("containerRemoveReaction", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerRemoveReaction({

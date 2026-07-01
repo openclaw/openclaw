@@ -14,6 +14,7 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
@@ -50,6 +51,7 @@ export type ContainerWebSocketMessage = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
+const DEFAULT_REST_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -109,6 +111,13 @@ async function readCappedResponseBuffer(res: Response, maxResponseBytes: number)
   return await readResponseWithLimit(res, maxResponseBytes, {
     onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
   });
+}
+
+async function readSignalRestTextResponse(res: Response): Promise<string> {
+  const body = await readResponseWithLimit(res, DEFAULT_REST_RESPONSE_MAX_BYTES, {
+    onOverflow: () => new Error("Signal REST response exceeded size limit"),
+  });
+  return new TextDecoder().decode(body);
 }
 
 async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
@@ -241,16 +250,20 @@ export async function containerRestRequest<T = unknown>(
   }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
+    const errorText = await readResponseTextLimited(res).catch(() => "");
     throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
   }
 
-  const text = await res.text();
+  const text = await readSignalRestTextResponse(res);
   if (!text) {
     return undefined as T;
   }
 
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Signal REST returned malformed JSON");
+  }
 }
 
 /**
@@ -448,6 +461,14 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
     throw new Error("Signal REST send returned invalid timestamp");
   }
   return timestamp;
+}
+
+function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(raw) ?? undefined;
+}
+
+function normalizeContainerQuoteText(raw: unknown): string | undefined {
+  return typeof raw === "string" ? raw : undefined;
 }
 
 /**
@@ -660,6 +681,10 @@ export async function containerRpcRequest<T = unknown>(
         return { start: Number(start), length: Number(length), style };
       });
 
+      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+        p.quoteTimestamp ?? p["quote-timestamp"],
+      );
+      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
       const result = await containerSendMessage({
         baseUrl: opts.baseUrl,
         account: (p.account as string) ?? "",
@@ -667,10 +692,9 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
-        quoteTimestamp: p["quote-timestamp"] as number | undefined,
-        quoteAuthor:
-          typeof p["quote-author"] === "string" ? stripUuidPrefix(p["quote-author"]) : undefined,
-        quoteMessage: p["quote-message"] as string | undefined,
+        quoteTimestamp,
+        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
+        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
         timeoutMs: opts.timeoutMs,
       });
       return result as T;

@@ -1,6 +1,7 @@
 // Signal plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
@@ -21,7 +22,12 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  resolveSignalAccount,
+  resolveSignalReplyToMode,
+  type ResolvedSignalAccount,
+} from "./accounts.js";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
   signalApprovalCapability,
@@ -40,10 +46,12 @@ import {
 } from "./shared.js";
 type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
+type SignalApprovalReactionsModule = typeof import("./approval-reactions.js");
 
 let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
 let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
 let signalSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | null = null;
+let signalApprovalReactionsModulePromise: Promise<SignalApprovalReactionsModule> | null = null;
 
 async function loadSignalMonitorModule() {
   signalMonitorModulePromise ??= import("./monitor.js");
@@ -58,6 +66,11 @@ async function loadSignalProbeModule() {
 async function loadSignalSendRuntime() {
   signalSendRuntimePromise ??= import("./send.runtime.js");
   return await signalSendRuntimePromise;
+}
+
+async function loadSignalApprovalReactionsModule() {
+  signalApprovalReactionsModulePromise ??= import("./approval-reactions.js");
+  return await signalApprovalReactionsModulePromise;
 }
 
 async function resolveSignalSendContext(params: {
@@ -101,6 +114,20 @@ async function sendSignalOutbound(params: {
 type SignalMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
 };
+
+function attachSignalVisibleText<T extends object>(result: T, visibleText: string) {
+  const meta =
+    "meta" in result && result.meta && typeof result.meta === "object"
+      ? (result.meta as Record<string, unknown>)
+      : {};
+  return {
+    ...result,
+    meta: {
+      ...meta,
+      signalVisibleText: visibleText,
+    },
+  };
+}
 
 const signalMessageAdapter = defineChannelMessageAdapter({
   id: "signal",
@@ -224,7 +251,7 @@ async function sendFormattedSignalText(ctx: {
       textMode: "plain",
       textStyles: chunk.styles,
     });
-    results.push(result);
+    results.push(attachSignalVisibleText(result, chunk.text));
   }
   return attachChannelToResults("signal", results);
 }
@@ -267,7 +294,49 @@ async function sendFormattedSignalMedia(ctx: {
     textMode: "plain",
     textStyles: formatted.styles,
   });
-  return attachChannelToResult("signal", result);
+  return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
+}
+
+async function registerDeliveredSignalApprovalPayloadForReactions(
+  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
+) {
+  const account = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.target.accountId ?? undefined,
+  });
+  if (!account.config.account) {
+    return;
+  }
+  const { registerSignalApprovalReactionTargetForDeliveredPayload } =
+    await loadSignalApprovalReactionsModule();
+  registerSignalApprovalReactionTargetForDeliveredPayload({
+    cfg: params.cfg,
+    target: { ...params.target, accountId: account.accountId },
+    payload: params.payload,
+    results: params.results,
+    targetAuthor: account.config.account,
+  });
+}
+
+async function renderSignalApprovalPayloadForReactions(
+  params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
+) {
+  const account = resolveSignalAccount({
+    cfg: params.ctx.cfg,
+    accountId: params.ctx.accountId ?? undefined,
+  });
+  if (!account.config.account) {
+    return null;
+  }
+  const { addSignalApprovalReactionHintToStructuredPayload } =
+    await loadSignalApprovalReactionsModule();
+  return addSignalApprovalReactionHintToStructuredPayload({
+    cfg: params.ctx.cfg,
+    accountId: params.ctx.accountId ?? undefined,
+    to: params.ctx.to,
+    payload: params.payload,
+    targetAuthor: account.config.account,
+  });
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
@@ -391,12 +460,16 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       },
     },
     security: signalSecurityAdapter,
+    threading: {
+      resolveReplyToMode: (params) => resolveSignalReplyToMode(params),
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
         chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
+        sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
           shouldSuppressLocalSignalExecApprovalPrompt({
             cfg,
@@ -435,6 +508,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             deps,
             abortSignal,
           }),
+        renderPresentation: (params) => renderSignalApprovalPayloadForReactions(params),
+        afterDeliverPayload: (params) => registerDeliveredSignalApprovalPayloadForReactions(params),
       },
       attachedResults: {
         channel: "signal",

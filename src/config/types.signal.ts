@@ -45,7 +45,7 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   /** Control native reply quoting when replies target an inbound Signal message. */
   replyToMode?: ReplyToMode;
   /** Optional per-chat-type native reply quoting overrides. */
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  replyToModeByChatType?: Partial<Record<"direct" | "group", ReplyToMode>>;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
