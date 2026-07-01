@@ -25,8 +25,13 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
-import { GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  GatewayDrainingError,
+  markGatewayDraining,
+  resetCommandQueueStateForTest,
+} from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import {
@@ -487,6 +492,117 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
+  it("keeps a globally draining preflight visible until recovery owns delivery", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-global-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    // Drain globally without marking abortedLastRun or persisting recovery
+    // delivery. The global gateway-draining flag is not enough to go silent,
+    // because recovery has not yet owned a user-visible delivery route.
+    compactState.compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      markGatewayDraining();
+      throw new GatewayDrainingError();
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+    try {
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 200_000,
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+    } finally {
+      resetCommandQueueStateForTest();
+    }
+  });
+
+  it("keeps a globally draining preflight silent once recovery owns delivery", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-owned-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      abortedLastRun: true,
+      restartRecoveryDeliveryContext: {
+        channel: "telegram",
+        to: "chat-123",
+        threadId: "topic-2",
+      },
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    compactState.compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      markGatewayDraining();
+      throw new GatewayDrainingError();
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+    try {
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 200_000,
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expectReplyText(result, SILENT_REPLY_TOKEN);
+    } finally {
+      resetCommandQueueStateForTest();
+    }
   });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
