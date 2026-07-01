@@ -108,7 +108,7 @@ import type {
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
 import {
-  dismissExecApprovalPrompt,
+  dismissExecApprovalEntryPrompt,
   isStaleApprovalResolutionError,
   refreshPendingApprovalQueue,
   type ExecApprovalRequest,
@@ -1424,10 +1424,10 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      dismissExecApprovalPrompt(this, active.id);
+      dismissExecApprovalEntryPrompt(this, active);
     } catch (err) {
       if (isStaleApprovalResolutionError(err)) {
-        dismissExecApprovalPrompt(this, active.id);
+        dismissExecApprovalEntryPrompt(this, active);
         await refreshPendingApprovalQueue(this);
         return;
       }
