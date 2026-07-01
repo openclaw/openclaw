@@ -100,6 +100,8 @@ const mocks = vi.hoisted(() => ({
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  collectWhatsappResponsivenessHealthFindings: vi.fn(() => []),
+  noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
@@ -338,6 +340,11 @@ vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
 }));
 
+vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
+  collectWhatsappResponsivenessHealthFindings: mocks.collectWhatsappResponsivenessHealthFindings,
+  noteWhatsappResponsivenessHealth: mocks.noteWhatsappResponsivenessHealth,
+}));
+
 vi.mock("../commands/doctor-device-pairing.js", () => ({
   collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
@@ -542,6 +549,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
     mocks.maybeRepairHeartbeatTemplate.mockReset();
     mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReset();
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValue([]);
+    mocks.noteWhatsappResponsivenessHealth.mockReset();
+    mocks.noteWhatsappResponsivenessHealth.mockResolvedValue(undefined);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
@@ -1362,6 +1373,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
     expect(contributionIds).toContain("core/doctor/disk-space");
     expect(contributionIds).toContain("core/doctor/heartbeat-template");
+    expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
@@ -1692,6 +1704,77 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
     });
     expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+  });
+
+  it("keeps WhatsApp responsiveness opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const whatsappCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/whatsapp-responsiveness",
+    );
+    expect(whatsappCheck).toMatchObject({ defaultEnabled: false });
+    expect(whatsappCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { channels: { whatsapp: { enabled: true } } },
+      mode: "lint",
+      allowExecSecretRefs: true,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [whatsappCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).not.toHaveBeenCalled();
+
+    const status = {
+      eventLoop: {
+        degraded: true,
+        reasons: ["event_loop_delay"],
+        intervalMs: 30_000,
+        delayP99Ms: 42,
+        delayMaxMs: 12_000,
+        utilization: 0.3,
+        cpuCoreRatio: 0.4,
+      },
+    };
+    mocks.checkGatewayHealth.mockResolvedValueOnce({
+      authenticated: true,
+      healthOk: true,
+      status,
+    });
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValueOnce([
+      {
+        checkId: "core/doctor/whatsapp-responsiveness",
+        severity: "warning",
+        message: "Gateway event loop is degraded while local TUI clients are running.",
+        path: "channels.whatsapp",
+        requirement: "local-tui-event-loop-pressure",
+      },
+    ]);
+    mocks.callGateway.mockResolvedValueOnce(status);
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/whatsapp-responsiveness" })],
+    });
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      config: ctx.cfg,
+    });
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      status,
+    });
   });
 
   it("keeps device pairing opt-in for default lint selection", async () => {
