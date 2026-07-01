@@ -1334,10 +1334,12 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
+  let partialFailureError: string | undefined;
   const wrappedParams = {
     ...params,
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
+      partialFailureError = formatErrorMessage(err);
       params.onError?.(err, payload);
     },
   };
@@ -1371,13 +1373,14 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(
-          (err: unknown) => {
-            log.warn(
-              `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-            );
-          },
-        );
+        const failureMessage = partialFailureError
+          ? `partial delivery failure (bestEffort): ${partialFailureError}`
+          : "partial delivery failure (bestEffort)";
+        await failDelivery(queueId, failureMessage).catch((err: unknown) => {
+          log.warn(
+            `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+          );
+        });
       } else {
         if (platformSendStarted) {
           await markQueuedPlatformOutcomeUnknown({

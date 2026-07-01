@@ -318,6 +318,81 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
+  it("treats omitted enabled as enabled during provider startup", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    delete cfg.channels!.msteams!.enabled;
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(expressControl.apps.length).toBeGreaterThan(0);
+    });
+
+    abort.abort();
+    const result = await task;
+    if (!result.app) {
+      throw new Error("expected Teams monitor app with omitted enabled");
+    }
+    await expect(result.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("resolves named account config when only accountId is provided", async () => {
+    const abort = new AbortController();
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-app-password",
+              webhook: {
+                port: 0,
+                path: "/api/messages",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      accountId: "support",
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(expressControl.apps.length).toBeGreaterThan(0);
+    });
+    expect(loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
+      {
+        appId: "support-app-id",
+        appPassword: "support-app-password",
+        tenantId: "tenant-id",
+        type: "secret",
+      },
+      expect.objectContaining({ cloud: "Public" }),
+    );
+
+    abort.abort();
+    const result = await task;
+    if (!result.app) {
+      throw new Error("expected named Teams monitor app");
+    }
+    await expect(result.shutdown()).resolves.toBeUndefined();
+  });
+
   it("rejects startup when webhook port is already in use", async () => {
     expressControl.mode.value = "error";
     await expect(

@@ -49,6 +49,23 @@ const emptyReactionCases: Array<{
   },
 ];
 
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
+
 describe("MSTeams reaction validation", () => {
   it.each(emptyReactionCases)("$name rejects empty reaction type", async ({ invoke }) => {
     await expect(invoke()).rejects.toThrow(/Reaction type is required/);
@@ -87,6 +104,21 @@ describe("pinMessageMSTeams", () => {
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
     expect(mockState.postGraphJson).not.toHaveBeenCalled();
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
+
+    await pinMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("unpinMessageMSTeams", () => {
@@ -115,6 +147,21 @@ describe("unpinMessageMSTeams", () => {
       }),
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
     expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    await unpinMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      pinnedMessageId: "pinned-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
   });
 });
 
@@ -152,6 +199,42 @@ describe("reactMessageMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/setReaction",
       body: { reactionType: "heart" },
+    });
+  });
+
+  it("resolves Graph tokens from the named account without double-scoping", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "shared-tenant",
+          accounts: {
+            legal: {
+              appId: "legal-app",
+              appPassword: "legal-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await reactMessageMSTeams({
+      cfg,
+      accountId: "legal",
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "like",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(cfg, {
+      accountId: "legal",
+      preferDelegated: true,
+    });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      body: { reactionType: "like" },
     });
   });
 
@@ -249,6 +332,42 @@ describe("unreactMessageMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
       body: { reactionType: "angry" },
+    });
+  });
+
+  it("resolves Graph tokens from the named account without double-scoping", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "shared-tenant",
+          accounts: {
+            legal: {
+              appId: "legal-app",
+              appPassword: "legal-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await unreactMessageMSTeams({
+      cfg,
+      accountId: "legal",
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "sad",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(cfg, {
+      accountId: "legal",
+      preferDelegated: true,
+    });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
+      body: { reactionType: "sad" },
     });
   });
 });

@@ -1,13 +1,15 @@
 // Msteams tests cover token plugin behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
+  loadDelegatedTokens,
   resolveDelegatedAccessToken,
   resolveMSTeamsCredentials,
+  saveDelegatedTokens,
 } from "./token.js";
 
 const oauthTokenMocks = vi.hoisted(() => ({
@@ -107,6 +109,34 @@ describe("token – secret credentials", () => {
       appId: "env-app-id",
       appPassword: "env-app-pw",
       tenantId: "env-tenant-id",
+    });
+  });
+
+  it("can disable env fallback for named accounts", () => {
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    process.env.MSTEAMS_APP_PASSWORD = "env-app-pw";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+
+    expect(resolveMSTeamsCredentials(undefined, { allowEnvFallback: false })).toBeUndefined();
+  });
+
+  it("does not inherit env auth type when env fallback is disabled", () => {
+    process.env.MSTEAMS_AUTH_TYPE = "federated";
+
+    expect(
+      resolveMSTeamsCredentials(
+        {
+          appId: "named-app-id",
+          appPassword: "named-app-pw",
+          tenantId: "tenant-id",
+        } as any,
+        { allowEnvFallback: false },
+      ),
+    ).toEqual({
+      type: "secret",
+      appId: "named-app-id",
+      appPassword: "named-app-pw",
+      tenantId: "tenant-id",
     });
   });
 
@@ -313,6 +343,13 @@ describe("resolveDelegatedAccessToken", () => {
     );
   }
 
+  const delegatedTokens = {
+    accessToken: "stale-access",
+    refreshToken: "refresh-token",
+    expiresAt: Date.now() + 60_000,
+    scopes: ["User.Read"],
+  };
+
   it("reuses a valid delegated access token before expiry", async () => {
     writeDelegatedTokens(Date.now() + 60_000);
 
@@ -338,6 +375,20 @@ describe("resolveDelegatedAccessToken", () => {
       }),
     ).resolves.toBeUndefined();
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenCalledOnce();
+  });
+
+  it("stores delegated tokens separately per account while preserving the default filename", () => {
+    saveDelegatedTokens({ ...delegatedTokens, accessToken: "default-access" });
+    saveDelegatedTokens(
+      { ...delegatedTokens, accessToken: "secondary-access" },
+      { accountId: "secondary" },
+    );
+
+    expect(loadDelegatedTokens()?.accessToken).toBe("default-access");
+    expect(loadDelegatedTokens({ accountId: "secondary" })?.accessToken).toBe("secondary-access");
+    expect(loadDelegatedTokens({ accountId: "finance" })).toBeUndefined();
+    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(true);
+    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.secondary.json"))).toBe(true);
   });
 });
 

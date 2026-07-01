@@ -14,6 +14,23 @@ const mockState = getGraphMessagesMockState();
 installGraphMessagesMockDefaults();
 let searchMessagesMSTeams: GraphMessagesTestModule["searchMessagesMSTeams"];
 
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
+
 beforeAll(async () => {
   ({ searchMessagesMSTeams } = await loadGraphMessagesTestModule());
 });
@@ -224,5 +241,20 @@ describe("searchMessagesMSTeams", () => {
     expect(calledPath).toContain(
       `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages?`,
     );
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      query: "test",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
   });
 });

@@ -116,6 +116,35 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("routes legacy single-account Teams configs to the default agent without bindings", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3978, path: "/api/messages" },
+        },
+      },
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      accountId: "default",
+      peer: { kind: "direct", id: "user-aad-object-id" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+  });
+
   test.each([
     { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
     {

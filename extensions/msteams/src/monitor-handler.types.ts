@@ -8,6 +8,7 @@ import type { MSTeamsSsoDeps } from "./sso.js";
 
 export type MSTeamsMessageHandlerDeps = {
   cfg: OpenClawConfig;
+  accountId: string;
   runtime: RuntimeEnv;
   appId: string;
   app: MSTeamsApp;

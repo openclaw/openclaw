@@ -21,6 +21,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -104,6 +105,47 @@ import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
+const msteamsSessionTurnChains = new Map<string, Promise<void>>();
+
+export function resolveMSTeamsTurnChainKey(params: {
+  storePath?: string;
+  sessionKey: string;
+}): string {
+  const sessionKey = params.sessionKey.trim();
+  const storePath = params.storePath?.trim();
+  if (storePath) {
+    return sessionKey ? `store:${storePath}:session:${sessionKey}` : `store:${storePath}`;
+  }
+  return sessionKey ? "global" : "";
+}
+
+async function enqueueMSTeamsSessionTurn<T>(
+  params: {
+    storePath?: string;
+    sessionKey: string;
+  },
+  task: () => Promise<T>,
+): Promise<T> {
+  const key = resolveMSTeamsTurnChainKey(params);
+  if (!key) {
+    return await task();
+  }
+  const previous = msteamsSessionTurnChains.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(task);
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  msteamsSessionTurnChains.set(key, settled);
+  const cleanup = () => {
+    if (msteamsSessionTurnChains.get(key) === settled) {
+      msteamsSessionTurnChains.delete(key);
+    }
+  };
+  settled.then(cleanup, cleanup);
+  return await current;
+}
+
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
   dmPolicy?: string;
@@ -183,6 +225,7 @@ function buildStoredConversationReference(params: {
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -199,7 +242,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.debug?.(message);
     }
   };
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",
@@ -305,6 +350,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupPolicy,
     } = await resolveMSTeamsSenderAccess({
       cfg,
+      accountId,
       activity,
       hasControlCommand: isControlCommand,
     });
@@ -485,6 +531,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      accountId,
       teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
@@ -849,7 +896,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       textLimit,
       onSentMessageIds: (ids) => {
         for (const id of ids) {
-          recordMSTeamsSentMessage(conversationId, id);
+          recordMSTeamsSentMessage(conversationId, id, { accountId: route.accountId });
         }
       },
       tokenProvider,
@@ -874,56 +921,60 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const turnResult = await core.channel.inbound.run({
-        channel: "msteams",
-        accountId: route.accountId,
-        raw: context,
-        adapter: {
-          ingest: () => ({
-            id: activity.id ?? `${teamsFrom}:${Date.now()}`,
-            timestamp: timestamp?.getTime(),
-            rawText: rawBody,
-            textForAgent: bodyForAgent,
-            textForCommands: commandBody,
-            raw: activity,
-          }),
-          resolveTurn: () => ({
+      const turnResult = await enqueueMSTeamsSessionTurn(
+        { storePath, sessionKey: route.sessionKey },
+        async () =>
+          await core.channel.inbound.run({
             channel: "msteams",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
-            ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
-            record: {
-              onRecordError: (err) => {
-                logVerboseMessage(
-                  `msteams: failed updating session meta: ${formatUnknownError(err)}`,
-                );
-              },
-            },
-            history: {
-              isGroup: isRoomish,
-              historyKey,
-              historyMap: conversationHistories,
-              limit: historyLimit,
-            },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
+            raw: context,
+            adapter: {
+              ingest: () => ({
+                id: activity.id ?? `${teamsFrom}:${Date.now()}`,
+                timestamp: timestamp?.getTime(),
+                rawText: rawBody,
+                textForAgent: bodyForAgent,
+                textForCommands: commandBody,
+                raw: activity,
               }),
-            runDispatch: () =>
-              dispatchReplyFromConfigWithSettledDispatcher({
-                cfg,
+              resolveTurn: () => ({
+                channel: "msteams",
+                accountId: route.accountId,
+                routeSessionKey: route.sessionKey,
+                storePath,
                 ctxPayload,
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-                replyOptions,
-                configOverride,
+                recordInboundSession: core.channel.session.recordInboundSession,
+                record: {
+                  onRecordError: (err) => {
+                    logVerboseMessage(
+                      `msteams: failed updating session meta: ${formatUnknownError(err)}`,
+                    );
+                  },
+                },
+                history: {
+                  isGroup: isRoomish,
+                  historyKey,
+                  historyMap: conversationHistories,
+                  limit: historyLimit,
+                },
+                onPreDispatchFailure: () =>
+                  core.channel.reply.settleReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => markDispatchIdle(),
+                  }),
+                runDispatch: () =>
+                  dispatchReplyFromConfigWithSettledDispatcher({
+                    cfg,
+                    ctxPayload,
+                    dispatcher,
+                    onSettled: () => markDispatchIdle(),
+                    replyOptions,
+                    configOverride,
+                  }),
               }),
+            },
           }),
-        },
-      });
+      );
       const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
       const queuedFinal = dispatchResult?.queuedFinal ?? false;
       const counts = resolveInboundReplyDispatchCounts(dispatchResult);
@@ -951,6 +1002,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<MSTeamsDebounceEntry>({
     debounceMs: inboundDebounceMs,
+    serializeImmediate: true,
     buildKey: (entry) => {
       const conversationId = normalizeMSTeamsConversationId(
         entry.context.activity.conversation?.id ?? "",
@@ -1023,7 +1075,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const implicitMentionKinds: Array<"reply_to_bot"> =
       conversationId &&
       replyToId &&
-      (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+      (await wasMSTeamsMessageSentWithPersistence({
+        conversationId,
+        messageId: replyToId,
+        accountId,
+      }))
         ? ["reply_to_bot"]
         : [];
 
