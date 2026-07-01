@@ -1,0 +1,236 @@
+/* OpenClaw GTK4 — orange accent, dashboard-style layout */
+
+@define-color accent_bg_color #f97316;
+@define-color accent_fg_color #ffffff;
+@define-color accent_color #f97316;
+
+/* ---- Sidebar ---- */
+.sidebar-box {
+    background-color: alpha(currentColor, 0.03);
+}
+
+.navigation-sidebar row {
+    border-radius: 8px;
+    margin: 1px 8px;
+    padding: 0;
+    min-height: 0;
+}
+
+.navigation-sidebar row:selected {
+    background-color: alpha(@accent_bg_color, 0.15);
+    color: @accent_color;
+}
+
+.nav-group-header {
+    font-weight: 700;
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.5;
+}
+
+/* ---- Top bar ---- */
+.topbar {
+    min-height: 40px;
+}
+
+.topbar > dropdown {
+    min-width: 140px;
+}
+
+/* ---- Status chips ---- */
+.status-chip {
+    font-size: 0.75em;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background-color: alpha(currentColor, 0.1);
+}
+
+.chip-ok {
+    color: #22c55e;
+    background-color: alpha(#22c55e, 0.12);
+}
+
+.chip-error {
+    color: #ef4444;
+    background-color: alpha(#ef4444, 0.12);
+}
+
+/* ---- Status dot (sidebar footer) ---- */
+.status-dot {
+    font-size: 0.6em;
+}
+
+.status-dot.connected {
+    color: #22c55e;
+}
+
+.status-dot.disconnected {
+    color: #ef4444;
+}
+
+/* ---- Chat bubbles ---- */
+.chat-bubble {
+    padding: 10px 14px;
+    border-radius: 16px;
+}
+
+.user-bubble {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 16px 16px 4px 16px;
+}
+
+.assistant-bubble {
+    background-color: alpha(currentColor, 0.06);
+    border-radius: 16px 16px 16px 4px;
+}
+
+/* ---- Cards ---- */
+.card {
+    border-radius: 12px;
+}
+
+/* ---- Streaming text ---- */
+.stream-text {
+    font-style: italic;
+    opacity: 0.6;
+    padding: 4px 0;
+}
+
+/* ---- Overview stat cards ---- */
+.card > box > label.title-2 {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Boxed lists ---- */
+.boxed-list {
+    border-radius: 12px;
+}
+
+/* ---- Log level chips ---- */
+.log-info { color: #3b82f6; }
+.log-warn { color: #f59e0b; }
+.log-error { color: #ef4444; }
+.log-debug { color: #8b5cf6; }
+
+/* ---- Config editor ---- */
+.config-valid { color: #22c55e; }
+.config-invalid { color: #ef4444; }
+
+/* ---- About view ---- */
+.about-credits {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+/* ---- Status page icon accent ---- */
+statuspage > scrolledwindow > viewport > box > .icon image {
+    color: @accent_color;
+    opacity: 0.6;
+}
+
+statuspage.error > scrolledwindow > viewport > box > .icon image {
+    color: #ef4444;
+    opacity: 0.8;
+}
+
+/* ---- Headerbar polish ---- */
+headerbar {
+    min-height: 46px;
+    padding: 0 6px;
+}
+
+headerbar button.flat {
+    border-radius: 6px;
+}
+
+/* ---- Sidebar toggle button ---- */
+headerbar togglebutton.flat:checked {
+    background-color: alpha(@accent_color, 0.15);
+    color: @accent_color;
+}
+
+/* ---- Improved status chip variants ---- */
+.status-chip {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+}
+
+.chip-ok {
+    background-color: alpha(#22c55e, 0.15);
+    border: 1px solid alpha(#22c55e, 0.25);
+}
+
+.chip-error {
+    background-color: alpha(#ef4444, 0.15);
+    border: 1px solid alpha(#ef4444, 0.25);
+}
+
+/* ---- Chat bubble refinements ---- */
+.user-bubble {
+    box-shadow: 0 1px 2px alpha(black, 0.08);
+}
+
+.assistant-bubble {
+    border: 1px solid alpha(currentColor, 0.08);
+}
+
+/* ---- Sidebar group header: more subtle ---- */
+.nav-group-header {
+    padding-top: 6px;
+    padding-bottom: 2px;
+}
+
+/* ---- Toast positioning ---- */
+toastoverlay > toast {
+    margin-bottom: 16px;
+}
+
+/* ---- Loading spinner ---- */
+spinner {
+    color: @accent_color;
+    min-width: 32px;
+    min-height: 32px;
+}
+
+/* ---- Connection chip (content header right-side) ---- */
+headerbar label.status-chip {
+    margin: 0 4px;
+}
+
+/* ---- Pulse animation for connecting state ---- */
+@keyframes pulse {
+    0%, 100% { opacity: 1.0; }
+    50% { opacity: 0.3; }
+}
+
+.status-dot.connecting {
+    animation: pulse 1.5s ease-in-out infinite;
+    color: #f59e0b;
+}
+
+/* ---- Smooth transitions for view switches ---- */
+.boxed-list row {
+    transition: background-color 150ms ease;
+}
+
+/* ---- Button hover animations ---- */
+button.suggested-action {
+    transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+
+button.suggested-action:hover {
+    box-shadow: 0 2px 8px alpha(@accent_bg_color, 0.3);
+}
+
+/* ---- Card hover effect ---- */
+.card {
+    transition: box-shadow 200ms ease;
+}
+
+/* ---- Expander row smooth open ---- */
+row.expander {
+    transition: min-height 200ms ease;
+}

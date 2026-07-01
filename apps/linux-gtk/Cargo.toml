@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/gateway-client", "crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/openclaw/openclaw"
+
+[workspace.dependencies]
+tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
