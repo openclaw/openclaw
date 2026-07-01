@@ -36,7 +36,6 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { CHAT_ATTACHMENT_ACCEPT, isSupportedChatAttachmentFile } from "./attachment-support.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -91,6 +90,17 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "[role='listbox']",
   "[role='option']",
 ].join(",");
+
+const CHAT_ATTACHMENT_ACCEPT =
+  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
+  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
+
+function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
+  if (file.type.startsWith("video/")) {
+    return false;
+  }
+  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
+}
 
 function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
   return status?.phase === "done" || status?.phase === "interrupted";
