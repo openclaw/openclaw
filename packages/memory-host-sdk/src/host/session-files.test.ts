@@ -912,4 +912,33 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
   });
+
+  it("preserves prior content when [cron:] appears mid-transcript (regression for #98241)", async () => {
+    // Before fix: any user message starting with [cron:] wiped the entire
+    // archive content via the cron classifier.  Real cron prompts are always
+    // the first message; user-typed [cron:] appears later and must not wipe.
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Please remember: my vendor is Acme and budget is 5000" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Got it, saved." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "[cron:daily-digest] why did my digest job fail?" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "mid-transcript-cron-pattern.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(
+      await buildSessionEntry(filePath, { isUsageCountedArchive: true }),
+    );
+    // Content from BEFORE the cron-pattern message must survive
+    expect(entry.content).toContain("Acme");
+    expect(entry.content).toContain("budget is 5000");
+  });
 });
