@@ -1676,6 +1676,8 @@ class NodeRuntime(
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
         "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
         "Failed: couldn't reach the secure gateway endpoint for this host."
     }

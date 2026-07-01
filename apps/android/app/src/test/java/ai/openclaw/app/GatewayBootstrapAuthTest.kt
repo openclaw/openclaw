@@ -350,6 +350,29 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime =
+      NodeRuntime(
+        app,
+        tlsFingerprintProbe = { _, _ ->
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+        },
+      )
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+    )
+
+    assertEquals(
+      "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
+      waitForStatusText(runtime),
+    )
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
   fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
