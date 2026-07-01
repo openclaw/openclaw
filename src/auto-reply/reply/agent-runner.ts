@@ -126,6 +126,7 @@ import {
   evaluateNoOpRearmAdmission,
   type NoOpRearmWakeClass,
   recordNoOpRearmOutcome,
+  summarizeEmbeddedRunOutcome,
 } from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -2005,11 +2006,18 @@ export async function runReplyAgent(replyParams: {
     // the streak before it can schedule the next same-family wake. This is also the
     // recording site for continuation turns driven through getReplyFromConfig.
     if (noOpRearmWakeClass && replySessionKey) {
+      const facts = summarizeEmbeddedRunOutcome(runResult);
+      const messageToolOnlyWithoutDelivery =
+        opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+        runResult.didSendViaMessagingTool !== true &&
+        runResult.didDeliverSourceReplyViaMessageTool !== true;
       recordNoOpRearmOutcome({
         sessionKey: replySessionKey,
         wakeClass: noOpRearmWakeClass,
         runId,
-        result: runResult,
+        ...(messageToolOnlyWithoutDelivery
+          ? { facts: { ...facts, hasVisibleReply: false } }
+          : { facts }),
       });
     }
 

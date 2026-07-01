@@ -65,6 +65,15 @@ describe("classifyNoOpRearmWake", () => {
     expect(wake).toEqual({ kind: "fresh_human_edge", messageId: "msg-1" });
   });
 
+  it("treats a direct user_request without provenance as a fresh human edge", () => {
+    const wake = classifyNoOpRearmWake({
+      sessionKey: "agent:main:discord:channel:1466192485440164011",
+      inboundEventKind: "user_request",
+      messageId: "msg-no-provenance",
+    });
+    expect(wake).toEqual({ kind: "fresh_human_edge", messageId: "msg-no-provenance" });
+  });
+
   it("treats stale human room-event backlog as self-rearm, not a fresh edge", () => {
     const wake = classifyNoOpRearmWake(
       roomEventWake({ provenance: { kind: "external_user" }, messageId: "msg-2" }),
@@ -211,6 +220,18 @@ describe("turn outcome classification", () => {
     const facts = summarizeEmbeddedRunOutcome(result);
     expect(facts.hasVisibleReply).toBe(false);
     expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("no_op");
+  });
+
+  it("does not treat structural continuation markers as visible replies", () => {
+    for (const text of ["CONTINUE_WORK", "[[CONTINUE_WORK]]", "[[CONTINUE_DELEGATE: hold]]"]) {
+      const result: EmbeddedAgentRunResult = {
+        payloads: [{ text }],
+        meta: { durationMs: 1 },
+      };
+      const facts = summarizeEmbeddedRunOutcome(result);
+      expect(facts.hasVisibleReply).toBe(false);
+      expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("no_op");
+    }
   });
 
   it("classifies an error-only turn with no output as error_no_gain", () => {

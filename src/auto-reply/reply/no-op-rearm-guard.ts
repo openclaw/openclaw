@@ -20,7 +20,7 @@ import {
   type InputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN, stripContinuationSignal } from "../tokens.js";
 
 /** Provenance sourceTool used by restart/pending-delivery recovery replays. */
 const RESTART_SENTINEL_SOURCE_TOOL = "restart-sentinel";
@@ -145,6 +145,11 @@ export function classifyNoOpRearmWake(
     return { kind: "structured_completion", source: sourceTool };
   }
 
+  if (input.inboundEventKind === "user_request" && !isRoomEvent && provenance === undefined) {
+    const messageId = normalizeMessageId(input.messageId);
+    return messageId ? { kind: "fresh_human_edge", messageId } : { kind: "fresh_human_edge" };
+  }
+
   // Fresh human edge: a direct external_user request that is not room-event backlog
   // and not obviously stale. Stale human backlog must not reset, and is guarded as
   // backlog like a room event.
@@ -240,6 +245,15 @@ function isNoReplyText(text: string | undefined): boolean {
   );
 }
 
+function isContinuationMarkerOnlyText(text: string | undefined): boolean {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized) {
+    return false;
+  }
+  const stripped = stripContinuationSignal(normalized);
+  return stripped.signal !== null && stripped.text.trim().length === 0;
+}
+
 function hasSubstantiveToolCall(toolNames: readonly string[]): boolean {
   return toolNames.some((name) => {
     const normalized = normalizeOptionalString(name)?.toLowerCase();
@@ -262,7 +276,8 @@ export function summarizeEmbeddedRunOutcome(
     if (
       typeof payload.text === "string" &&
       payload.text.trim().length > 0 &&
-      !isNoReplyText(payload.text)
+      !isNoReplyText(payload.text) &&
+      !isContinuationMarkerOnlyText(payload.text)
     ) {
       return true;
     }
@@ -282,6 +297,7 @@ export function summarizeEmbeddedRunOutcome(
   const visibleText =
     visibleAssistantText !== undefined &&
     !isNoReplyText(visibleAssistantText) &&
+    !isContinuationMarkerOnlyText(visibleAssistantText) &&
     meta?.error?.kind !== "hook_block";
   const hasVisibleReply = payloadVisible || deliveredViaMessaging || visibleText;
 
