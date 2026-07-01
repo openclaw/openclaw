@@ -1038,9 +1038,12 @@ describe("buildGuardedModelFetch", () => {
       await first.text();
       const queued = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
-      await expect(
-        fetcher("https://api.openai.com/v1/responses", { method: "POST" }),
-      ).rejects.toMatchObject({ status: 429, code: "provider_rate_limit_queue_full" });
+      const queueFull = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      expect(queueFull.status).toBe(429);
+      expect(queueFull.headers.get("x-should-retry")).toBe("false");
+      await expect(queueFull.json()).resolves.toMatchObject({
+        error: { code: "provider_rate_limit_queue_full", type: "rate_limit" },
+      });
       await vi.advanceTimersByTimeAsync(50);
       await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
       await queued;
@@ -1070,9 +1073,12 @@ describe("buildGuardedModelFetch", () => {
 
       const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
       await first.text();
-      await expect(
-        fetcher("https://api.openai.com/v1/responses", { method: "POST" }),
-      ).rejects.toMatchObject({ status: 429, code: "provider_rate_limit_queue_full" });
+      const queueFull = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      expect(queueFull.status).toBe(429);
+      expect(queueFull.headers.get("x-should-retry")).toBe("false");
+      await expect(queueFull.json()).resolves.toMatchObject({
+        error: { code: "provider_rate_limit_queue_full", type: "rate_limit" },
+      });
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

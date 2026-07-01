@@ -622,13 +622,33 @@ function resolveProviderRateLimitDelayMs(
   return Math.max(intervalDelayMs, minuteDelayMs);
 }
 
+function buildProviderRateLimitQueueFullResponse(model: Model): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: `${model.provider}/${model.id}: provider request rate-limit queue is full`,
+        type: "rate_limit",
+        code: "provider_rate_limit_queue_full",
+      },
+    }),
+    {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: {
+        "content-type": "application/json",
+        "x-should-retry": "false",
+      },
+    },
+  );
+}
+
 async function waitForProviderRequestRateLimit(
   model: Model,
   config?: ProviderRequestRateLimitConfig,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<Response | undefined> {
   if (!config || (!config.requestsPerMinute && !config.minIntervalMs)) {
-    return;
+    return undefined;
   }
   const key = resolveProviderRateLimitKey(model);
   const bucket = providerRequestRateLimitBuckets.get(key) ?? {
@@ -642,17 +662,10 @@ async function waitForProviderRequestRateLimit(
   if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
     bucket.lastDispatchAt = Date.now();
     bucket.requestTimes.push(bucket.lastDispatchAt);
-    return;
+    return undefined;
   }
   if (bucket.queued >= maxQueueSize) {
-    throw new ProviderHttpError(
-      `${model.provider}/${model.id}: provider request rate-limit queue is full`,
-      {
-        status: 429,
-        code: "provider_rate_limit_queue_full",
-        type: "rate_limit",
-      },
-    );
+    return buildProviderRateLimitQueueFullResponse(model);
   }
   bucket.queued += 1;
   const turn = bucket.queue.then(async () => {
@@ -669,6 +682,7 @@ async function waitForProviderRequestRateLimit(
   } finally {
     bucket.queued = Math.max(0, bucket.queued - 1);
   }
+  return undefined;
 }
 
 const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
@@ -992,19 +1006,32 @@ export function buildGuardedModelFetch(
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
-      localServiceLease = await ensureModelProviderLocalService(
-        model,
-        baseInit?.headers,
-        localServiceSignal,
-      );
+      let rateLimitResponse: Response | undefined;
       if (rateLimitConfig) {
-        await waitForProviderRequestRateLimit(model, rateLimitConfig, localServiceSignal);
+        rateLimitResponse = await waitForProviderRequestRateLimit(
+          model,
+          rateLimitConfig,
+          localServiceSignal,
+        );
       }
-      result = await fetchWithSsrFGuard(
-        useEnvProxy
-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-          : guardedFetchOptions,
-      );
+      if (rateLimitResponse) {
+        result = {
+          response: rateLimitResponse,
+          finalUrl: url,
+          release: async () => undefined,
+        };
+      } else {
+        localServiceLease = await ensureModelProviderLocalService(
+          model,
+          baseInit?.headers,
+          localServiceSignal,
+        );
+        result = await fetchWithSsrFGuard(
+          useEnvProxy
+            ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+            : guardedFetchOptions,
+        );
+      }
     } catch (error) {
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
