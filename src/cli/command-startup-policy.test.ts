@@ -235,4 +235,20 @@ describe("command-startup-policy", () => {
       pluginRegistry: { scope: "channels" },
     });
   });
+
+  it("treats mcp serve as stdout-clean protocol startup", () => {
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["mcp", "serve"],
+        jsonOutputMode: false,
+        env: {},
+      }),
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
+    });
+  });
 });
