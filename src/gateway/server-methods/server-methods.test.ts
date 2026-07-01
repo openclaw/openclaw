@@ -608,6 +608,58 @@ describe("waitForAgentJob", () => {
     expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
     agentJobTesting.resetAgentRunCache();
   });
+
+  it("does not evict cached terminal snapshots with active fresh waiters", async () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const prefix = `cap-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitedRunId = `${prefix}-waited`;
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+    const waitPromise = waitForAgentJob({
+      runId: waitedRunId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+
+    for (let i = 0; i < max + 25; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    const cached = await waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 });
+    expectRecordFields(cached, {
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    });
+
+    const waited = await waitPromise;
+    expectRecordFields(waited, {
+      status: "ok",
+      startedAt: 10_000,
+      endedAt: 10_100,
+    });
+    emitAgentEvent({
+      runId: `${prefix}-after-waiter`,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 20_000, endedAt: 20_100 },
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {

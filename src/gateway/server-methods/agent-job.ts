@@ -80,6 +80,9 @@ function enforceAgentRunCacheMaxEntries() {
     if (removed >= toRemove) {
       break;
     }
+    if ((agentRunWaiterCounts.get(runId) ?? 0) > 0) {
+      continue;
+    }
     agentRunCache.delete(runId);
     removed += 1;
   }
