@@ -1270,7 +1270,7 @@ docker() {
   if [[ "$*" == *"--pids-limit"* ]]; then
     printf 'gateway-cid\\n' >"$TMPDIR/gateway.cid"
     echo "OCI runtime create failed: crun: controller pids is not available" >&2
-    return 126
+    return 125
   fi
   if [[ "$*" == "run --name gateway-test --cidfile $TMPDIR/gateway.cid demo" && -e "$TMPDIR/gateway.cid" ]]; then
     echo "cidfile exists" >&2
@@ -1290,6 +1290,120 @@ docker_e2e_docker_cmd run second
 [[ "$(sed -n '4p' "$TMPDIR/docker-seen")" = "run --name gateway-test --cidfile $TMPDIR/gateway.cid demo" ]]
 [[ "$(sed -n '5p' "$TMPDIR/docker-seen")" = "run second" ]]
 [[ ! -e "$TMPDIR/gateway.cid" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores Docker-like command arguments after the image when cleaning up a resource-limit retry", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-cgroup-image-boundary-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--pids-limit"* ]]; then
+    echo "OCI runtime create failed: crun: controller pids is not available" >&2
+    return 125
+  fi
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd run demo worker --name command-container --cidfile "$TMPDIR/command.cid"
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 16 --pids-limit 2048 demo worker --name command-container --cidfile $TMPDIR/command.cid" ]]
+[[ "\${docker_seen[1]}" = "run demo worker --name command-container --cidfile $TMPDIR/command.cid" ]]
+[[ "\${#docker_seen[@]}" = "2" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry container command failures that only print resource-limit text", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-cgroup-container-stderr-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "OCI runtime create failed: crun: controller pids is not available" >&2
+  return 126
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "$status" = "126" ]]
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 16 --pids-limit 2048 demo" ]]
+[[ "\${#docker_seen[@]}" = "1" ]]
+grep -Fq "OCI runtime create failed: crun: controller pids is not available" "$TMPDIR/stderr"
+if grep -Fq "retrying without default" "$TMPDIR/stderr"; then
+  echo "container stderr caused an unsafe retry" >&2
+  exit 1
+fi
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -1741,7 +1855,7 @@ docker() {
   if [[ "$*" == *"--pids-limit"* ]]; then
     printf 'package-cid\\n' >"$TMPDIR/package.cid"
     echo "OCI runtime create failed: crun: cgroup controller pids is not available" >&2
-    return 126
+    return 125
   fi
   if [[ "$*" == "run --name package-gateway --cidfile $TMPDIR/package.cid demo" && -e "$TMPDIR/package.cid" ]]; then
     echo "cidfile exists" >&2
@@ -1762,6 +1876,139 @@ mapfile -t docker_seen <"$TMPDIR/docker-seen"
 [[ "\${docker_seen[3]}" = "run --name package-gateway --cidfile $TMPDIR/package.cid demo" ]]
 [[ "\${docker_seen[4]}" = "run second" ]]
 [[ ! -e "$TMPDIR/package.cid" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores package-backed Docker-like command arguments after the image when cleaning up a resource-limit retry", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-image-boundary-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--pids-limit"* ]]; then
+    echo "OCI runtime create failed: crun: cgroup controller pids is not available" >&2
+    return 125
+  fi
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_docker_run_cmd run demo worker --name package-command --cidfile "$TMPDIR/package-command.cid"
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 8 --pids-limit 2048 demo worker --name package-command --cidfile $TMPDIR/package-command.cid" ]]
+[[ "\${docker_seen[1]}" = "run demo worker --name package-command --cidfile $TMPDIR/package-command.cid" ]]
+[[ "\${#docker_seen[@]}" = "2" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry package-backed container command failures that only print resource-limit text", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-container-stderr-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "OCI runtime create failed: crun: cgroup controller pids is not available" >&2
+  return 126
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "$status" = "126" ]]
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
+[[ "\${#docker_seen[@]}" = "1" ]]
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$stderr" = *"OCI runtime create failed: crun: cgroup controller pids is not available"* ]]
+if [[ "$stderr" = *"retrying without default"* ]]; then
+  echo "container stderr caused an unsafe package fallback retry" >&2
+  exit 1
+fi
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

@@ -67,6 +67,10 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     return 1
   }
 
+  docker_e2e_resource_limit_error_status() {
+    [ "${1:-}" = "125" ]
+  }
+
   docker_e2e_resource_limit_stderr_file() {
     local template="${TMPDIR:-/tmp}/openclaw-docker-resource-limits.XXXXXX"
     local stderr_file=""
@@ -97,6 +101,30 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     elif [ -x /usr/bin/rm ]; then
       /usr/bin/rm -f "$file"
     fi
+  }
+
+  docker_e2e_docker_run_option_consumes_value() {
+    case "$1" in
+      -a | --attach | --add-host | --annotation | --blkio-weight | --blkio-weight-device | \
+        --cap-add | --cap-drop | --cgroup-parent | --cidfile | --cpu-count | --cpu-percent | \
+        --cpu-period | --cpu-quota | --cpu-rt-period | --cpu-rt-runtime | -c | --cpu-shares | \
+        --cpus | --cpuset-cpus | --cpuset-mems | --device | --device-cgroup-rule | \
+        --device-read-bps | --device-read-iops | --device-write-bps | --device-write-iops | \
+        --dns | --dns-option | --dns-search | --domainname | --entrypoint | -e | --env | \
+        --env-file | --expose | --gpus | --group-add | --health-cmd | --health-interval | \
+        --health-retries | --health-start-interval | --health-start-period | --health-timeout | \
+        -h | --hostname | --ip | --ip6 | --ipc | --isolation | --kernel-memory | -l | --label | \
+        --label-file | --link | --link-local-ip | --log-driver | --log-opt | --mac-address | \
+        -m | --memory | --memory-reservation | --memory-swap | --memory-swappiness | --mount | \
+        --name | --network | --network-alias | --oom-score-adj | --pid | --pids-limit | \
+        --platform | -p | --publish | --pull | --restart | --runtime | --security-opt | \
+        --shm-size | --stop-signal | --stop-timeout | --storage-opt | --sysctl | --tmpfs | \
+        --ulimit | -u | --user | --userns | --uts | -v | --volume | --volume-driver | \
+        --volumes-from | -w | --workdir)
+        return 0
+        ;;
+    esac
+    return 1
   }
 
   docker_e2e_docker_run_created_container_refs() {
@@ -151,6 +179,19 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
             done <"$value"
           fi
           ;;
+        --)
+          break
+          ;;
+        --*=*)
+          ;;
+        -*)
+          if docker_e2e_docker_run_option_consumes_value "$arg" && [ "$#" -gt 0 ]; then
+            shift
+          fi
+          ;;
+        *)
+          break
+          ;;
       esac
     done
   }
@@ -190,7 +231,7 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
       status="$?"
     fi
     docker_e2e_print_file_stderr "$stderr_file" || true
-    if docker_e2e_resource_limit_error_file "$stderr_file"; then
+    if docker_e2e_resource_limit_error_status "$status" && docker_e2e_resource_limit_error_file "$stderr_file"; then
       export DOCKER_E2E_RESOURCE_LIMITS_RUNTIME_DISABLED=1
       echo "Docker run resource limits were rejected by this daemon; retrying without default --memory/--cpus/--pids-limit flags." >&2
       docker_e2e_cleanup_failed_resource_limited_run "$@"
