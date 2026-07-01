@@ -1,6 +1,10 @@
 // Tests inline reply directive parsing and whitespace-preserving behavior.
 import { describe, expect, it } from "vitest";
-import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
+import {
+  extractInlineSimpleCommand,
+  isExplicitInlineStatusRequest,
+  stripInlineStatus,
+} from "./reply-inline.js";
 
 describe("stripInlineStatus", () => {
   it("strips /status directive from message", () => {
@@ -32,6 +36,19 @@ describe("stripInlineStatus", () => {
     const result = stripInlineStatus("   ");
     expect(result.cleaned).toBe("");
     expect(result.didStrip).toBe(false);
+  });
+});
+
+describe("isExplicitInlineStatusRequest", () => {
+  it("accepts leading inline status directives", () => {
+    expect(isExplicitInlineStatusRequest("/status")).toBe(true);
+    expect(isExplicitInlineStatusRequest(" /status what changed?")).toBe(true);
+    expect(isExplicitInlineStatusRequest("/status: what changed?")).toBe(true);
+  });
+
+  it("rejects quoted or discussed status commands", () => {
+    expect(isExplicitInlineStatusRequest("please ignore /status and answer normally")).toBe(false);
+    expect(isExplicitInlineStatusRequest("The command `/status` shows runtime state.")).toBe(false);
   });
 });
 

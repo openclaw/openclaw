@@ -11,6 +11,7 @@ const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
 const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
 
 const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
+const LEADING_INLINE_STATUS_RE = /^\/status(?=$|\s|:)(?:\s*:\s*)?/i;
 
 export function extractInlineSimpleCommand(body?: string): {
   command: string;
@@ -44,4 +45,8 @@ export function stripInlineStatus(body: string): {
   // preserving newlines so multi-line messages keep their paragraph structure.
   const cleaned = collapseInlineHorizontalWhitespace(trimmed.replace(INLINE_STATUS_RE, " ")).trim();
   return { cleaned, didStrip: cleaned !== trimmed };
+}
+
+export function isExplicitInlineStatusRequest(body: string): boolean {
+  return LEADING_INLINE_STATUS_RE.test(body.trimStart());
 }

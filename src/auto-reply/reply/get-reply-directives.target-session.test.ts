@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   applyInlineDirectiveOverrides: vi.fn(),
   resolveFastModeState: vi.fn(),
   resolveReplyExecOverrides: vi.fn(),
+  shouldHandleTextCommands: vi.fn(),
 }));
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -33,8 +34,41 @@ function makeTypingController() {
   };
 }
 
-function parseInlineDirectivesForTest(body: string) {
+function parseInlineDirectivesForTest(
+  body: string,
+  options?: { allowStatusDirective?: boolean },
+) {
   const normalized = body.trim();
+  if (options?.allowStatusDirective !== false && /(?:^|\s)\/status(?=$|\s|:)/i.test(body)) {
+    const cleaned = body
+      .replace(/(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/i, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return {
+      cleaned,
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
+      hasFastDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: true,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      reasoningLevel: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
   if (normalized === "/reasoning stream") {
     return {
       cleaned: "",
@@ -152,6 +186,7 @@ async function resolveHelloWithModelDefaults(params: {
   provider?: string;
   model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
+  isGroup?: boolean;
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
@@ -190,7 +225,7 @@ async function resolveHelloWithModelDefaults(params: {
     storePath: "/tmp/sessions.json",
     sessionScope: "per-sender",
     groupResolution: undefined,
-    isGroup: false,
+    isGroup: params.isGroup ?? false,
     triggerBodyNormalized: "hello",
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized ?? false,
@@ -211,6 +246,7 @@ async function resolveHelloWithModelDefaults(params: {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: vi.fn(() => []),
+  resolveAgentConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../agents/defaults.js", () => ({
@@ -230,7 +266,7 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 
 vi.mock("../commands-text-routing.js", () => ({
-  shouldHandleTextCommands: vi.fn(() => false),
+  shouldHandleTextCommands: (...args: unknown[]) => mocks.shouldHandleTextCommands(...args),
 }));
 
 vi.mock("./commands-context.js", () => ({
@@ -298,7 +334,9 @@ describe("resolveReplyDirectives", () => {
     mocks.applyInlineDirectiveOverrides.mockReset();
     mocks.resolveFastModeState.mockReset();
     mocks.resolveReplyExecOverrides.mockReset();
+    mocks.shouldHandleTextCommands.mockReset();
 
+    mocks.shouldHandleTextCommands.mockReturnValue(false);
     mocks.createModelSelectionState.mockResolvedValue({
       provider: "openai",
       model: "gpt-4o-mini",
@@ -526,6 +564,60 @@ describe("resolveReplyDirectives", () => {
       reply: {
         text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
       },
+    });
+  });
+
+  it("does not treat quoted status text as an inline status request", async () => {
+    mocks.shouldHandleTextCommands.mockReturnValue(true);
+    const body = "请忽略上一条 /status 的内部状态细节，只回复：fresh-turn-ok";
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body,
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+    });
+
+    expectContinueResult(result, {
+      cleanedBody: body,
+      inlineStatusRequested: false,
+    });
+  });
+
+  it("keeps leading status text as an inline status request", async () => {
+    mocks.shouldHandleTextCommands.mockReturnValue(true);
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "/status what's next?",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+    });
+
+    expectContinueResult(result, {
+      cleanedBody: "what's next?",
+      inlineStatusRequested: true,
+    });
+  });
+
+  it("allows mention-prefixed group status text as an inline status request", async () => {
+    mocks.shouldHandleTextCommands.mockReturnValue(true);
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "@12345 /status what's next?",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      ctx: {
+        ChatType: "channel",
+        WasMentioned: true,
+      },
+      isGroup: true,
+    });
+
+    expectContinueResult(result, {
+      cleanedBody: "@12345 what's next?",
+      inlineStatusRequested: true,
     });
   });
 

@@ -43,7 +43,7 @@ import {
   resolveContextTokens,
 } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
-import { stripInlineStatus } from "./reply-inline.js";
+import { isExplicitInlineStatusRequest, stripInlineStatus } from "./reply-inline.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
@@ -104,6 +104,20 @@ function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: Temp
     promptSource,
     commandText: commandSource || promptSource,
   };
+}
+
+function isExplicitStatusDirectiveText(params: {
+  commandText: string;
+  isGroup: boolean;
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentId: string;
+}): boolean {
+  const stripped = stripStructuralPrefixes(params.commandText);
+  const commandText = params.isGroup
+    ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
+    : stripped;
+  return isExplicitInlineStatusRequest(commandText);
 }
 
 type ReplyDirectiveContinuation = {
@@ -283,7 +297,16 @@ export async function resolveReplyDirectives(params: {
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
-  const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
+  const allowStatusDirective =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    isExplicitStatusDirectiveText({
+      commandText,
+      isGroup,
+      ctx,
+      cfg,
+      agentId,
+    });
   let parsedDirectives = parseInlineDirectives(commandText, {
     modelAliases: configuredAliases,
     allowStatusDirective,
