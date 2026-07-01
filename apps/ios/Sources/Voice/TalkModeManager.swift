@@ -1812,10 +1812,9 @@ final class TalkModeManager: NSObject {
             self.lastPlaybackWasPCM = false
             playback = await self.mp3Player.play(stream: stream)
         }
+        let outputFormat = result.outputformat ?? "unknown"
         self.logger.info(
-            "gateway talk.speak provider=\(result.provider, privacy: .public) " +
-                "format=\(result.outputformat ?? "unknown", privacy: .public) " +
-                "finished=\(playback.finished, privacy: .public)")
+            "gateway talk.speak provider=\(result.provider, privacy: .public) format=\(outputFormat, privacy: .public) finished=\(playback.finished, privacy: .public)")
         if !playback.finished, playback.interruptedAt == nil {
             throw NSError(domain: "TalkSpeak", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed",
@@ -2877,11 +2876,11 @@ extension TalkModeManager {
         } else {
             self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
         }
-        let gatewayOwnedVoiceProvider = usesRealtimeConfig
+        let gatewayOwnedVoiceProvider = usesRealtimeConfig || Self.shouldUseGatewayTalkSpeak(provider: activeProvider)
         if gatewayOwnedVoiceProvider {
             self.apiKey = nil
-            let credentialProvider = realtimeProvider ?? activeProvider
-            GatewayDiagnostics.log("talk realtime provider '\(credentialProvider)' uses gateway-owned credentials")
+            let credentialProvider = usesRealtimeConfig ? (realtimeProvider ?? activeProvider) : activeProvider
+            GatewayDiagnostics.log("talk provider '\(credentialProvider)' uses gateway-owned credentials")
         }
         return gatewayOwnedVoiceProvider
     }
@@ -3273,6 +3272,14 @@ extension TalkModeManager {
 
     func _test_canUseGatewayTalkSpeak() -> Bool {
         self.canUseGatewayTalkSpeak()
+    }
+
+    func _test_gatewayTalkApiKeyConfigured() -> Bool {
+        self.gatewayTalkApiKeyConfigured
+    }
+
+    func _test_gatewayTalkPermissionState() -> TalkGatewayPermissionState {
+        self.gatewayTalkPermissionState
     }
 
     func _test_markNativeFallbackActive(after issue: TalkRuntimeIssue) {

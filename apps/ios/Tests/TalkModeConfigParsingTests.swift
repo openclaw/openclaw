@@ -353,6 +353,44 @@ import Testing
         #expect(manager._test_gatewayTalkDefaultModelId() == "mimo-tts")
         #expect(TalkModeManager._test_shouldUseGatewayTalkSpeak(provider: "xiaomi"))
         #expect(manager._test_canUseGatewayTalkSpeak())
+        #expect(manager._test_gatewayTalkApiKeyConfigured())
+        #expect(manager._test_gatewayTalkPermissionState() == .ready)
+    }
+
+    @Test func gatewaySpeechProviderDoesNotAskForLocalProviderKey() {
+        let config: [String: Any] = [
+            "talk": [
+                "provider": "microsoft",
+                "providers": [
+                    "microsoft": [
+                        "modelId": "azure-tts",
+                        "voiceId": "en-US-SoniaNeural",
+                    ],
+                ],
+                "resolved": [
+                    "provider": "microsoft",
+                    "config": [
+                        "modelId": "azure-tts",
+                        "voiceId": "en-US-SoniaNeural",
+                    ],
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(parsed)
+
+        #expect(manager._test_executionMode() == .native)
+        #expect(manager._test_canUseGatewayTalkSpeak())
+        #expect(manager._test_gatewayTalkApiKeyConfigured())
+        #expect(manager._test_gatewayTalkPermissionState() == .ready)
     }
 
     @Test func doesNotRouteLocalOrRealtimeProvidersThroughGatewaySpeak() {
