@@ -884,6 +884,77 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
+  it("stopOpenClawChrome clears cookie flush and snapshots cookies before SIGTERM", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/cookie-stop",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("Storage.getCookies");
+            ws.send(
+              JSON.stringify({
+                id: req.id,
+                result: {
+                  cookies: [{ name: "session", value: "abc", domain: "example.com", path: "/" }],
+                },
+              }),
+            );
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-cookie-stop-"));
+        const timer = setInterval(() => {}, 60_000);
+        timer.unref();
+        const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+        const proc = makeChromeTestProc();
+        try {
+          await stopOpenClawChrome(
+            {
+              proc,
+              cdpPort: 12345,
+              userDataDir,
+              browserWsUrl: `${baseUrl.replace("http://", "ws://")}/devtools/browser/cookie-stop`,
+              cookieFlushTimer: timer,
+            } as unknown as StopChromeTarget,
+            10,
+          );
+
+          expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
+          expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+          const saved = JSON.parse(
+            await fsp.readFile(path.join(path.dirname(userDataDir), "cookies.json"), "utf8"),
+          ) as { cookies?: unknown[] };
+          expect(saved.cookies).toEqual([
+            { name: "session", value: "abc", domain: "example.com", path: "/" },
+          ]);
+        } finally {
+          clearInterval(timer);
+          await fsp.rm(userDataDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("stopOpenClawChrome uses the cookie flush cleanup hook", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const stopCookieFlush = vi.fn();
+    await stopOpenClawChrome(
+      {
+        proc,
+        cdpPort: 12345,
+        stopCookieFlush,
+      } as unknown as StopChromeTarget,
+      10,
+    );
+
+    expect(stopCookieFlush).toHaveBeenCalledOnce();
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
     vi.stubGlobal(
       "fetch",

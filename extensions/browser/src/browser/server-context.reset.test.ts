@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCookieStorePath } from "./cookie-persistence.js";
 import { createProfileResetOps } from "./server-context.reset.js";
 
 const trashMocks = vi.hoisted(() => ({
@@ -72,7 +73,9 @@ describe("createProfileResetOps", () => {
   it("stops local browser, closes playwright connection, and trashes profile dir", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-"));
     const profileDir = path.join(tempRoot, "openclaw");
+    const cookieStorePath = resolveCookieStorePath(profileDir);
     fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(cookieStorePath, JSON.stringify({ cookies: [{ name: "session" }] }));
 
     const stopRunningBrowser = vi.fn(async () => ({ stopped: true }));
     const isHttpReachable = vi.fn(async () => true);
@@ -100,6 +103,7 @@ describe("createProfileResetOps", () => {
       cdpUrl: "http://127.0.0.1:18800",
     });
     expect(trashMocks.movePathToTrash).toHaveBeenCalledWith(profileDir);
+    expect(fs.existsSync(cookieStorePath)).toBe(false);
   });
 
   it("forces playwright disconnect when loopback cdp is occupied by non-owned process", async () => {

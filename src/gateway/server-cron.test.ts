@@ -35,13 +35,13 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
+  sendCronAnnouncePayloadStrictMock: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
   })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
-  runCronChangedMock: vi.fn(async () => {}),
+  runCronChangedMock: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
@@ -209,6 +209,13 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
   return value as Array<unknown>;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 function callArg(
@@ -470,10 +477,9 @@ describe("buildGatewayCronService", () => {
 
       // The hook context should use getRuntimeConfig() (runtimeCfg), not startupCfg
       expect(runCronChangedMock).toHaveBeenCalledTimes(1);
-      const calls = runCronChangedMock.mock.calls as unknown[][];
-      const hookCtx = calls[0]?.[1] as { config?: unknown } | undefined;
-      expect(hookCtx?.config).toBe(runtimeCfg);
-      expect(hookCtx?.config).not.toBe(startupCfg);
+      const hookCtx = requireRecord(runCronChangedMock.mock.calls[0]?.[1], "cron_changed context");
+      expect(hookCtx.config).toBe(runtimeCfg);
+      expect(hookCtx.config).not.toBe(startupCfg);
     } finally {
       state.cron.stop();
     }
@@ -623,7 +629,7 @@ describe("buildGatewayCronService", () => {
       const event = runCronChangedMock.mock.calls
         .map((call) => requireRecord(call[0], "cron_changed event"))
         .find((hookEvent) => hookEvent.action === "finished");
-      const summary = String(event?.summary ?? "");
+      const summary = requireString(event?.summary, "cron_changed summary");
       expect(summary).toContain("[redacted-url]");
       expect(summary).toContain("[redacted-code]");
       expect(summary).toContain("token=***");
@@ -673,7 +679,7 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = String(announcePayload.message ?? "");
+      const message = requireString(announcePayload.message, "cron announce message");
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
     } finally {
@@ -716,7 +722,7 @@ describe("buildGatewayCronService", () => {
       const event = runCronChangedMock.mock.calls
         .map((call) => requireRecord(call[0], "cron_changed event"))
         .find((hookEvent) => hookEvent.action === "finished");
-      expect(event?.summary).toBe(summary);
+      expect(requireString(event?.summary, "cron_changed summary")).toBe(summary);
     } finally {
       state.cron.stop();
     }
