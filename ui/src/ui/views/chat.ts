@@ -203,6 +203,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onChatWheelIntent?: (event: WheelEvent) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
   /** Selected message to reply to (set via right-click or keyboard shortcut). */
@@ -2298,6 +2299,7 @@ export function renderChat(props: ChatProps) {
         );
       })}
       @scroll=${handleChatThreadScroll}
+      @wheel=${props.onChatWheelIntent}
       @click=${handleCodeBlockCopy}
       @contextmenu=${(e: MouseEvent) => handleChatContextMenu(e, props)}
     >
