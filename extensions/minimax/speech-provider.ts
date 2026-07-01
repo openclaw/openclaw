@@ -200,7 +200,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         ctx,
         overrideKey: "vol",
         range: { min: 0, minExclusive: true, max: 10 },
-        warning: (value) => `invalid MiniMax volume "${value}" (0-10, exclusive)`,
+        warning: (value) => `invalid MiniMax volume "${value}" (0 exclusive to 10 inclusive)`,
       });
     }
     case "pitch": {
