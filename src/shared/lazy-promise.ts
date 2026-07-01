@@ -48,6 +48,15 @@ export function createLazyPromiseLoader<T>(
   };
 }
 
+/** Creates a reusable function that resolves one cached promise at a time. */
+export function createLazyPromise<T>(
+  load: () => T | Promise<T>,
+  options?: LazyPromiseLoaderOptions,
+): () => Promise<T> {
+  const loader = createLazyPromiseLoader(load, options);
+  return loader.load;
+}
+
 /** Convenience wrapper for dynamic-import-shaped loaders. */
 export function createLazyImportLoader<T>(
   load: () => Promise<T>,

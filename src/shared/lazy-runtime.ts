@@ -1,13 +1,11 @@
+import { createLazyPromise } from "./lazy-promise.js";
+
 // Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,
 ): () => Promise<TSurface> {
-  let cached: Promise<TSurface> | null = null;
-  return () => {
-    cached ??= importer().then(select);
-    return cached;
-  };
+  return createLazyPromise(() => importer().then(select), { cacheRejections: true });
 }
 
 /** Cache the raw dynamically imported runtime module behind a stable loader. */

@@ -1,6 +1,21 @@
 // Lazy promise tests cover single-flight loading and error reuse behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createLazyImportLoader, createLazyPromiseLoader } from "./lazy-promise.js";
+import {
+  createLazyImportLoader,
+  createLazyPromise,
+  createLazyPromiseLoader,
+} from "./lazy-promise.js";
+
+describe("createLazyPromise", () => {
+  it("returns a reusable single-flight loader", async () => {
+    let calls = 0;
+    const load = createLazyPromise(async () => `loaded-${++calls}`);
+
+    await expect(Promise.all([load(), load()])).resolves.toEqual(["loaded-1", "loaded-1"]);
+    await expect(load()).resolves.toBe("loaded-1");
+    expect(calls).toBe(1);
+  });
+});
 
 describe("createLazyPromiseLoader", () => {
   it("dedupes concurrent loads and reuses the resolved value", async () => {
