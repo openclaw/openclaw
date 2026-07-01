@@ -1484,6 +1484,8 @@ describe("session accessor file-backed seam", () => {
     const retiredKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-rollover.jsonl");
     const previousEntry: SessionEntry = {
+      autoTitle: "Previous generated title",
+      displayName: "Manual display name",
       sessionFile: previousTranscript,
       sessionId: "previous-rollover",
       updatedAt: now,
@@ -1522,11 +1524,14 @@ describe("session accessor file-backed seam", () => {
     });
 
     expect(result.sessionEntry).toMatchObject(nextEntry);
+    expect(result.sessionEntry.autoTitle).toBeUndefined();
     expect(result.previousSessionTranscript.transcriptArchived).toBe(true);
     expect(result.previousSessionTranscript.sessionFile).toContain(
       "previous-rollover.jsonl.reset.",
     );
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
+    const storedNextEntry = loadSessionEntry({ sessionKey, storePath });
+    expect(storedNextEntry).toMatchObject(nextEntry);
+    expect(storedNextEntry?.autoTitle).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toEqual({
       sessionId: "legacy-main",
       updatedAt: expect.any(Number),

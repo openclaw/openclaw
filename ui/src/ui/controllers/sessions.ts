@@ -297,6 +297,8 @@ const SESSION_EVENT_ROW_FIELDS = [
   "compactionCheckpointCount",
   "contextTokens",
   "displayName",
+  "autoTitle",
+  "derivedTitle",
   "effectiveResponseUsage",
   "endedAt",
   "elevatedLevel",
@@ -1150,6 +1152,7 @@ async function loadSessionsOnce(
     if (search) {
       params.search = search;
     }
+    params.includeDerivedTitles = true;
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       const projected = projectSessionsResultForAvailability(res, { showArchived });

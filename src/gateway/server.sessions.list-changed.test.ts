@@ -522,6 +522,36 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
   });
 });
 
+test("sessions.changed mutation events include generated title metadata", async () => {
+  await writeMainSessionStore({
+    autoTitle: "Nebula Banana Notebook",
+  });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  expectMainPatchBroadcast(result, {
+    autoTitle: "Nebula Banana Notebook",
+    derivedTitle: "Nebula Banana Notebook",
+  });
+});
+
+test("sessions.changed mutation events omit transcript-derived title fallbacks without title data", async () => {
+  await writeMainSessionStore();
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    fastMode: false,
+  });
+  expect(payload).not.toHaveProperty("derivedTitle");
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
 });

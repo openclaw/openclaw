@@ -244,6 +244,7 @@ function filterRows(
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
+    const derivedTitle = normalizeLowercaseStringOrEmpty(row.derivedTitle);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
     const status = normalizeLowercaseStringOrEmpty(row.status);
     const goal = row.goal
@@ -263,6 +264,7 @@ function filterRows(
       label.includes(q) ||
       kind.includes(q) ||
       displayName.includes(q) ||
+      derivedTitle.includes(q) ||
       runtime.includes(q) ||
       status.includes(q) ||
       goal.includes(q) ||

@@ -1,4 +1,13 @@
-import type { GatewaySessionRow } from "./session-utils.js";
+import { deriveSessionTitle, type GatewaySessionRow } from "./session-utils.js";
+
+function hasEventTitleSource(sessionRow: GatewaySessionRow): boolean {
+  return Boolean(
+    sessionRow.derivedTitle !== undefined ||
+    sessionRow.displayName?.trim() ||
+    sessionRow.subject?.trim() ||
+    sessionRow.autoTitle?.trim(),
+  );
+}
 
 export function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
@@ -10,6 +19,9 @@ export function buildGatewaySessionEventFields(params: {
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  const derivedTitle = hasEventTitleSource(sessionRow)
+    ? (sessionRow.derivedTitle ?? deriveSessionTitle(sessionRow))
+    : undefined;
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
@@ -29,6 +41,8 @@ export function buildGatewaySessionEventFields(params: {
     subagentControlScope: sessionRow.subagentControlScope,
     label: params.label ?? sessionRow.label,
     displayName: params.displayName ?? sessionRow.displayName,
+    ...(sessionRow.autoTitle === undefined ? {} : { autoTitle: sessionRow.autoTitle }),
+    ...(derivedTitle === undefined ? {} : { derivedTitle }),
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,

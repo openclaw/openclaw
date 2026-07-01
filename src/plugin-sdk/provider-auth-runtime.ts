@@ -8,6 +8,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { Model } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -342,6 +343,11 @@ type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolve
 type GetRuntimeAuthForModel =
   typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;
 type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
+type PublicRuntimeAuthForModelParams = {
+  model: Model;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+};
 const RUNTIME_MODEL_AUTH_CANDIDATES = [
   "./runtime-model-auth.runtime",
   "../plugins/runtime/runtime-model-auth.runtime",
@@ -385,9 +391,13 @@ export async function resolveApiKeyForProvider(
  */
 export async function getRuntimeAuthForModel(
   /** Concrete model auth request forwarded to the runtime auth module. */
-  params: Parameters<GetRuntimeAuthForModel>[0],
+  params: PublicRuntimeAuthForModelParams,
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
   const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
     await loadRuntimeModelAuthModule();
-  return getRuntimeAuthForModelLocal(params);
+  return getRuntimeAuthForModelLocal({
+    model: params.model,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
 }

@@ -6,6 +6,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+
+const runtimeModelAuthMocks = vi.hoisted(() => ({
+  getRuntimeAuthForModel: vi.fn(),
+}));
+
+vi.mock("../plugins/runtime/runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
 async function getFreePort(): Promise<number> {
@@ -27,6 +34,36 @@ async function getFreePort(): Promise<number> {
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {
     expect(providerAuthRuntime.getRuntimeAuthForModel).toBeTypeOf("function");
+  });
+
+  it("does not forward internal credential selectors from the public runtime auth helper", async () => {
+    const model = {
+      id: "openai/gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+    };
+    const cfg = { auth: { profiles: ["openai:work"] } };
+    runtimeModelAuthMocks.getRuntimeAuthForModel.mockResolvedValue({
+      apiKey: "api-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+
+    await providerAuthRuntime.getRuntimeAuthForModel({
+      model: model as never,
+      cfg: cfg as never,
+      workspaceDir: "/workspace",
+      agentDir: "/agent",
+      profileId: "openai:work",
+      preferredProfile: "openai:work",
+      lockedProfile: true,
+    } as never);
+
+    expect(runtimeModelAuthMocks.getRuntimeAuthForModel).toHaveBeenCalledWith({
+      model,
+      cfg,
+      workspaceDir: "/workspace",
+    });
   });
 
   it("resolves non-secret provider auth profile metadata", async () => {
