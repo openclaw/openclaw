@@ -3,6 +3,41 @@ import type { MatrixClient } from "../sdk.js";
 import { isMatrixTerminalSyncState, type MatrixSyncState } from "../sync-state.js";
 import type { MatrixMonitorStatusController } from "./status.js";
 
+/**
+ * Determines if a sync error is recoverable (non-fatal).
+ * Decryption failures, Megolm errors, and transient network issues should not
+ * stop the entire sync process. These are expected during normal operation.
+ */
+function isRecoverableSyncError(error?: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const lowerMessage = message.toLowerCase();
+
+  // Decryption and Megolm errors are recoverable (keys may arrive later)
+  if (lowerMessage.includes("decrypt") || lowerMessage.includes("megolm")) {
+    return true;
+  }
+
+  // Session/key-related errors are often transient
+  if (lowerMessage.includes("session") && lowerMessage.includes("key")) {
+    return true;
+  }
+
+  // Transient network errors
+  if (lowerMessage.includes("network") || lowerMessage.includes("timeout") || lowerMessage.includes("offline")) {
+    return true;
+  }
+
+  // M error codes for network issues
+  if (lowerMessage.includes("m_unknown_token") || lowerMessage.includes("m_limit_exceeded")) {
+    return true;
+  }
+
+  return false;
+}
+
 function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -38,6 +73,11 @@ export function createMatrixMonitorSyncLifecycle(params: {
 
   const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
     if (isMatrixTerminalSyncState(state) && !params.isStopping?.()) {
+      // Recoverable errors (decryption, Megolm, network) should not stop sync
+      if (isRecoverableSyncError(error)) {
+        params.statusController.noteSyncState(state, error);
+        return;
+      }
       const fatalErrorLocal = formatSyncLifecycleError(state, error);
       params.statusController.noteUnexpectedError(fatalErrorLocal);
       settleFatal(fatalErrorLocal);
@@ -59,6 +99,11 @@ export function createMatrixMonitorSyncLifecycle(params: {
 
   const onUnexpectedError = (error: Error) => {
     if (params.isStopping?.()) {
+      return;
+    }
+    // Recoverable errors (decryption, Megolm, network) should not be treated as fatal
+    if (isRecoverableSyncError(error)) {
+      params.statusController.noteSyncState("SYNCING", error);
       return;
     }
     params.statusController.noteUnexpectedError(error);
