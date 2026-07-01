@@ -91,10 +91,48 @@ export function normalizeMattermostBaseUrl(raw?: string | null): string | undefi
   return withoutTrailing.replace(/\/api\/v4$/i, "");
 }
 
+function decodeMattermostPathSegment(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripMattermostUrlIgnoredPathControls(value: string): string {
+  return value.replace(/[\t\r\n]/g, "");
+}
+
+function mattermostPathnameForSegmentValidation(path: string): string {
+  const withoutQueryOrFragment = path.split(/[?#]/, 1)[0] ?? "";
+  return stripMattermostUrlIgnoredPathControls(withoutQueryOrFragment).replace(/\\/g, "/");
+}
+
+function containsMattermostUnsafePathSegment(path: string): boolean {
+  const pathname = mattermostPathnameForSegmentValidation(path);
+  const suffix = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return suffix.split("/").some((segment) => {
+    if (segment === "." || segment === "..") {
+      return true;
+    }
+    const decodedSegment = decodeMattermostPathSegment(segment);
+    if (decodedSegment == null) {
+      return true;
+    }
+    const decoded = stripMattermostUrlIgnoredPathControls(decodedSegment);
+    return decoded.split(/[\\/]/).some((decodedComponent) => {
+      return decodedComponent === "." || decodedComponent === "..";
+    });
+  });
+}
+
 function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
     throw new Error("Mattermost baseUrl is required");
+  }
+  if (containsMattermostUnsafePathSegment(path)) {
+    throw new Error("Mattermost API path must not contain unsafe path segments");
   }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
