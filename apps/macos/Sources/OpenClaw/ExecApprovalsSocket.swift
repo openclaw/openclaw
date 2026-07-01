@@ -132,22 +132,25 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
+private let execHostMaxJsonlResponseBytes = 16 * 1024 * 1024
+private let execHostMaxOutputFieldBytes = 1024 * 1024
+private let execHostOutputTruncationMarker = "... (truncated) "
+
 enum ExecHostOutputLimiter {
-    static let maxJsonlResponseBytes = 16 * 1024 * 1024
-    static let maxOutputFieldBytes = 1024 * 1024
-    private static let truncationMarker = "... (truncated) "
+    static let maxJsonlResponseBytes = execHostMaxJsonlResponseBytes
+    static let maxOutputFieldBytes = execHostMaxOutputFieldBytes
 
     static func limit(_ text: String) -> String {
-        guard text.utf8.count > Self.maxOutputFieldBytes else {
+        guard text.utf8.count > execHostMaxOutputFieldBytes else {
             return text
         }
-        let markerBytes = Self.truncationMarker.utf8.count
-        let tailBudget = max(0, Self.maxOutputFieldBytes - markerBytes)
+        let markerBytes = execHostOutputTruncationMarker.utf8.count
+        let tailBudget = max(0, execHostMaxOutputFieldBytes - markerBytes)
         var tail = text.suffix(tailBudget)
-        while Self.truncationMarker.utf8.count + tail.utf8.count > Self.maxOutputFieldBytes {
+        while execHostOutputTruncationMarker.utf8.count + tail.utf8.count > execHostMaxOutputFieldBytes {
             tail.removeFirst()
         }
-        return Self.truncationMarker + tail
+        return execHostOutputTruncationMarker + tail
     }
 }
 
