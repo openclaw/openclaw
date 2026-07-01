@@ -1411,8 +1411,13 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
-    const active = this.execApprovalQueue[0];
+  async handleExecApprovalDecision(
+    decision: "allow-once" | "allow-always" | "deny",
+    approvalId?: string,
+  ) {
+    const active = approvalId
+      ? this.execApprovalQueue.find((entry) => entry.id === approvalId)
+      : this.execApprovalQueue[0];
     if (!active || !this.client || this.execApprovalBusy) {
       return;
     }
@@ -1425,6 +1430,9 @@ export class OpenClawApp extends LitElement {
         decision,
       });
       dismissExecApprovalPrompt(this, active.id);
+      if (this.execApprovalQueue.length === 0) {
+        await refreshPendingApprovalQueue(this, { suppressIds: [active.id] });
+      }
     } catch (err) {
       if (isStaleApprovalResolutionError(err)) {
         dismissExecApprovalPrompt(this, active.id);

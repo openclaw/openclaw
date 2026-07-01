@@ -223,7 +223,30 @@ describe("approval and confirmation modals", () => {
 
     dispatchEscape(dialog);
 
-    expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny");
+    expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny", "approval-1");
+  });
+
+  it("sends the active approval id with button decisions", async () => {
+    const handleExecApprovalDecision = vi.fn(async () => undefined);
+    const active = createExecRequest();
+    const queued = createExecRequest();
+    queued.id = "approval-2";
+    queued.request.command = "pnpm test";
+    render(
+      renderExecApprovalPrompt(
+        createExecState({
+          execApprovalQueue: [active, queued],
+          handleExecApprovalDecision,
+        }),
+      ),
+      container,
+    );
+
+    await getRenderedDialog();
+
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
+
+    expect(handleExecApprovalDecision).toHaveBeenCalledWith("allow-once", "approval-1");
   });
 
   it("does not dispatch an extra exec decision from Escape while busy", async () => {

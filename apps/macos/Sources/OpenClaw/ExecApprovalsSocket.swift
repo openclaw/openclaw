@@ -5,7 +5,7 @@ import Foundation
 import OpenClawKit
 import OSLog
 
-struct ExecApprovalPromptRequest: Codable {
+struct ExecApprovalPromptRequest: Codable, Sendable {
     var command: String
     var cwd: String?
     var host: String?
@@ -300,7 +300,12 @@ final class ExecApprovalsPromptServer {
 
 enum ExecApprovalsPromptPresenter {
     @MainActor
-    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision? {
+    static func prompt(_ request: ExecApprovalPromptRequest) async -> ExecApprovalDecision? {
+        await ExecApprovalsPromptQueue.prompt(request)
+    }
+
+    @MainActor
+    fileprivate static func presentNow(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision? {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -466,6 +471,73 @@ enum ExecApprovalsPromptPresenter {
 }
 
 @MainActor
+private enum ExecApprovalsPromptQueue {
+    typealias Presenter = @MainActor (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
+
+    private struct PendingPrompt {
+        let request: ExecApprovalPromptRequest
+        let continuation: CheckedContinuation<ExecApprovalDecision?, Never>
+    }
+
+    private static var pending: [PendingPrompt] = []
+    private static var isPresenting = false
+    private static var presenter: Presenter = { request in
+        ExecApprovalsPromptPresenter.presentNow(request)
+    }
+
+    static func prompt(_ request: ExecApprovalPromptRequest) async -> ExecApprovalDecision? {
+        await withCheckedContinuation { continuation in
+            self.pending.append(PendingPrompt(request: request, continuation: continuation))
+            self.presentNextIfNeeded()
+        }
+    }
+
+    private static func presentNextIfNeeded() {
+        guard !self.isPresenting else { return }
+        guard !self.pending.isEmpty else { return }
+
+        self.isPresenting = true
+        let next = self.pending.removeFirst()
+        Task { @MainActor in
+            let decision = await self.presenter(next.request)
+            next.continuation.resume(returning: decision)
+            self.isPresenting = false
+            self.presentNextIfNeeded()
+        }
+    }
+
+    #if DEBUG
+    static func withPresenter(
+        _ presenter: @escaping Presenter,
+        run body: @MainActor () async -> Void) async
+    {
+        let previousPresenter = self.presenter
+        self.pending.removeAll(keepingCapacity: false)
+        self.isPresenting = false
+        self.presenter = presenter
+        defer {
+            self.presenter = previousPresenter
+            self.pending.removeAll(keepingCapacity: false)
+            self.isPresenting = false
+        }
+        await body()
+    }
+    #endif
+}
+
+#if DEBUG
+extension ExecApprovalsPromptPresenter {
+    @MainActor
+    static func _testWithPresenter(
+        _ presenter: @escaping @MainActor (ExecApprovalPromptRequest) async -> ExecApprovalDecision?,
+        run body: @MainActor () async -> Void) async
+    {
+        await ExecApprovalsPromptQueue.withPresenter(presenter, run: body)
+    }
+}
+#endif
+
+@MainActor
 private enum ExecHostExecutor {
     private typealias ExecApprovalContext = ExecApprovalEvaluation
 
@@ -492,7 +564,7 @@ private enum ExecHostExecutor {
         case .allow:
             break
         case .requiresPrompt:
-            guard let decision = ExecApprovalsPromptPresenter.prompt(
+            guard let decision = await ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
                     cwd: request.cwd,

@@ -324,12 +324,18 @@ export function enqueueExecApprovalPrompt(
   scheduleApprovalExpiryPrune(state, entry);
 }
 
-export async function refreshPendingApprovalQueue(state: ExecApprovalPromptState): Promise<void> {
+export async function refreshPendingApprovalQueue(
+  state: ExecApprovalPromptState,
+  options?: { suppressIds?: Iterable<string> },
+): Promise<void> {
   const client = state.client;
   if (!client) {
     return;
   }
   const removedDuringRefresh = state.execApprovalRefreshRemovedIds ?? new Set<string>();
+  for (const id of options?.suppressIds ?? []) {
+    removedDuringRefresh.add(id);
+  }
   const ownsRemovedSet = !state.execApprovalRefreshRemovedIds;
   if (ownsRemovedSet) {
     state.execApprovalRefreshRemovedIds = removedDuringRefresh;

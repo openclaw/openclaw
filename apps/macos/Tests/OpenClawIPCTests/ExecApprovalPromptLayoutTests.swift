@@ -122,6 +122,41 @@ struct ExecApprovalPromptLayoutTests {
         #expect(withDeny == .deny)
     }
 
+    @Test func `exec approval prompts are serialized while a prompt is active`() async {
+        var presentedCommands: [String] = []
+        var firstContinuation: CheckedContinuation<ExecApprovalDecision?, Never>?
+
+        await ExecApprovalsPromptPresenter._testWithPresenter({ request in
+            presentedCommands.append(request.command)
+            if request.command == "first" {
+                return await withCheckedContinuation { continuation in
+                    firstContinuation = continuation
+                }
+            }
+            return .deny
+        }, run: {
+            let firstTask = Task { @MainActor in
+                await ExecApprovalsPromptPresenter.prompt(ExecApprovalPromptRequest(command: "first"))
+            }
+            await Task.yield()
+
+            let secondTask = Task { @MainActor in
+                await ExecApprovalsPromptPresenter.prompt(ExecApprovalPromptRequest(command: "second"))
+            }
+            await Task.yield()
+
+            #expect(presentedCommands == ["first"])
+
+            firstContinuation?.resume(returning: .allowOnce)
+            let firstDecision = await firstTask.value
+            let secondDecision = await secondTask.value
+
+            #expect(firstDecision == .allowOnce)
+            #expect(secondDecision == .deny)
+            #expect(presentedCommands == ["first", "second"])
+        })
+    }
+
     @Test func `accessory view reserves nonzero alert layout space`() {
         let accessory = ExecApprovalsPromptPresenter.buildAccessoryView(
             ExecApprovalPromptRequest(

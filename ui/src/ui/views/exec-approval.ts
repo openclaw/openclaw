@@ -179,7 +179,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   const decisions = resolveApprovalDecisions(active);
   const handleCancel = () => {
     if (!state.execApprovalBusy && decisions.includes("deny")) {
-      void state.handleExecApprovalDecision("deny");
+      void state.handleExecApprovalDecision("deny", active.id);
     }
   };
   return html`
@@ -207,7 +207,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
               <button
                 class=${approvalDecisionClass(decision)}
                 ?disabled=${state.execApprovalBusy}
-                @click=${() => state.handleExecApprovalDecision(decision)}
+                @click=${() => state.handleExecApprovalDecision(decision, active.id)}
               >
                 ${approvalDecisionLabel(decision)}
               </button>
