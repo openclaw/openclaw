@@ -51,6 +51,29 @@ async function waitForRequests(
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
 }
 
+async function installPlainHttpClipboardCapture(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+    document.execCommand = ((command: string) => {
+      if (command !== "copy") {
+        return false;
+      }
+      // execCommand("copy") copies the active selection; the fallback selects
+      // its off-screen scratch textarea, so the focused element holds the text.
+      const active = document.activeElement as HTMLTextAreaElement | null;
+      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
+        active?.value ?? "",
+      );
+      return true;
+    }) as typeof document.execCommand;
+  });
+}
+
+async function copiedViaExec(page: Page): Promise<string[]> {
+  return page.evaluate(() => (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec);
+}
+
 async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
   return page.locator(".chat-thread").evaluate((element) => {
     const thread = element as HTMLElement;
@@ -373,25 +396,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    // Simulate a plain-HTTP (non-secure) deployment: navigator.clipboard is
-    // undefined there, so the Clipboard API path throws. Capture the legacy
-    // execCommand copy the fallback should use instead.
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
-      document.execCommand = ((command: string) => {
-        if (command !== "copy") {
-          return false;
-        }
-        // execCommand("copy") copies the active selection; the fallback selects
-        // its off-screen scratch textarea, so the focused element holds the text.
-        const active = document.activeElement as HTMLTextAreaElement | null;
-        (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
-          active?.value ?? "",
-        );
-        return true;
-      }) as typeof document.execCommand;
-    });
+    // Simulate a plain-HTTP deployment where navigator.clipboard is unavailable.
+    await installPlainHttpClipboardCapture(page);
     const code = "const hello = 1;";
     const gateway = await installMockGateway(page, {
       historyMessages: [
@@ -414,10 +420,50 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timeout: 10_000,
         })
         .toBe(true);
-      const copied = await page.evaluate(
-        () => (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec,
-      );
-      expect(copied).toContain(code);
+      expect(await copiedViaExec(page)).toContain(code);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("copies a workspace file path over a non-secure context via the execCommand fallback", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installPlainHttpClipboardCapture(page);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "artifacts.list": { artifacts: [] },
+        "sessions.files.list": {
+          browser: { entries: [], path: "" },
+          files: [
+            {
+              kind: "modified",
+              missing: false,
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              size: 2048,
+            },
+          ],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+
+      await page.getByRole("button", { name: "Copy path" }).click();
+
+      expect(await copiedViaExec(page)).toContain("/workspace/AGENTS.md");
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
