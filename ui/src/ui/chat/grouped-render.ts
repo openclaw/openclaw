@@ -1702,16 +1702,19 @@ const MAX_JSON_AUTOPARSE_CHARS = 20_000;
  * Size-capped to prevent render-loop DoS from large JSON messages.
  */
 function detectJson(text: string): { parsed: unknown; pretty: string } | null {
-  const t = text.trim();
+  const trimmed = text.trim();
 
   // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
-  if (t.length > MAX_JSON_AUTOPARSE_CHARS) {
+  if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
     return null;
   }
 
-  if ((t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"))) {
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
     try {
-      const parsed = JSON.parse(t);
+      const parsed = JSON.parse(trimmed);
       return { parsed, pretty: JSON.stringify(parsed, null, 2) };
     } catch {
       return null;
