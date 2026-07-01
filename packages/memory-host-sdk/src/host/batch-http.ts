@@ -1,4 +1,5 @@
 // Memory Host SDK module implements batch http behavior.
+import type { PinnedDispatcherPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
 import { retryAsync } from "./retry-utils.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
@@ -10,6 +11,7 @@ export async function postJsonWithRetry<T>(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchImpl?: typeof fetch;
   retryImpl?: typeof retryAsync;
   body: unknown;
@@ -22,6 +24,7 @@ export async function postJsonWithRetry<T>(params: {
         url: params.url,
         headers: params.headers,
         ssrfPolicy: params.ssrfPolicy,
+        dispatcherPolicy: params.dispatcherPolicy,
         fetchImpl: params.fetchImpl,
         body: params.body,
         errorPrefix: params.errorPrefix,

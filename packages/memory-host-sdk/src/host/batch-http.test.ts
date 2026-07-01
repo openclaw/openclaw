@@ -111,4 +111,24 @@ describe("postJsonWithRetry", () => {
     expect((error as Error).message).toBe("memory batch failed: 503 backend down");
     expect((error as { status?: unknown }).status).toBe(503);
   });
+
+  it("forwards dispatcherPolicy to postJson", async () => {
+    postJsonMock.mockImplementationOnce(async () => []);
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "https://proxy.example.test:8443",
+    };
+
+    await postJsonWithRetry({
+      url: "https://memory.example/v1/batch",
+      headers: {},
+      body: { chunks: [] },
+      errorPrefix: "memory batch failed",
+      dispatcherPolicy,
+      retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
+    });
+
+    const postJsonParams = requirePostJsonParams(postJsonMock);
+    expect(postJsonParams).toHaveProperty("dispatcherPolicy", dispatcherPolicy);
+  });
 });

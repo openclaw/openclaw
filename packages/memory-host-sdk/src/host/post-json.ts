@@ -1,4 +1,5 @@
 // Memory Host SDK module implements post json behavior.
+import type { PinnedDispatcherPolicy } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { readResponseJsonWithLimit, readResponseTextSnippet } from "./response-snippet.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
@@ -10,6 +11,7 @@ export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   body: unknown;
@@ -21,6 +23,7 @@ export async function postJson<T>(params: {
   return await withRemoteHttpResponse({
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
     fetchImpl: params.fetchImpl,
     signal: params.signal,
     init: {
