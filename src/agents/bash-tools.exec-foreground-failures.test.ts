@@ -100,8 +100,7 @@ async function expectUnavailableWorkdir(params: {
     const text = requireTextContent(result);
     expect(text).toContain(`workdir "${params.workdir}" is unavailable or not a directory`);
     expect(text).toContain("command was not executed");
-    expect(text).toContain("workdir is treated as a literal path");
-    expect(text).toContain('shell expansions such as "~" are not applied');
+    expect(text).toContain('Leading "~" is expanded to the home directory for local execution');
     const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.timedOut).toBe(false);

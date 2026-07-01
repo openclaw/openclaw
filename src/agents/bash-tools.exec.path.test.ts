@@ -234,8 +234,7 @@ describe("exec PATH login shell merge", () => {
     expect(result.details?.status).toBe("failed");
     expect(value).toContain(`workdir "${missingWorkdir}" is unavailable or not a directory`);
     expect(value).toContain("command was not executed");
-    expect(value).toContain("workdir is treated as a literal path");
-    expect(value).toContain('shell expansions such as "~" are not applied');
+    expect(value).toContain('Leading "~" is expanded to the home directory for local execution');
     expect(value).not.toMatch(/^ok/);
   });
 
