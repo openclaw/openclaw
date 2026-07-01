@@ -7507,6 +7507,38 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("omits max_completion_tokens when model maxTokens is not configured (covers #98295)", () => {
+    // Custom Xiaomi MiMo model configured without maxTokens — the model
+    // object has contextWindow set but maxTokens left undefined. Previously
+    // the fallback chain in model.static-catalog.ts would fill maxTokens
+    // with DEFAULT_CONTEXT_TOKENS (200_000), producing an invalid
+    // max_completion_tokens value that Xiaomi rejects with HTTP 400.
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2-flash",
+        name: "MiMo V2 Flash",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.mimo.chat/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        // maxTokens intentionally undefined — mimics custom model config
+        // without an explicit maxTokens field.
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
     const params = buildOpenAICompletionsParams(
       {

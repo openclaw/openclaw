@@ -92,7 +92,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     cost: normalizeStaticCatalogCost(row.cost),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: row.contextTokens,
-    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: row.maxTokens ?? undefined,
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
@@ -128,7 +128,7 @@ function modelFromProviderStaticCatalog(params: {
       model?.maxTokens ??
       params.model.maxTokens ??
       params.providerConfig.maxTokens ??
-      DEFAULT_CONTEXT_TOKENS,
+      undefined,
     ...(params.providerConfig.authHeader !== undefined
       ? { authHeader: params.providerConfig.authHeader }
       : {}),
