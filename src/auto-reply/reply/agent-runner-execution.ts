@@ -116,6 +116,7 @@ import {
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  clearFailedReusedCliSessionBinding,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -2362,7 +2363,22 @@ export async function runAgentTurnWithFallback(params: {
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
                   },
-                  onErrorBeforeLifecycle: async () => {
+                  onErrorBeforeLifecycle: async (error) => {
+                    try {
+                      await clearFailedReusedCliSessionBinding({
+                        provider: cliExecutionProvider,
+                        error,
+                        cliSessionBinding,
+                        sessionKey: params.sessionKey,
+                        sessionStore: params.activeSessionStore,
+                        storePath: params.storePath,
+                        activeSessionEntry: params.getActiveSessionEntry(),
+                      });
+                    } catch (clearError) {
+                      logVerbose(
+                        `failed to clear failed CLI session binding (non-fatal): ${String(clearError)}`,
+                      );
+                    }
                     if (!rollbackFallbackCandidateSelection) {
                       return;
                     }

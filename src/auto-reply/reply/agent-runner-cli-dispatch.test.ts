@@ -1,7 +1,12 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -9,6 +14,7 @@ import {
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
 import {
+  clearFailedReusedCliSessionBinding,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -214,6 +220,54 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
     expect(onDroppedReplacement).toHaveBeenCalledOnce();
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+});
+
+describe("clearFailedReusedCliSessionBinding", () => {
+  it("clears reused Claude CLI session state from memory and sessions.json after failover", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-dispatch-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:user";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: 1,
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "stale-claude-session" },
+      },
+      cliSessionIds: { "claude-cli": "stale-claude-session" },
+      claudeCliSessionId: "stale-claude-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    try {
+      await clearFailedReusedCliSessionBinding({
+        provider: "claude-cli",
+        error: new FailoverError("Not logged in", {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-opus-4-6",
+        }),
+        cliSessionBinding: { sessionId: "stale-claude-session" },
+        sessionKey,
+        sessionStore,
+        storePath,
+        activeSessionEntry: sessionEntry,
+      });
+
+      expect(sessionStore[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(persisted[sessionKey]?.cliSessionBindings).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionIds).toBeUndefined();
+      expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
