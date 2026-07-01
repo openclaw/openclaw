@@ -1,5 +1,5 @@
 import http from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -28,7 +28,9 @@ describe("tlon error body boundary", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await new Promise<void>((r) => server?.close(() => r()));
+    await new Promise<void>((resolve) => {
+      server?.close(() => resolve());
+    });
   });
 
   it("bounds poke error body at 16 KiB", async () => {
@@ -36,18 +38,33 @@ describe("tlon error body boundary", () => {
       res.writeHead(500, { "Content-Type": "text/plain" });
       let written = 0;
       function write() {
-        if (written >= 4 * 1024 * 1024) { res.end(); return; }
+        if (written >= 4 * 1024 * 1024) {
+          res.end();
+          return;
+        }
         const ok = res.write(CHUNK);
         written += CHUNK.length;
-        if (ok) setImmediate(write);
-        else res.once("drain", write);
+        if (ok) {
+          setImmediate(write);
+        } else {
+          res.once("drain", write);
+        }
       }
       write();
     });
-    const port = await new Promise<number>((r) => server.listen(0, "127.0.0.1", () => r((server.address() as { port: number }).port)));
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as { port: number }).port);
+      });
+    });
 
     const err = await pokeUrbitChannel(
-      { baseUrl: `http://127.0.0.1:${port}`, cookie: "urbit=cookie", ship: "~zod", channelId: "test" },
+      {
+        baseUrl: `http://127.0.0.1:${port}`,
+        cookie: "urbit=cookie",
+        ship: "~zod",
+        channelId: "test",
+      },
       { app: "test", mark: "test", json: {}, auditContext: "test" },
     ).catch((e: unknown) => e);
 
@@ -62,10 +79,19 @@ describe("tlon error body boundary", () => {
       res.writeHead(500, { "Content-Type": "text/plain" });
       res.end("session expired");
     });
-    const port = await new Promise<number>((r) => server.listen(0, "127.0.0.1", () => r((server.address() as { port: number }).port)));
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as { port: number }).port);
+      });
+    });
 
     const err = await pokeUrbitChannel(
-      { baseUrl: `http://127.0.0.1:${port}`, cookie: "urbit=cookie", ship: "~zod", channelId: "test" },
+      {
+        baseUrl: `http://127.0.0.1:${port}`,
+        cookie: "urbit=cookie",
+        ship: "~zod",
+        channelId: "test",
+      },
       { app: "test", mark: "test", json: {}, auditContext: "test" },
     ).catch((e: unknown) => e);
 
