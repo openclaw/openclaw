@@ -676,11 +676,6 @@ export function logMessageQueued(params: {
   }
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
-  // Track messages steered into an active embedded run separately so
-  // they can be subtracted on idle without clearing real backlog (#98685).
-  if (params.source === "embedded-agent-runner") {
-    state.embeddedSteeredCount = (state.embeddedSteeredCount ?? 0) + 1;
-  }
   state.lastActivity = Date.now();
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
@@ -880,6 +875,39 @@ export function logSessionTurnCreated(params: {
   markActivity();
 }
 
+/**
+ * Logs a steered-message event without incrementing queueDepth.
+ * Messages steered into an active embedded run are not session backlog (#98685).
+ */
+export function logEmbeddedAgentSteerEvent(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message steered: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } queueDepth=${state.queueDepth} sessionState=${state.state}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.queued",
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+    source: "embedded-agent-runner",
+    queueDepth: state.queueDepth,
+  });
+  markActivity();
+}
+
 export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
@@ -901,11 +929,7 @@ export function logSessionStateChange(
     state.activeQueuedTurn = state.queueDepth > 0;
   }
   if (params.state === "idle") {
-    // Decrement by 1 for normal completion, and subtract any additional
-    // steered-message depth accumulated during an embedded run (#98685).
-    const steered = state.embeddedSteeredCount ?? 0;
-    state.queueDepth = Math.max(0, state.queueDepth - 1 - steered);
-    state.embeddedSteeredCount = 0;
+    state.queueDepth = Math.max(0, state.queueDepth - 1);
     state.activeQueuedTurn = false;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {

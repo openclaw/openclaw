@@ -41,6 +41,7 @@ import {
 } from "./diagnostic-stability.js";
 import {
   diagnosticLogger,
+  logEmbeddedAgentSteerEvent,
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
@@ -236,28 +237,24 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 
-  it("resets queueDepth to 0 on idle after multiple steered messages (#98685)", () => {
-    const sessionKey = "multi-queue-depth-test";
-    // Messages steered into an active embedded run
-    logMessageQueued({ sessionKey, source: "embedded-agent-runner" });
-    logMessageQueued({ sessionKey, source: "embedded-agent-runner" });
-    logMessageQueued({ sessionKey, source: "embedded-agent-runner" });
-    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(3);
-    expect(getDiagnosticSessionState({ sessionKey }).embeddedSteeredCount).toBe(3);
-    logSessionStateChange({ sessionKey, state: "idle", reason: "run_completed" });
+  it("steered messages via logEmbeddedAgentSteerEvent do not increment queueDepth (#98685)", () => {
+    const sessionKey = "steer-no-depth-test";
+    // Messages steered into an active run use a dedicated event that
+    // logs diagnostics without incrementing the session backlog depth.
+    logEmbeddedAgentSteerEvent({ sessionKey });
+    logEmbeddedAgentSteerEvent({ sessionKey });
+    logEmbeddedAgentSteerEvent({ sessionKey });
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
-    expect(getDiagnosticSessionState({ sessionKey }).embeddedSteeredCount).toBe(0);
+    // Normal queued messages still count
+    logMessageQueued({ sessionKey, source: "user" });
+    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(1);
   });
 
   it("preserves real queued backlog from non-steered messages on idle (#98685)", () => {
-    // Normal messages (not from embedded-agent-runner) should NOT be
-    // subtracted as steered, so queueDepth preserves real backlog.
     const sessionKey = "multi-queue-backlog-test";
     logMessageQueued({ sessionKey, source: "user" });
     logMessageQueued({ sessionKey, source: "user" });
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(2);
-    expect(getDiagnosticSessionState({ sessionKey }).embeddedSteeredCount).toBeUndefined();
-    // One idle transition decrements once, leaving the remaining backlog
     logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(1);
     logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });

@@ -12,10 +12,6 @@ export type SessionState = {
   lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
-  /** Count of messages steered into an active embedded run since the last
-   *  idle transition.  Subtracted from queueDepth on idle so that steered
-   *  messages don't leave stale residual depth (#98685). */
-  embeddedSteeredCount?: number;
   activeQueuedTurn?: boolean;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
