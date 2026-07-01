@@ -32,8 +32,10 @@ import {
   type ModelCatalogEntry,
 } from "../agents/model-catalog.js";
 import {
+  findNormalizedProviderKey,
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
+  normalizeProviderId,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -1598,30 +1600,72 @@ export function getSessionDefaults(
   };
 }
 
-export function resolveSessionModelRef(
+function hasCatalogModelRef(
+  catalog: ModelCatalogEntry[] | undefined,
+  ref: { provider: string; model: string },
+): boolean {
+  return Boolean(
+    catalog &&
+    findModelCatalogEntry(catalog, {
+      provider: ref.provider,
+      modelId: ref.model,
+    }),
+  );
+}
+
+function currentConfigAllowsPersistedModelRef(params: {
+  cfg: OpenClawConfig;
+  ref: { provider: string; model: string };
+  defaultRef: { provider: string; model: string };
+  modelCatalog?: ModelCatalogEntry[];
+}): boolean {
+  const provider = normalizeProviderId(params.ref.provider);
+  if (!provider) {
+    return true;
+  }
+  if (provider === normalizeProviderId(params.defaultRef.provider)) {
+    return true;
+  }
+  if (findNormalizedProviderKey(params.cfg.models?.providers, provider)) {
+    return true;
+  }
+  if (hasCatalogModelRef(params.modelCatalog, params.ref)) {
+    return true;
+  }
+  if (params.modelCatalog) {
+    return false;
+  }
+  if (params.cfg.models?.mode === "replace") {
+    return false;
+  }
+  return true;
+}
+
+function persistedModelRefNeedsCatalogValidation(params: {
+  cfg: OpenClawConfig;
+  ref: { provider: string; model: string };
+  defaultRef: { provider: string; model: string };
+}): boolean {
+  const provider = normalizeProviderId(params.ref.provider);
+  if (!provider) {
+    return false;
+  }
+  if (provider === normalizeProviderId(params.defaultRef.provider)) {
+    return false;
+  }
+  return !findNormalizedProviderKey(params.cfg.models?.providers, provider);
+}
+
+export function shouldLoadModelCatalogForSessionModelResolution(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
-): { provider: string; model: string } {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
-  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
-    return resolvePersistedSelectedModelRef({
-      defaultProvider: normalizedOverride.providerOverride,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-      allowPluginNormalization: options?.allowPluginNormalization,
-    })!;
-  }
-  const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
-  const runtimeModel = normalizeOptionalString(entry?.model);
-  if (runtimeProvider && runtimeModel) {
-    return { provider: runtimeProvider, model: runtimeModel };
+): boolean {
+  if (!entry) {
+    return false;
   }
 
   const resolved = agentId
@@ -1636,6 +1680,96 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
       });
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+  });
+  const runtimeProvider = normalizeOptionalString(entry.modelProvider);
+  const runtimeModel = normalizeOptionalString(entry.model);
+  const refs: Array<{ provider: string; model: string }> = [];
+
+  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    const override = resolvePersistedSelectedModelRef({
+      defaultProvider: normalizedOverride.providerOverride,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+      allowPluginNormalization: options?.allowPluginNormalization,
+    });
+    if (override) {
+      refs.push(override);
+    }
+  }
+  if (runtimeProvider && runtimeModel) {
+    refs.push({ provider: runtimeProvider, model: runtimeModel });
+  }
+
+  return refs.some((ref) =>
+    persistedModelRefNeedsCatalogValidation({
+      cfg,
+      ref,
+      defaultRef: resolved,
+    }),
+  );
+}
+
+export function resolveSessionModelRef(
+  cfg: OpenClawConfig,
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+  agentId?: string,
+  options?: { allowPluginNormalization?: boolean; modelCatalog?: ModelCatalogEntry[] },
+): { provider: string; model: string } {
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+  });
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
+  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    const override = resolvePersistedSelectedModelRef({
+      defaultProvider: normalizedOverride.providerOverride,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+      allowPluginNormalization: options?.allowPluginNormalization,
+    });
+    if (
+      override &&
+      currentConfigAllowsPersistedModelRef({
+        cfg,
+        ref: override,
+        defaultRef: resolved,
+        modelCatalog: options?.modelCatalog,
+      })
+    ) {
+      return override;
+    }
+  }
+  const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
+  const runtimeModel = normalizeOptionalString(entry?.model);
+  if (runtimeProvider && runtimeModel) {
+    const runtimeRef = { provider: runtimeProvider, model: runtimeModel };
+    if (
+      currentConfigAllowsPersistedModelRef({
+        cfg,
+        ref: runtimeRef,
+        defaultRef: resolved,
+        modelCatalog: options?.modelCatalog,
+      })
+    ) {
+      return runtimeRef;
+    }
+  }
 
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
@@ -1645,7 +1779,15 @@ export function resolveSessionModelRef(
     overrideModel: normalizedOverride.modelOverride,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
-  if (persisted) {
+  if (
+    persisted &&
+    currentConfigAllowsPersistedModelRef({
+      cfg,
+      ref: persisted,
+      defaultRef: resolved,
+      modelCatalog: options?.modelCatalog,
+    })
+  ) {
     return persisted;
   }
   return resolved;
