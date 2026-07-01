@@ -18,7 +18,7 @@ import {
 
 type ChatModelSelectStateInput = {
   chatModelCatalog: ModelCatalogEntry[];
-  modelOverrides: Record<string, string | null | undefined>;
+  modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 };
@@ -155,9 +155,7 @@ export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
   return undefined;
 }
 
-export function resolveChatFastModeStatus(
-  session: GatewaySessionRow | undefined,
-): string {
+export function resolveChatFastModeStatus(session: GatewaySessionRow | undefined): string {
   return formatFastModeCurrentStatus({
     mode: session?.effectiveFastMode ?? session?.fastMode,
     source: session?.effectiveFastModeSource,

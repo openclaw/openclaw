@@ -3,7 +3,12 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../api/types.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import {
   blockArtCodeBlockCopyPayloadEncoding,
@@ -23,11 +28,11 @@ import {
 } from "./attachment-payload-store.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 import { renderChatQueue } from "./components/chat-composer-controls.ts";
+import { renderChatQuotaPill } from "./components/chat-controls.ts";
 import {
-  renderChatModelSelect,
-  renderChatQuotaPill,
-  type ChatModelControlsState,
-} from "./components/chat-controls.ts";
+  renderChatModelControls,
+  type ChatModelControlsProps,
+} from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
@@ -124,12 +129,23 @@ const renderMessageGroupMock = vi.hoisted(() =>
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
-type ChatHeaderTestState = ChatModelControlsState & {
+type ChatHeaderTestState = {
+  basePath?: string;
+  chatLoading: boolean;
+  chatModelCatalog: ModelCatalogEntry[];
+  chatModelsLoading?: boolean;
+  chatRunId: string | null;
+  chatSending: boolean;
+  chatStream: string | null;
+  client: GatewayBrowserClient;
+  connected: boolean;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  sessionKey: string;
+  sessionsResult: SessionsListResult | null;
   agentsSelectedId: string | null;
   settings: UiSettings;
   sessions: SessionCapability;
   setRoute: ReturnType<typeof vi.fn>;
-  modelAuthStatusResult?: ChatModelControlsState["modelAuthStatusResult"];
   toolsEffectiveLoading: boolean;
   toolsEffectiveLoadingKey: string | null;
   toolsEffectiveError: string | null;
@@ -445,6 +461,23 @@ function getChatModelSelect(container: Element): HTMLElement {
     throw new Error("Expected chat model control");
   }
   return select;
+}
+
+function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
+  return {
+    activeRunId: state.chatRunId,
+    connected: state.connected,
+    gatewayAvailable: Boolean(state.client),
+    loading: state.chatLoading,
+    modelCatalog: state.chatModelCatalog,
+    modelOverrides: state.sessions.state.modelOverrides,
+    modelSwitching: false,
+    modelsLoading: state.chatModelsLoading,
+    sending: state.chatSending,
+    sessionKey: state.sessionKey,
+    sessionsResult: state.sessionsResult,
+    stream: state.chatStream,
+  };
 }
 
 function getChatSelectValue(control: HTMLElement): string {
@@ -2708,7 +2741,11 @@ describe("chat model controls", () => {
     };
     const container = document.createElement("div");
     render(
-      renderChatQuotaPill(state, (route) => state.setRoute(route)),
+      renderChatQuotaPill({
+        basePath: state.basePath,
+        modelAuthStatusResult: state.modelAuthStatusResult,
+        onNavigate: (route) => state.setRoute(route),
+      }),
       container,
     );
 
@@ -2727,7 +2764,7 @@ describe("chat model controls", () => {
     state.chatRunId = "run-123";
     state.chatStream = "Working";
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const modelSelect = getChatModelSelect(container);
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
@@ -2747,7 +2784,7 @@ describe("chat model controls", () => {
       omitSessionFromList: true,
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
     expect(getThinkingResetButton(container)).toBeNull();
@@ -2760,7 +2797,7 @@ describe("chat model controls", () => {
       thinkingDefault: "adaptive",
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const thinkingSelect = getThinkingSelect(container);
 
@@ -2846,7 +2883,7 @@ describe("chat model controls", () => {
       ],
     };
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const thinkingSelect = getThinkingSelect(container);
 
@@ -2877,7 +2914,7 @@ describe("chat model controls", () => {
       defaultsThinkingDefault: "off",
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (Low)");
   });
@@ -2901,7 +2938,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const thinkingSelect = getThinkingSelect(container);
 
@@ -2917,7 +2954,7 @@ describe("chat model controls", () => {
       omitSessionFromList: true,
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const thinkingSelect = getThinkingSelect(container);
 

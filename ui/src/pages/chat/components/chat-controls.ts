@@ -1,10 +1,8 @@
-// Chat-owned model, reasoning, speed, quota, and settings controls.
+// Chat-owned quota, settings, refresh, and display controls.
 import { html } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import type {
   AgentsListResult,
   ModelAuthStatusResult,
-  ModelCatalogEntry,
   SessionsListResult,
 } from "../../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../../app-routes.ts";
@@ -16,18 +14,6 @@ import {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  resolveChatFastModeSelectState,
-  resolveChatModelSelectState,
-  type ChatFastModeSelectState,
-  type ChatFastModeSelectValue,
-  type ChatModelSelectOption,
-} from "../../../lib/chat/model-select-state.ts";
-import {
-  formatThinkingOverrideLabel,
-  resolveChatThinkingSelectState,
-  type ChatThinkingSelectState,
-} from "../../../lib/chat/thinking.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth-helpers.ts";
 import {
   collectQuotaWindowsFromAuthStatus,
@@ -39,50 +25,37 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
+import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
-export type ChatModelControlsState = {
+type ChatQuotaPillProps = {
   basePath?: string;
-  chatLoading: boolean;
-  chatModelCatalog: ModelCatalogEntry[];
-  chatModelsLoading?: boolean;
-  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  chatRunId: string | null;
-  chatSending: boolean;
-  chatStream: string | null;
-  chatThinkingLevel: string | null;
-  client: unknown;
-  connected: boolean;
-  agentsList: AgentsListResult | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
-  sessionKey: string;
-  sessionsResult: SessionsListResult | null;
+  onNavigate?: (routeId: RouteId) => void;
 };
 
-export type ChatControlsState = ChatModelControlsState & {
-  chatManualRefreshInFlight: boolean;
-  chatMobileControlsOpen: boolean;
+export type ChatControlsProps = {
+  agentsList: AgentsListResult | null;
+  connected: boolean;
+  hideCronSessions: boolean;
+  loading: boolean;
+  manualRefreshInFlight: boolean;
+  model: ChatModelControlsProps;
   onboarding: boolean;
-  requestUpdate?: () => void;
+  quota: ChatQuotaPillProps;
+  runId: string | null;
+  sending: boolean;
   settings: UiSettings;
-  sessionsHideCron: boolean;
-  applySettings: (next: UiSettings) => void;
-  setChatMobileControlsOpen: (
+  settingsOpen: boolean;
+  sessionKey: string;
+  sessionsResult: SessionsListResult | null;
+  stream: string | null;
+  onRefresh: () => Promise<void> | void;
+  onSettingsChange: (next: UiSettings) => void;
+  onSettingsOpenChange: (
     open: boolean,
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
-};
-
-export type ChatModelControlsOptions = {
-  modelOverrides?: Readonly<Record<string, string | null>>;
-  onFastModeSelect?: (value: ChatFastModeSelectValue) => Promise<unknown> | unknown;
-  onModelSelect?: (value: string) => Promise<unknown> | unknown;
-  onThinkingSelect?: (value: string) => Promise<unknown> | unknown;
   onToggleCronSessions?: () => void;
-};
-
-export type ChatControlsOptions = ChatModelControlsOptions & {
-  onNavigate?: (routeId: RouteId) => void;
-  onRefresh: () => Promise<void> | void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -109,8 +82,11 @@ function nextChatAutoScrollMode(mode: ChatAutoScrollMode): ChatAutoScrollMode {
   return "near-bottom";
 }
 
-function renderChatAutoScrollToggle(state: Pick<ChatControlsState, "applySettings" | "settings">) {
-  const mode = normalizeChatAutoScrollMode(state.settings.chatAutoScroll);
+function renderChatAutoScrollToggle(props: {
+  settings: UiSettings;
+  onSettingsChange: (next: UiSettings) => void;
+}) {
+  const mode = normalizeChatAutoScrollMode(props.settings.chatAutoScroll);
   const label = `${t("chat.autoScrollMode")}: ${chatAutoScrollLabel(mode)}`;
   const active = mode !== "off";
   return html`
@@ -122,8 +98,8 @@ function renderChatAutoScrollToggle(state: Pick<ChatControlsState, "applySetting
         aria-label=${label}
         aria-pressed=${active}
         @click=${() => {
-          state.applySettings({
-            ...state.settings,
+          props.onSettingsChange({
+            ...props.settings,
             chatAutoScroll: nextChatAutoScrollMode(mode),
           });
         }}
@@ -160,31 +136,33 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
-function countHiddenCronSessions(state: ChatControlsState): number {
-  const sessions = state.sessionsResult;
+function countHiddenCronSessions(
+  props: Pick<ChatControlsProps, "agentsList" | "sessionKey" | "sessionsResult">,
+): number {
+  const sessions = props.sessionsResult;
   if (!sessions?.sessions) {
     return 0;
   }
   const activeAgentId = normalizeAgentId(
-    parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main",
+    parseAgentSessionKey(props.sessionKey)?.agentId ?? props.agentsList?.defaultId ?? "main",
   );
-  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const defaultAgentId = normalizeAgentId(props.agentsList?.defaultId ?? "main");
 
   return sessions.sessions.filter(
     (row) =>
       isCronSessionKey(row.key) &&
-      row.key !== state.sessionKey &&
+      row.key !== props.sessionKey &&
       isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId),
   ).length;
 }
 
-export function renderChatControls(state: ChatControlsState, options: ChatControlsOptions) {
-  const hideCron = state.sessionsHideCron ?? true;
-  const hiddenCronCount = hideCron ? countHiddenCronSessions(state) : 0;
-  const disableThinkingToggle = state.onboarding;
-  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
-  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const persistCommentary = state.settings.chatPersistCommentary === true;
+export function renderChatControls(props: ChatControlsProps) {
+  const hideCron = props.hideCronSessions;
+  const hiddenCronCount = hideCron ? countHiddenCronSessions(props) : 0;
+  const disableThinkingToggle = props.onboarding;
+  const showThinking = props.onboarding ? false : props.settings.chatShowThinking;
+  const showToolCalls = props.onboarding ? true : props.settings.chatShowToolCalls;
+  const persistCommentary = props.settings.chatPersistCommentary === true;
   const thinkingLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.thinkingToggle");
@@ -195,18 +173,18 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
     ? t("chat.onboardingDisabled")
     : t("chat.commentaryToggle");
   const refreshDisabled =
-    !state.connected ||
-    state.chatManualRefreshInFlight ||
-    state.chatLoading ||
-    state.chatSending ||
-    state.chatStream !== null ||
-    Boolean(state.chatRunId);
+    !props.connected ||
+    props.manualRefreshInFlight ||
+    props.loading ||
+    props.sending ||
+    props.stream !== null ||
+    Boolean(props.runId);
   const cronLabel = hideCron
     ? hiddenCronCount > 0
       ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
       : t("chat.showCronSessions")
     : t("chat.hideCronSessions");
-  const settingsOpen = state.chatMobileControlsOpen;
+  const settingsOpen = props.settingsOpen;
   const settingsLabel = t("chat.settings");
   const settingsTitle = t("chat.settings");
 
@@ -214,14 +192,14 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
     <div
       class="chat-composer-model-control"
       @click=${() => {
-        if (state.chatMobileControlsOpen) {
-          state.setChatMobileControlsOpen(false);
+        if (props.settingsOpen) {
+          props.onSettingsOpenChange(false);
         }
       }}
     >
-      ${renderChatModelSelect(state, options)}
+      ${renderChatModelControls(props.model)}
     </div>
-    ${renderChatQuotaPill(state, options.onNavigate)}
+    ${renderChatQuotaPill(props.quota)}
     <div class="chat-settings-popover-wrapper">
       <openclaw-tooltip .content=${settingsTitle}>
         <button
@@ -236,7 +214,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
               .closest(".agent-chat__composer-controls")
               ?.querySelectorAll("details.chat-controls__inline-select[open]")
               .forEach((details) => details.removeAttribute("open"));
-            state.setChatMobileControlsOpen(!settingsOpen, {
+            props.onSettingsOpenChange(!settingsOpen, {
               trigger: event.currentTarget as HTMLElement,
             });
           }}
@@ -261,7 +239,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
                 ?disabled=${refreshDisabled}
                 @click=${() => {
                   if (!refreshDisabled) {
-                    void options.onRefresh();
+                    void props.onRefresh();
                   }
                 }}
                 aria-label=${t("common.refresh")}
@@ -270,7 +248,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
                 <span class="chat-settings-action__text">${t("common.refresh")}</span>
               </button>
             </openclaw-tooltip>
-            ${renderChatAutoScrollToggle(state)}
+            ${renderChatAutoScrollToggle(props)}
             <openclaw-tooltip .content=${thinkingLabel}>
               <button
                 class="btn btn--sm btn--icon chat-settings-action ${showThinking ? "active" : ""}"
@@ -279,9 +257,9 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
                   if (disableThinkingToggle) {
                     return;
                   }
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowThinking: !state.settings.chatShowThinking,
+                  props.onSettingsChange({
+                    ...props.settings,
+                    chatShowThinking: !props.settings.chatShowThinking,
                   });
                 }}
                 aria-pressed=${showThinking}
@@ -299,9 +277,9 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
                   if (disableThinkingToggle) {
                     return;
                   }
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowToolCalls: !state.settings.chatShowToolCalls,
+                  props.onSettingsChange({
+                    ...props.settings,
+                    chatShowToolCalls: !props.settings.chatShowToolCalls,
                   });
                 }}
                 aria-pressed=${showToolCalls}
@@ -321,8 +299,8 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
                   if (disableThinkingToggle) {
                     return;
                   }
-                  state.applySettings({
-                    ...state.settings,
+                  props.onSettingsChange({
+                    ...props.settings,
                     chatPersistCommentary: !persistCommentary,
                   });
                 }}
@@ -337,7 +315,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
               <button
                 class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
                 @click=${() => {
-                  options.onToggleCronSessions?.();
+                  props.onToggleCronSessions?.();
                 }}
                 aria-pressed=${hideCron}
                 aria-label=${cronLabel}
@@ -353,12 +331,9 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
   `;
 }
 
-export function renderChatQuotaPill(
-  state: ChatModelControlsState,
-  onNavigate?: (routeId: RouteId) => void,
-) {
+export function renderChatQuotaPill(props: ChatQuotaPillProps) {
   const windows = collectQuotaWindowsFromAuthStatus(
-    state.modelAuthStatusResult ?? null,
+    props.modelAuthStatusResult ?? null,
     isMonitoredAuthProvider,
   );
   const primary = windows[0];
@@ -381,7 +356,7 @@ export function renderChatQuotaPill(
   return html`
     <a
       class="chat-controls__quota chat-controls__quota--${severity}"
-      href=${pathForRoute("usage", state.basePath ?? "")}
+      href=${pathForRoute("usage", props.basePath ?? "")}
       title=${title}
       aria-label=${`Provider usage: ${title}`}
       data-chat-provider-usage="true"
@@ -397,400 +372,11 @@ export function renderChatQuotaPill(
           return;
         }
         event.preventDefault();
-        onNavigate?.("usage");
+        props.onNavigate?.("usage");
       }}
     >
       <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>
     </a>
-  `;
-}
-
-export function renderChatModelSelect(
-  state: ChatModelControlsState,
-  callbacks: ChatModelControlsOptions = {},
-) {
-  const {
-    currentOverride,
-    defaultLabel,
-    options: selectOptions,
-  } = resolveChatModelSelectState({
-    chatModelCatalog: state.chatModelCatalog,
-    modelOverrides: callbacks.modelOverrides ?? {},
-    sessionKey: state.sessionKey,
-    sessionsResult: state.sessionsResult,
-  });
-  const thinking = resolveChatThinkingSelectState({
-    catalog: state.chatModelCatalog,
-    sessionKey: state.sessionKey,
-    sessionsResult: state.sessionsResult,
-  });
-  const fastMode = resolveChatFastModeSelectState({
-    activeRunId: state.chatRunId,
-    catalog: state.chatModelCatalog,
-    connected: state.connected,
-    currentModelOverride: currentOverride,
-    gatewayAvailable: Boolean(state.client),
-    loading: state.chatLoading,
-    sending: state.chatSending,
-    sessionKey: state.sessionKey,
-    sessionsResult: state.sessionsResult,
-    stream: state.chatStream,
-  });
-  const busy =
-    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
-  const disabled =
-    !state.connected ||
-    busy ||
-    Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
-    (state.chatModelsLoading && selectOptions.length === 0) ||
-    !state.client;
-  const thinkingDisabled =
-    !state.connected ||
-    busy ||
-    !state.client ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
-  const selectedLabel =
-    currentOverride === ""
-      ? defaultLabel
-      : (selectOptions.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
-  const selectedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
-
-  return renderChatModelReasoningSelect({
-    disabled,
-    fastMode,
-    modelOptions: [{ value: "", label: defaultLabel }, ...selectOptions],
-    selectedModelLabel: selectedLabel,
-    selectedModelValue: currentOverride,
-    selectedThinkingLabel,
-    selectedThinkingValue: thinking.currentOverride,
-    thinkingDefaultValue: thinking.defaultValue,
-    thinkingDisabled,
-    thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-    onFastModeSelect: async (next) => callbacks.onFastModeSelect?.(next),
-    onModelSelect: async (next) => callbacks.onModelSelect?.(next),
-    onThinkingSelect: async (next) => callbacks.onThinkingSelect?.(next),
-  });
-}
-
-function formatCombinedPickerModelLabel(label: string): string {
-  const match = /^Default \((.+)\)$/u.exec(label);
-  return match?.[1] ?? label;
-}
-
-function formatCombinedPickerModelOptionLabel(
-  option: ChatModelSelectOption,
-  selected: boolean,
-): string {
-  return option.value === "" && selected
-    ? formatCombinedPickerModelLabel(option.label)
-    : option.label;
-}
-
-function formatCombinedPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
-}
-
-function renderChatModelReasoningSelect(params: {
-  fastMode: ChatFastModeSelectState;
-  disabled: boolean;
-  modelOptions: ChatModelSelectOption[];
-  selectedModelLabel: string;
-  selectedModelValue: string;
-  selectedThinkingLabel: string;
-  selectedThinkingValue: string;
-  thinkingDefaultValue: string;
-  thinkingDisabled: boolean;
-  thinkingOptions: ChatModelSelectOption[];
-  onFastModeSelect: (value: ChatFastModeSelectValue) => Promise<unknown>;
-  onModelSelect: (value: string) => Promise<unknown>;
-  onThinkingSelect: (value: string) => Promise<unknown>;
-}) {
-  const {
-    disabled,
-    fastMode,
-    modelOptions,
-    selectedModelLabel,
-    selectedModelValue,
-    selectedThinkingLabel,
-    selectedThinkingValue,
-    thinkingDefaultValue,
-    thinkingDisabled,
-    thinkingOptions,
-    onFastModeSelect,
-    onModelSelect,
-    onThinkingSelect,
-  } = params;
-  const triggerModel = formatCombinedPickerModelLabel(selectedModelLabel);
-  const triggerThinking = formatCombinedPickerThinkingLabel(selectedThinkingLabel);
-  const triggerTitle = `${triggerModel} · ${triggerThinking}`;
-  const triggerLabel =
-    selectedThinkingValue === "" ? triggerModel : `${triggerModel} · ${triggerThinking}`;
-  const sliderStops = thinkingOptions.filter((option) => option.value !== "");
-  const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
-  const hasThinkingOverride = selectedThinkingValue !== "";
-  const overrideStopIndex = sliderStops.findIndex(
-    (option) => option.value === selectedThinkingValue,
-  );
-  const sliderIndex = Math.max(hasThinkingOverride ? overrideStopIndex : defaultStopIndex, 0);
-  const sliderUnanchored = !hasThinkingOverride && defaultStopIndex < 0;
-  const sliderFillPercent = (index: number) =>
-    sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
-  const reasoningValueLabel = hasThinkingOverride
-    ? triggerThinking
-    : `Default (${triggerThinking})`;
-  const defaultLevelLabel = formatThinkingOverrideLabel(thinkingDefaultValue);
-  const onSliderDrag = (event: Event) => {
-    const input = event.currentTarget as HTMLInputElement;
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-  };
-  const onSliderCommit = async (event: Event) => {
-    if (thinkingDisabled) {
-      return;
-    }
-    const input = event.currentTarget as HTMLInputElement;
-    const stop = sliderStops[Number(input.value)];
-    if (!stop || stop.value === selectedThinkingValue) {
-      return;
-    }
-    await onThinkingSelect(stop.value);
-  };
-  const showReasoning = sliderStops.length > 0;
-  const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
-  const showReasoningPanel = showReasoning || fastMode.supported;
-  return html`
-    <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-      <summary
-        class="chat-controls__inline-select-trigger ${disabled
-          ? "chat-controls__inline-select-trigger--disabled"
-          : ""}"
-        data-chat-model-select="true"
-        data-chat-thinking-select="true"
-        data-chat-select-value=${selectedModelValue}
-        data-chat-thinking-value=${selectedThinkingValue}
-        data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
-        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
-        aria-disabled=${disabled ? "true" : "false"}
-        @click=${(event: MouseEvent) => {
-          if (disabled) {
-            event.preventDefault();
-          }
-        }}
-      >
-        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
-        <span class="chat-controls__inline-select-icon" aria-hidden="true">
-          ${icons.chevronDown}
-        </span>
-      </summary>
-      <div
-        class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined"
-        aria-label=${t("chat.selectors.model")}
-      >
-        <div class="chat-controls__inline-select-section-label">Model</div>
-        <div class="chat-controls__combined-model-list">
-          ${repeat(
-            modelOptions,
-            (entry) => entry.value,
-            (entry) => {
-              const selected = entry.value === selectedModelValue;
-              return html`
-                <div class="chat-controls__combined-model">
-                  <button
-                    class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
-                      ? "chat-controls__inline-select-option--selected"
-                      : ""}"
-                    data-chat-model-option=${entry.value}
-                    role="option"
-                    aria-selected=${selected ? "true" : "false"}
-                    type="button"
-                    ?disabled=${disabled}
-                    @click=${async (event: MouseEvent) => {
-                      if (disabled || selected) {
-                        event.preventDefault();
-                        return;
-                      }
-                      (event.currentTarget as HTMLElement)
-                        .closest("details")
-                        ?.removeAttribute("open");
-                      await onModelSelect(entry.value);
-                    }}
-                  >
-                    <span>${formatCombinedPickerModelOptionLabel(entry, selected)}</span>
-                    ${selected
-                      ? html`<span
-                          class="chat-controls__inline-select-check chat-controls__combined-model-arrow"
-                          aria-hidden="true"
-                        >
-                          ${icons.chevronDown}
-                        </span>`
-                      : ""}
-                  </button>
-                </div>
-              `;
-            },
-          )}
-        </div>
-        ${showReasoningPanel
-          ? html`
-              <div class="chat-controls__reasoning-panel">
-                ${showReasoning
-                  ? html`
-                      <div class="chat-controls__reasoning-head">
-                        <span class="chat-controls__inline-select-section-label">Reasoning</span>
-                        <span class="chat-controls__reasoning-value">${reasoningValueLabel}</span>
-                      </div>
-                      ${sliderStops.length > 1
-                        ? html`
-                            <div class="chat-controls__reasoning-slider">
-                              <div class="chat-controls__reasoning-dots" aria-hidden="true">
-                                ${sliderStops.map(
-                                  (stop, index) =>
-                                    html`<span
-                                      class="chat-controls__reasoning-dot ${index ===
-                                      defaultStopIndex
-                                        ? "chat-controls__reasoning-dot--default"
-                                        : ""}"
-                                      data-stop=${stop.value}
-                                    ></span>`,
-                                )}
-                              </div>
-                              <input
-                                class="chat-controls__reasoning-range ${hasThinkingOverride
-                                  ? ""
-                                  : "chat-controls__reasoning-range--inherit"} ${sliderUnanchored
-                                  ? "chat-controls__reasoning-range--unanchored"
-                                  : ""}"
-                                type="range"
-                                min="0"
-                                max=${sliderStops.length - 1}
-                                step="1"
-                                .value=${String(sliderIndex)}
-                                style=${`--reasoning-fill: ${sliderFillPercent(sliderIndex)}%`}
-                                data-chat-thinking-slider="true"
-                                data-chat-thinking-values=${sliderStops
-                                  .map((stop) => stop.value)
-                                  .join(",")}
-                                aria-label=${t("chat.selectors.thinkingLevel")}
-                                aria-valuetext=${reasoningValueLabel}
-                                ?disabled=${thinkingDisabled}
-                                @input=${onSliderDrag}
-                                @change=${onSliderCommit}
-                              />
-                            </div>
-                            <div class="chat-controls__reasoning-scale" aria-hidden="true">
-                              <span>Faster</span>
-                              <span>Smarter</span>
-                            </div>
-                          `
-                        : onlyStop
-                          ? html`
-                              <button
-                                class="chat-controls__reasoning-option ${hasThinkingOverride
-                                  ? "chat-controls__reasoning-option--selected"
-                                  : ""}"
-                                data-chat-thinking-option=${onlyStop.value}
-                                type="button"
-                                aria-pressed=${hasThinkingOverride ? "true" : "false"}
-                                ?disabled=${thinkingDisabled}
-                                @click=${async (event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (thinkingDisabled || hasThinkingOverride) {
-                                    event.preventDefault();
-                                    return;
-                                  }
-                                  await onThinkingSelect(onlyStop.value);
-                                }}
-                              >
-                                <span>${onlyStop.label}</span>
-                                ${hasThinkingOverride
-                                  ? html`<span
-                                      class="chat-controls__inline-select-check"
-                                      aria-hidden="true"
-                                    >
-                                      ${icons.check}
-                                    </span>`
-                                  : ""}
-                              </button>
-                            `
-                          : ""}
-                      ${hasThinkingOverride
-                        ? html`
-                            <button
-                              class="chat-controls__reasoning-reset"
-                              data-chat-thinking-option=""
-                              type="button"
-                              ?disabled=${thinkingDisabled}
-                              @click=${async (event: MouseEvent) => {
-                                event.stopPropagation();
-                                if (thinkingDisabled) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                await onThinkingSelect("");
-                              }}
-                            >
-                              Use default (${defaultLevelLabel})
-                            </button>
-                          `
-                        : ""}
-                    `
-                  : ""}
-                ${fastMode.supported
-                  ? html`
-                      <div class="chat-controls__inline-select-section-label">Speed</div>
-                      <div class="chat-controls__reasoning-options" role="listbox">
-                        ${repeat(
-                          fastMode.options,
-                          (speed) => speed.value,
-                          (speed) => {
-                            const speedValue = speed.value as ChatFastModeSelectValue;
-                            const speedSelected = speedValue === fastMode.currentOverride;
-                            return html`
-                              <button
-                                class="chat-controls__reasoning-option ${speedSelected
-                                  ? "chat-controls__reasoning-option--selected"
-                                  : ""}"
-                                data-chat-speed-option=${speed.value}
-                                role="option"
-                                aria-selected=${speedSelected ? "true" : "false"}
-                                type="button"
-                                ?disabled=${fastMode.disabled}
-                                @click=${async (event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (fastMode.disabled) {
-                                    event.preventDefault();
-                                    return;
-                                  }
-                                  (event.currentTarget as HTMLElement)
-                                    .closest("details")
-                                    ?.removeAttribute("open");
-                                  await onFastModeSelect(speedValue);
-                                }}
-                              >
-                                <span>${speed.label}</span>
-                                ${speedSelected
-                                  ? html`<span
-                                      class="chat-controls__inline-select-check"
-                                      aria-hidden="true"
-                                    >
-                                      ${icons.check}
-                                    </span>`
-                                  : ""}
-                              </button>
-                            `;
-                          },
-                        )}
-                      </div>
-                    `
-                  : ""}
-              </div>
-            `
-          : ""}
-      </div>
-    </details>
   `;
 }
