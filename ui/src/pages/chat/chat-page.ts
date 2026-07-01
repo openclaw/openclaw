@@ -87,7 +87,11 @@ import {
 } from "./chat-session.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import { ChatComposerPersistenceController } from "./composer-persistence.ts";
+import {
+  ChatComposerPersistenceController,
+  persistChatComposerState,
+  restoreChatComposerState,
+} from "./composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,

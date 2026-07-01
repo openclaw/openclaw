@@ -11,7 +11,7 @@ import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
 const SEARCH_DEBOUNCE_MS = 300;
-let sessionPickerIdCounter = 0;
+const SESSION_PICKER_ID = "chat-session-picker-sidebar";
 
 export class SessionPicker extends LitElement {
   @property({ attribute: false }) sessions?: SessionCapability;
@@ -32,7 +32,6 @@ export class SessionPicker extends LitElement {
   private requestId = 0;
   private searchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private triggerElement: HTMLElement | null = null;
-  private readonly pickerId = `openclaw-session-picker-${++sessionPickerIdCounter}`;
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (!this.open || event.defaultPrevented || event.key !== "Escape") {
@@ -286,7 +285,7 @@ export class SessionPicker extends LitElement {
         : this.result.sessions.length);
     return html`
       <div
-        id=${this.pickerId}
+        id=${SESSION_PICKER_ID}
         class="chat-session-picker"
         role="dialog"
         aria-label=${t("chat.selectors.session")}
@@ -433,7 +432,7 @@ export class SessionPicker extends LitElement {
             aria-label=${t("chat.selectors.session")}
             aria-haspopup="dialog"
             aria-expanded=${this.open ? "true" : "false"}
-            aria-controls=${this.pickerId}
+            aria-controls=${SESSION_PICKER_ID}
             ?disabled=${!this.connected}
             @click=${(event: MouseEvent) => this.toggle(event.currentTarget as HTMLElement)}
             @keydown=${(event: KeyboardEvent) => {
