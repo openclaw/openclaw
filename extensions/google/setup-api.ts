@@ -1,6 +1,7 @@
 // Google API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { shouldEnableGoogleGeminiCliHarness } from "./gemini-cli-harness-policy.js";
 import { createGoogleVertexProvider } from "./provider-contract-api.js";
 
 export default definePluginEntry({
@@ -9,6 +10,8 @@ export default definePluginEntry({
   description: "Lightweight Google setup hooks",
   register(api) {
     api.registerProvider(createGoogleVertexProvider());
-    api.registerCliBackend(buildGoogleGeminiCliBackend());
+    if (shouldEnableGoogleGeminiCliHarness()) {
+      api.registerCliBackend(buildGoogleGeminiCliBackend());
+    }
   },
 });
