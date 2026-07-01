@@ -2610,6 +2610,72 @@ describe("initSessionState reset policy", () => {
       previousSessionId: undefined,
     });
   });
+
+  it("rolls over a stale-by-daily session for an ordinary send without resume signal", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-ordinary-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "ordinary-stale-session-id";
+
+    // Stale: last updated before the 4 AM daily reset boundary
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    // No resumeRequestedSession flag — ordinary send must still roll over.
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: existingSessionId,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("rolls over a stale-by-idle session for an ordinary send without resume signal", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-ordinary-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "ordinary-idle-session-id";
+
+    // Stale: last updated 45 min ago, 30 min idle timeout
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    // No resumeRequestedSession — ordinary stale send must still rotate.
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: existingSessionId,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
 });
 
 describe("initSessionState browser tab cleanup", () => {
