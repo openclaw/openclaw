@@ -620,6 +620,48 @@ describe("pairing store", () => {
     });
   });
 
+  it("refuses to clobber the allowFrom store when the base file is present-but-unreadable", async () => {
+    await withTempStateDir(async (stateDir, env) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1001", "1002"],
+      });
+      clearPairingAllowFromReadCacheForTest();
+
+      const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      const originalReadFile = fsSync.promises.readFile.bind(fsSync.promises);
+      const readSpy = vi
+        .spyOn(fsSync.promises, "readFile")
+        .mockImplementation(async (target, ...rest) => {
+          if (typeof target === "string" && target === allowFromPath) {
+            throw error;
+          }
+          return await originalReadFile(target as never, ...(rest as []));
+        });
+
+      try {
+        await expect(
+          addChannelAllowFromStoreEntry({
+            channel: "telegram",
+            accountId: "yy",
+            entry: "1003",
+            env,
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      const persisted = JSON.parse(fsSync.readFileSync(allowFromPath, "utf8")) as {
+        allowFrom: string[];
+      };
+      expect(persisted.allowFrom).toEqual(["1001", "1002"]);
+    });
+  });
+
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir, env) => {
       for (const { setup, accountId, expected, expectedLegacy } of [

@@ -359,14 +359,14 @@ async function readAllowFromState(params: {
   filePath: string;
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ current: string[]; normalized: string | null }> {
-  const { value } = await readJsonFile<AllowFromStore>(params.filePath, {
-    version: 1,
-    allowFrom: [],
-  });
   const pairingAdapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
-  const current = normalizeAllowFromList(value, pairingAdapter);
+  const { entries } = await readAllowFromFileWithExists({
+    cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
+    filePath: params.filePath,
+    normalizeStore: (store) => normalizeAllowFromList(store, pairingAdapter),
+  });
   const normalized = normalizeAllowFromInput(params.entry, pairingAdapter);
-  return { current, normalized: normalized || null };
+  return { current: entries, normalized: normalized || null };
 }
 
 async function writeAllowFromState(filePath: string, allowFrom: string[]): Promise<void> {
