@@ -1740,6 +1740,23 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      healthChecks: {
+        id: "core/doctor/whatsapp-responsiveness",
+        description:
+          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { checkGatewayHealth } = await import("../commands/doctor-gateway-health.js");
+          const { collectWhatsappResponsivenessHealthFindings } =
+            await import("../commands/doctor-whatsapp-responsiveness.js");
+          const { status } = await checkGatewayHealth({
+            runtime: ctx.runtime,
+            cfg: ctx.cfg,
+            timeoutMs: 3000,
+          });
+          return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
+        },
+      },
       run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({
