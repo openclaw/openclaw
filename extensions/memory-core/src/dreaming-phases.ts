@@ -23,6 +23,7 @@ import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
+  generateAndAppendDreamNarrativeQueued,
   readRecentDreamDiaryEntries,
   type NarrativePhaseData,
   runDetachedDreamNarrative,
@@ -1747,8 +1748,12 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
       ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
     };
-    if (params.detachNarratives) {
-      runDetachedDreamNarrative({
+    // Always use the concurrency-queued path when a subagent is available,
+    // regardless of trigger type. Heartbeat-triggered dreaming from multiple
+    // agents would otherwise bypass the queue and exhaust local model context
+    // slots (#95746).
+    if (params.subagent) {
+      await generateAndAppendDreamNarrativeQueued({
         subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
@@ -1862,8 +1867,12 @@ async function runRemDreaming(params: {
               .filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    if (params.detachNarratives) {
-      runDetachedDreamNarrative({
+    // Always use the concurrency-queued path when a subagent is available,
+    // regardless of trigger type. Heartbeat-triggered dreaming from multiple
+    // agents would otherwise bypass the queue and exhaust local model context
+    // slots (#95746).
+    if (params.subagent) {
+      await generateAndAppendDreamNarrativeQueued({
         subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,

@@ -1037,3 +1037,19 @@ export function runDetachedDreamNarrative(
     })();
   });
 }
+
+/**
+ * Awaitable variant of `runDetachedDreamNarrative` that respects the same
+ * concurrency cap. Used by heartbeat-triggered dreaming so callers can
+ * await completion while still bounding concurrent subagent sessions (#95746).
+ */
+export async function generateAndAppendDreamNarrativeQueued(
+  params: Parameters<typeof generateAndAppendDreamNarrative>[0],
+): Promise<ReturnType<typeof generateAndAppendDreamNarrative> extends Promise<infer R> ? R : never> {
+  await acquireDetachedNarrativeSlot();
+  try {
+    return await generateAndAppendDreamNarrative(params);
+  } finally {
+    releaseDetachedNarrativeSlot();
+  }
+}
