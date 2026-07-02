@@ -49,12 +49,20 @@ export function resetSubagentSessionCleanupForTests(): void {
 export async function deleteSubagentSessionForCleanup(
   params: DeleteSubagentSessionForCleanupParams,
 ): Promise<void> {
-  const { hasLiveOrRecentlyDispatchedContinuationWork } =
-    await import("../auto-reply/continuation/work-store.js");
-  // A continuation_work TaskFlow is the owner of same-session re-entry. Keep
-  // the child session entry until the durable work wake drains, then retry so
-  // delete-mode child sessions do not leak after cleanup bookkeeping finishes.
-  if (hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey)) {
+  const [{ hasLiveOrRecentlyDispatchedContinuationWork }, { pendingDelegateCount }] =
+    await Promise.all([
+      import("../auto-reply/continuation/work-store.js"),
+      import("../auto-reply/continuation/delegate-store.js"),
+    ]);
+  // A continuation_work TaskFlow or a queued continuation delegate owns
+  // same-session re-entry. Keep the child session entry until they drain, then
+  // retry, so delete-mode child sessions do not leak after cleanup bookkeeping
+  // finishes AND a queued (e.g. delayed bracket/tool) delegate does not lose the
+  // child's chain/requester state to deletion before its hedge fires (#1144).
+  if (
+    hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
+    pendingDelegateCount(params.childSessionKey) > 0
+  ) {
     scheduleDeferredCleanupRetry(params);
     return;
   }

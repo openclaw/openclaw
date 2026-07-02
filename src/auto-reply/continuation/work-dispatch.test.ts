@@ -272,6 +272,7 @@ vi.mock("../../infra/heartbeat-runner.js", () => {
 
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   isRetryableHeartbeatBusySkipReason: (reason: string) => reason === "requests-in-flight",
+  requestHeartbeatNow: vi.fn(),
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -429,6 +430,11 @@ import {
   DEFAULT_NO_OP_REARM_THRESHOLD,
   recordNoOpRearmOutcome,
 } from "../reply/no-op-rearm-guard.js";
+import {
+  cancelPendingDelegates,
+  enqueuePendingDelegate,
+  pendingDelegateCount,
+} from "./delegate-store.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
@@ -664,6 +670,34 @@ describe("durable continuation_work dispatch", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("retains a child session while a queued continuation delegate is pending (#1144)", async () => {
+    const childSessionKey = "agent:main:continuation-delegate-child";
+    mockSessionStore[childSessionKey] = { sessionKey: childSessionKey };
+    // A delayed delegate queued under the child (e.g. a durable delayed bracket
+    // delegate) owns the child's chain/requester state until it drains.
+    enqueuePendingDelegate(childSessionKey, { task: "delayed hop", delayMs: 60_000 });
+    expect(pendingDelegateCount(childSessionKey)).toBeGreaterThan(0);
+
+    const callGateway = vi.fn();
+    await deleteSubagentSessionForCleanup({
+      callGateway: callGateway as never,
+      childSessionKey,
+      spawnMode: "run",
+    });
+    // Deletion is deferred while the delegate is queued so the child session (and
+    // its chain state) survives until the delegate's hedge fires.
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Once the delegate is gone, the deferred retry deletes the child.
+    cancelPendingDelegates(childSessionKey);
+    expect(pendingDelegateCount(childSessionKey)).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
   });
 
   it("re-arms a delayed continue_work election after simulated gateway restart", async () => {
