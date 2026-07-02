@@ -287,6 +287,36 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expectApprovalResolution(resultPromise, manager, record);
   });
 
+  it("normalizes blank plugin policy approval copy before storing pending records", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
+        const approval = await ctx.approvals?.request({
+          title: "   ",
+          description: "\t",
+        });
+        return { ok: true, payload: approval ?? null };
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("Plugin approval required");
+    expect(record.request.description).toBe(`Plugin policy for ${DEMO_COMMAND} requires approval.`);
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
   it("leaves commands without a dangerous plugin registration to normal allowlist handling", async () => {
     registryState.current = {
       nodeHostCommands: [],
