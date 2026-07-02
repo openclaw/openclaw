@@ -636,9 +636,10 @@ async function driveContinuationTurn(
     // the expected-revision race (a revision/cancel landed between claim and
     // here). Returning a plain "ran" would let the caller run
     // markPendingWorkTurnGranted with the stale revision — that finish also
-    // fails, leaving the row `running` WITHOUT the succeeded read-guard, so
-    // recovery would re-drive this already-executed turn. Reconcile the row so
-    // it can never be replayed and tell the caller not to finalize again.
+    // fails, leaving the row `running`, so recovery would re-drive this
+    // already-executed turn. Reconcile terminalizes the current-revision row
+    // (finished, or failed non-retryably if it races again) so it can never be
+    // replayed and is not left non-terminal; tell the caller not to finalize.
     reconcileUndeliverableGrantedWork(work);
     return { status: "ran-finalized" };
   }

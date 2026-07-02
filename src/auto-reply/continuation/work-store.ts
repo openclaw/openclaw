@@ -603,11 +603,14 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
  * Reconcile a continuation work row whose durable delivered-mark lost the
  * expected-revision race AFTER the provider turn already executed (#1144:
  * revision/cancel race). The turn is spent, so restart-gap replay must be
- * prevented. If the row is still `running` under a bumped revision, write the
- * `succeeded` read-guard against the CURRENT revision so `consumePendingWork`
- * recognizes it as delivered and finalizes it instead of re-driving. When even
- * that races, fail the row non-retryably — dropping a stale row is strictly
- * safer than replaying an already-executed turn.
+ * prevented AND the row must not linger `running`: dispatchPendingContinuationWork
+ * skips markPendingWorkTurnGranted on this path (work.expectedRevision is stale),
+ * so nothing else finalizes it. Terminalize the CURRENT-revision row here — a
+ * lingering `running` row would keep live-work bookkeeping and cleanup gates
+ * (hasLiveOrRecentlyDispatchedContinuationWork) blocked until a later recovery
+ * pass even though the turn is spent. If finishing races too, fail the row
+ * non-retryably — dropping a stale row is strictly safer than replaying an
+ * already-executed turn.
  *
  * No-ops when the row is gone, already terminal, cancel-owned, or re-queued by
  * another actor: none of those replay THIS turn (a fresh election is a new flow
@@ -622,23 +625,28 @@ export function reconcileUndeliverableGrantedWork(work: PendingContinuationWork)
     return;
   }
   const state = decodeWorkState(current) ?? buildFallbackWorkState(work);
+  const { idleRetry: _idleRetry, recoveryDueAt: _recoveryDueAt, ...terminalState } = state;
   const now = Date.now();
   const succeeded = { point: "optimal", durability: "durable" } as const;
-  const marked = updateFlowRecordByIdExpectedRevision({
+  // Finish (terminalize) against the CURRENT revision — the turn already ran, so
+  // this is a clean delivered/granted close, not a failure. Stamp both the
+  // delivered read-guard and turnGrantedAt so the finished row reads identically
+  // to the normal deliver-then-grant path.
+  const finished = finishFlow({
     flowId: current.flowId,
     expectedRevision: current.revision,
-    patch: {
-      currentStep: "Continuation wake delivered (post-race reconcile)",
-      stateJson: {
-        ...state,
-        deliveredAt: state.deliveredAt ?? now,
-        disposition: "granted",
-        succeeded,
-      },
-      updatedAt: now,
+    currentStep: "Continuation wake delivered (post-race reconcile)",
+    stateJson: {
+      ...terminalState,
+      deliveredAt: state.deliveredAt ?? now,
+      turnGrantedAt: now,
+      disposition: "granted",
+      succeeded,
     },
+    updatedAt: now,
+    endedAt: now,
   });
-  if (marked.applied) {
+  if (finished.applied) {
     return;
   }
   const latest = getTaskFlowById(work.flowId);

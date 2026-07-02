@@ -606,6 +606,14 @@ describe("durable continuation_work dispatch", () => {
     expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expect(result.dispatched).toBe(1);
 
+    // #1144 round-6: the reconciled row is terminalized immediately, not left
+    // `running` behind a read-guard for a later consume/recovery pass. A
+    // lingering running row keeps running-flow bookkeeping non-terminal even
+    // though the provider turn is already spent.
+    const raceFlow = [...mockFlows.values()][0];
+    expect(raceFlow?.status).toBe("succeeded");
+    expect(hasLiveOrRecentlyDispatchedContinuationWork(sessionKey)).toBe(false);
+
     // Restart recovery must NOT re-drive the already-executed turn: the row was
     // reconciled to a delivered/succeeded (or non-retryable) terminal state.
     bumpWorkRevisionOnReply = false;
