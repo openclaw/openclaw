@@ -14,6 +14,7 @@ import {
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -430,7 +431,9 @@ export async function executeNodeHostCommand(
             const combined = [payload.stdout, payload.stderr, payload.error]
               .filter(Boolean)
               .join("\n");
-            const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = normalizeNotifyOutput(
+              sliceUtf16Safe(combined, combined.length - DEFAULT_NOTIFY_TAIL_CHARS),
+            );
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
