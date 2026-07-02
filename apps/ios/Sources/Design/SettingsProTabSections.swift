@@ -200,10 +200,6 @@ extension SettingsProTab {
 
     var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let gatewayProblem = self.appModel.lastGatewayProblem {
-                self.gatewayProblemCard(gatewayProblem)
-            }
-
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
@@ -914,21 +910,6 @@ extension SettingsProTab {
                     .textFieldStyle(.roundedBorder)
                 self.detailRow("Instance ID", value: self.instanceId)
             }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func gatewayProblemCard(_ problem: GatewayConnectionProblem) -> some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            GatewayProblemBanner(
-                problem: problem,
-                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
-                onPrimaryAction: {
-                    Task { await self.handleGatewayProblemPrimaryAction(problem) }
-                },
-                onShowDetails: {
-                    self.showGatewayProblemDetails = true
-                })
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
