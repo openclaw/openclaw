@@ -45,6 +45,7 @@ import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
@@ -944,7 +945,8 @@ export async function startGatewayServer(
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
       getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry,
-      getPluginRouteRegistry: () => pluginRegistry,
+      getPluginRouteRegistry: () =>
+        getPluginRegistryState()?.activeRegistry ?? pluginRegistry,
       getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
       pinChannelRegistry: !minimalTestGateway,
       deps,

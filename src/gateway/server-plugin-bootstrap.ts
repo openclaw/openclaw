@@ -8,6 +8,7 @@ import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import {
@@ -63,6 +64,7 @@ function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
 
 function pinGatewayPluginRuntimeRegistries(pluginRegistry: PluginRegistry): void {
   pinActivePluginChannelRegistry(pluginRegistry);
+  pinActivePluginHttpRouteRegistry(pluginRegistry);
   pinActivePluginSessionExtensionRegistry(pluginRegistry);
 }
 

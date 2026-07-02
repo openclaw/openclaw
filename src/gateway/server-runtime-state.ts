@@ -134,6 +134,9 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
+    // resolvePluginRouteRegistry returns the gateway's pluginRegistry.
+    // Runtime-loaded plugins' HTTP routes are made discoverable by the
+    // getPluginRouteRegistry callback in server.impl.ts. (#94572)
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
