@@ -140,27 +140,71 @@ export function buildPluginToolDescriptorCacheKey(params: {
   });
 }
 
-function asJsonObject(value: unknown): JsonObject {
-  return value as JsonObject;
+type ToolDescriptorFieldRead =
+  | {
+      readonly ok: true;
+      readonly value: unknown;
+    }
+  | { readonly ok: false };
+
+function readToolDescriptorField(
+  tool: AnyAgentTool,
+  field: keyof AnyAgentTool | "label" | "displaySummary",
+): ToolDescriptorFieldRead {
+  try {
+    return { ok: true, value: (tool as Record<string, unknown>)[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readOptionalDescriptorString(
+  tool: AnyAgentTool,
+  field: "label" | "displaySummary",
+): string | undefined {
+  const fieldRead = readToolDescriptorField(tool, field);
+  return fieldRead.ok && typeof fieldRead.value === "string" && fieldRead.value.trim()
+    ? fieldRead.value.trim()
+    : undefined;
+}
+
+function asJsonObject(value: unknown): JsonObject | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : undefined;
 }
 
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
-}): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
-  const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+}): CachedPluginToolDescriptor | undefined {
+  const nameRead = readToolDescriptorField(params.tool, "name");
+  const parametersRead = readToolDescriptorField(params.tool, "parameters");
+  if (!nameRead.ok || typeof nameRead.value !== "string" || !nameRead.value.trim()) {
+    return undefined;
+  }
+  const inputSchema = parametersRead.ok ? asJsonObject(parametersRead.value) : undefined;
+  if (!inputSchema) {
+    return undefined;
+  }
+  const name = nameRead.value.trim();
+  const descriptionRead = readToolDescriptorField(params.tool, "description");
+  if (!descriptionRead.ok || typeof descriptionRead.value !== "string") {
+    return undefined;
+  }
+  const title = readOptionalDescriptorString(params.tool, "label");
+  const displaySummary = readOptionalDescriptorString(params.tool, "displaySummary");
   return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(displaySummary ? { displaySummary } : {}),
     optional: params.optional,
     descriptor: {
-      name: params.tool.name,
+      name,
       ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
+      description: descriptionRead.value,
+      inputSchema,
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName: name },
     },
   };
 }
