@@ -364,8 +364,25 @@ function assertMSTeamsReadTargetAllowed(params: {
     msteamsCfg === undefined
       ? "allowlist"
       : (msteamsCfg.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist");
+  if (!target) {
+    throw new Error("Microsoft Teams read target is not allowed.");
+  }
+  const dmTarget = normalizeMSTeamsDmTarget(target);
+  if (dmTarget) {
+    if (
+      !msteamsCfg ||
+      !isMSTeamsReadTargetAllowed({
+        cfg: msteamsCfg,
+        target,
+        targetTrusted: params.targetTrusted,
+      })
+    ) {
+      throw new Error("Microsoft Teams read target is not allowed.");
+    }
+    return;
+  }
   const routeAllowlistConfigured = Object.keys(msteamsCfg?.teams ?? {}).length > 0;
-  if (groupPolicy === "open" && !routeAllowlistConfigured && !normalizeMSTeamsDmTarget(target)) {
+  if (groupPolicy === "open" && !routeAllowlistConfigured) {
     return;
   }
   if (

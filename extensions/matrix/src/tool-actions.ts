@@ -108,11 +108,30 @@ async function resolveMatrixReadRoomConfig(params: {
   clientOpts: MatrixActionClientOpts;
 }) {
   const rooms = params.accountConfig.groups ?? params.accountConfig.rooms;
-  const roomConfig = resolveMatrixRoomConfig({
+  const directRoomConfig = resolveMatrixRoomConfig({
     rooms,
     roomId: params.roomId,
     aliases: [],
   });
+  if (directRoomConfig.matchSource === "direct") {
+    return directRoomConfig;
+  }
+  let roomId = params.roomId;
+  const targetAliases: string[] = [];
+  if (params.roomId.trim().startsWith("#")) {
+    try {
+      roomId = await withResolvedActionClient(params.clientOpts, async (client) =>
+        resolveMatrixRoomId(client, params.roomId),
+      );
+      targetAliases.push(params.roomId);
+    } catch {
+      return directRoomConfig;
+    }
+  }
+  const roomConfig =
+    roomId === params.roomId
+      ? directRoomConfig
+      : resolveMatrixRoomConfig({ rooms, roomId, aliases: targetAliases });
   if (roomConfig.matchSource === "direct") {
     return roomConfig;
   }
@@ -124,7 +143,7 @@ async function resolveMatrixReadRoomConfig(params: {
     const resolvedAliases: string[] = [];
     for (const alias of aliasKeys) {
       try {
-        if ((await resolveMatrixRoomId(client, alias)) === params.roomId) {
+        if ((await resolveMatrixRoomId(client, alias)) === roomId) {
           resolvedAliases.push(alias);
         }
       } catch {
@@ -133,7 +152,7 @@ async function resolveMatrixReadRoomConfig(params: {
     }
     return resolvedAliases;
   });
-  return resolveMatrixRoomConfig({ rooms, roomId: params.roomId, aliases });
+  return resolveMatrixRoomConfig({ rooms, roomId, aliases: [...targetAliases, ...aliases] });
 }
 
 async function assertMatrixReadTargetAllowed(params: {

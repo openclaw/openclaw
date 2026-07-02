@@ -582,6 +582,38 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("allows room metadata reads when a requested Matrix alias resolves to a configured room id", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!room:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "channelInfo",
+        roomId: "#ops:example",
+      },
+      cfg,
+      { client: client as never },
+    );
+
+    expect(client.resolveRoom).toHaveBeenCalledWith("#ops:example");
+    expect(mocks.getMatrixRoomInfo).toHaveBeenCalledWith("#ops:example", {
+      cfg,
+      client,
+    });
+  });
+
   it("blocks room metadata reads when a disabled Matrix alias resolves under open policy", async () => {
     const client = {
       resolveRoom: vi.fn().mockResolvedValue("!room:example"),

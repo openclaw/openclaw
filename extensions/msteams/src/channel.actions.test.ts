@@ -640,6 +640,40 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("allows explicit user read targets when Teams groups are disabled but DMs allow the user", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "disabled",
+            dmPolicy: "allowlist",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        target: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
   it("allows implicit trusted current-DM read targets", async () => {
     await expectSuccessfulAction({
       mockFn: getMessageMSTeamsMock,
