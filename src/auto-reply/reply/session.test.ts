@@ -281,6 +281,7 @@ async function writeTerminalTranscriptSessionStore(params: {
   sessionKey: string;
   sessionId: string;
   status?: SessionEntry["status"];
+  abortedLastRun?: boolean;
   omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
@@ -303,6 +304,7 @@ async function writeTerminalTranscriptSessionStore(params: {
       startedAt: params.endedAt - 10_000,
       endedAt: params.endedAt,
       runtimeMs: 9_000,
+      ...(params.abortedLastRun ? { abortedLastRun: true } : {}),
       ...(status ? { status } : {}),
     },
   });
@@ -2291,6 +2293,45 @@ describe("initSessionState reset policy", () => {
     expect(persisted[sessionKey]?.endedAt).toBeUndefined();
     expect(persisted[sessionKey]?.runtimeMs).toBeUndefined();
     expect(persisted[sessionKey]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("reuses an aborted main session when restart continuation is enabled", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-restart-continuation-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "restart-continuation-old";
+    const now = Date.now();
+    const terminalUpdatedAt = now - 10_000;
+    const terminalEndedAt = now - 11_000;
+    await writeTerminalTranscriptSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      abortedLastRun: true,
+      updatedAt: terminalUpdatedAt,
+      endedAt: terminalEndedAt,
+      transcriptMtimeMs: now,
+    });
+
+    const cfg = {
+      session: { store: storePath, restartContinuation: true },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello after restart", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.abortedLastRun).toBe(true);
+    expect(persisted[sessionKey]?.endedAt).toBe(terminalEndedAt);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

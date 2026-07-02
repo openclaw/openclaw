@@ -12,6 +12,7 @@ import {
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  isRestartContinuationAllowed,
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import {
@@ -389,9 +390,8 @@ export function resolveSession(opts: {
       : false;
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
-  const fresh = sessionEntry
-    ? !terminalMainTranscriptNewerThanRegistry &&
-      (skipImplicitExpiry ||
+  const underlyingFresh = sessionEntry
+    ? skipImplicitExpiry ||
         evaluateSessionFreshness({
           updatedAt: sessionEntry.updatedAt,
           ...resolveSessionLifecycleTimestamps({
@@ -401,14 +401,25 @@ export function resolveSession(opts: {
           }),
           now,
           policy: resetPolicy,
-        }).fresh)
+        }).fresh
     : false;
+  // Honor the restart-continuation opt-in here too, or an enabled operator's
+  // aborted main session still rotates through the agent command path. (#94458)
+  const restartContinuationAllowed = isRestartContinuationAllowed({
+    restartContinuation: sessionCfg?.restartContinuation,
+    abortedLastRun: sessionEntry?.abortedLastRun,
+    reusableFresh: underlyingFresh,
+    terminalMainTranscriptNewerThanRegistry,
+  });
+  const fresh =
+    restartContinuationAllowed || (!terminalMainTranscriptNewerThanRegistry && underlyingFresh);
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
-    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
-    : sessionEntry;
+  const resolvedSessionEntry =
+    terminalMainTranscriptNewerThanRegistry && !restartContinuationAllowed
+      ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+      : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
