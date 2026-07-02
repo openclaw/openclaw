@@ -23,7 +23,12 @@ const state = vi.hoisted(() => ({
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
+  runCliTurnCompactionLifecycleMock: vi.fn(
+    async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+  ),
+  emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
+  deliveryCalls: 0,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -144,14 +149,28 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
 });
 
 vi.mock("./command/cli-compaction.js", () => ({
-  runCliTurnCompactionLifecycle: async (params: { sessionEntry?: SessionEntry }) =>
-    params.sessionEntry,
+  runCliTurnCompactionLifecycle: (params: { sessionEntry?: SessionEntry }) =>
+    state.runCliTurnCompactionLifecycleMock(params),
 }));
+
+vi.mock("../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
+    "../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: (...args: Parameters<typeof actual.emitAgentEvent>) => {
+      state.emitAgentEventMock(...args);
+      return actual.emitAgentEvent(...args);
+    },
+  };
+});
 
 vi.mock("./command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: async (params: {
     resolveFreshSessionEntryForDelivery?: () => Promise<SessionEntry | undefined>;
   }) => {
+    state.deliveryCalls += 1;
     state.deliveryFreshEntries.push(await params.resolveFreshSessionEntryForDelivery?.());
     return { deliverySucceeded: true };
   },
@@ -167,7 +186,11 @@ beforeEach(async () => {
   vi.clearAllMocks();
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
+  state.runCliTurnCompactionLifecycleMock.mockImplementation(
+    async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+  );
   state.deliveryFreshEntries = [];
+  state.deliveryCalls = 0;
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rotation-e2e-"));
   state.workspaceDir = path.join(tmpDir, "workspace");
   state.agentDir = path.join(tmpDir, "agent");
@@ -351,6 +374,119 @@ describe("agentCommand compaction transcript rotation", () => {
     await expect(readSessionMessages(rotatedSessionFile)).resolves.toEqual([
       expect.objectContaining({ role: "assistant" }),
     ]);
+  });
+
+  it("delivers the already-generated reply when post-turn compaction fails", async () => {
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(
+      new Error(
+        "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.",
+      ),
+    );
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({
+        sessionId: "yuyu-home",
+        text: "reply generated before compaction failed",
+      }),
+    );
+
+    const result = await agentCommand({
+      message: "room message",
+      sessionId: "yuyu-home",
+      cwd: state.workspaceDir,
+      deliver: true,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliveryCalls).toBe(1);
+    expect(result).toMatchObject({ deliverySucceeded: true });
+
+    // The turn must settle as a normal lifecycle "end", never a post-turn
+    // "error": a swallowed compaction failure cannot reclassify a delivered turn.
+    const lifecyclePhases = state.emitAgentEventMock.mock.calls
+      .map(([event]) => event as { stream?: string; data?: { phase?: string } })
+      .filter((event) => event?.stream === "lifecycle")
+      .map((event) => event.data?.phase);
+    expect(lifecyclePhases).toContain("end");
+    expect(lifecyclePhases).not.toContain("error");
+  });
+
+  it("delivers a media-only reply (no assistant text) when post-turn compaction fails", async () => {
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(
+      new Error(
+        "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.",
+      ),
+    );
+    state.runAgentAttemptMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrls: ["https://example.com/generated.png"] }],
+      meta: {
+        durationMs: 1,
+        stopReason: "end_turn",
+        executionTrace: {
+          runner: "cli" as const,
+          fallbackUsed: false,
+          winnerProvider: "openai",
+          winnerModel: "gpt-5.5",
+        },
+        agentMeta: {
+          sessionId: "media-only-session",
+          provider: "openai",
+          model: "gpt-5.5",
+        },
+      },
+    });
+
+    const result = await agentCommand({
+      message: "generate an image",
+      sessionId: "media-only-session",
+      cwd: state.workspaceDir,
+      deliver: true,
+    });
+
+    // A media reply has no assistant text but is still deliverable, so the
+    // compaction failure must not discard it.
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliveryCalls).toBe(1);
+    expect(result).toMatchObject({ deliverySucceeded: true });
+  });
+
+  it("keeps a no-reply turn's compaction failure fatal instead of an empty success", async () => {
+    const noReplyResult: EmbeddedAgentRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        stopReason: "end_turn",
+        executionTrace: {
+          runner: "cli" as const,
+          fallbackUsed: false,
+          winnerProvider: "openai",
+          winnerModel: "gpt-5.5",
+        },
+        agentMeta: {
+          sessionId: "no-reply-session",
+          provider: "openai",
+          model: "gpt-5.5",
+        },
+      },
+    };
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(
+      new Error(
+        "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.",
+      ),
+    );
+    state.runAgentAttemptMock.mockResolvedValueOnce(noReplyResult);
+
+    await expect(
+      agentCommand({
+        message: "prompt that produced no assistant reply",
+        sessionId: "no-reply-session",
+        cwd: state.workspaceDir,
+        deliver: true,
+      }),
+    ).rejects.toThrow("Summarization failed: Connection error.");
+
+    // Compaction was reached, the failure stayed fatal, and nothing was delivered.
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliveryCalls).toBe(0);
   });
 
   it("resumes the next turn from the rotated successor", async () => {
