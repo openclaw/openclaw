@@ -852,6 +852,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/voice.ogg"],
     };
 
@@ -891,6 +892,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => ["file:///tmp/outbound/voice.ogg"],
     };
 
@@ -914,6 +916,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The pipeline streamed some partial content, but the final text payload was
@@ -942,6 +945,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     // The final text-only payload matches what the pipeline already sent,
@@ -967,6 +971,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -990,6 +995,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
     const presentation = {
@@ -1020,6 +1026,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 
@@ -1046,6 +1053,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => ["/tmp/generated.png"],
     };
 
@@ -1094,6 +1102,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      hasPendingDelivery: () => false,
       getSentMediaUrls: () => [],
     };
 

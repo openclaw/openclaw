@@ -44,10 +44,10 @@ export async function resetReplyRunSession(params: {
   onActiveSessionEntry: (entry: SessionEntry) => void;
   onNewSession: (newSessionId: string, nextSessionFile: string) => void;
 }): Promise<boolean> {
-  if (!params.sessionKey || !params.activeSessionStore || !params.storePath) {
+  if (!params.sessionKey || !params.storePath) {
     return false;
   }
-  const prevEntry = params.activeSessionStore[params.sessionKey] ?? params.activeSessionEntry;
+  const prevEntry = params.activeSessionStore?.[params.sessionKey] ?? params.activeSessionEntry;
   if (!prevEntry) {
     return false;
   }
@@ -89,7 +89,9 @@ export async function resetReplyRunSession(params: {
     params.messageThreadId,
   );
   nextEntry.sessionFile = nextSessionFile;
-  params.activeSessionStore[params.sessionKey] = nextEntry;
+  if (params.activeSessionStore) {
+    params.activeSessionStore[params.sessionKey] = nextEntry;
+  }
   try {
     await deps.persistSessionResetLifecycle({
       agentId,

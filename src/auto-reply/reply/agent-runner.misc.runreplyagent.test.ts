@@ -208,6 +208,7 @@ vi.mock("./private-message-tool-final.js", async (importOriginal) => {
   return { ...actual, warnPrivateMessageToolFinal: warnPrivateFinalSpy };
 });
 
+import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.js";
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -255,6 +256,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
 
 beforeEach(() => {
   vi.useRealTimers();
+  setAgentRunnerSessionResetTestDeps();
   registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -292,6 +294,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setAgentRunnerSessionResetTestDeps();
   cliBackendsTesting.resetDepsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -2935,6 +2938,264 @@ describe("runReplyAgent response usage footer", () => {
 });
 
 describe("runReplyAgent transient HTTP retry", () => {
+  it("resets and retries once after a stalled compacted direct session aborts without output", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stalled-direct-reset-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "stalled-session",
+      updatedAt: Date.now(),
+      sessionFile: path.join(tmp, "stalled-session.jsonl"),
+      systemSent: true,
+      chatType: "direct",
+      compactionCount: 2,
+      totalTokens: 1_000,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+    setAgentRunnerSessionResetTestDeps({
+      generateSecureUuid: () => "reset-session",
+      persistSessionResetLifecycle: async (params) => {
+        await saveSessionStore(params.storePath, { [params.sessionKey]: params.nextEntry });
+        return { replayedMessages: 0 };
+      },
+    });
+
+    runEmbeddedAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "LLM request failed.", isError: true }],
+        meta: {
+          aborted: true,
+          durationMs: 383_000,
+          error: {
+            kind: "incomplete_turn",
+            message: "Request was aborted",
+          },
+          agentMeta: {
+            sessionId: "stalled-session",
+            provider: "codex-lb",
+            model: "gpt-5.5",
+          },
+        },
+      })
+      .mockImplementationOnce(async (params) => {
+        expect(replyRunRegistry.resolveSessionId(sessionKey)).toBe("reset-session");
+        expect(params.suppressNextUserMessagePersistence).toBe(true);
+        return {
+          payloads: [{ text: "Recovered response" }],
+          meta: {
+            agentMeta: {
+              sessionId: "reset-session",
+              provider: "codex-lb",
+              model: "gpt-5.5",
+            },
+          },
+        };
+      });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      ChatType: "direct",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "stalled-session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: sessionEntry.sessionFile,
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const payload = Array.isArray(result)
+      ? result.find((entry) => entry?.text === "Recovered response")
+      : result;
+    expectRecordFields(payload, { text: "Recovered response" }, "reply result");
+    expect(followupRun.run.sessionId).toBe("reset-session");
+    expect(followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.sessionId).toBe("reset-session");
+    expect(persisted[sessionKey]?.systemSent).toBe(false);
+    expect(persisted[sessionKey]?.totalTokens).toBeUndefined();
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: sessionKey,
+      previousSessionId: "stalled-session",
+      nextSessionId: "reset-session",
+      nextSessionFile: persisted[sessionKey]?.sessionFile,
+    });
+    expect(runtimeErrorMock).toHaveBeenCalledWith(
+      "Stalled direct session aborted without visible output. Resetting hot session main stalled-session -> reset-session and retrying once.",
+    );
+  });
+
+  it("does not reset when a stalled direct session has pending block delivery", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stalled-direct-buffered-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "stalled-session",
+      updatedAt: Date.now(),
+      sessionFile: path.join(tmp, "stalled-session.jsonl"),
+      systemSent: true,
+      chatType: "direct",
+      compactionCount: 2,
+      totalTokens: 1_000,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+
+    let resolveBlockDelivery: (() => void) | undefined;
+    const blockDelivery = new Promise<void>((resolve) => {
+      resolveBlockDelivery = resolve;
+    });
+    const onBlockReply = vi.fn(() => blockDelivery);
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as
+        | ((payload: { text?: string; mediaUrls?: string[] }) => void)
+        | undefined;
+      block?.({ text: "Visible answer", mediaUrls: ["file://visible.png"] });
+      setImmediate(() => resolveBlockDelivery?.());
+      return {
+        payloads: [{ text: "LLM request failed.", isError: true }],
+        meta: {
+          aborted: true,
+          livenessState: "blocked",
+          agentMeta: {
+            sessionId: "stalled-session",
+            provider: "codex-lb",
+            model: "gpt-5.5",
+          },
+        },
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      ChatType: "direct",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "stalled-session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: sessionEntry.sessionFile,
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: { onBlockReply },
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: true,
+      blockReplyChunking: {
+        minChars: 100,
+        maxChars: 200,
+        breakPreference: "paragraph",
+      },
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("Visible answer") }),
+      expect.any(Object),
+    );
+    expect(followupRun.run.sessionId).toBe("stalled-session");
+    expect(sessionStore[sessionKey]?.sessionId).toBe("stalled-session");
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+    expect(runtimeErrorMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("Stalled direct session aborted without visible output"),
+    );
+  });
+
   it("retries once after transient 521 HTML failure and then succeeds", async () => {
     vi.useFakeTimers();
     runEmbeddedAgentMock

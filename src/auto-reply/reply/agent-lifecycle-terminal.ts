@@ -10,6 +10,7 @@ export type AgentLifecycleTerminalBackstop = {
     extraData?: Record<string, unknown>,
   ) => void;
   getDeferredError: () => string | undefined;
+  getDeferredMetadata: () => Record<string, unknown>;
   note: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
@@ -116,6 +117,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
   return {
     emit,
     getDeferredError: () => deferredError,
+    getDeferredMetadata: () => ({ ...deferredTerminalMetadata }),
     note,
   };
 }

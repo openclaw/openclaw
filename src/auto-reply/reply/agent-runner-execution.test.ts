@@ -1337,6 +1337,45 @@ describe("runAgentTurnWithFallback", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("defers blocked terminated timeouts so stalled direct-session reset can retry", async () => {
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "LLM request timed out.",
+          aborted: false,
+          livenessState: "blocked",
+        },
+      });
+      throw new FailoverError("LLM request timed out.", {
+        reason: "timeout",
+        provider: "openai",
+        model: "gpt-5.5",
+        rawError: "terminated",
+      });
+    });
+    const shouldDeferRunFailure = vi.fn(() => true);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ replyOperation }),
+      shouldDeferRunFailure,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.meta).toMatchObject({
+        aborted: true,
+        livenessState: "blocked",
+      });
+    }
+    expect(shouldDeferRunFailure).toHaveBeenCalledOnce();
+    expect(failMock).not.toHaveBeenCalled();
+    expect(retainFailureUntilCompleteMock).not.toHaveBeenCalled();
+  });
+
   it("passes the hydrated run account to embedded execution", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -3939,6 +3978,7 @@ describe("runAgentTurnWithFallback", () => {
       flush: vi.fn(async () => {}),
       stop: vi.fn(),
       hasBuffered: vi.fn(() => true),
+      hasPendingDelivery: vi.fn(() => false),
       didStream: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
