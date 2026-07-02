@@ -451,6 +451,21 @@ export interface OpenAICompletionsCompat {
   supportsPromptCacheKey?: boolean;
   /** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
   supportsLongCacheRetention?: boolean;
+  /**
+   * Disable boundary-aware system prompt caching for this provider.
+   *
+   * When true, the system prompt cache boundary (`<!-- OPENCLAW_CACHE_BOUNDARY -->`)
+   * is stripped and dynamic system prompt additions are moved to the first user
+   * message as context instead of being appended to the system prompt.
+   *
+   * This prevents prefix-matching cache breakage on providers like DeepSeek whose
+   * prompt caching relies on the full system-prompt prefix being stable across
+   * requests. Splitting the prompt with a boundary causes non-matching suffix
+   * tokens to invalidate the entire prefix match.
+   *
+   * Default: false.
+   */
+  disableBoundaryAwareCache?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */

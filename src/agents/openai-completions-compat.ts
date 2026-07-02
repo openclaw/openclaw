@@ -28,6 +28,7 @@ type OpenAICompletionsCompatDefaults = {
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  disableBoundaryAwareCache: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -125,6 +126,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
+    disableBoundaryAwareCache: isDeepSeek || isXiaomi,
   };
 }
 
