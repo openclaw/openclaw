@@ -125,7 +125,7 @@ pnpm ios:version:sync -- --version 2026.6.11
 pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 ```
 
-## Normal TestFlight iteration workflow
+## Normal App Store Connect build iteration workflow
 
 1. choose the App Store release train explicitly, for example `2026.6.11`
 2. update `apps/ios/CHANGELOG.md` under `## <release version>` or `## Unreleased`
@@ -156,9 +156,9 @@ not appear on GitHub release or tag pages, and they do not participate in the
 core OpenClaw release machinery.
 
 `pnpm ios:release:upload` checks the ref before archive/upload work and records
-it only after `upload_to_testflight` succeeds. Existing refs are immutable: the
-same ref at the same SHA is accepted, while the same ref at a different SHA
-fails.
+it only after the App Store Connect upload succeeds. Existing refs are
+immutable: the same ref at the same SHA is accepted, while the same ref at a
+different SHA fails.
 
 Do not create this ref after a manual fallback upload. The ref is release-lane
 evidence, not a repair mechanism for a failed `pnpm ios:release:upload` run.

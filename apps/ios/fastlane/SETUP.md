@@ -112,9 +112,9 @@ Upload to App Store Connect:
 pnpm ios:release:upload -- --version 2026.6.11
 ```
 
-Direct Fastlane TestFlight upload is disabled. Use the package script so the
-release wrapper, App Store push mode, and exported-IPA validation gate all run
-in the same path.
+Direct Fastlane upload is disabled. Use the package script so the release
+wrapper, App Store push mode, and exported-IPA validation gate all run in the
+same path.
 
 Maintainer recovery path for a fresh clone on the same Mac:
 
@@ -152,7 +152,7 @@ Quick verification after upload:
 - confirm `apps/ios/build/app-store/OpenClaw-<version>.ipa` exists
 - confirm Fastlane validates the exported IPA before upload
 - confirm Fastlane prints `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
-- remember that App Store Connect/TestFlight processing can take a few minutes after the upload succeeds
+- remember that App Store Connect processing can take a few minutes after the upload succeeds
 
 Versioning rules:
 

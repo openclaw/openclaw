@@ -1392,7 +1392,7 @@ platform :ios do
   desc "Generate screenshots, update App Store metadata and review attachment, then upload an App Store build"
   lane :release_upload do |options|
     unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
-      UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
+      UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane upload is disabled.")
     end
 
     release_sha = release_git_sha
