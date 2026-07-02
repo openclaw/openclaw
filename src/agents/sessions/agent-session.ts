@@ -1920,7 +1920,9 @@ export class AgentSession {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    const preparation = unwrapCoreResult(
+      prepareCompaction(pathEntries, options.settings, { force: isManual }),
+    );
     if (!preparation) {
       if (isManual) {
         const lastEntry = pathEntries[pathEntries.length - 1];

@@ -21,6 +21,7 @@ import {
   openClawAgentCoreRuntime,
   type CompactionDetails,
   type CompactionPreparation,
+  type CompactionPreparationOptions,
   type CompactionResult,
   type CompactionSettings,
   type ContextUsageEstimate,
@@ -58,8 +59,9 @@ function unwrapCompactionResult<T>(result: Result<T, Error>): T {
 export function prepareCompaction(
   pathEntries: SessionEntry[],
   settings: CompactionSettings,
+  options?: CompactionPreparationOptions,
 ): CompactionPreparation | undefined {
-  return unwrapCompactionResult(prepareCompactionCore(pathEntries, settings));
+  return unwrapCompactionResult(prepareCompactionCore(pathEntries, settings, options));
 }
 
 /** Generates a compaction summary through the shared agent-core runtime. */

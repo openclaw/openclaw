@@ -630,10 +630,16 @@ export interface CompactionPreparation {
   settings: CompactionSettings;
 }
 
+export interface CompactionPreparationOptions {
+  /** Prepare a real summary even when the kept-tail heuristic would otherwise summarize nothing. */
+  force?: boolean;
+}
+
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
 export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
+  options: CompactionPreparationOptions = {},
 ): Result<CompactionPreparation | undefined, CompactionError> {
   if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {
     return ok(undefined);
@@ -689,6 +695,41 @@ export function prepareCompaction(
         turnPrefixMessages.push(msg);
       }
     }
+  }
+  if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
+    if (options.force === true) {
+      const forcedMessagesToSummarize: AgentMessage[] = [];
+      for (let i = boundaryStart; i < boundaryEnd; i++) {
+        const msg = getMessageFromEntryForCompaction(pathEntries[i]);
+        if (msg) {
+          forcedMessagesToSummarize.push(msg);
+        }
+      }
+      // Anchor the kept tail on the last valid cut point, not the raw final entry.
+      // findValidCutPoints excludes tool results, so a forced boundary that is not
+      // collapsed to summary-only later never keeps an orphaned tool result.
+      const forcedCutPoints = findValidCutPoints(pathEntries, boundaryStart, boundaryEnd);
+      const forcedKeepIndex =
+        forcedCutPoints.length > 0 ? forcedCutPoints[forcedCutPoints.length - 1] : -1;
+      if (forcedMessagesToSummarize.length > 0 && forcedKeepIndex >= 0) {
+        const forcedFileOps = extractFileOperations(
+          forcedMessagesToSummarize,
+          pathEntries,
+          prevCompactionIndex,
+        );
+        return ok({
+          firstKeptEntryId: pathEntries[forcedKeepIndex].id,
+          messagesToSummarize: forcedMessagesToSummarize,
+          turnPrefixMessages: [],
+          isSplitTurn: false,
+          tokensBefore,
+          previousSummary,
+          fileOps: forcedFileOps,
+          settings,
+        });
+      }
+    }
+    return ok(undefined);
   }
   const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
   if (cutPoint.isSplitTurn) {
