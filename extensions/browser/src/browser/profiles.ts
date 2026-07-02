@@ -103,9 +103,10 @@ export const PROFILE_COLORS = [
 
 /** Allocate the first unused profile color, cycling when all are used. */
 export function allocateColor(usedColors: Set<string>): string {
+  const normalizedUsedColors = new Set(Array.from(usedColors, (color) => color.toUpperCase()));
   // Find first unused color from palette
   for (const color of PROFILE_COLORS) {
-    if (!usedColors.has(color.toUpperCase())) {
+    if (!normalizedUsedColors.has(color.toUpperCase())) {
       return color;
     }
   }
