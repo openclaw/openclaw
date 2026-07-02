@@ -1,5 +1,14 @@
 // Covers managed task-flow creation, lookup, ownership, and state transitions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearInternalHooks,
+  createInternalHookEvent,
+  isTaskFlowCreatedEvent,
+  isTaskFlowDeletedEvent,
+  isTaskFlowTransitionEvent,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../hooks/internal-hooks.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createFlowRecord as createFlowRecordOrNull,
@@ -68,6 +77,7 @@ describe("task-flow-registry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    clearInternalHooks();
     resetTaskFlowRegistryForTests();
   });
 
@@ -239,7 +249,214 @@ describe("task-flow-registry", () => {
     expect(events[2]?.flowId).toBe(created.flowId);
   });
 
+  it("emits task-flow lifecycle hooks after successful persistence", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const events: InternalHookEvent[] = [];
+      registerInternalHook("task", (event) => {
+        events.push(event);
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/hooks",
+        goal: "Observe flow hooks",
+        currentStep: "created",
+        stateJson: { privateState: true },
+        waitJson: { privateWait: true },
+        blockedSummary: "private blocked details",
+      });
+      const resumed = resumeFlow({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        status: "running",
+        currentStep: "running",
+      });
+      expect(resumed.applied).toBe(true);
+      expect(deleteTaskFlowRecordById(created.flowId)).toBe(true);
+
+      await vi.waitFor(() => expect(events).toHaveLength(3));
+
+      expect(events.map((event) => `${event.type}:${event.action}`)).toEqual([
+        "task:flow:created",
+        "task:flow:transition",
+        "task:flow:deleted",
+      ]);
+
+      const createdContext = events[0]?.context as {
+        flow?: Record<string, unknown>;
+      };
+      expect(createdContext.flow).toMatchObject({
+        flowId: created.flowId,
+        syncMode: "managed",
+        ownerKey: "agent:main:main",
+        status: "queued",
+        goal: "Observe flow hooks",
+        currentStep: "created",
+        controllerId: "tests/hooks",
+        revision: 0,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+      });
+      expect(createdContext.flow).not.toHaveProperty("stateJson");
+      expect(createdContext.flow).not.toHaveProperty("waitJson");
+      expect(createdContext.flow).not.toHaveProperty("blockedTaskId");
+      expect(createdContext.flow).not.toHaveProperty("blockedSummary");
+      expect(createdContext.flow).not.toHaveProperty("requesterOrigin");
+
+      const transitionContext = events[1]?.context as {
+        flow?: Record<string, unknown>;
+        previousStatus?: string;
+        durationMs?: number;
+      };
+      expect(transitionContext.previousStatus).toBe("queued");
+      expect(transitionContext.durationMs).toEqual(expect.any(Number));
+      expect(transitionContext.flow).toMatchObject({
+        flowId: created.flowId,
+        status: "running",
+        currentStep: "running",
+        revision: 1,
+      });
+      expect(transitionContext.flow).not.toHaveProperty("stateJson");
+      expect(transitionContext.flow).not.toHaveProperty("waitJson");
+
+      const deletedContext = events[2]?.context as {
+        flowId?: string;
+        previous?: Record<string, unknown>;
+      };
+      expect(deletedContext.flowId).toBe(created.flowId);
+      expect(deletedContext.previous).toMatchObject({
+        flowId: created.flowId,
+        status: "running",
+        revision: 1,
+      });
+      expect(deletedContext.previous).not.toHaveProperty("stateJson");
+      expect(deletedContext.previous).not.toHaveProperty("waitJson");
+      expect(deletedContext.previous).not.toHaveProperty("blockedSummary");
+    });
+  });
+
+  it("emits transition hooks only when flow status changes", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const transitions: InternalHookEvent[] = [];
+      registerInternalHook("task:flow:transition", (event) => {
+        transitions.push(event);
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/transition-hooks",
+        goal: "Status-only transitions",
+      });
+      const waiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        currentStep: "waiting",
+      });
+      expect(waiting.applied).toBe(true);
+      const stillWaiting = setFlowWaiting({
+        flowId: created.flowId,
+        expectedRevision: 1,
+        currentStep: "still waiting",
+      });
+      expect(stillWaiting.applied).toBe(true);
+
+      await vi.waitFor(() => expect(transitions).toHaveLength(1));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25);
+      });
+
+      expect(transitions).toHaveLength(1);
+      expect(transitions[0]?.context).toMatchObject({
+        previousStatus: "queued",
+        flow: {
+          flowId: created.flowId,
+          status: "waiting",
+        },
+      });
+    });
+  });
+
+  it("does not let task-flow hook failures break registry writes", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const successfulHandler = vi.fn();
+      registerInternalHook("task:flow:created", () => {
+        throw new Error("hook failed");
+      });
+      registerInternalHook("task:flow:created", successfulHandler);
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/hook-failure",
+        goal: "Hook failure isolation",
+      });
+
+      await vi.waitFor(() => expect(successfulHandler).toHaveBeenCalledOnce());
+      expect(getTaskFlowById(created.flowId)?.flowId).toBe(created.flowId);
+    });
+  });
+
+  it("recognizes task-flow hook events with type guards", () => {
+    expect(
+      isTaskFlowCreatedEvent(
+        createInternalHookEvent("task", "flow:created", "agent:main:main", {
+          flow: {
+            flowId: "flow-1",
+            syncMode: "managed",
+            ownerKey: "agent:main:main",
+            status: "queued",
+            goal: "Test flow",
+            revision: 0,
+            createdAt: 10,
+            updatedAt: 10,
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isTaskFlowTransitionEvent(
+        createInternalHookEvent("task", "flow:transition", "agent:main:main", {
+          flow: {
+            flowId: "flow-1",
+            syncMode: "managed",
+            ownerKey: "agent:main:main",
+            status: "running",
+            goal: "Test flow",
+            revision: 1,
+            createdAt: 10,
+            updatedAt: 20,
+          },
+          previousStatus: "queued",
+          durationMs: 10,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isTaskFlowDeletedEvent(
+        createInternalHookEvent("task", "flow:deleted", "agent:main:main", {
+          flowId: "flow-1",
+          previous: {
+            flowId: "flow-1",
+            syncMode: "managed",
+            ownerKey: "agent:main:main",
+            status: "running",
+            goal: "Test flow",
+            revision: 1,
+            createdAt: 10,
+            updatedAt: 20,
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isTaskFlowCreatedEvent(createInternalHookEvent("task", "flow:transition", "s1", {})),
+    ).toBe(false);
+  });
+
   it("does not throw or register memory when flow create persistence fails", () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("task", (event) => {
+      events.push(event);
+    });
     const upsertFlow = vi.fn((_flow: TaskFlowRecord) => {
       throw new Error("SQLITE_FULL: database or disk is full");
     });
@@ -263,9 +480,14 @@ describe("task-flow-registry", () => {
     const attempted = upsertFlow.mock.calls[0]?.[0];
     expect(attempted?.flowId).toEqual(expect.any(String));
     expect(getTaskFlowById(attempted?.flowId ?? "")).toBeUndefined();
+    expect(events).toHaveLength(0);
   });
 
   it("does not throw or mutate memory when flow update persistence fails", () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("task:flow:transition", (event) => {
+      events.push(event);
+    });
     let failUpsert = false;
     const upsertFlow = vi.fn(() => {
       if (failUpsert) {
@@ -307,9 +529,14 @@ describe("task-flow-registry", () => {
       revision: 0,
       status: "queued",
     });
+    expect(events).toHaveLength(0);
   });
 
   it("does not throw or delete memory when flow delete persistence fails", () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("task:flow:deleted", (event) => {
+      events.push(event);
+    });
     const deleteFlow = vi.fn(() => {
       throw new Error("SQLITE_BUSY: database is locked");
     });
@@ -333,6 +560,7 @@ describe("task-flow-registry", () => {
 
     expect(deleteFlow).toHaveBeenCalledWith(created.flowId);
     expect(getTaskFlowById(created.flowId)?.flowId).toBe(created.flowId);
+    expect(events).toHaveLength(0);
   });
 
   it("normalizes restored managed flows without a controller id", () => {

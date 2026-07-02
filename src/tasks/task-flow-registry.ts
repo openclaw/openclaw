@@ -1,6 +1,13 @@
 // Coordinates managed task-flow creation, updates, ownership, and snapshots.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+import {
+  createInternalHookEvent,
+  hasInternalHookListeners,
+  triggerInternalHook,
+  type TaskFlowHookSnapshot,
+} from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -165,6 +172,61 @@ function emitFlowRegistryObserverEvent(createEvent: () => TaskFlowRegistryObserv
   } catch {
     // Flow observers are best-effort only. They must not break registry writes.
   }
+}
+
+function flowRecordToHookSnapshot(flow: TaskFlowRecord): TaskFlowHookSnapshot {
+  return {
+    flowId: flow.flowId,
+    syncMode: flow.syncMode,
+    ownerKey: flow.ownerKey,
+    status: flow.status,
+    goal: flow.goal,
+    revision: flow.revision,
+    createdAt: flow.createdAt,
+    updatedAt: flow.updatedAt,
+    ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
+    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
+    ...(flow.endedAt != null ? { endedAt: flow.endedAt } : {}),
+  };
+}
+
+function emitTaskFlowHook(
+  flow: TaskFlowRecord,
+  action: "flow:created" | "flow:transition" | "flow:deleted",
+  context: Record<string, unknown>,
+): void {
+  if (!hasInternalHookListeners("task", action)) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(createInternalHookEvent("task", action, flow.ownerKey, context)),
+    `task:${action} hook`,
+    (message) => log.warn(message),
+  );
+}
+
+function emitTaskFlowUpsertHook(next: TaskFlowRecord, previous?: TaskFlowRecord): void {
+  if (!previous) {
+    emitTaskFlowHook(next, "flow:created", {
+      flow: flowRecordToHookSnapshot(next),
+    });
+    return;
+  }
+  if (previous.status === next.status) {
+    return;
+  }
+  emitTaskFlowHook(next, "flow:transition", {
+    flow: flowRecordToHookSnapshot(next),
+    previousStatus: previous.status,
+    durationMs: Math.max(0, next.updatedAt - next.createdAt),
+  });
+}
+
+function emitTaskFlowDeletedHook(flowId: string, previous: TaskFlowRecord): void {
+  emitTaskFlowHook(previous, "flow:deleted", {
+    flowId,
+    previous: flowRecordToHookSnapshot(previous),
+  });
 }
 
 function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
@@ -426,6 +488,7 @@ function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskF
     flow: cloneFlowRecord(next),
     ...(previous ? { previous: cloneFlowRecord(previous) } : {}),
   }));
+  emitTaskFlowUpsertHook(next, previous);
   return cloneFlowRecord(next);
 }
 
@@ -777,6 +840,7 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
     flowId,
     previous: cloneFlowRecord(current),
   }));
+  emitTaskFlowDeletedHook(flowId, current);
   return true;
 }
 

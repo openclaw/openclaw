@@ -62,6 +62,10 @@ openclaw hooks info session-memory
 | `message:transcribed`    | After audio transcription completes                        |
 | `message:preprocessed`   | After media and link preprocessing completes or is skipped |
 | `message:sent`           | Outbound send attempted (`context.success` has the result) |
+| `task:flow:created`      | After a Task Flow record is persisted                      |
+| `task:flow:transition`   | After a Task Flow status changes                           |
+| `task:flow:deleted`      | After a Task Flow record is deleted                        |
+| `task`                   | Any Task Flow hook event                                   |
 
 ## Writing hooks
 
@@ -159,6 +163,15 @@ natural final answer and ask the agent for one more pass should use the typed
 plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
 
 **Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls. The default wait budget is 5 seconds for `gateway:shutdown` and 10 seconds for `gateway:pre-restart`.
+
+**Task Flow events**: `task:flow:created`, `task:flow:transition`, and
+`task:flow:deleted` fire only after the Task Flow registry write succeeds.
+Their `context.flow` or `context.previous` value is a safe projection with
+`flowId`, `syncMode`, `ownerKey`, `status`, `goal`, `revision`, timestamps,
+and optional `currentStep`, `controllerId`, and `endedAt`. Transition events
+also include `previousStatus` and `durationMs`. Internal persistence fields
+such as `stateJson`, `waitJson`, `blockedTaskId`, `blockedSummary`, and
+`requesterOrigin` are not included.
 
 Use `gateway:pre-restart` for short restart notices while channels are still available:
 
