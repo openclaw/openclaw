@@ -131,7 +131,7 @@ reported as pre-model cron failures.
 
 ### One-shot jobs
 
-`--at <datetime>` schedules a one-shot run. Offset-less datetimes are treated as UTC unless you also pass `--tz <iana>`, which interprets the wall-clock time in the given timezone.
+`--at <when>` schedules a one-shot run. It accepts ISO timestamps, offset-less datetimes, time-only values like `09:00` or `09:00:30`, and relative durations like `20m` or `+20m`. Offset-less and time-only values are treated as UTC unless you also pass `--tz <iana>`, which interprets the wall-clock time in the given timezone.
 
 <Note>
 One-shot jobs delete after success by default. Use `--keep-after-run` to preserve them.

@@ -280,17 +280,66 @@ export function parseCronFallbacks(input: unknown): string[] | undefined {
     .filter((fallback): fallback is string => Boolean(fallback));
 }
 
+const TIME_ONLY_RE = /^(\d{2}):(\d{2})(?::(\d{2}))?$/u;
+
+function parseTimeOnlyIsoTime(raw: string): string | null | undefined {
+  const match = TIME_ONLY_RE.exec(raw);
+  if (!match) {
+    return undefined;
+  }
+  const hour = Number.parseInt(match[1] ?? "", 10);
+  const minute = Number.parseInt(match[2] ?? "", 10);
+  const second = Number.parseInt(match[3] ?? "0", 10);
+  if (hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  return `${match[1]}:${match[2]}:${match[3] ?? "00"}`;
+}
+
+function getCurrentUtcDateString(): string {
+  return new Date(Date.now()).toISOString().slice(0, 10);
+}
+
+function getCurrentDateStringInTimeZone(timeZone: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(Date.now()));
+    const getPart = (type: string) => parts.find((part) => part.type === type)?.value;
+    const year = getPart("year");
+    const month = getPart("month");
+    const day = getPart("day");
+    return year && month && day ? `${year}-${month}-${day}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
- * When `tz` is provided and the input is an offset-less datetime
- * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
+ * When `tz` is provided and the input is an offset-less datetime or time-only
+ * value (e.g. `2026-03-23T23:00:00` or `09:00`), the value is interpreted in
  * that IANA timezone instead of UTC.
  */
 export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
+  }
+
+  const timeOnlyIsoTime = parseTimeOnlyIsoTime(raw);
+  if (timeOnlyIsoTime !== undefined) {
+    if (timeOnlyIsoTime === null) {
+      return null;
+    }
+    const date = tz ? getCurrentDateStringInTimeZone(tz) : getCurrentUtcDateString();
+    return date
+      ? parseOffsetlessIsoDateTimeInTimeZone(`${date}T${timeOnlyIsoTime}`, tz ?? "UTC")
+      : null;
   }
 
   // If a timezone is provided and the input looks like an offset-less ISO datetime,

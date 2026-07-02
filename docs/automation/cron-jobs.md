@@ -63,13 +63,13 @@ Task reconciliation for cron is runtime-owned first, durable-history-backed seco
 
 ## Schedule types
 
-| Kind    | CLI flag  | Description                                             |
-| ------- | --------- | ------------------------------------------------------- |
-| `at`    | `--at`    | One-shot timestamp (ISO 8601 or relative like `20m`)    |
-| `every` | `--every` | Fixed interval                                          |
-| `cron`  | `--cron`  | 5-field or 6-field cron expression with optional `--tz` |
+| Kind    | CLI flag  | Description                                                                  |
+| ------- | --------- | ---------------------------------------------------------------------------- |
+| `at`    | `--at`    | One-shot time: ISO 8601, `HH:MM`/`HH:MM:SS`, or relative duration like `20m` |
+| `every` | `--every` | Fixed interval                                                               |
+| `cron`  | `--cron`  | 5-field or 6-field cron expression with optional `--tz`                      |
 
-Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` for local wall-clock scheduling.
+Timestamps and time-only values without a timezone are treated as UTC. Add `--tz America/New_York` for local wall-clock scheduling.
 
 Recurring top-of-hour expressions are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing or `--stagger 30s` for an explicit window.
 

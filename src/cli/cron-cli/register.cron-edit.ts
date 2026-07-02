@@ -88,7 +88,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
+      .option(
+        "--at <when>",
+        "Set one-shot time (ISO, HH:MM[:SS], or +duration). Use --tz for offset-less values",
+      )
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
       .option(
