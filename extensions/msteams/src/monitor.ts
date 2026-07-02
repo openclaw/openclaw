@@ -12,9 +12,20 @@ import {
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import {
+  buildMSTeamsDurableCardActionPayload,
+  createMSTeamsDurableCardActionId,
+  createMSTeamsDurableInboundReceive,
+  createMSTeamsDurableTurnContext,
+  deserializeMSTeamsDurableActivity,
+  MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS,
+  MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS_REASON,
+  type MSTeamsDurableInboundPayload,
+} from "./durable-inbound.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
+import { withMSTeamsInboundDeliveryControl } from "./inbound-delivery-control.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import {
   isCardActionInvokeAuthorized,
@@ -364,6 +375,100 @@ export async function monitorMSTeamsProvider(
     sso: ssoDeps,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
+  const durableInboundReceive = createMSTeamsDurableInboundReceive();
+  const durableInboundJournal = durableInboundReceive.journal;
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
+  const startDurableDispatch = (task: Promise<void>, failureMessage: string) => {
+    void task.catch((err: unknown) => {
+      log.error(failureMessage, { error: formatUnknownError(err) });
+    });
+  };
+  const dispatchDurableCardAction = async (
+    id: string,
+    context: MSTeamsTurnContext,
+    attempts: number,
+  ): Promise<void> => {
+    let finalized = false;
+    const completeDurable = async () => {
+      finalized = true;
+      await durableInboundJournal.complete(id, {
+        metadata: { completedKind: "card-action" },
+      });
+    };
+    const releaseDurable = async (err: unknown) => {
+      finalized = true;
+      const errorMessage = formatUnknownError(err);
+      // Stop poison card actions after the retry cap so every restart does not
+      // rerun the same failing agent path and resend the generic error reply.
+      if (attempts + 1 >= MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS) {
+        await durableInboundReceive.fail(id, {
+          reason: MSTEAMS_DURABLE_INBOUND_MAX_ATTEMPTS_REASON,
+          message: errorMessage,
+        });
+        return;
+      }
+      await durableInboundJournal.release(id, {
+        lastError: errorMessage,
+      });
+    };
+    try {
+      await handler.run!(
+        withMSTeamsInboundDeliveryControl(context, {
+          skipDebounce: true,
+          complete: completeDurable,
+          release: releaseDurable,
+        }),
+      );
+      if (!finalized) {
+        await completeDurable();
+      }
+    } catch (err) {
+      if (!finalized) {
+        await releaseDurable(err);
+      }
+      try {
+        await context.sendActivity("⚠️ Something went wrong. Please try again.");
+      } catch {
+        // Best effort.
+      }
+      throw err;
+    }
+  };
+  const replayDurableCardAction = async (record: {
+    id: string;
+    payload: MSTeamsDurableInboundPayload;
+    attempts: number;
+  }) => {
+    if (record.payload.kind !== "card-action" || record.payload.version !== 1) {
+      await durableInboundJournal.deletePending(record.id);
+      return;
+    }
+    await dispatchDurableCardAction(
+      record.id,
+      createMSTeamsDurableTurnContext({
+        app,
+        activity: deserializeMSTeamsDurableActivity(record.payload.activity),
+        serviceUrlBoundary: sdkCloudOptions,
+      }),
+      record.attempts,
+    );
+  };
+  startDurableDispatch(
+    (async () => {
+      const pending = await durableInboundJournal.pending();
+      for (const record of pending) {
+        try {
+          await replayDurableCardAction(record);
+        } catch (err) {
+          log.error("msteams durable card.action replay record failed", {
+            id: record.id,
+            error: formatUnknownError(err),
+          });
+        }
+      }
+    })(),
+    "msteams durable card.action replay failed",
+  );
 
   // Handle adaptiveCard/action invokes (Action.Execute Universal Action Model).
   // We must return an InvokeResponse-shaped value so Teams updates the card UI;
@@ -448,11 +553,19 @@ export async function monitorMSTeamsProvider(
           };
         }
       }
-      // Non-poll card actions may dispatch into the agent. Acknowledge the
-      // invoke immediately so Teams does not time out while that work runs.
-      void handler.run!(adaptedCtx).catch((err: unknown) => {
-        log.error("msteams card.action dispatch failed", { error: formatUnknownError(err) });
-      });
+      // Non-poll card actions may dispatch into the agent. Persist them before
+      // acking Teams so fast invoke responses do not make the inbound event lossy.
+      const durableId = createMSTeamsDurableCardActionId(activity);
+      const accepted = await durableInboundJournal.accept(
+        durableId,
+        buildMSTeamsDurableCardActionPayload(activity),
+      );
+      if (accepted.kind === "accepted") {
+        startDurableDispatch(
+          dispatchDurableCardAction(durableId, adaptedCtx, accepted.record.attempts),
+          "msteams card.action dispatch failed",
+        );
+      }
       return {
         statusCode: 200,
         type: "application/vnd.microsoft.activity.message",
