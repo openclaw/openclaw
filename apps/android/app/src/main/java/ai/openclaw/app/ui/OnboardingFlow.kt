@@ -6,7 +6,9 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawErrorState
 import ai.openclaw.app.ui.design.ClawListItem
@@ -1378,8 +1380,8 @@ private fun rememberPermissionState(
   var locationGranted by rememberSaveable {
     mutableStateOf(hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION))
   }
-  val photosPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-  var photosGranted by rememberSaveable { mutableStateOf(hasPermission(context, photosPermission)) }
+  val photosPermissions = photoReadPermissionsForRequest()
+  var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
   var contactsGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CONTACTS)) }
   var calendarGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CALENDAR)) }
   var notificationsGranted by rememberSaveable {
@@ -1426,7 +1428,7 @@ private fun rememberPermissionState(
         permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
         permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
         locationGranted
-      photosGranted = permissions[photosPermission] ?: photosGranted
+      photosGranted = hasPhotoReadPermission(context) || photosPermissions.any { permissions[it] == true }
       contactsGranted = permissions[Manifest.permission.READ_CONTACTS] ?: contactsGranted
       calendarGranted = permissions[Manifest.permission.READ_CALENDAR] ?: calendarGranted
       notificationsGranted =
@@ -1459,7 +1461,7 @@ private fun rememberPermissionState(
       },
       if (photosAvailable) {
         PermissionRowModel("Photos", "Attach photos and media", Icons.Default.Image, photosGranted) {
-          request(photosPermission)
+          request(*photosPermissions.toTypedArray())
         }
       } else {
         null

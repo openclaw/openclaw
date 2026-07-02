@@ -201,7 +201,7 @@ struct TalkProTab: View {
         .buttonBorderShape(.circle)
         .openClawGlassButton(
             prominent: isOn.wrappedValue,
-            tint: isOn.wrappedValue ? Color(uiColor: .systemBlue) : nil)
+            tint: isOn.wrappedValue ? OpenClawBrand.accent : nil)
         .accessibilityLabel(title)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
         .accessibilityIdentifier(accessibilityIdentifier)
@@ -457,7 +457,7 @@ struct TalkProState: Equatable {
         case .waiting:
             OpenClawBrand.warn.opacity(0.72)
         default:
-            Color(uiColor: .systemBlue)
+            OpenClawBrand.accent
         }
     }
 

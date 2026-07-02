@@ -1039,10 +1039,10 @@ private struct IPadWorkboardKanbanCard: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 
@@ -1164,10 +1164,10 @@ struct IPadWorkboardQueueRow: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 

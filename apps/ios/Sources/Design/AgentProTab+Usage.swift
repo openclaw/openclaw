@@ -10,7 +10,9 @@ extension AgentProTab {
                     Text("Totals")
                         .font(.headline)
                     Spacer()
-                    ProValuePill(value: "\(self.overview?.usage?.days ?? 31)d", color: OpenClawBrand.accent)
+                    ProValuePill(
+                        value: "\(self.overview?.usage?.days ?? 31)d",
+                        color: OpenClawBrand.accentForeground)
                 }
                 HStack(spacing: 10) {
                     self.detailMetric(label: "Cost", value: self.usageValue)
