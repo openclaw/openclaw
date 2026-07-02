@@ -561,9 +561,25 @@ function assertNoCronShellExecution(value: unknown): void {
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
-  if (schedule?.kind === "on-exit") {
+  // value.kind covers raw flat params, where the schedule kind has not been
+  // recovered into a nested schedule object yet.
+  if (schedule?.kind === "on-exit" || value.kind === "on-exit") {
     throw new Error(
       "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+  // The canonicalizer never recovers command/cwd, so any present here — flat
+  // beside the action, stray on a job/patch object, or stuffed inside a
+  // non-on-exit schedule — are shell-execution fields the caller set
+  // explicitly. Reject loudly rather than silently dropping them.
+  if (
+    value.command !== undefined ||
+    value.cwd !== undefined ||
+    schedule?.command !== undefined ||
+    schedule?.cwd !== undefined
+  ) {
+    throw new Error(
+      "cron command/cwd fields cannot be set through the agent cron tool; use the CLI or Gateway API.",
     );
   }
 }
@@ -1168,6 +1184,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             );
           }
           case "add": {
+            // Checked on the raw params as well as the canonical job below:
+            // flat recovery drops command/cwd, so only this pre-recovery check
+            // can reject them loudly instead of silently swallowing them.
+            assertNoCronShellExecution(params);
             // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
             // job properties to the top level alongside `action` instead of nesting
             // them inside `job`. When `params.job` is missing or empty, reconstruct
@@ -1294,6 +1314,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             if (!id) {
               throw new Error("jobId required (id accepted for backward compatibility)");
             }
+            // Checked on the raw params as well as the canonical patch below:
+            // flat recovery drops command/cwd, so only this pre-recovery check
+            // can reject them loudly instead of silently swallowing them.
+            assertNoCronShellExecution(params);
 
             // Flat-params recovery for patch
             let recoveredFlatPatch = false;
