@@ -68,6 +68,11 @@ export type DeliveryQueueHealthSummary = {
 type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
+/** Config hot-reload watcher status, present only when a reloader is running. */
+export type ConfigReloadHealthSummary = {
+  hotReloadStatus: import("../gateway/config-reload.js").GatewayHotReloadStatus;
+};
+
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
   ok: true;
@@ -78,6 +83,7 @@ export type HealthSummary = {
   contextEngines?: ContextEngineHealthSummary;
   deliveryQueues?: DeliveryQueueHealthSummary;
   modelPricing?: ModelPricingHealthSummary;
+  configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

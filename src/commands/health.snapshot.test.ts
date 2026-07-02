@@ -585,6 +585,28 @@ describe("getHealthSnapshot", () => {
     }
   });
 
+  it("omits configReload when no config reloader status is supplied", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.configReload).toBeUndefined();
+  });
+
+  it("surfaces a disabled config hot-reload watcher in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 10,
+      probe: false,
+      configReloadHotReloadStatus: "disabled",
+    });
+
+    expect(snap.configReload).toEqual({ hotReloadStatus: "disabled" });
+  });
+
   it("skips telegram probe when not configured", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {

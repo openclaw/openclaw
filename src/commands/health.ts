@@ -31,6 +31,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import type { GatewayHotReloadStatus } from "../gateway/config-reload.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
@@ -285,6 +286,14 @@ export function formatDeliveryQueueHealthLine(
   return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
 }
 
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -504,6 +513,7 @@ export async function getHealthSnapshot(params?: {
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = await readRuntimeHealthConfig();
@@ -710,6 +720,9 @@ export async function getHealthSnapshot(params?: {
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
     ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),
+    ...(params?.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -948,6 +961,10 @@ export async function healthCommand(
     const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
     if (deliveryQueueLine) {
       runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
+    }
+    const configReloadLine = formatConfigReloadHealthLine(summary);
+    if (configReloadLine) {
+      runtime.log(styleHealthChannelLine(configReloadLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

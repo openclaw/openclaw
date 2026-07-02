@@ -9,6 +9,7 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
+  formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
@@ -203,6 +204,51 @@ describe("healthCommand", () => {
     expect(output).toContain(
       "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago)",
     );
+  });
+
+  it("surfaces a disabled config hot-reload watcher in JSON output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "disabled" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
+    expect(parsed.configReload).toEqual({ hotReloadStatus: "disabled" });
+  });
+
+  it("prints the config hot-reload disabled line in text output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "disabled" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toContain("Config hot reload: disabled");
+  });
+
+  it("omits the config hot-reload line in text output when the reloader is active", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "active" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).not.toContain("Config hot reload");
   });
 
   it("prints the rich text summary and verbose gateway details", async () => {
@@ -534,6 +580,42 @@ describe("formatDeliveryQueueHealthLine", () => {
     });
 
     expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
+  });
+});
+
+describe("formatConfigReloadHealthLine", () => {
+  it("reports a disabled config hot-reload watcher", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.configReload = { hotReloadStatus: "disabled" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBe(
+      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
+    );
+  });
+
+  it("stays silent while the config hot-reload watcher is active", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.configReload = { hotReloadStatus: "active" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
+  });
+
+  it("stays silent when no config reloader is running", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 });
 
