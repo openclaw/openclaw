@@ -12,6 +12,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
+import { toDiscoveryApiKey } from "../agents/models-config.providers.secret-helpers.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -457,10 +458,16 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
   if (!apiKey) {
     return null;
   }
+  // Marker-aware fallback: only forward apiKey to the provider builder when it is
+  // a concrete credential. Non-secret markers (env-var placeholders, OAuth markers,
+  // SecretRef markers, local-auth sentinels) must not be sent as bearer tokens,
+  // or auth-required /models endpoints will reject the request and authless local
+  // servers will see a placeholder credential where none was configured.
+  const discoveryKey = discoveryApiKey ?? toDiscoveryApiKey(apiKey);
   return {
     provider: {
       ...(await params.buildProvider({
-        apiKey: discoveryApiKey,
+        apiKey: discoveryKey,
         ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
       })),
       apiKey,

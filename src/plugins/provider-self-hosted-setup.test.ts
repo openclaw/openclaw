@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   discoverOpenAICompatibleLocalModels,
+  discoverOpenAICompatibleSelfHostedProvider,
 } from "./provider-self-hosted-setup.js";
-import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
+import type { ProviderAuthMethodNonInteractiveContext, ProviderCatalogContext } from "./types.js";
 
 const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -635,5 +636,181 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(ctx.resolveApiKey).not.toHaveBeenCalled();
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+  });
+});
+
+describe("discoverOpenAICompatibleSelfHostedProvider", () => {
+  function createDiscoveryCtx(overrides: {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+  }): ProviderCatalogContext {
+    return {
+      config: {},
+      env: {},
+      resolveProviderApiKey: vi.fn(() => ({
+        apiKey: overrides.apiKey,
+        discoveryApiKey: overrides.discoveryApiKey,
+      })),
+      resolveProviderAuth: vi.fn(() => ({
+        apiKey: overrides.apiKey,
+        discoveryApiKey: overrides.discoveryApiKey,
+        mode: "api_key" as const,
+        source: "profile" as const,
+      })),
+    };
+  }
+
+  it("forwards the resolver's discoveryApiKey to the provider builder when both are present", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "OPENAI_API_KEY",
+      discoveryApiKey: "sk-real-key-123",
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "litellm",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({
+      apiKey: "sk-real-key-123",
+    });
+    expect(result!.provider).toEqual({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      apiKey: "OPENAI_API_KEY",
+    });
+  });
+
+  it("falls back to a concrete env-resolved apiKey when discoveryApiKey is undefined", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "sk-real-key-123",
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:4000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "litellm",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({
+      apiKey: "sk-real-key-123",
+    });
+    expect(result!.provider).toEqual({
+      baseUrl: "http://127.0.0.1:4000/v1",
+      apiKey: "sk-real-key-123",
+    });
+  });
+
+  it("omits apiKey from the provider builder when apiKey is a non-secret local marker", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "custom-local",
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:11434/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "ollama",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({});
+    expect(result!.provider).toEqual({
+      baseUrl: "http://127.0.0.1:11434/v1",
+      apiKey: "custom-local",
+    });
+  });
+
+  it("omits apiKey when apiKey is an env-var placeholder marker (e.g. VLLM_API_KEY)", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "VLLM_API_KEY",
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "vllm",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({});
+  });
+
+  it("omits apiKey when apiKey is a non-env SecretRef marker", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "secretref-managed",
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:9000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "selfhosted",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({});
+  });
+
+  it("omits apiKey when apiKey is an OAuth marker (e.g. oauth:litellm)", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "oauth:litellm",
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "litellm",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({});
+  });
+
+  it("prefers discoveryApiKey even when apiKey is a non-secret marker", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: "custom-local",
+      discoveryApiKey: "sk-real-key-456",
+    });
+    const buildProvider = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8000/v1" }));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "litellm",
+      buildProvider,
+    });
+
+    expect(result).not.toBeNull();
+    expect(buildProvider).toHaveBeenCalledWith({
+      apiKey: "sk-real-key-456",
+    });
+  });
+
+  it("returns null when apiKey is undefined", async () => {
+    const ctx = createDiscoveryCtx({
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+    });
+    const buildProvider = vi.fn(async () => ({}));
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "litellm",
+      buildProvider,
+    });
+
+    expect(result).toBeNull();
+    expect(buildProvider).not.toHaveBeenCalled();
   });
 });
