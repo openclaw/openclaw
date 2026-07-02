@@ -57,7 +57,7 @@ function capitalize(s: string): string {
  * Parse a session key to extract type information and a human-readable
  * fallback display name. Exported for testing.
  */
-function parseSessionKey(key: string): SessionKeyInfo {
+export function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.
