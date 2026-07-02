@@ -1286,6 +1286,128 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  it("uses every configured completion retry delay before a durable parent handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion
+        .mockResolvedValueOnce({
+          delivered: false,
+          path: "direct" as const,
+          error: "completion handoff is still pending",
+        })
+        .mockResolvedValueOnce({
+          delivered: false,
+          path: "direct" as const,
+          error: "completion handoff is still pending",
+        })
+        .mockResolvedValueOnce({
+          delivered: true,
+          path: "direct" as const,
+          phases: [{ phase: "direct-primary" as const, delivered: true, path: "direct" as const }],
+        });
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [10, 20],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child final result",
+        }),
+      );
+
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        }),
+      );
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "failed",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails completion delivery after exhausting retries on permanently non-durable handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "completion delivery did not produce a parent response",
+      });
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [10, 20],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child final result",
+        }),
+      );
+
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "failed",
+          error: expect.stringContaining("retry schedule exhausted"),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reconciles completed native subagents from child rollout transcripts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");

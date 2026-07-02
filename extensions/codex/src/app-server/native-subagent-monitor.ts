@@ -614,15 +614,47 @@ export class CodexNativeSubagentMonitor {
     });
   }
 
+  private markCompletionDeliveryFailed(
+    completion: CodexNativeSubagentCompletion,
+    error: string,
+  ): void {
+    const taskRuntime = this.getTaskRuntimeForChild(completion.childThreadId);
+    if (!taskRuntime) {
+      return;
+    }
+    taskRuntime.setDetachedTaskDeliveryStatusByRunId({
+      runId: codexNativeSubagentRunId(completion.childThreadId),
+      deliveryStatus: "failed",
+      error,
+    });
+  }
+
   private scheduleCompletionDeliveryRetry(childState: ChildState): void {
     if (!childState.pendingCompletion || childState.completionDeliveryTimer) {
       return;
     }
     const attempt = childState.completionDeliveryAttempt;
-    const delayMs =
-      this.completionDeliveryRetryDelaysMs[
-        Math.min(attempt, this.completionDeliveryRetryDelaysMs.length - 1)
-      ];
+    const delayMs = this.completionDeliveryRetryDelaysMs[attempt];
+    // completionDeliveryAttempt tracks scheduled retries. Once every configured
+    // delay has been consumed, settle the handoff instead of clamping forever.
+    if (delayMs === undefined) {
+      const completion = childState.pendingCompletion;
+      const deliveryAttempts = childState.completionDeliveryAttempt + 1;
+      const error =
+        `completion delivery abandoned after ${deliveryAttempts} failed attempts; ` +
+        "retry schedule exhausted";
+      childState.pendingCompletion = undefined;
+      childState.pendingCompletionEventAt = undefined;
+      childState.completionDeliveryAttempt = 0;
+      this.markCompletionDeliveryFailed(completion, error);
+      embeddedAgentLog.warn("Codex native subagent completion delivery abandoned", {
+        parentThreadId: childState.parentThreadId,
+        childThreadId: completion.childThreadId,
+        attempts: deliveryAttempts,
+        error,
+      });
+      return;
+    }
     childState.completionDeliveryAttempt += 1;
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
