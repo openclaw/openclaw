@@ -303,7 +303,7 @@ describe("google-meet create flow", () => {
         return false;
       }
       const body = proxy.body as Record<string, unknown>;
-      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new";
+      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new?hl=en";
     });
   });
 
@@ -425,7 +425,9 @@ describe("google-meet create flow", () => {
               payload: {
                 result: {
                   targetId:
-                    proxy.body?.url === "https://meet.google.com/new" ? "create-tab" : "join-tab",
+                    proxy.body?.url === "https://meet.google.com/new?hl=en"
+                      ? "create-tab"
+                      : "join-tab",
                   title: "Meet",
                   url: proxy.body?.url,
                 },
