@@ -17,7 +17,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
-import ai.openclaw.app.ui.gatewayOfflineDiagnosis
+import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -100,6 +100,7 @@ fun ChatScreen(
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -115,7 +116,8 @@ fun ChatScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
-  val offlineDiagnosis = gatewayOfflineDiagnosis(statusText = statusText, gatewayAddress = gatewayAddress)
+  val gatewayProblemMessage = gatewayConnectionProblem?.message?.takeIf { it.isNotBlank() }
+  val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: statusText)
   val gatewayOffline = !gatewayConnected
   val context = LocalContext.current
   val resolver = context.contentResolver
@@ -209,16 +211,6 @@ fun ChatScreen(
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
-      offlineDiagnosis = offlineDiagnosis,
-      onFixConnection = onOpenGatewaySettings,
-      onCopyDiagnostics = {
-        copyGatewayDiagnosticsReport(
-          context = context,
-          screen = "chat",
-          gatewayAddress = gatewayAddress,
-          statusText = statusText,
-        )
-      },
       onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
@@ -231,7 +223,7 @@ fun ChatScreen(
       contextUsage = contextUsage,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
-      offlineDiagnosis = offlineDiagnosis,
+      offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onPickImages = { pickImages.launch("image/*") },
@@ -243,7 +235,7 @@ fun ChatScreen(
           context = context,
           screen = "chat composer",
           gatewayAddress = gatewayAddress,
-          statusText = statusText,
+          statusText = offlineStatus,
         )
       },
       onAbort = viewModel::abortChat,
@@ -461,9 +453,6 @@ private fun ChatMessageList(
   streamingAssistantText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
-  offlineDiagnosis: String,
-  onFixConnection: () -> Unit,
-  onCopyDiagnostics: () -> Unit,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -521,9 +510,6 @@ private fun ChatMessageList(
         EmptyChatHint(
           healthOk = healthOk,
           gatewayOffline = gatewayOffline,
-          offlineDiagnosis = offlineDiagnosis,
-          onFixConnection = onFixConnection,
-          onCopyDiagnostics = onCopyDiagnostics,
           onStarterPrompt = onStarterPrompt,
           modifier = Modifier.align(Alignment.Center),
         )
@@ -536,9 +522,6 @@ private fun ChatMessageList(
 private fun EmptyChatHint(
   healthOk: Boolean,
   gatewayOffline: Boolean,
-  offlineDiagnosis: String,
-  onFixConnection: () -> Unit,
-  onCopyDiagnostics: () -> Unit,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -554,7 +537,7 @@ private fun EmptyChatHint(
           if (healthOk) {
             "Start with a prompt, or use voice."
           } else if (gatewayOffline) {
-            "Cannot send yet: $offlineDiagnosis."
+            "Use the recovery options below to reconnect."
           } else {
             "Chat is checking Gateway health."
           },
@@ -565,8 +548,6 @@ private fun EmptyChatHint(
     }
     if (healthOk) {
       StarterPromptList(onStarterPrompt = onStarterPrompt)
-    } else if (gatewayOffline) {
-      ChatOfflineActions(onFixConnection = onFixConnection, onCopyDiagnostics = onCopyDiagnostics)
     }
   }
 }
@@ -783,7 +764,7 @@ private fun ChatComposer(
   contextUsage: ChatContextUsage,
   healthOk: Boolean,
   gatewayOffline: Boolean,
-  offlineDiagnosis: String,
+  offlineStatus: String,
   pendingRunCount: Int,
   onThinkingLevelChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -815,7 +796,7 @@ private fun ChatComposer(
 
     if (!healthOk && gatewayOffline) {
       ChatOfflineNotice(
-        diagnosis = offlineDiagnosis,
+        status = offlineStatus,
         onFixConnection = onFixConnection,
         onCopyDiagnostics = onCopyDiagnostics,
       )
@@ -846,16 +827,21 @@ private fun ChatComposer(
 
 @Composable
 private fun ChatOfflineNotice(
-  diagnosis: String,
+  status: String,
   onFixConnection: () -> Unit,
   onCopyDiagnostics: () -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(
-        text = "Gateway offline · $diagnosis",
+        text = "Gateway offline",
         style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
         color = ClawTheme.colors.warning,
+      )
+      Text(
+        text = status,
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = ClawTheme.colors.textMuted,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )

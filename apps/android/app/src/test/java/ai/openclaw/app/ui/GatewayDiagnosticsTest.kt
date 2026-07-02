@@ -45,16 +45,7 @@ class GatewayDiagnosticsTest {
   }
 
   @Test
-  fun offlineDiagnosisClassifiesCommonConnectionFailures() {
-    assertEquals("Endpoint not configured", gatewayOfflineDiagnosis(statusText = "Offline", gatewayAddress = "Not set"))
-    assertEquals("Pairing needs approval", gatewayOfflineDiagnosis(statusText = "Pairing request pending approval", gatewayAddress = "ws://10.0.2.2:18789"))
-    assertEquals("Authentication needs attention", gatewayOfflineDiagnosis(statusText = "Auth token rejected", gatewayAddress = "ws://10.0.2.2:18789"))
-    assertEquals("TLS trust needs review", gatewayOfflineDiagnosis(statusText = "TLS fingerprint changed", gatewayAddress = "wss://gateway.example.test"))
-    assertEquals("Gateway is unreachable", gatewayOfflineDiagnosis(statusText = "connection refused", gatewayAddress = "ws://10.0.2.2:18789"))
-  }
-
-  @Test
-  fun diagnosticsReportIncludesDiagnosisAndSupportContext() {
+  fun diagnosticsReportIncludesSupportContext() {
     val report =
       buildGatewayDiagnosticsReport(
         screen = "chat composer",
@@ -64,7 +55,6 @@ class GatewayDiagnosticsTest {
 
     assertTrue(report.contains("- screen: chat composer"))
     assertTrue(report.contains("- gateway address: http://10.0.2.2:18789"))
-    assertTrue(report.contains("- diagnosis: Gateway is unreachable"))
     assertTrue(report.contains("- status/error: connection refused"))
   }
 }
