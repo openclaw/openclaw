@@ -50,12 +50,17 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
   }
 }
 
-function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("legacy Discord thread bindings store must be an object");
+function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore | null {
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed as LegacyThreadBindingsStore;
+  } catch {
+    return null;
   }
-  return parsed as LegacyThreadBindingsStore;
 }
 
 function normalizeLegacyPreferenceKey(key: string): string | undefined {
