@@ -162,6 +162,24 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("forwards clientContext onto the agent request", async () => {
+    const transport = new FakeTransport({
+      agent: { status: "ok", runId: "run_ctx", sessionKey: "main" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const clientContext = { schemaVersion: "agentweave.context.v1", agentId: "Conductor" };
+    await oc.runs.create({
+      input: "ship it",
+      sessionKey: "main",
+      idempotencyKey: "ctx-test",
+      clientContext,
+    });
+
+    const agentCall = transport.calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({ clientContext });
+  });
+
   it("preserves numeric wait timestamps", async () => {
     const transport = new FakeTransport({
       "agent.wait": { status: "ok", runId: "run_numeric", startedAt: 123, endedAt: 456 },

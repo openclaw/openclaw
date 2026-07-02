@@ -42,6 +42,10 @@ const STRICT_LITERAL_STRUCTS = new Set([
 ]);
 
 const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]][] = [
+  // Keep the generated AgentParams initializer source-compatible for existing
+  // OpenClawKit callers: the optional clientContext param defaults to nil so
+  // callers constructed without it still compile (the wire field stays additive).
+  ["AgentParams", ["clientContext"]],
   ["SendParams", ["buffer", "filename", "contentType"]],
   ["SessionOperationEvent", ["agentId"]],
   ["SessionsCompactionListParams", ["agentId"]],

@@ -302,6 +302,13 @@ export type AgentRunParams = {
   workspace?: WorkspaceSelection;
   approvals?: ApprovalMode;
   idempotencyKey?: string;
+  /**
+   * Opaque, caller-supplied attribution bag forwarded verbatim to the Gateway.
+   * The Gateway seeds it onto the run's diagnostic session state for diagnostics
+   * exporters to interpret; its contents are never inspected by the SDK or
+   * Gateway. Size/depth/key bounds are enforced server-side.
+   */
+  clientContext?: Record<string, unknown>;
 };
 
 /** Parameters for creating a session. */
