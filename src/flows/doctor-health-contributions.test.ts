@@ -69,10 +69,6 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
-  repairLegacyPluginManifestContractFindings: vi.fn(async () => ({
-    changes: [] as string[],
-    effects: [] as unknown[],
-  })),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
@@ -179,7 +175,6 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
   legacyPluginManifestContractMigrationToHealthFinding:
     mocks.legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
-  repairLegacyPluginManifestContractFindings: mocks.repairLegacyPluginManifestContractFindings,
 }));
 
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
@@ -390,11 +385,6 @@ describe("doctor health contributions", () => {
     mocks.legacyPluginManifestContractMigrationToHealthFinding.mockClear();
     mocks.maybeRepairLegacyPluginManifestContracts.mockClear();
     mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
-    mocks.repairLegacyPluginManifestContractFindings.mockClear();
-    mocks.repairLegacyPluginManifestContractFindings.mockResolvedValue({
-      changes: [],
-      effects: [],
-    });
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear();
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
     mocks.collectAuthProfileHealthFindings.mockClear();
@@ -563,56 +553,6 @@ describe("doctor health contributions", () => {
       migration,
       expect.any(Number),
       expect.any(Array),
-    );
-  });
-
-  it("threads dry-run legacy plugin manifest repairs through the structured check", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-plugin-manifests");
-    const check = contribution.healthChecks[0] as HealthCheck;
-    const findings = [
-      {
-        checkId: "core/doctor/legacy-plugin-manifests",
-        severity: "warning" as const,
-        message: "Plugin manifest legacy-plugin uses legacy top-level capability keys.",
-        path: "/tmp/openclaw-plugin/openclaw.plugin.json",
-        target: "legacy-plugin",
-        requirement: "contracts-capability-keys",
-      },
-    ];
-    mocks.repairLegacyPluginManifestContractFindings.mockResolvedValueOnce({
-      changes: ["Would rewrite legacy manifest."],
-      effects: [
-        {
-          kind: "file",
-          action: "would-rewrite-legacy-plugin-manifest-contracts",
-          target: "/tmp/openclaw-plugin/openclaw.plugin.json",
-          dryRunSafe: false,
-        },
-      ],
-    });
-
-    const result = await check.repair?.(
-      {
-        cfg: { plugins: { load: { paths: ["/tmp/openclaw-plugin"] } } },
-        mode: "fix",
-        dryRun: true,
-        diff: true,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      },
-      findings,
-    );
-
-    expect(mocks.repairLegacyPluginManifestContractFindings).toHaveBeenCalledWith({
-      config: { plugins: { load: { paths: ["/tmp/openclaw-plugin"] } } },
-      env: process.env,
-      findings,
-      dryRun: true,
-      diff: true,
-    });
-    expect(result?.effects).toContainEqual(
-      expect.objectContaining({
-        action: "would-rewrite-legacy-plugin-manifest-contracts",
-      }),
     );
   });
 

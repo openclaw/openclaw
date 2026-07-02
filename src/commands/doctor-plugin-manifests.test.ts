@@ -9,7 +9,6 @@ import {
   collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts,
-  repairLegacyPluginManifestContractFindings,
 } from "./doctor-plugin-manifests.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -279,63 +278,6 @@ describe("doctor plugin manifest legacy contract repair", () => {
     expect(next.contracts).toEqual({
       tools: ["contract_tool"],
     });
-  });
-
-  it("previews legacy manifest rewrites as file effects and diffs", async () => {
-    const pluginsRoot = await suiteTempDirs.make("preview-capability");
-    const root = path.join(pluginsRoot, "openai");
-    fs.mkdirSync(root, { recursive: true });
-    writePackageJson(root);
-    writeManifest(root, {
-      id: "openai",
-      speechProviders: ["openai"],
-      configSchema: { type: "object" },
-    });
-    const manifestPath = path.join(root, "openclaw.plugin.json");
-
-    const result = await repairLegacyPluginManifestContractFindings({
-      config: configWithPluginLoadPath(pluginsRoot),
-      env: {
-        ...process.env,
-      },
-      manifestRoots: [pluginsRoot],
-      findings: [
-        {
-          checkId: "core/doctor/legacy-plugin-manifests",
-          severity: "warning",
-          message: "Plugin manifest openai uses legacy top-level capability keys.",
-          path: manifestPath,
-          target: "openai",
-          requirement: "contracts-capability-keys",
-        },
-      ],
-      dryRun: true,
-      diff: true,
-    });
-
-    expect(result.changes).toEqual([
-      `- ${manifestPath}: moved speechProviders to contracts.speechProviders`,
-    ]);
-    expect(result.effects).toEqual([
-      {
-        kind: "file",
-        action: "would-rewrite-legacy-plugin-manifest-contracts",
-        target: manifestPath,
-        dryRunSafe: false,
-      },
-    ]);
-    expect(result.diffs).toEqual([
-      expect.objectContaining({
-        kind: "file",
-        path: manifestPath,
-        before: expect.stringContaining('"speechProviders"'),
-        after: expect.stringContaining('"contracts"'),
-      }),
-    ]);
-    const unchanged = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-      speechProviders?: string[];
-    };
-    expect(unchanged.speechProviders).toEqual(["openai"]);
   });
 
   it("ignores non-object contracts payloads when collecting migrations", async () => {
