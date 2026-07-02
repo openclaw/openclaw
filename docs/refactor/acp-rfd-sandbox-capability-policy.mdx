@@ -1,0 +1,224 @@
+---
+title: "Sandbox Capability and Policy"
+---
+
+Author(s): [visionik](https://github.com/visionik) (OpenClaw)
+
+<Note>
+  **RFD draft status.** This file is authored in the OpenClaw repository as
+  `docs/refactor/acp-rfd-sandbox-capability-policy.mdx` for iteration and review with OpenClaw
+  maintainers and OpenClaw's upstream sponsors before being submitted to
+  `agentclientprotocol/agent-client-protocol` as `docs/rfds/sandbox-capability-policy.mdx` per the
+  [ACP RFD process](https://agentclientprotocol.com/rfds/about).
+</Note>
+
+## Relationship to in-flight ACP RFDs and maintainer work
+
+OpenClaw is building a consolidation of its internal agent-launch paths onto ACP as the sole internal execution contract (see OpenClaw's `docs/refactor/acp-everywhere.md`). While auditing what ACP already provides vs. what our consolidation needs, the overwhelming majority of our needs are already being addressed by current RFDs and maintainer priorities. This RFD introduces the one area we could not find any existing work on: typed sandbox modeling.
+
+Before the main proposal, a brief statement of how OpenClaw intends to consume adjacent in-flight work, so reviewers can see this RFD fits within the wider plan rather than competing with it:
+
+- **[Authentication Methods](https://agentclientprotocol.com/rfds/auth-methods)** — adopt directly; replaces OpenClaw's current ad-hoc auth-profile shuttling through `_meta`.
+- **[Session Close](https://agentclientprotocol.com/rfds/session-close)**, **[Session Delete](https://agentclientprotocol.com/rfds/session-delete)**, **[Session Fork](https://agentclientprotocol.com/rfds/session-fork)**, **[Session Resume](https://agentclientprotocol.com/rfds/session-resume)** — adopt directly; these cover every session-lifecycle need in OpenClaw's spawn/subagent registry.
+- **[Additional Workspace Roots](https://agentclientprotocol.com/rfds/additional-directories)** — adopt; aligns with OpenClaw's multi-workspace agent configurations.
+- **[Boolean Config Option](https://agentclientprotocol.com/rfds/boolean-config-option)** — adopt; needed for OpenClaw's fast-mode / verbose flags.
+- **[Configurable LLM Providers](https://agentclientprotocol.com/rfds/custom-llm-endpoint)** — adopt; replaces OpenClaw's provider/model plumbing through bespoke config.
+- **[Elicitation](https://agentclientprotocol.com/rfds/elicitation)** — adopt for URL elicitation during auth and for future approval flows.
+- **[Logout Method](https://agentclientprotocol.com/rfds/logout-method)** — adopt.
+- **[MCP-over-ACP](https://agentclientprotocol.com/rfds/mcp-over-acp)** — adopt; aligns with OpenClaw's existing `mcporter` bridge direction.
+- **[Message ID](https://agentclientprotocol.com/rfds/message-id)** — adopt; supplies the message-level correlation OpenClaw needs for transcript and audit.
+- **[Meta Field Propagation Conventions](https://agentclientprotocol.com/rfds/meta-propagation)** — adopt the W3C trace context keys; this is the right answer for OpenClaw's cross-tool tracing.
+- **[Agent Extensions via ACP Proxies](https://agentclientprotocol.com/rfds/proxy-chains)** — adopt as the extension mechanism for OpenClaw's domain-specific client surfaces (channel messaging, skills context, thread-binding) rather than proposing parallel spec additions.
+- **[Request Cancellation Mechanism](https://agentclientprotocol.com/rfds/request-cancellation)** — adopt.
+- **[Session Usage and Context Status](https://agentclientprotocol.com/rfds/session-usage)** — adopt directly; covers the token/context/cost side of what OpenClaw currently emits as ad-hoc `stream: "usage"` events.
+- **[Streamable HTTP & WebSocket Transport](https://agentclientprotocol.com/rfds/streamable-http-websocket-transport)** — adopt; supports OpenClaw's remote-gateway topologies and future loopback-transport experiments.
+- **Better Subagent Representation** (maintainer-meeting agenda item, 2026-04-02) — OpenClaw has production subagent semantics (depth/concurrency limits, announce-back, thread binding, cascade stop). We will contribute concrete requirements / implementation feedback to whichever maintainer drives that RFD rather than proposing a parallel one.
+- **New notification-based prompt format** (Ben Brandt in-progress, 2026-04-02) — wait and adopt; likely supersedes any independent "lifecycle start" proposal.
+- **Plan mode improvements** (maintainer agenda, 2026-04-02) — adopt once an RFD lands; aligns with OpenClaw's current plan-update work.
+
+The proposal below is scoped to the one identified gap: there is no structured model for what isolation a backend provides or what isolation a particular session requires. What follows is the full RFD for that gap.
+
+## Elevator pitch
+
+Add a typed `SandboxCapability` that an agent advertises in `AgentCapabilities`, a typed `SandboxPolicy` that a client can set per session as a `SessionConfigOption`, and a well-defined `satisfies` relation between them. This lets agents declare the isolation guarantees they actually enforce (host vs. container vs. chroot vs. seccomp, across filesystem / network / process-capability dimensions) and lets clients express per-session isolation requirements that the agent can validate or reject up-front, instead of clients guessing from implementation docs.
+
+## Status quo
+
+ACP today has no first-class model for sandboxing. Implementers are already reinventing this in incompatible ways:
+
+1. **Boolean or string knobs on `_meta`.** Some agents expose a `_meta.sandbox: true|false` or `_meta.sandboxMode: "docker"|"host"` at `session/new` time. These are not discoverable, not versioned, and collide in namespace across agents.
+2. **Silent host-only assumption.** Many agents simply run on the host, but do not declare that. Clients that care (audit, enterprise) have no way to verify before they route work.
+3. **Error-only signaling.** Clients that want a particular isolation mode typically find out at the permission-prompt layer (`RequestPermissionRequest`) when an operation is about to happen, rather than at session setup. If the agent can't honor the policy, the client has already wasted a session on work that will be blocked.
+4. **Boolean collapse.** A single bool cannot distinguish host-only from container from chroot from seccomp, cannot distinguish filesystem isolation from network isolation, and cannot express operator requirements like "must drop process capabilities" or "workspace-only write access." Projects that need those distinctions end up branching on provider/model/agent-id strings — i.e., hard-coding implementation names.
+
+This is not hypothetical. OpenClaw today rejects one legitimate configuration (`sessions_spawn sandbox="require"` with `runtime="acp"`) solely because the ACP runtime has no structured way to say "yes, I actually enforce workspace-scope filesystem isolation under Docker." The workaround is to forbid the combination, which forces users to drop from ACP to the native subagent runtime, which is itself the thing we're trying to unify on.
+
+More broadly, sandbox policy is the kind of decision that should be made once at session setup, verified once against declared capabilities, and then trusted for the rest of the session. A capability/policy split is the standard shape for that kind of check; the field has been reinventing it in LSP, MCP, WASI, and Kubernetes RBAC. ACP is an appropriate place to adopt the pattern before a dozen agents ship a dozen incompatible versions.
+
+## What we propose to do about it
+
+Two additive, capability-negotiated types and one relation.
+
+### 1. `SandboxCapability` — what the agent enforces
+
+Advertised by the agent in `AgentCapabilities.sandbox`. Static per agent; does not change across sessions. Encodes runtime-provable facts.
+
+```json
+{
+  "sandbox": {
+    "mode": "docker",
+    "guarantees": {
+      "fsIsolation": "workspace",
+      "netIsolation": "restricted",
+      "processCaps": true
+    }
+  }
+}
+```
+
+Field definitions (proposed enums; expandable over time):
+
+- `mode`: one of `"host"`, `"docker"`, `"podman"`, `"chroot"`, `"seccomp"`, `"custom"`.
+- `guarantees.fsIsolation`: one of `"none"`, `"workspace"`, `"fullRoot"`.
+- `guarantees.netIsolation`: one of `"none"`, `"restricted"`, `"denyAll"`.
+- `guarantees.processCaps`: `boolean` — whether the runtime drops process capabilities (setuid, ptrace, raw sockets, etc.) by default.
+
+Agents that run on the host (the common case today) advertise `{ mode: "host", guarantees: { fsIsolation: "none", netIsolation: "none", processCaps: false } }`. This is not a regression — it's explicit about what was previously implicit.
+
+### 2. `SandboxPolicy` — what the session requires
+
+Advertised by the client as a session configuration option via the existing [Session Config Options](https://agentclientprotocol.com/protocol/session-config-options) mechanism, under the well-known id `acp.sandbox`. Per-session; expresses the operator's requirement for this session's work.
+
+```json
+{
+  "sessionId": "sess_abc123",
+  "configOptions": [
+    {
+      "id": "acp.sandbox",
+      "value": {
+        "require": "sandboxed",
+        "minFsIsolation": "workspace",
+        "minNetIsolation": "restricted"
+      }
+    }
+  ]
+}
+```
+
+Field definitions:
+
+- `require`: `"any"` | `"host"` | `"sandboxed"`.
+- `minFsIsolation` (optional): `"workspace"` | `"fullRoot"`.
+- `minNetIsolation` (optional): `"restricted"` | `"denyAll"`.
+- `image` (optional, string): container image operator prefers when `mode` is container-like. Advisory — agent may reject or substitute.
+- `setupCommand` (optional, string): one-shot setup to run inside the sandbox before the session starts. Advisory.
+
+Clients MAY omit `SandboxPolicy` entirely, in which case the session runs under whatever the agent's `SandboxCapability` declares (compatible with today's behavior).
+
+### 3. `satisfies(capability, policy)` — the check
+
+A deterministic predicate the agent MUST evaluate when a client sets `acp.sandbox` (or fails-open if the client does not set one):
+
+```text
+satisfies(cap, pol) ⇔
+  (pol.require = "any")
+  ∨ (pol.require = "host" ∧ cap.mode = "host")
+  ∨ (pol.require = "sandboxed" ∧ cap.mode ≠ "host")
+  ∧ (pol.minFsIsolation absent ∨ cap.guarantees.fsIsolation ≥ pol.minFsIsolation)
+  ∧ (pol.minNetIsolation absent ∨ cap.guarantees.netIsolation ≥ pol.minNetIsolation)
+```
+
+Isolation grades are ordered: `none < workspace < fullRoot` for filesystem, `none < restricted < denyAll` for network. If `satisfies` returns false, the agent MUST reject the `setSessionConfigOption` with a typed error code `sandbox_policy_unsatisfiable`, returning its current `SandboxCapability` in the error payload so the client can explain the mismatch to the operator. If `satisfies` returns true, the session proceeds.
+
+### Why a Session Config Option rather than an ensureSession field
+
+`session/new` input is already crowded and has strong guarantees about backward compatibility. Session Config Options (already stabilized) is the designed extension point for structured, agent-negotiated per-session selectors. `acp.sandbox` slots in there cleanly, advertised via the same mechanism as any other config option, and the agent gets to accept or reject via the existing machinery. This keeps the proposal additive and re-uses an existing RFD's infrastructure rather than introducing a parallel one.
+
+### Extension dimension
+
+Future isolation dimensions (memory quotas, GPU access scoping, secrets isolation, etc.) can be added as new optional guarantee/policy fields without breaking existing agents or clients. The enum strings in `mode` can also be extended — agents that use an unknown `mode` value in `satisfies` simply match against `"host"` vs. "not host" as the coarse fallback.
+
+## Shiny future
+
+**For agent authors.** You declare once what your runtime actually enforces. No bespoke `_meta` conventions, no custom error strings when a client asks for a mode you don't do. Clients that want stronger isolation than you offer simply don't start sessions with you — which is the correct outcome.
+
+**For clients.** You declare, per session, what isolation matters for the work the user is about to do. You get upfront rejection instead of permission-prompt failures ten minutes into a turn, and the rejection carries structured data you can surface in the UI ("this agent runs on the host; your policy requires a container").
+
+**For operators in regulated environments.** Compliance stories ("all agent actions in this tenant run inside a container with no network access") become expressible in the protocol instead of in each client's config layer.
+
+**For the ecosystem.** The standard shape prevents the next six months of implementers each inventing their own `sandboxMode: "..."` string space on `_meta`.
+
+**For OpenClaw specifically.** Resolves the today-forbidden combination of `sandbox="require"` with an ACP backend. The OpenClaw spawn module sets `acp.sandbox.require = "sandboxed"` for sandbox-required child sessions, and backends that really run sandboxed accept it. Backends that run on the host correctly reject, and the spawn module falls back to OpenClaw's native sandboxed runtime for that specific child.
+
+## Implementation details and plan
+
+### Schema changes
+
+1. Add `SandboxCapability` to `schema.json` under `$defs`, referenced from `AgentCapabilities.sandbox?: SandboxCapability`.
+2. Register a new well-known Session Config Option id: `acp.sandbox`, with `value` type `SandboxPolicy` (also a new `$defs` entry). Registration is via whatever registry mechanism the [Session Config Options](https://agentclientprotocol.com/rfds/session-config-options) RFD settles on.
+3. Add error code `sandbox_policy_unsatisfiable` with a payload carrying the agent's `SandboxCapability`.
+
+### SDK changes (Rust reference, then propagated)
+
+- `AgentCapabilities` gets an optional `sandbox: Option<SandboxCapability>`.
+- `SandboxCapability` and `SandboxPolicy` are plain serde types.
+- Rust provides a helper `fn satisfies(cap: &SandboxCapability, pol: &SandboxPolicy) -> bool` with the exact predicate above, tested.
+- TypeScript, Python, Kotlin, Java SDKs mirror the types; each one gets the same `satisfies` helper.
+
+### Backward compatibility
+
+- Agents that do not advertise `SandboxCapability` behave exactly as today. Clients that set `acp.sandbox` on such agents receive the new error and can choose to proceed without the policy or fail fast.
+- Clients that do not set `acp.sandbox` behave exactly as today. Agents that advertise `SandboxCapability` incur no extra work for those clients.
+- No changes to session lifecycle, prompts, events, or transport.
+
+### Rollout
+
+1. RFD merges to Draft; Rust SDK implementation behind `unstable` feature flag, as per CONTRIBUTING.
+2. One editor client (Zed) and one agent (Claude Code or Codex) pilot the capability + policy path.
+3. RFD moves to Preview once two of each side implement and agree on the predicate.
+4. Stabilize after the preview period.
+
+### Open questions for dialog
+
+- Should the `fsIsolation` grade have a fourth level for "read-only workspace"? Would make it expressible that an agent can read the workspace but not write, which is what some analysis agents actually want. Probably yes; naming TBD.
+- Should `netIsolation` grow an `"allowlist"` grade with a list of allowed hosts in `guarantees`? Plausible for container-based agents that use a proxy, but complicates the capability surface.
+- Should `SandboxPolicy` also carry an optional list of required capability extensions (e.g., `["com.openclaw.workspaceOnly"]`) so operators can pin vendor-specific guarantees? Probably not — that's what proxies and capabilities are for; the core sandbox model should stay small.
+- How does this interact with `Elicitation`? Specifically, if a session needs to prompt the user to install or start a container, that is an elicitation concern and the sandbox RFD should not duplicate it.
+
+## FAQ
+
+### Why not model sandbox as a tool-level permission instead of a session-level policy?
+
+`RequestPermissionRequest` exists and handles fine-grained per-operation approval. That's the right layer for individual dangerous operations. Sandbox is different: it's a statement about the environment the whole session runs in. An operator who wants "container only" for this session does not want to answer 50 permission prompts to get there — they want to know up front that the agent will honor the requirement, and to reject the session if not.
+
+### Why a new top-level capability instead of nesting under `promptCapabilities` or similar?
+
+`promptCapabilities` describes what content the agent can ingest. `sessionCapabilities` is about session lifecycle (load, resume). Sandbox is an agent-level fact about runtime isolation — the session doesn't change it — so `AgentCapabilities.sandbox` is the right home.
+
+### Why three enums rather than freeform strings?
+
+Freeform strings let every agent advertise a different vocabulary, which defeats the purpose. Three short, carefully-chosen enums cover the isolation dimensions that actually matter in practice today, and the `"custom"` mode + extension fields (B.3 future-possibility) leave room for specialized cases without bloating core. See Open questions above for the dimensions worth considering.
+
+### Why is `satisfies` in the RFD rather than left to each implementation?
+
+Because if each SDK reimplements the predicate, clients and agents disagree on edge cases and the RFD becomes useless. The predicate is small, deterministic, and SHOULD be provided as a helper in every SDK (and should be included in the conformance test suite once that exists).
+
+### Does this replace OS-level isolation?
+
+No. The RFD does not mandate what agents use under the hood (Docker, Podman, chroot, seccomp, gVisor, Firecracker, WASI, a tenant with nothing but promises). It only standardizes how agents _describe_ what they use and how clients _require_ a minimum level. The enforcement is the agent's responsibility.
+
+### Why not just wait for the `Better Subagent Representation` RFD to cover this?
+
+That RFD (planned; not yet written as of 2026-04-02 maintainer notes) will likely cover how subagents are named, listed, and lifecycled. It's a different axis. A "subagent" can run on the host or in a container — the sandbox capability/policy split is orthogonal and applies equally to top-level agents and subagents.
+
+### Won't this let clients discriminate against agents that don't sandbox?
+
+Yes, and that is the point. Clients that need sandboxed execution can fail fast rather than route sensitive work to a host agent. Agents that want to serve such clients have a clear path: add isolation and advertise it. Clients that don't care (today's default) set no policy and continue to work with every agent unchanged.
+
+### Is the enum ordering (`none < workspace < fullRoot`) correct?
+
+`workspace` is a stronger guarantee than `none` — the agent cannot touch arbitrary files outside the workspace root. `fullRoot` is stronger again — the agent has a completely separate root filesystem, so even reads of `/etc/passwd` are isolated. The ordering matches the operator intuition that more isolation is higher. If there's disagreement, we can make the enum explicit as a numeric grade, but the string form is friendlier.
+
+## Revision history
+
+- **Date TBD (initial draft):** first version authored in OpenClaw's repo at `docs/refactor/acp-rfd-sandbox-capability-policy.mdx` for maintainer review before upstream submission.
