@@ -33,7 +33,6 @@ import {
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
-  hasAbortableSessionRun,
   retryReconnectableQueuedChatSends,
 } from "./chat-send.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
@@ -63,6 +62,7 @@ import {
   type DetailFullMessageResult,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 

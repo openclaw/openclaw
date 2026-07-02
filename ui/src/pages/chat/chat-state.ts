@@ -42,7 +42,6 @@ import {
 import type { ChatMetadataResult, ChatState } from "./chat-history.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import {
-  handleAbortChat,
   handleSendChat,
   recordChatSendServerTiming,
   refreshChat,
@@ -77,7 +76,7 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { handleAbortChat, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
 

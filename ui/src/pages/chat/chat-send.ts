@@ -18,7 +18,6 @@ import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
-  scopedAgentParamsForSession,
   visibleSessionMatches,
   type SessionCapability,
   type SessionRefreshTarget,
@@ -81,7 +80,12 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  handleAbortChat,
+  isChatBusy,
+  isChatStopCommand,
+  reconcileChatRunLifecycle,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -186,10 +190,6 @@ export type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
-};
-
-export type ChatAbortOptions = {
-  preserveDraft?: boolean;
 };
 
 function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
@@ -444,38 +444,6 @@ export async function sendSteerChatMessage(
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
-export async function abortChatRun(state: ChatState): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
-  }
-  const runId = state.chatRunId;
-  try {
-    await state.client.request(
-      "chat.abort",
-      runId
-        ? {
-            sessionKey: state.sessionKey,
-            ...(() => {
-              const agentId = resolveSelectedAgentId(state);
-              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
-            })(),
-            runId,
-          }
-        : {
-            sessionKey: state.sessionKey,
-            ...(() => {
-              const agentId = resolveSelectedAgentId(state);
-              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
-            })(),
-          },
-    );
-    return true;
-  } catch (err) {
-    setChatError(state, formatConnectError(err));
-    return false;
-  }
-}
-
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -483,43 +451,6 @@ export {
   resetChatInputHistoryNavigation,
 };
 export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
-
-export function isChatBusy(host: ChatHost) {
-  return host.chatSending || Boolean(host.chatRunId);
-}
-
-export function hasAbortableSessionRun(host: {
-  chatRunId?: string | null;
-  sessionKey: string;
-  sessionsResult?: SessionsListResult | null;
-}): boolean {
-  if (host.chatRunId) {
-    return true;
-  }
-  return Boolean(
-    host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && isSessionRunActive(session),
-    ),
-  );
-}
-
-export function isChatStopCommand(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "/stop") {
-    return true;
-  }
-  return (
-    normalized === "stop" ||
-    normalized === "esc" ||
-    normalized === "abort" ||
-    normalized === "wait" ||
-    normalized === "exit"
-  );
-}
 
 function isChatResetCommand(text: string) {
   const parsed = parseSlashCommand(text);
@@ -547,32 +478,6 @@ function confirmChatResetCommand(text: string) {
 
 function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
-}
-
-export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
-  const activeRunId = host.chatRunId;
-  const clearDraft = () => {
-    if (opts?.preserveDraft) {
-      return;
-    }
-    host.chatMessage = "";
-    resetChatInputHistoryNavigation(host);
-  };
-  // If disconnected but this session is abortable, queue the abort for when we reconnect.
-  if (!host.connected && hasAbortableSessionRun(host)) {
-    clearDraft();
-    host.pendingAbort = {
-      runId: activeRunId,
-      sessionKey: host.sessionKey,
-      ...scopedAgentParamsForSession(host, host.sessionKey),
-    };
-    return;
-  }
-  if (!host.connected) {
-    return;
-  }
-  clearDraft();
-  await abortChatRun(host as unknown as ChatState);
 }
 
 function enqueuePendingSendMessage(

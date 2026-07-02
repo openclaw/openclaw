@@ -48,8 +48,8 @@ vi.mock("./chat-command-executor.ts", async (importOriginal) => {
 let handleSendChat: typeof import("./chat-send.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessage;
 let navigateChatInputHistory: typeof import("./chat-send.ts").navigateChatInputHistory;
-let handleAbortChat: typeof import("./chat-send.ts").handleAbortChat;
-let hasAbortableSessionRun: typeof import("./chat-send.ts").hasAbortableSessionRun;
+let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
+let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
 let refreshChat: typeof import("./chat-send.ts").refreshChat;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
@@ -63,13 +63,12 @@ async function loadChatHelpers(): Promise<void> {
     handleSendChat,
     steerQueuedChatMessage,
     navigateChatInputHistory,
-    handleAbortChat,
-    hasAbortableSessionRun,
     refreshChat,
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
   } = await import("./chat-send.ts"));
+  ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({ clearPendingQueueItemsForRun, removeQueuedMessage, markQueuedChatSendsWaitingForReconnect } =
     await import("./chat-queue.ts"));
 }

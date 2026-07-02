@@ -1,12 +1,17 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 // Control UI chat module implements run lifecycle behavior.
 import {
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
 } from "../../ui/app-tool-stream.ts";
+import { formatConnectError } from "../../ui/connect-error.ts";
+import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -68,9 +73,93 @@ type ReconcileOptions = {
   armLocalTerminalReconcile?: boolean;
 };
 
+type ChatAbortRunState = SessionScopeHost & {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  sessionKey: string;
+  chatRunId?: string | null;
+  lastError?: string | null;
+  chatError?: string | null;
+};
+
+type ChatAbortHost = ChatAbortRunState &
+  ChatInputHistoryState & {
+    pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+    sessionsResult?: SessionsListResult | null;
+  };
+
+const CHAT_STOP_COMMANDS = new Set(["/stop", "stop", "esc", "abort", "wait", "exit"]);
+
 function toSessionKey(value: string | null | undefined): string | null {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed ? trimmed : null;
+}
+
+function setChatError(state: ChatAbortRunState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
+
+export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | null }) {
+  return Boolean(host.chatSending || host.chatRunId);
+}
+
+export function hasAbortableSessionRun(host: {
+  chatRunId?: string | null;
+  sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
+}): boolean {
+  if (host.chatRunId) {
+    return true;
+  }
+  return Boolean(
+    host.sessionsResult?.sessions.some(
+      (session) => session.key === host.sessionKey && isSessionRunActive(session),
+    ),
+  );
+}
+
+export function isChatStopCommand(text: string) {
+  return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
+}
+
+export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const runId = state.chatRunId;
+  try {
+    await state.client.request("chat.abort", {
+      sessionKey: state.sessionKey,
+      ...scopedAgentParamsForSession(state, state.sessionKey),
+      ...(runId ? { runId } : {}),
+    });
+    return true;
+  } catch (err) {
+    setChatError(state, formatConnectError(err));
+    return false;
+  }
+}
+
+export async function handleAbortChat(host: ChatAbortHost, opts?: { preserveDraft?: boolean }) {
+  const activeRunId = host.chatRunId;
+  const queueAbort = !host.connected && hasAbortableSessionRun(host);
+  if (!host.connected && !queueAbort) {
+    return;
+  }
+  if (!opts?.preserveDraft) {
+    host.chatMessage = "";
+    resetChatInputHistoryNavigation(host);
+  }
+  if (queueAbort) {
+    host.pendingAbort = {
+      runId: activeRunId,
+      sessionKey: host.sessionKey,
+      ...scopedAgentParamsForSession(host, host.sessionKey),
+    };
+    return;
+  }
+  await abortChatRun(host);
 }
 
 function clearTimer(timer: TimerHandle | number | null | undefined) {

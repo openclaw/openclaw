@@ -12,12 +12,12 @@ import {
 } from "./chat-gateway.ts";
 import { GatewayRequestError, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
-  abortChatRun,
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
 } from "./chat-send.ts";
+import { abortChatRun } from "./run-lifecycle.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
