@@ -1,31 +1,29 @@
 // Control UI module installs array copy method fallbacks for older browsers.
 
-export function installArrayCopyMethodPolyfills(): void {
-  const proto = Array.prototype as unknown as Record<string, unknown>;
+const arrayPrototype = Array.prototype as unknown as Record<string, unknown>;
+const arraySort = Array.prototype.sort;
+const arrayReverse = Array.prototype.reverse;
 
-  if (typeof proto.toSorted !== "function") {
-    // oxlint-disable-next-line eslint/no-extend-native -- entrypoint polyfill for legacy browsers.
-    Object.defineProperty(Array.prototype, "toSorted", {
+export function installArrayCopyMethodPolyfills(): void {
+  if (typeof arrayPrototype.toSorted !== "function") {
+    Object.defineProperty(arrayPrototype, "toSorted", {
       configurable: true,
       writable: true,
       value: function toSorted<T>(this: T[], compareFn?: (a: T, b: T) => number): T[] {
         const copy = this.slice();
-        // oxlint-disable-next-line unicorn/no-array-sort -- fallback for browsers without toSorted.
-        copy.sort(compareFn);
+        arraySort.call(copy, compareFn);
         return copy;
       },
     });
   }
 
-  if (typeof proto.toReversed !== "function") {
-    // oxlint-disable-next-line eslint/no-extend-native -- entrypoint polyfill for legacy browsers.
-    Object.defineProperty(Array.prototype, "toReversed", {
+  if (typeof arrayPrototype.toReversed !== "function") {
+    Object.defineProperty(arrayPrototype, "toReversed", {
       configurable: true,
       writable: true,
       value: function toReversed<T>(this: T[]): T[] {
         const copy = this.slice();
-        // oxlint-disable-next-line unicorn/no-array-reverse -- fallback for browsers without toReversed.
-        return copy.reverse();
+        return arrayReverse.call(copy) as T[];
       },
     });
   }

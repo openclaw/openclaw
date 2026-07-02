@@ -2,18 +2,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installArrayCopyMethodPolyfills } from "./array-copy-method-polyfills.js";
 
-const originalToSorted = Object.getOwnPropertyDescriptor(Array.prototype, "toSorted");
-const originalToReversed = Object.getOwnPropertyDescriptor(Array.prototype, "toReversed");
+const arrayPrototype = Array.prototype as unknown as Record<"toSorted" | "toReversed", unknown>;
+const originalToSorted = Object.getOwnPropertyDescriptor(arrayPrototype, "toSorted");
+const originalToReversed = Object.getOwnPropertyDescriptor(arrayPrototype, "toReversed");
 
 function restoreArrayMethod(
   name: "toSorted" | "toReversed",
   descriptor: PropertyDescriptor | undefined,
 ) {
   if (descriptor) {
-    // oxlint-disable-next-line eslint/no-extend-native -- restores native descriptor after legacy-browser simulation.
-    Object.defineProperty(Array.prototype, name, descriptor);
+    Object.defineProperty(arrayPrototype, name, descriptor);
   } else {
-    delete (Array.prototype as unknown as Record<string, unknown>)[name];
+    delete arrayPrototype[name];
   }
 }
 
@@ -23,8 +23,7 @@ function restoreArrayCopyMethods() {
 }
 
 function removeArrayMethod(name: "toSorted" | "toReversed") {
-  // oxlint-disable-next-line eslint/no-extend-native -- simulates legacy browsers missing the method.
-  Object.defineProperty(Array.prototype, name, {
+  Object.defineProperty(arrayPrototype, name, {
     configurable: true,
     writable: true,
     value: undefined,
@@ -65,8 +64,7 @@ describe("array-copy-method-polyfills", () => {
     const sentinel = function toSortedSentinel(this: number[]): number[] {
       return [99, ...this];
     };
-    // oxlint-disable-next-line eslint/no-extend-native -- simulates a browser native implementation.
-    Object.defineProperty(Array.prototype, "toSorted", {
+    Object.defineProperty(arrayPrototype, "toSorted", {
       configurable: true,
       writable: true,
       value: sentinel,
