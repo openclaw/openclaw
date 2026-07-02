@@ -1930,4 +1930,48 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
   });
+
+  describe("stream reader lock lifecycle", () => {
+    it("requires releaseLock() after cancel() to unlock the stream", async () => {
+      // Create a ReadableStream — simulating response.body
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("data"));
+          controller.close();
+        },
+      });
+
+      // Acquire a reader — same pattern as classifyOpenAISdkStreamBody
+      const reader = stream.getReader();
+
+      // Cancel the reader — per spec, cancel() rejects pending reads but does NOT release the lock
+      await reader.cancel();
+
+      // After cancel(), the stream should still be locked
+      expect(stream.locked).toBe(true);
+
+      // releaseLock() IS required to allow other consumers
+      reader.releaseLock();
+
+      // After releaseLock(), the stream should be unlocked
+      expect(stream.locked).toBe(false);
+    });
+
+    it("cancel() alone leaves stream locked (negative control)", () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("data"));
+          controller.close();
+        },
+      });
+      const reader = stream.getReader();
+      void reader.cancel().catch(() => undefined);
+
+      // Without releaseLock(), the stream remains locked
+      expect(stream.locked).toBe(true);
+
+      // Cleanup
+      reader.releaseLock();
+    });
+  });
 });
