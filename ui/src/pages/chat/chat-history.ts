@@ -26,7 +26,12 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { unsubscribeSessionMessages, type SessionCapability } from "../../lib/sessions/index.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import {
+  scopedAgentParamsForSession,
+  unsubscribeSessionMessages,
+  type SessionCapability,
+} from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -41,7 +46,13 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
-import { cacheChatMessages, type ChatMessageCache } from "./session-message-cache.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
+import {
+  cacheChatMessages,
+  clearChatMessagesFromCache,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -406,6 +417,7 @@ export type ChatState = {
   chatError?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
+  chatReplyTarget?: unknown | null;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
@@ -750,6 +762,62 @@ function replaceCachedChatMessages(
     return;
   }
   cacheChatMessages(state.chatMessagesBySession, state, { sessionKey, agentId }, messages);
+}
+
+type ClearChatHistoryState = ChatState &
+  Parameters<typeof reconcileChatRunLifecycle>[0] &
+  Parameters<typeof scheduleChatScroll>[0] & {
+    sessions: Pick<SessionCapability, "reset">;
+  };
+
+function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
+  if (state.chatRunId) {
+    return true;
+  }
+  return Boolean(
+    state.sessionsResult?.sessions.some(
+      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+    ),
+  );
+}
+
+function clearCachedChatMessagesForSession(state: ClearChatHistoryState, sessionKey: string) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+}
+
+export async function clearChatHistory(state: ClearChatHistoryState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const hadActiveRun = hasAbortableChatSessionRun(state);
+  try {
+    await state.sessions.reset(
+      state.sessionKey,
+      scopedAgentParamsForSession(state, state.sessionKey),
+    );
+    state.chatMessages = [];
+    clearCachedChatMessagesForSession(state, state.sessionKey);
+    state.chatSideResult = null;
+    state.chatReplyTarget = null;
+    reconcileChatRunLifecycle(state, {
+      outcome: hadActiveRun ? "interrupted" : undefined,
+      sessionStatus: "killed",
+      runId: state.chatRunId,
+      sessionKey: state.sessionKey,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStream: true,
+      clearSideResultTerminalRuns: true,
+      clearRunStatus: !hadActiveRun,
+    });
+    await loadChatHistory(state);
+  } catch (err) {
+    setChatError(state, String(err));
+  }
+  scheduleChatScroll(state);
 }
 
 export async function loadChatHistory(

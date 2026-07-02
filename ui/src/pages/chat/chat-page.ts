@@ -25,19 +25,18 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import {
+  clearChatHistory,
+  loadChatHistory,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   hasAbortableSessionRun,
   retryReconnectableQueuedChatSends,
 } from "./chat-send.ts";
-import {
-  clearChatHistory,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import {
   canCreateChatSession,
   ChatStateController,

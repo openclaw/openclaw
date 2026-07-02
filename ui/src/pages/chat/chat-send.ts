@@ -48,6 +48,7 @@ import {
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import {
+  clearChatHistory,
   loadChatHistory,
   type ChatEventPayload,
   type ChatHistoryResult,
@@ -65,7 +66,7 @@ import {
   updateQueuedMessage,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
-import { clearChatHistory, refreshChatSessionListForTarget } from "./chat-session.ts";
+import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   removeStoredChatComposerQueueItem,
