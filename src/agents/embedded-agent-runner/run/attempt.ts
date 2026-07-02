@@ -1859,6 +1859,7 @@ export async function runEmbeddedAttempt(
       callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
       toolsEnabled,
       disableTools: params.disableTools,
+      modelRun: isRawModelRun,
     });
     logAgentRuntimeToolDiagnostics({
       runtimePlan: params.runtimePlan,
