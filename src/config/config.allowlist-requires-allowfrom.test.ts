@@ -156,6 +156,18 @@ describe("signal reply-to config", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects unreachable Signal account reply-to overrides", () => {
+    const result = SignalConfigSchema.safeParse({
+      accounts: {
+        work: {
+          replyToModeByChatType: { channel: "off" },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("Discord mentionAliases schema", () => {

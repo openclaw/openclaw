@@ -552,6 +552,7 @@ describe("signal outbound", () => {
     if (!resolveReplyToMode) {
       throw new Error("signal threading.resolveReplyToMode unavailable");
     }
+
     const cfg = {
       channels: {
         signal: {
@@ -778,9 +779,10 @@ describe("signal outbound", () => {
   });
 
   it("registers delivered approval reactions under the resolved default account", async () => {
+    const renderPresentation = signalPlugin.outbound?.renderPresentation;
     const afterDeliverPayload = signalPlugin.outbound?.afterDeliverPayload;
-    if (!afterDeliverPayload) {
-      throw new Error("signal outbound after-delivery hook unavailable");
+    if (!renderPresentation || !afterDeliverPayload) {
+      throw new Error("signal outbound approval delivery hooks unavailable");
     }
 
     clearSignalApprovalReactionTargetsForTest();
@@ -790,7 +792,7 @@ describe("signal outbound", () => {
           defaultAccount: "work",
           accounts: {
             work: {
-              account: "+15550009999",
+              accountUuid: "123e4567-e89b-12d3-a456-426614174000",
               allowFrom: ["+15551230000"],
             },
           },
@@ -805,15 +807,7 @@ describe("signal outbound", () => {
       },
     } as OpenClawConfig;
     const payload: ReplyPayload = {
-      text: [
-        "Exec approval required",
-        "ID: exec-1",
-        "",
-        "React with:",
-        "",
-        "👍 Allow Once",
-        "👎 Deny",
-      ].join("\n"),
+      text: ["Exec approval required", "ID: exec-1"].join("\n"),
       channelData: {
         execApproval: {
           approvalId: "exec-1",
@@ -823,16 +817,30 @@ describe("signal outbound", () => {
         },
       },
     };
+    const renderedPayload =
+      (await renderPresentation({
+        ctx: {
+          cfg,
+          to: "+15551230000",
+          text: payload.text ?? "",
+          accountId: "work",
+          payload,
+        },
+        presentation: { blocks: [] },
+        payload,
+      })) ?? payload;
+
+    expect(renderedPayload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
 
     await afterDeliverPayload({
       cfg,
       target: { channel: "signal", to: "+15551230000" },
-      payload,
+      payload: renderedPayload,
       results: [
         {
           channel: "signal",
           messageId: "1700000000001",
-          meta: { signalVisibleText: payload.text },
+          meta: { signalVisibleText: renderedPayload.text },
         },
       ],
     });
@@ -843,7 +851,7 @@ describe("signal outbound", () => {
         conversationKey: "+15551230000",
         messageId: "1700000000001",
         reactionKey: "👍",
-        targetAuthor: "+15550009999",
+        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
       }),
     ).resolves.toMatchObject({
       approvalId: "exec-1",

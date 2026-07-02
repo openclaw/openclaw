@@ -369,6 +369,7 @@ export async function deliverReplies(params: {
   target: string;
   baseUrl: string;
   account?: string;
+  accountUuid?: string;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
@@ -377,8 +378,18 @@ export async function deliverReplies(params: {
   replyContext?: SignalNativeReplyContext;
   chatType?: "direct" | "group";
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountUuid,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
   const replyToMode = resolveSignalReplyToMode({
     cfg: params.cfg,
     accountId,
@@ -397,8 +408,14 @@ export async function deliverReplies(params: {
         to: target,
         payload,
         targetAuthor: account,
+        targetAuthorUuid: accountUuid,
       }) ?? payload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    const nextNativeReply = createSignalNativeReplyResolver({
+      payload: deliveredPayload,
+      replyContext: params.replyContext,
+      replyToMode,
+    });
     const recordDeliveryResult = (
       result: Awaited<ReturnType<typeof sendMessageSignal>>,
       visibleText: string,
@@ -415,11 +432,6 @@ export async function deliverReplies(params: {
         });
       }
     };
-    const nextNativeReply = createSignalNativeReplyResolver({
-      payload: deliveredPayload,
-      replyContext: params.replyContext,
-      replyToMode,
-    });
     const delivered = await deliverTextOrMediaReply({
       payload: deliveredPayload,
       text: reply.text,
@@ -464,6 +476,7 @@ export async function deliverReplies(params: {
         payload: deliveredPayload,
         results: deliveryResults,
         targetAuthor: account,
+        targetAuthorUuid: accountUuid,
       });
       runtime.log?.(`delivered reply to ${target}`);
     }

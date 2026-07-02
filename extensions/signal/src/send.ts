@@ -15,6 +15,10 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
+import {
+  appendSignalApprovalReactionHintForOutboundMessage,
+  registerSignalApprovalReactionTargetForOutboundMessage,
+} from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
@@ -224,6 +228,7 @@ function isSignalQuoteMetadataRejection(error: unknown): boolean {
   return (
     normalized.includes("reject") ||
     normalized.includes("invalid") ||
+    normalized.includes("unrecognized") ||
     normalized.includes("unsupported") ||
     normalized.includes("not found") ||
     normalized.includes("no such") ||
@@ -244,7 +249,17 @@ export async function sendMessageSignal(
   });
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
-  let message = text ?? "";
+  const targetAuthor = normalizeOptionalString(account);
+  const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
+  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
+    cfg,
+    accountId: accountInfo.accountId,
+    to,
+    text: text ?? "",
+    targetAuthor,
+    targetAuthorUuid,
+  });
+  let message = outboundText;
   let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
@@ -347,6 +362,15 @@ export async function sendMessageSignal(
   }
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
+  registerSignalApprovalReactionTargetForOutboundMessage({
+    cfg,
+    accountId: accountInfo.accountId,
+    to,
+    messageId,
+    text: outboundText,
+    targetAuthor,
+    targetAuthorUuid,
+  });
   return {
     messageId,
     timestamp,

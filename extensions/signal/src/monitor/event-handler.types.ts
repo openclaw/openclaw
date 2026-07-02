@@ -120,6 +120,7 @@ export type SignalEventHandlerDeps = {
     target: string;
     baseUrl: string;
     account?: string;
+    accountUuid?: string;
     accountId?: string;
     runtime: RuntimeEnv;
     maxBytes: number;

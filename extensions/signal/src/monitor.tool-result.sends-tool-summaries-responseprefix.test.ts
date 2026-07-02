@@ -171,6 +171,112 @@ describe("monitorSignalProvider tool results", () => {
     });
   });
 
+  it("passes UUID-only inbound Signal quote metadata to final replies", async () => {
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "123e4567-e89b-12d3-a456-426614174000",
+      replyToBody: "quote me",
+    });
+  });
+
+  it("passes group inbound quote metadata through group reply mode overrides", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        groupPolicy: "open",
+        replyToMode: "off",
+        replyToModeByChatType: { group: "all" },
+      }),
+    );
+    replyMock.mockResolvedValue({ text: "group reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "group quote me",
+              groupInfo: {
+                groupId: "signal-group-id",
+                groupName: "Testing realm",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[0]).toBe("group:signal-group-id");
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "group quote me",
+    });
+  });
+
+  it("uses native quote metadata on every implicit chunk when configured for all replies", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({
+        autoStart: false,
+        replyToMode: "all",
+        textChunkLimit: 8,
+      }),
+    );
+    replyMock.mockResolvedValue({ text: "chunked Signal reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+    });
+    for (const call of sendMock.mock.calls) {
+      expect(call[2]).toMatchObject({
+        replyToId: "1700000000001",
+        replyToAuthor: "+15550001111",
+        replyToBody: "quote me",
+      });
+    }
+  });
+
   it("uses native quote metadata only on the first implicit chunk when configured", async () => {
     setSignalToolResultTestConfig(
       createSignalToolResultConfig({
@@ -402,6 +508,61 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
   });
 
+  it("quotes the last inbound message for multi-message batched-mode turns", async () => {
+    vi.useFakeTimers();
+    try {
+      setSignalToolResultTestConfig({
+        ...createSignalToolResultConfig({
+          autoStart: false,
+          replyToMode: "batched",
+        }),
+        messages: { inbound: { debounceMs: 10 } },
+      });
+      replyMock.mockResolvedValue([{ text: "first reply" }, { text: "second reply" }]);
+      const abortController = new AbortController();
+      streamMock.mockImplementation(async ({ onEvent }) => {
+        for (const [timestamp, message] of [
+          [1700000000001, "first debounced message"],
+          [1700000000002, "second debounced message"],
+        ] as const) {
+          await onEvent({
+            event: "receive",
+            data: JSON.stringify({
+              envelope: {
+                sourceNumber: "+15550001111",
+                sourceName: "Ada",
+                timestamp,
+                dataMessage: { message },
+              },
+            }),
+          });
+        }
+        await vi.advanceTimersByTimeAsync(10);
+        abortController.abort();
+      });
+
+      await runMonitorWithMocks({
+        autoStart: false,
+        baseUrl: SIGNAL_BASE_URL,
+        abortSignal: abortController.signal,
+      });
+
+      await vi.waitFor(() => {
+        expect(sendMock).toHaveBeenCalledTimes(2);
+      });
+      expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+        replyToId: "1700000000002",
+        replyToAuthor: "+15550001111",
+        replyToBody: "second debounced message",
+      });
+      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
+      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToAuthor");
+      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToBody");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("passes inbound Signal quote metadata to media replies", async () => {
     replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
 
@@ -510,6 +671,37 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("keeps explicit current-message native quote metadata when reply mode is off", async () => {
+    setSignalToolResultTestConfig(
+      createSignalToolResultConfig({ autoStart: false, replyToMode: "off" }),
+    );
+    replyMock.mockResolvedValue({ text: "final reply", replyToCurrent: true });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "quote me",
+    });
   });
 
   it("lets direct chat replyToMode override channel default quote settings", async () => {

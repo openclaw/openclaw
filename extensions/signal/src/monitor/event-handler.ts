@@ -512,6 +512,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
           account: deps.account,
+          accountUuid: deps.accountUuid,
           accountId: deps.accountId,
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,

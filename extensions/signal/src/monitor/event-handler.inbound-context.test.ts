@@ -213,7 +213,30 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ReplyToId).toBe("1700000000001");
   });
 
-  it("falls back to dataMessage timestamp for native reply metadata", async () => {
+  it.each([
+    {
+      name: "dataMessage",
+      envelope: {
+        dataMessage: {
+          timestamp: 1700000000002,
+          message: "hello",
+          attachments: [],
+        },
+      },
+    },
+    {
+      name: "editMessage.dataMessage",
+      envelope: {
+        editMessage: {
+          dataMessage: {
+            timestamp: 1700000000002,
+            message: "hello",
+            attachments: [],
+          },
+        },
+      },
+    },
+  ])("falls back to $name timestamp for native reply metadata", async ({ envelope }) => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
@@ -226,11 +249,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         sourceNumber: "+15550002222",
         sourceName: "Bob",
         timestamp: undefined,
-        dataMessage: {
-          timestamp: 1700000000002,
-          message: "hello",
-          attachments: [],
-        },
+        ...envelope,
       }),
     );
 
