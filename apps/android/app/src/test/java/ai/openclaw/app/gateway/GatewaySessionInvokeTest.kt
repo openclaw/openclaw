@@ -1,11 +1,14 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -124,6 +127,65 @@ class GatewaySessionInvokeTest {
         shutdownHarness(harness, server)
       }
     }
+
+  @Test
+  fun disconnectCancelsPendingRpcWithoutWaitingForRequestTimeout() {
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val slowRequestSeen = CompletableDeferred<Unit>()
+      val requestResult = CompletableDeferred<Result<GatewaySession.RpcResult>>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "slow.method" -> {
+              if (!slowRequestSeen.isCompleted) slowRequestSeen.complete(Unit)
+            }
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+      var requestJob: Job? = null
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        requestJob =
+          launch {
+            requestResult.complete(
+              runCatching {
+                harness.session.requestDetailed("slow.method", null, timeoutMs = 30_000)
+              },
+            )
+          }
+        withTimeout(TEST_TIMEOUT_MS) { slowRequestSeen.await() }
+
+        harness.session.disconnect()
+
+        val result = withTimeout(2_000) { requestResult.await() }
+        assertEquals(true, result.exceptionOrNull() is CancellationException)
+        serverWebSocket.get()?.close(1000, "done")
+        withTimeoutOrNull(2_000) {
+          while (lastDisconnect.get().isEmpty()) delay(10)
+        }
+      } finally {
+        requestJob?.cancelAndJoin()
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
+        harness.session.disconnect()
+        harness.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+  }
 
   @Test
   fun eventsAreDispatchedInWebSocketFrameOrder() =

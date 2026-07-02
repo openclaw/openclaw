@@ -46,7 +46,6 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
-    @State var showGatewayProblemDetails = false
     @State var showQRScanner = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
@@ -176,6 +175,11 @@ struct SettingsProTab: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
+            .onChange(of: self.onboardingRequestID) { _, _ in
+                // Root-owned resets leave Settings mounted behind onboarding.
+                // Reload cleared credentials before the view can persist stale state.
+                self.syncAfterOnboardingReset()
+            }
             .onChange(of: self.navigationPath) { _, _ in
                 self.notifyRouteChange()
             }
@@ -183,16 +187,6 @@ struct SettingsProTab: View {
 
     private func settingsModalPresentation(_ content: some View) -> some View {
         content
-            .sheet(isPresented: self.$showGatewayProblemDetails) {
-                if let gatewayProblem = self.appModel.lastGatewayProblem {
-                    GatewayProblemDetailsSheet(
-                        problem: gatewayProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
-                        })
-                }
-            }
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)

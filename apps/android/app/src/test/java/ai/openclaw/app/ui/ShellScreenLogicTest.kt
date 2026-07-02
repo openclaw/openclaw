@@ -4,6 +4,8 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
@@ -485,9 +487,67 @@ class ShellScreenLogicTest {
     )
   }
 
+  @Test
+  fun gatewaySummaryUsesStructuredProblemForCurrentAuthFailure() {
+    assertEquals(
+      "Gateway token needed",
+      gatewaySummary(
+        "Gateway error: unauthorized: gateway token missing",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING"),
+      ),
+    )
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))
+  }
+
+  @Test
+  fun gatewaySummaryLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
+    val problem = authProblem("AUTH_TOKEN_MISSING")
+    assertEquals("Online and ready", gatewaySummary("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
+    assertEquals("Connecting...", gatewaySummary("Reconnecting", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Waiting for pairing", gatewaySummary("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Certificate review needed", gatewaySummary("TLS handshake failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
+  @Test
+  fun gatewaySummaryUsesAtomicRetryDisplayAfterAuthFailure() {
+    val retrying =
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText = "Reconnecting…",
+        problem = null,
+      )
+
+    assertEquals("Connecting...", gatewaySummary(retrying))
+  }
+
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
   private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+
+  private fun authProblem(code: String): GatewayConnectionProblem =
+    GatewayConnectionProblem(
+      code = code,
+      message = "Authentication failed.",
+      reason = null,
+      requestId = null,
+      recommendedNextStep = null,
+      pauseReconnect = false,
+      retryable = false,
+    )
 }

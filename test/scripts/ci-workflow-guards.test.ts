@@ -128,6 +128,12 @@ describe("ci workflow guards", () => {
     const commitStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Commit and push locale artifact",
     );
+    const refreshStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Refresh native locale artifact",
+    );
+    const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
+      (step: { name?: string }) => step.name === "Refresh control UI locale files",
+    );
 
     expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
     expect(refresh.strategy.matrix.locale).toContain("sv");
@@ -138,6 +144,23 @@ describe("ci workflow guards", () => {
       "github.actor != 'github-actions[bot]'",
     );
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(refreshStep.run).toContain("run_refresh anthropic");
+    expect(refreshStep.run).toContain("retrying with OpenAI");
+    expect(refreshStep.run).toContain("run_openai_refresh");
+    expect(refreshStep.run).toContain("repository OpenAI key");
+    expect(refreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
+    expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
+    expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
+    expect(controlUiRefreshStep.run).toContain("repository OpenAI key");
+    expect(controlUiRefreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
     expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
     expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
     expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
