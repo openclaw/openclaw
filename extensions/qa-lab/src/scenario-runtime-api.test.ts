@@ -133,6 +133,15 @@ describe("createQaScenarioRuntimeApi", () => {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
         state,
+        reset: async () => {
+          state.reset();
+        },
+        sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+          state.addInboundMessage(input),
+        waitForNoOutbound: vi.fn(async () => undefined),
+        waitForOutbound: vi.fn(async () => {
+          throw new Error("not used");
+        }),
         capabilities: {
           waitForCondition,
           getNormalizedMessageState: state.getSnapshot.bind(state),

@@ -121,7 +121,7 @@ struct GatewayQuickSetupSheet: View {
         self.gatewayController.gateways.first
     }
 
-    private func fullRowToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+    private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         Toggle(title, isOn: isOn)
             .contentShape(Rectangle())
             .overlay {

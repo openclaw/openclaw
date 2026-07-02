@@ -98,6 +98,13 @@ Pinned iOS version `2026.4.10` maps to:
   - increments App Store Connect build numbers for the pinned short version
   - uploads screenshots, release notes, and the rendered App Review PDF attachment before archiving a release build
 
+Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only
+release path. If that command fails, stop at the failing screenshot, metadata,
+archive, validation, or upload step. Do not continue by archiving and uploading
+manually with `pnpm ios:release:archive`, `asc builds upload`,
+`asc release stage`, `asc publish appstore`, direct Fastlane lanes, or other App
+Store Connect mutation commands.
+
 ## Release-note resolution order
 
 When generating `apps/ios/fastlane/metadata/en-US/release_notes.txt`, the tooling reads the first available changelog section in this order:
@@ -153,6 +160,9 @@ it only after `upload_to_testflight` succeeds. Existing refs are immutable: the
 same ref at the same SHA is accepted, while the same ref at a different SHA
 fails.
 
+Do not create this ref after a manual fallback upload. The ref is release-lane
+evidence, not a repair mechanism for a failed `pnpm ios:release:upload` run.
+
 Useful direct commands:
 
 ```bash
@@ -188,3 +198,8 @@ Fastlane and Xcode should consume only the pinned iOS version from `apps/ios/ver
 Changing `package.json.version` alone must not change the iOS app version until a maintainer explicitly runs the pin step.
 
 App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, upload the App Review PDF attachment, and upload builds, but it should not upload the App Store Connect `Notes` field or submit a build for review.
+
+For agent-driven releases, a failed `pnpm ios:release:upload` is terminal for
+that attempt. Agents must report the failed step and wait for maintainer
+direction instead of switching to lower-level App Store Connect upload or
+submission commands.
