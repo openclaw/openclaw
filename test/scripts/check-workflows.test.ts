@@ -27,6 +27,31 @@ describe("check-workflows", () => {
     expect(result.stderr).toContain("install actionlint, Go");
   });
 
+  it("fails before external linters when workflow files contain tabs", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const workflowDir = path.join(tempDir, ".github", "workflows");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(path.join(workflowDir, "bad.yml"), "name:\tbad\n");
+    for (const command of ["actionlint", "node", "pre-commit", "python3"]) {
+      writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Tabs found in workflow file(s):");
+    expect(result.stderr).toContain(".github/workflows/bad.yml");
+  });
+
   it("uses the pinned go fallback and audits all workflows with zizmor", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
