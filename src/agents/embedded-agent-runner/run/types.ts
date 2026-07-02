@@ -4,6 +4,7 @@
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
+  CliSessionBinding,
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../../config/sessions/types.js";
@@ -151,6 +152,19 @@ export type EmbeddedRunAttemptResult = {
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /**
+   * Provider-owned session binding surfaced by an app-server harness runner
+   * (claude-bridge / codex-app-server) whose durable, resumable thread lives in
+   * the harness's own sidecar store rather than the gateway session store. The
+   * runner sets this to record the resumable thread id (e.g. the bridge
+   * `threadId`) so the auto-reply persistence path writes it to
+   * `entry.cliSessionBindings[modelProvider]`, which is what
+   * `hasProviderOwnedSession()` reads to exempt the session from the daily
+   * default reset. Unlike the legacy text-only CLI runner (cli-runner.ts), this
+   * value is NOT consulted for resume — resume is handled entirely by the
+   * harness sidecar — it exists purely to mark the session provider-owned.
+   */
+  cliSessionBinding?: CliSessionBinding;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   promptTimeoutOutcome?: {
     message?: string;

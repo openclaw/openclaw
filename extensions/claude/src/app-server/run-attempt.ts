@@ -423,6 +423,19 @@ export async function runClaudeAppServerAttempt(
     result.assistantTexts = accumulated.assistantTexts;
     result.attemptUsage = accumulated.usage;
     result.toolMetas = accumulated.toolMetas;
+    // Record the bridge threadId as this session's provider-owned session
+    // binding. The bridge keeps a durable, resumable Anthropic thread (its own
+    // sidecar meta.json, keyed by threadId); the gateway session store never
+    // learned about it, so `hasProviderOwnedSession()` saw no binding for the
+    // "anthropic" provider and the daily default reset wiped active bridge
+    // sessions (openclaw-pg9). Surfacing threadId here lets the auto-reply
+    // persistence path write `cliSessionBindings.anthropic.sessionId`, marking
+    // the session provider-owned so it survives the reset. This value is only a
+    // freshness/ownership marker — resume still flows through the sidecar
+    // binding, not this field.
+    if (threadId) {
+      result.cliSessionBinding = { sessionId: threadId };
+    }
     // Populate messagesSnapshot + lastAssistant so the auto-reply dispatcher
     // and provenance message_sending hook chain (which key on these fields,
     // not on emitted events) have a transcript to operate on. Without this,
