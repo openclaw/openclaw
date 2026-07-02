@@ -183,3 +183,25 @@ describe("getToolPath exit-status handling", () => {
     expect(getToolPath("fd")).toBe("fd");
   });
 });
+
+describe("ensureTool bounded release JSON", () => {
+  it("rejects oversized GitHub release responses", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    // 2 MiB body > 1 MiB cap
+    const bigBody = "x".repeat(2 * 1024 * 1024);
+    const response = new Response(bigBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(ensureTool("fd", true)).rejects.toThrow(
+      "GitHub release response too large",
+    );
+  });
+});

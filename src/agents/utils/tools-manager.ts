@@ -20,6 +20,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import {
   getWindowsPowerShellExePath,
@@ -30,6 +31,7 @@ import { APP_NAME, getBinDir } from "../config.js";
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const TOOLS_RELEASE_JSON_MAX_BYTES = 1 * 1024 * 1024;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -154,7 +156,13 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const body = await readResponseWithLimit(response, TOOLS_RELEASE_JSON_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `GitHub release response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    const data = JSON.parse(body.toString("utf8")) as { tag_name: string };
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
