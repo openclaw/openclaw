@@ -298,6 +298,13 @@ function firstGatewayStartCall(
 }
 
 describe("startGatewayPostAttachRuntime", () => {
+  const testIntervalHandles: ReturnType<typeof setInterval>[] = [];
+
+  function trackTestInterval<T extends ReturnType<typeof setInterval>>(handle: T): T {
+    testIntervalHandles.push(handle);
+    return handle;
+  }
+
   beforeEach(() => {
     closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
@@ -365,6 +372,10 @@ describe("startGatewayPostAttachRuntime", () => {
     closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    for (const handle of testIntervalHandles) {
+      clearInterval(handle);
+    }
+    testIntervalHandles.length = 0;
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
@@ -1874,9 +1885,9 @@ describe("startGatewayPostAttachRuntime", () => {
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
       nodePresenceTimers: new Map(),
       broadcast: vi.fn(),
-      tickInterval: setInterval(() => {}, 1 << 30),
-      healthInterval: setInterval(() => {}, 1 << 30),
-      dedupeCleanup: setInterval(() => {}, 1 << 30),
+      tickInterval: trackTestInterval(setInterval(() => {}, 1 << 30)),
+      healthInterval: trackTestInterval(setInterval(() => {}, 1 << 30)),
+      dedupeCleanup: trackTestInterval(setInterval(() => {}, 1 << 30)),
       mediaCleanup: null,
       agentUnsub: null,
       heartbeatUnsub: null,

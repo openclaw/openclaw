@@ -86,6 +86,12 @@ type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
 >;
 const originalRestartTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+const testIntervalHandles: ReturnType<typeof setInterval>[] = [];
+
+function trackTestInterval<T extends ReturnType<typeof setInterval>>(handle: T): T {
+  testIntervalHandles.push(handle);
+  return handle;
+}
 
 function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
   return mock.mock.calls[0];
@@ -112,9 +118,9 @@ function createGatewayCloseTestDeps(
     stopTaskRegistryMaintenance: null,
     nodePresenceTimers: new Map(),
     broadcast: vi.fn(),
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
+    tickInterval: trackTestInterval(setInterval(() => undefined, 60_000)),
+    healthInterval: trackTestInterval(setInterval(() => undefined, 60_000)),
+    dedupeCleanup: trackTestInterval(setInterval(() => undefined, 60_000)),
     mediaCleanup: null,
     agentUnsub: null,
     heartbeatUnsub: null,
@@ -161,6 +167,10 @@ describe("createGatewayCloseHandler", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetGatewayRestartTraceForTest();
+    for (const handle of testIntervalHandles) {
+      clearInterval(handle);
+    }
+    testIntervalHandles.length = 0;
     if (originalRestartTraceEnv === undefined) {
       delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     } else {

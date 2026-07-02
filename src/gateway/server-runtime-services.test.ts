@@ -64,6 +64,13 @@ const {
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
+const testIntervalHandles: ReturnType<typeof setInterval>[] = [];
+
+function trackTestInterval<T extends ReturnType<typeof setInterval>>(handle: T): T {
+  testIntervalHandles.push(handle);
+  return handle;
+}
+
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -82,6 +89,10 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    for (const handle of testIntervalHandles) {
+      clearInterval(handle);
+    }
+    testIntervalHandles.length = 0;
   });
 
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
@@ -393,9 +404,9 @@ function createPostReadyMaintenanceScheduleParams(
 
 function createMaintenanceHandles() {
   return {
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
-    mediaCleanup: setInterval(() => undefined, 60_000),
+    tickInterval: trackTestInterval(setInterval(() => undefined, 60_000)),
+    healthInterval: trackTestInterval(setInterval(() => undefined, 60_000)),
+    dedupeCleanup: trackTestInterval(setInterval(() => undefined, 60_000)),
+    mediaCleanup: trackTestInterval(setInterval(() => undefined, 60_000)),
   };
 }
