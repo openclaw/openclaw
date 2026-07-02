@@ -841,6 +841,30 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 
+  // Locks the documented contract that trustedProxy.allowUsers is matched
+  // case-sensitively. Case-folding here would broaden the access-control
+  // boundary (e.g. "Nick@example.com" satisfying an entry for
+  // "nick@example.com"). Operators that want case-insensitive matching must
+  // normalise the values in their config.
+  it("rejects user when allowlist entry differs only in case", async () => {
+    const res = await authorizeTrustedProxy({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          allowUsers: ["nick@example.com"],
+        },
+      },
+      headers: {
+        "x-forwarded-user": "Nick@example.com",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_user_not_allowed");
+  });
+
   it("rejects when no trustedProxies configured", async () => {
     const res = await authorizeTrustedProxy({
       trustedProxies: [],
