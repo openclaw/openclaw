@@ -1,6 +1,5 @@
 /** Doctor checks and repair effects for cached shell completion setup. */
 import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveCliName } from "../cli/cli-name.js";
