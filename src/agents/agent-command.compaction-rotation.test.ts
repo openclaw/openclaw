@@ -244,6 +244,63 @@ function requireStorePath(): string {
   return storePath;
 }
 
+describe("agentCommand subagent-announce tool isolation", () => {
+  it("runs a subagent-completion announce handoff tool-free", async () => {
+    // A read-only subagent's completion must not be able to drive parent-topic
+    // bash/apply_patch through the announce delivery turn.
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({ sessionId: "announce-session", text: "relayed completion" }),
+    );
+
+    await agentCommand({
+      message: "A background task finished. Process the completion update now.",
+      sessionId: "announce-session",
+      cwd: state.workspaceDir,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:openclaw:subagent:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_announce",
+      },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:openclaw:subagent:child",
+          announceType: "completion",
+          taskLabel: "read-only review",
+          status: "ok",
+          statusLabel: "completed",
+          result: "child output",
+          replyInstruction: "Relay this completion.",
+        },
+      ],
+    } as Parameters<typeof agentCommand>[0]);
+
+    const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+      | { disableTools?: boolean }
+      | undefined;
+    expect(attempt?.disableTools).toBe(true);
+  });
+
+  it("keeps tools enabled for a normal human turn", async () => {
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({ sessionId: "human-session", text: "answer" }),
+    );
+
+    await agentCommand({
+      message: "do the thing",
+      sessionId: "human-session",
+      cwd: state.workspaceDir,
+    });
+
+    const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+      | { disableTools?: boolean }
+      | undefined;
+    expect(attempt?.disableTools).toBeFalsy();
+  });
+});
+
 describe("agentCommand compaction transcript rotation", () => {
   it("does not re-normalize an exact configured custom provider through plugin runtime", async () => {
     state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(

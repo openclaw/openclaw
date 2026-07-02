@@ -4,6 +4,7 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import { isAnnounceRunId } from "../agents/announce-idempotency.js";
 import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -40,6 +41,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "endedAt"
   | "runtimeMs"
   | "abortedLastRun"
+  | "announceLastRun"
   | "restartRecoveryRuns"
 >;
 
@@ -186,6 +188,16 @@ export function derivePersistedSessionLifecyclePatch(params: {
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
   const runId = params.event.runId?.trim();
+  // Persist whether the active run is a subagent-completion announce delivery so
+  // restart recovery can reconcile the parent topic instead of resurrecting a
+  // human "[System] previous turn interrupted" task. Cleared on the next normal
+  // start and on any terminal event.
+  const phaseForAnnounce = resolveLifecyclePhase(params.event);
+  if (phaseForAnnounce === "start") {
+    patch.announceLastRun = isAnnounceRunId(runId) ? true : undefined;
+  } else if (phaseForAnnounce === "end" || phaseForAnnounce === "error") {
+    patch.announceLastRun = undefined;
+  }
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const restartRecoveryRuns = params.entry?.restartRecoveryRuns;
   if (
