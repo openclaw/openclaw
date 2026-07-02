@@ -78,6 +78,8 @@ type LegacyEditToolInput = Record<string, unknown> & {
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
+const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
+const EDIT_MISMATCH_CANDIDATE_LINE_LIMIT = 160;
 
 /**
  * Pluggable operations for the edit tool.
@@ -173,14 +175,150 @@ function didEditLikelyApply(params: {
   );
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+function countLeadingSpaces(value: string): number {
+  const match = /^ */.exec(value);
+  return match?.[0].length ?? 0;
+}
+
+function countBackslashes(value: string): number {
+  let count = 0;
+  for (const char of value) {
+    if (char === "\\") {
+      count++;
+    }
+  }
+  return count;
+}
+
+function shortenDiagnosticLine(value: string): string {
+  return value.length <= EDIT_MISMATCH_CANDIDATE_LINE_LIMIT
+    ? value
+    : `${value.slice(0, EDIT_MISMATCH_CANDIDATE_LINE_LIMIT)}...`;
+}
+
+function formatDiagnosticLine(value: string): string {
+  return JSON.stringify(shortenDiagnosticLine(value));
+}
+
+function buildDifferenceMarker(expected: string, candidate: string): string {
+  const expectedLine = formatDiagnosticLine(expected);
+  const candidateLine = formatDiagnosticLine(candidate);
+  const maxLength = Math.max(expectedLine.length, candidateLine.length);
+  let marker = "";
+  for (let i = 0; i < maxLength; i++) {
+    marker += expectedLine[i] === candidateLine[i] ? " " : "^";
+  }
+  return marker.trimEnd() || "^";
+}
+
+function scoreCandidateLine(expected: string, candidate: string): number {
+  const expectedTrimmed = expected.trim();
+  const candidateTrimmed = candidate.trim();
+  if (!expectedTrimmed || !candidateTrimmed) {
+    return 0;
+  }
+
+  let commonPrefix = 0;
+  while (
+    commonPrefix < expectedTrimmed.length &&
+    commonPrefix < candidateTrimmed.length &&
+    expectedTrimmed[commonPrefix] === candidateTrimmed[commonPrefix]
+  ) {
+    commonPrefix++;
+  }
+
+  const candidateChars = new Map<string, number>();
+  for (const char of candidateTrimmed) {
+    candidateChars.set(char, (candidateChars.get(char) ?? 0) + 1);
+  }
+
+  let sharedChars = 0;
+  for (const char of expectedTrimmed) {
+    const count = candidateChars.get(char) ?? 0;
+    if (count > 0) {
+      sharedChars++;
+      candidateChars.set(char, count - 1);
+    }
+  }
+
+  const maxLength = Math.max(expectedTrimmed.length, candidateTrimmed.length);
+  return (sharedChars + commonPrefix * 2) / maxLength;
+}
+
+function buildCandidateHint(expected: string, candidate: string): string | undefined {
+  const hints: string[] = [];
+  const expectedIndent = countLeadingSpaces(expected);
+  const candidateIndent = countLeadingSpaces(candidate);
+  if (expectedIndent !== candidateIndent) {
+    hints.push(
+      `indent differs: oldText has ${expectedIndent} leading spaces, candidate has ${candidateIndent}`,
+    );
+  }
+
+  const expectedBackslashes = countBackslashes(expected);
+  const candidateBackslashes = countBackslashes(candidate);
+  if (expectedBackslashes !== candidateBackslashes) {
+    hints.push(
+      `backslashes differ: oldText has ${expectedBackslashes}, candidate has ${candidateBackslashes}`,
+    );
+  }
+
+  if (expected.trim() === candidate.trim() && expected !== candidate) {
+    hints.push("only surrounding whitespace differs");
+  }
+
+  return hints.length > 0 ? hints.join("; ") : undefined;
+}
+
+function buildMismatchCandidateLines(currentContent: string, edits: Edit[]): string {
+  const expectedLine = edits
+    .flatMap((edit) => normalizeToLF(edit.oldText).split("\n"))
+    .find((line) => line.trim().length > 0);
+  if (!expectedLine) {
+    return "";
+  }
+
+  const candidates = normalizeToLF(currentContent)
+    .split("\n")
+    .map((line, index) => ({
+      line,
+      lineNumber: index + 1,
+      score: scoreCandidateLine(expectedLine, line),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .toSorted((a, b) => b.score - a.score)
+    .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
+
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  const lines = ["Nearest candidate lines:"];
+  for (const candidate of candidates) {
+    lines.push(`- line ${candidate.lineNumber}:`);
+    lines.push(`  oldText:   ${formatDiagnosticLine(expectedLine)}`);
+    lines.push(`  candidate: ${formatDiagnosticLine(candidate.line)}`);
+    lines.push(`  diff:      ${buildDifferenceMarker(expectedLine, candidate.line)}`);
+    const hint = buildCandidateHint(expectedLine, candidate.line);
+    if (hint) {
+      lines.push(`  hint:      ${hint}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function appendMismatchHint(error: Error, currentContent: string, edits: Edit[]): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
-    cause: error,
-  });
+  const candidates = buildMismatchCandidateLines(currentContent, edits);
+  const enhanced = new Error(
+    `${error.message}${candidates ? `\n${candidates}` : ""}\nCurrent file contents:\n${snippet}`,
+    {
+      cause: error,
+    },
+  );
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -490,7 +628,7 @@ export function createEditToolDefinition(
             };
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(normalizedError, currentContent, originalEdits);
           }
           // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError instanceof EditNoChangeError) {

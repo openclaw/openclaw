@@ -46,6 +46,42 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
+  it("adds nearest candidate lines and indentation hints to mismatch errors", async () => {
+    const filePath = await createTempFile("function demo() {\n    return value;\n}\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "      return value;", newText: "      return nextValue;" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(
+      /Nearest candidate lines:[\s\S]*line 2:[\s\S]*candidate: " {4}return value;"[\s\S]*indent differs: oldText has 6 leading spaces, candidate has 4/,
+    );
+  });
+
+  it("adds backslash hints to mismatch errors", async () => {
+    const filePath = await createTempFile(String.raw`const word = /\btest\b/u;` + "\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: String.raw`const word = /\\btest\\b/u;`, newText: "changed" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(
+      /diff: {6} {17}\^{16}[\s\S]*hint: {6}backslashes differ: oldText has 4, candidate has 2/,
+    );
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.
