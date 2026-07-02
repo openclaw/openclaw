@@ -1056,6 +1056,7 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
     kind: "core",
     description:
       "Workspace backup and memory-system suggestions are captured as structured findings.",
+    defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
