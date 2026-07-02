@@ -1440,8 +1440,11 @@ private fun rememberPermissionState(
         }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
       smsGranted =
-        (permissions[Manifest.permission.SEND_SMS] ?: smsGranted) &&
-        (permissions[Manifest.permission.READ_SMS] ?: smsGranted)
+        mergedRequiredPermissionGrantState(
+          permissions = permissions,
+          requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
+          currentlyGranted = { permission -> hasPermission(context, permission) },
+        )
       callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
     }
 
@@ -1511,6 +1514,13 @@ private fun rememberPermissionState(
     },
   )
 }
+
+/** RequestMultiplePermissions only reports launched permissions, so omitted entries use current system state. */
+internal fun mergedRequiredPermissionGrantState(
+  permissions: Map<String, Boolean>,
+  requiredPermissions: List<String>,
+  currentlyGranted: (String) -> Boolean,
+): Boolean = requiredPermissions.all { permission -> permissions[permission] ?: currentlyGranted(permission) }
 
 private fun hasPermission(
   context: Context,
