@@ -263,4 +263,57 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       await prepared.cleanup?.();
     });
   });
+
+  it("merges every variadic --mcp-config path and drops stray positional values", async () => {
+    // Regression for #98944: --mcp-config is variadic in the Claude arg model,
+    // so OpenClaw must collect every following non-dash value and merge each
+    // listed config file instead of leaving later values as bare positionals.
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-variadic-",
+    );
+    const alphaPath = path.join(workspaceDir, "alpha.json");
+    const betaPath = path.join(workspaceDir, "beta.json");
+    await fs.writeFile(
+      alphaPath,
+      `${JSON.stringify({
+        mcpServers: {
+          alpha: { type: "sse", url: "https://alpha.example.invalid/mcp/sse" },
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      betaPath,
+      `${JSON.stringify({
+        mcpServers: {
+          beta: { type: "sse", url: "https://beta.example.invalid/mcp/sse" },
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs", "--mcp-config", alphaPath, betaPath],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+    });
+
+    // Neither user path should leak through as a bare positional arg.
+    expect(prepared.backend.args).not.toContain(alphaPath);
+    expect(prepared.backend.args).not.toContain(betaPath);
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { url?: string }>;
+    };
+    expect(raw.mcpServers?.alpha?.url).toBe("https://alpha.example.invalid/mcp/sse");
+    expect(raw.mcpServers?.beta?.url).toBe("https://beta.example.invalid/mcp/sse");
+
+    await prepared.cleanup?.();
+  });
 });
