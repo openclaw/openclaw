@@ -609,6 +609,7 @@ function resolveFeishuChatId(ctx: {
 }
 
 type FeishuReadTarget = { kind: "group"; id: string } | { kind: "direct"; id: string };
+type FeishuReadTargetSource = "explicit" | "current";
 
 function resolveFeishuReadTarget(raw?: string): FeishuReadTarget | undefined {
   if (!raw?.trim()) {
@@ -622,11 +623,23 @@ function resolveFeishuReadTarget(raw?: string): FeishuReadTarget | undefined {
   return groupId ? { kind: "group", id: groupId } : undefined;
 }
 
+function sameFeishuReadTarget(
+  left: FeishuReadTarget | undefined,
+  right: FeishuReadTarget | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.kind === right.kind &&
+    normalizeFeishuAllowEntry(left.id) === normalizeFeishuAllowEntry(right.id)
+  );
+}
+
 function resolveFeishuMessageReadChatTarget(ctx: {
   params: Record<string, unknown>;
   toolContext?: { currentChannelId?: string; currentMessageId?: string | number } | null;
   messageId: string;
-}): { requestedTarget?: FeishuReadTarget } {
+}): { requestedTarget?: FeishuReadTarget; targetSource?: FeishuReadTargetSource } {
   const explicit = readFirstString(ctx.params, [
     "chatId",
     "chat_id",
@@ -635,18 +648,25 @@ function resolveFeishuMessageReadChatTarget(ctx: {
     "to",
     "target",
   ]);
-  if (explicit) {
-    return {
-      requestedTarget: resolveFeishuReadTarget(explicit),
-    };
-  }
   const currentMessageId =
     typeof ctx.toolContext?.currentMessageId === "number"
       ? String(ctx.toolContext.currentMessageId)
       : ctx.toolContext?.currentMessageId?.trim();
+  const currentTarget =
+    currentMessageId === ctx.messageId
+      ? resolveFeishuReadTarget(ctx.toolContext?.currentChannelId)
+      : undefined;
+  if (explicit) {
+    const explicitTarget = resolveFeishuReadTarget(explicit);
+    return {
+      requestedTarget: explicitTarget,
+      targetSource: sameFeishuReadTarget(explicitTarget, currentTarget) ? "current" : "explicit",
+    };
+  }
   if (currentMessageId === ctx.messageId) {
     return {
-      requestedTarget: resolveFeishuReadTarget(ctx.toolContext?.currentChannelId),
+      requestedTarget: currentTarget,
+      targetSource: currentTarget ? "current" : undefined,
     };
   }
   return {};
@@ -680,7 +700,10 @@ function shouldVerifyFeishuFetchedReadTarget(params: {
     return true;
   }
   if (params.requestedTarget?.kind !== "direct") {
-    return false;
+    return (
+      params.requestedTarget !== undefined &&
+      (params.account.config.dmPolicy ?? "pairing") !== "open"
+    );
   }
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
   return dmPolicy !== "open";
@@ -789,7 +812,18 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   requestedTarget?: FeishuReadTarget;
+  targetSource?: FeishuReadTargetSource;
 }) {
+  if (
+    params.targetSource === "explicit" &&
+    shouldVerifyFeishuFetchedReadTarget({
+      cfg: params.cfg,
+      account: params.account,
+      requestedTarget: params.requestedTarget,
+    })
+  ) {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
   if (!params.requestedTarget && shouldEnforceFeishuDirectReadTarget(params.account)) {
     throw new Error("Feishu read target chat is not allowed.");
   }
@@ -843,10 +877,40 @@ function assertFeishuFetchedMessageReadTargetAllowed(params: {
     params.message && typeof params.message === "object"
       ? (params.message as Record<string, unknown>)
       : {};
+  const chatType = readFirstString(messageRecord, ["chatType", "chat_type"]);
+  const senderOpenId = readFirstString(messageRecord, ["senderOpenId", "sender_open_id"]);
+  const senderId = readFirstString(messageRecord, ["senderId", "sender_id"]);
+  const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
+  if (chatType === "p2p" || chatType === "private") {
+    const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+    if ((dmPolicy as string) === "disabled") {
+      throw new Error("Feishu read target chat is not allowed.");
+    }
+    const targetId = normalizeFeishuAllowEntry(target.id);
+    if (
+      !targetId ||
+      (target.kind === "direct"
+        ? ![senderOpenId, senderId, actualChatId].some(
+            (candidate) =>
+              candidate !== undefined && normalizeFeishuAllowEntry(candidate) === targetId,
+          )
+        : actualChatId === undefined || normalizeFeishuAllowEntry(actualChatId) !== targetId)
+    ) {
+      throw new Error("Feishu read target chat is not allowed.");
+    }
+    if (
+      dmPolicy === "allowlist" &&
+      ![senderOpenId, senderId, actualChatId].some(
+        (candidate) =>
+          candidate !== undefined &&
+          isFeishuReadDirectAllowlisted({ account: params.account, directId: candidate }),
+      )
+    ) {
+      throw new Error("Feishu read target chat is not allowed.");
+    }
+    return;
+  }
   if (target.kind === "direct") {
-    const senderOpenId = readFirstString(messageRecord, ["senderOpenId", "sender_open_id"]);
-    const senderId = readFirstString(messageRecord, ["senderId", "sender_id"]);
-    const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
     const targetId = normalizeFeishuAllowEntry(target.id);
     if (
       !targetId ||
@@ -858,7 +922,6 @@ function assertFeishuFetchedMessageReadTargetAllowed(params: {
     }
     return;
   }
-  const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
   if (
     !actualChatId ||
     normalizeFeishuAllowEntry(actualChatId) !== normalizeFeishuAllowEntry(target.id)
@@ -873,6 +936,7 @@ async function assertFeishuReactionReadTargetAllowed(params: {
   accountId?: string;
   messageId: string;
   requestedTarget?: FeishuReadTarget;
+  targetSource?: FeishuReadTargetSource;
   getMessageFeishu: (params: {
     cfg: ClawdbotConfig;
     messageId: string;
@@ -883,6 +947,7 @@ async function assertFeishuReactionReadTargetAllowed(params: {
     cfg: params.cfg,
     account: params.account,
     requestedTarget: params.requestedTarget,
+    targetSource: params.targetSource,
   });
   if (
     !shouldVerifyFeishuFetchedReadTarget({

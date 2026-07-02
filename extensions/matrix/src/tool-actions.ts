@@ -182,6 +182,20 @@ async function isCurrentMatrixDirectReadAllowed(params: {
   });
 }
 
+function hasCurrentMatrixDirectReadContext(params: {
+  roomId: string;
+  toolContext?: MatrixToolActionContext;
+}): boolean {
+  const contextRoomId = normalizeMatrixReadRoomId(params.toolContext?.currentChannelId);
+  const requestedRoomId = normalizeMatrixReadRoomId(params.roomId);
+  return Boolean(
+    contextRoomId &&
+    requestedRoomId &&
+    contextRoomId === requestedRoomId &&
+    params.toolContext?.currentDirectUserId,
+  );
+}
+
 async function resolveMatrixReadRoomConfig(params: {
   accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
   roomId: string;
@@ -252,6 +266,21 @@ async function assertMatrixReadTargetAllowed(params: {
       })
     : undefined;
   if (groupPolicy === "open") {
+    if (roomId && hasCurrentMatrixDirectReadContext({ roomId, toolContext: params.toolContext })) {
+      if (
+        await isCurrentMatrixDirectReadAllowed({
+          accountConfig: params.accountConfig,
+          clientOpts: params.clientOpts,
+          roomId,
+          toolContext: params.toolContext,
+        })
+      ) {
+        return;
+      }
+      if ((params.accountConfig.dm?.policy ?? "pairing") !== "open") {
+        throw new Error("Matrix read target room is not allowed.");
+      }
+    }
     if (roomConfig?.config && !roomConfig.allowed) {
       throw new Error("Matrix read target room is not allowed.");
     }

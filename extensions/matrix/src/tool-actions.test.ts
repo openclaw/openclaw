@@ -566,6 +566,35 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
   });
 
+  it("blocks current Matrix DM reads when group policy is open but dm policy is disabled", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          actions: { messages: true },
+          dm: { policy: "disabled" as never },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
   it("allows unmatched Matrix room reads under open policy when another room is configured", async () => {
     const cfg = {
       channels: {
