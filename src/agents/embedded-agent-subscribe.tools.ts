@@ -26,6 +26,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
+import { isHostOwnedMcpMediaPath } from "./mcp-tool-result-media.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
   isToolResultError,
@@ -606,6 +607,11 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
+function isDeliverableExternalMediaUrl(mediaUrl: string): boolean {
+  const trimmed = mediaUrl.trim();
+  return HTTP_URL_RE.test(trimmed) || isHostOwnedMcpMediaPath(trimmed);
+}
+
 export function isToolResultMediaTrusted(
   toolName?: string,
   result?: unknown,
@@ -673,7 +679,7 @@ export function filterToolResultMediaUrls(
     }
     return mediaUrls;
   }
-  return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+  return mediaUrls.filter((url) => isDeliverableExternalMediaUrl(url));
 }
 
 /**
