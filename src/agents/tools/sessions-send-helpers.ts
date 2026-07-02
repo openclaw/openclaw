@@ -57,12 +57,22 @@ function buildAgentSessionLines(params: {
   requesterChannel?: string;
   targetSessionKey: string;
   targetChannel?: string;
+  includeRequesterReturnInstruction?: boolean;
 }): string[] {
+  const requesterSessionLine = params.requesterSessionKey
+    ? `Agent 1 (requester) session: ${
+        params.includeRequesterReturnInstruction
+          ? params.requesterSessionKey
+          : "<REQUESTER_SESSION>"
+      }.`
+    : undefined;
+  const requesterReturnLine =
+    params.requesterSessionKey && params.includeRequesterReturnInstruction
+      ? `Return visible replies to the requester source conversation with message(action="send", message=...). Do not call sessions_send back to the requester.`
+      : undefined;
   return [
-    // Session keys are high-cardinality (thread/run ids), so concrete values churn the
-    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
-    // low-cardinality and inform reply formatting, so they stay concrete.
-    params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
+    requesterSessionLine,
+    requesterReturnLine,
     params.requesterChannel
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
@@ -77,9 +87,10 @@ export function buildAgentToAgentMessageContext(params: {
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
-  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
-    Boolean,
-  );
+  const lines = [
+    "Agent-to-agent message context:",
+    ...buildAgentSessionLines({ ...params, includeRequesterReturnInstruction: true }),
+  ].filter(Boolean);
   return lines.join("\n");
 }
 
