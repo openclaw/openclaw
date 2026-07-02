@@ -1310,6 +1310,19 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("expands group:core to all available core tools in global tool policy", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { allow: ["group:core"] } },
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    expect(names.has("message")).toBe(true);
+    expect(names.has("cron")).toBe(true);
+  });
+
   it("expands group shorthands in global tool deny policy", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { deny: ["group:fs"] } },

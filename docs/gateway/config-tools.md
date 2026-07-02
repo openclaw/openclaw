@@ -20,17 +20,18 @@ sidebarTitle: "Tools and custom providers"
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                             |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `skill_workshop`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
-| `full`      | No restriction (same as unset)                                                                                                                    |
+| Profile     | Includes                                                                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                                                               |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `skill_workshop`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                                           |
+| `full`      | No restriction (same as unset)                                                                                                                                      |
 
 ### Tool groups
 
 | Group              | Tools                                                                                                                   |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `group:core`       | All built-in core tools (excludes provider plugins)                                                                     |
 | `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
 | `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
 | `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
@@ -41,8 +42,8 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:messaging`  | `message`                                                                                                               |
 | `group:nodes`      | `nodes`                                                                                                                 |
 | `group:agents`     | `agents_list`, `update_plan`                                                                                            |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `pdf`, `video_generate`, `tts`                                             |
+| `group:openclaw`   | Curated OpenClaw integration tools (excludes filesystem, shell runtime, and provider plugins)                           |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                            |
 
 ### MCP and plugin tools inside sandbox tool policy
