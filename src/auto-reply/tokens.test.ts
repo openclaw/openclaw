@@ -109,6 +109,44 @@ describe("isSilentReplyText", () => {
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
+
+  it("returns true for token with stray leading punctuation (#98166)", () => {
+    expect(isSilentReplyText(".NO_REPLY")).toBe(true);
+    expect(isSilentReplyText("*NO_REPLY")).toBe(true);
+    expect(isSilentReplyText("...NO_REPLY")).toBe(true);
+  });
+
+  it("returns true for token with stray trailing punctuation (#98166)", () => {
+    expect(isSilentReplyText("NO_REPLY.")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY*")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY...")).toBe(true);
+  });
+
+  it("returns true for token with punctuation on both sides (#98166)", () => {
+    expect(isSilentReplyText("*NO_REPLY*")).toBe(true);
+    expect(isSilentReplyText("\"NO_REPLY\"")).toBe(true);
+    expect(isSilentReplyText(".NO_REPLY.")).toBe(true);
+  });
+
+  it("still returns false for substantive text with stray punctuation before token", () => {
+    // "the sentinel is NO_REPLY, fyi" should remain false
+    expect(isSilentReplyText("the sentinel is NO_REPLY, fyi")).toBe(false);
+  });
+
+  it("returns true for punctuation with surrounding whitespace (#98166)", () => {
+    expect(isSilentReplyText(" .NO_REPLY")).toBe(true);
+    expect(isSilentReplyText(".NO_REPLY ")).toBe(true);
+    expect(isSilentReplyText(" .NO_REPLY ")).toBe(true);
+    expect(isSilentReplyText(" NO_REPLY. ")).toBe(true);
+    expect(isSilentReplyText(" *NO_REPLY* ")).toBe(true);
+  });
+
+  it("preserves exact custom-token matches with punctuation-edged tokens", () => {
+    // Custom tokens whose first/last character is punctuation must still match
+    expect(isSilentReplyText("*SILENT*", "*SILENT*")).toBe(true);
+    expect(isSilentReplyText("#QUIET#", "#QUIET#")).toBe(true);
+    expect(isSilentReplyText("^^MUTE^^", "^^MUTE^^")).toBe(true);
+  });
 });
 
 describe("isSilentReplyPayloadText", () => {
