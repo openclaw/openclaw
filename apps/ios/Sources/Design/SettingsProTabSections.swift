@@ -460,36 +460,43 @@ extension SettingsProTab {
 
     var notificationsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.detailStatusCard(
-                icon: "bell",
-                title: "Notifications",
-                detail: "",
-                value: self.notificationStatusText,
-                color: self.notificationStatus.color)
-
-            ProCard(radius: SettingsLayout.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        self.handleNotificationAction()
-                    } label: {
-                        Label(
-                            self.notificationActionText,
-                            systemImage: self.notificationStatus.actionIcon)
-                            .frame(maxWidth: .infinity)
+            ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 12) {
+                        ProIconBadge(systemName: "bell", color: self.notificationStatus.color)
+                        Text("Notifications")
+                            .font(.headline)
+                        Spacer(minLength: 8)
+                        ProValuePill(value: self.notificationStatusText, color: self.notificationStatus.color)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                    .padding(12)
 
-                    Text(self.notificationStatusDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Divider().padding(.leading, 54)
 
-                    Text(self.notificationRelayDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            self.handleNotificationAction()
+                        } label: {
+                            Label(
+                                self.notificationActionText,
+                                systemImage: self.notificationStatus.actionIcon)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+
+                        Text(self.notificationStatusDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(self.notificationRelayDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
