@@ -145,17 +145,14 @@ describe("describeImageWithModel", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
-        base_resp: { status_code: 0 },
-        content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ base_resp: { status_code: 0 }, content: "portal ok" }), {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "application/json" },
+        }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",

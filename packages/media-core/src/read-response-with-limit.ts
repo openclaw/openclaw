@@ -53,10 +53,21 @@ type ReadResponsePrefixResult = {
   truncated: boolean;
 };
 
+function sliceHeadUtf16Safe(value: string, end: number): string {
+  let safeEnd = Math.max(0, Math.min(value.length, end));
+  const last = value.charCodeAt(safeEnd - 1);
+  const next = value.charCodeAt(safeEnd);
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    safeEnd -= 1;
+  }
+  return value.slice(0, safeEnd);
+}
+
 async function readResponsePrefix(
   res: Response,
   maxBytes: number,
   opts?: {
+    cancelAtLimit?: boolean;
     chunkTimeoutMs?: number;
     onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
@@ -64,15 +75,7 @@ async function readResponsePrefix(
   const chunkTimeoutMs = opts?.chunkTimeoutMs;
   const body = res.body;
   if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await res.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
-    }
-    return { buffer: fallback, size: fallback.length, truncated: false };
+    return { buffer: Buffer.alloc(0), size: 0, truncated: false };
   }
 
   const reader = body.getReader();
@@ -109,6 +112,13 @@ async function readResponsePrefix(
       chunks.push(value);
       total = nextTotal;
       size = total;
+      if (opts?.cancelAtLimit && total >= maxBytes) {
+        truncated = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        break;
+      }
     }
   } finally {
     try {
@@ -163,6 +173,7 @@ export async function readResponseTextSnippet(
   const maxBytes = opts?.maxBytes ?? 8 * 1024;
   const maxChars = opts?.maxChars ?? 200;
   const prefix = await readResponsePrefix(res, maxBytes, {
+    cancelAtLimit: true,
     chunkTimeoutMs: opts?.chunkTimeoutMs,
     onIdleTimeout: opts?.onIdleTimeout,
   });
@@ -180,7 +191,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${sliceHeadUtf16Safe(collapsed, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }

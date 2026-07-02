@@ -6,6 +6,7 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { readProviderJsonResponse } from "./provider-http-errors.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -14,6 +15,7 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
+const MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
@@ -142,7 +144,18 @@ export async function minimaxUnderstandImage(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  let json: unknown;
+  try {
+    json = await readProviderJsonResponse<unknown>(res, "MiniMax VLM", {
+      maxBytes: MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES,
+    });
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("malformed JSON response")) {
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(`MiniMax VLM response was not JSON.${trace}`, { cause });
+    }
+    throw cause;
+  }
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);

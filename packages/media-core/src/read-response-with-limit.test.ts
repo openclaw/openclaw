@@ -228,6 +228,28 @@ describe("readResponseTextSnippet", () => {
     await expectReadResponseTextSnippetCase({ response, options, expected });
   });
 
+  it("truncates snippets without dangling surrogate halves", async () => {
+    const response = new Response(makeStream([new TextEncoder().encode(`${"x".repeat(2)}🙂tail`)]));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "xx…",
+    });
+  });
+
+  it("cancels snippet streams when the byte budget is exactly filled", async () => {
+    const cancel = vi.fn();
+    const response = new Response(makeStallingStream([new TextEncoder().encode("1234")], cancel));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 4, maxChars: 50 },
+      expected: "1234…",
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "applies the idle timeout while reading snippets",

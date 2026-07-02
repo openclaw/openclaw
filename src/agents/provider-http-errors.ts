@@ -8,6 +8,7 @@ export { asFiniteNumber } from "../../packages/normalization-core/src/number-coe
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { truncateUtf16Safe } from "../shared/utf16-slice.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -25,7 +26,7 @@ export function asObject(value: unknown): Record<string, unknown> | undefined {
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
 export function truncateErrorDetail(detail: string, limit = 220): string {
-  return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
+  return detail.length <= limit ? detail : `${truncateUtf16Safe(detail, limit - 1)}…`;
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */
