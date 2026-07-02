@@ -51,7 +51,7 @@ import {
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
-import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
+import { formatSandboxContainerName, resolveSandboxAgentId } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
@@ -231,9 +231,10 @@ export async function ensureSandboxBrowser(params: {
     return null;
   }
 
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
-  const name = `${params.cfg.browser.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+  const containerName = formatSandboxContainerName(
+    params.cfg.browser.containerPrefix,
+    params.scopeKey,
+  );
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
   const cdpSourceRange = normalizeOptionalString(params.cfg.browser.cdpSourceRange);

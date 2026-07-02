@@ -10,6 +10,8 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { hashTextSha256 } from "./hash.js";
 
+const DOCKER_NAME_MAX_LENGTH = 63;
+
 /** Converts an arbitrary session key into a bounded filesystem/container-safe slug. */
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
@@ -17,8 +19,43 @@ export function slugifySessionKey(value: string) {
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const base = safe.slice(0, 32) || "session";
+  const workspaceScopeHash = trimmed.match(/:workspace:([a-f0-9]{8})$/i)?.[1]?.toLowerCase();
+  // Keep the readable prefix bounded; uniqueness comes from the trailing hash of
+  // the full untruncated key. Workspace-scoped keys keep their workspace hash
+  // outside the readable-prefix truncation window so container names and
+  // workspace paths retain tenant entropy even for long agent/session keys.
+  const base =
+    (workspaceScopeHash
+      ? safe.replace(/-workspace-[a-f0-9]{8}$/i, "").slice(0, 24)
+      : safe.slice(0, 32)) || "session";
+  if (workspaceScopeHash) {
+    return `${base}-workspace-${workspaceScopeHash}-${hash}`;
+  }
   return `${base}-${hash}`;
+}
+
+/** Formats a Docker/container runtime name while preserving the unique slug suffix. */
+export function formatSandboxContainerName(prefix: string, scopeKey: string) {
+  const slug = scopeKey.trim() === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  const name = `${prefix}${slug}`;
+  if (name.length <= DOCKER_NAME_MAX_LENGTH) {
+    return name;
+  }
+
+  const suffix =
+    slug.match(/-workspace-[a-f0-9]{8}-[a-f0-9]{8}$/i)?.[0] ??
+    slug.match(/-[a-f0-9]{8}$/i)?.[0] ??
+    `-${hashTextSha256(slug).slice(0, 8)}`;
+  const slugBudget = DOCKER_NAME_MAX_LENGTH - prefix.length;
+  if (slugBudget > suffix.length) {
+    const baseBudget = slugBudget - suffix.length;
+    const base = slug.slice(0, baseBudget).replace(/-+$/g, "") || "session".slice(0, baseBudget);
+    return `${prefix}${base}${suffix}`;
+  }
+
+  const fallbackSuffix = `-${hashTextSha256(name).slice(0, 8)}`;
+  const prefixBudget = Math.max(0, DOCKER_NAME_MAX_LENGTH - fallbackSuffix.length);
+  return `${prefix.slice(0, prefixBudget).replace(/-+$/g, "")}${fallbackSuffix}`;
 }
 
 /** Resolves the per-session sandbox workspace directory under the configured sandbox root. */
@@ -29,16 +66,24 @@ export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
 }
 
 /** Resolves the registry scope key for session-, agent-, or shared-scope sandbox lifetimes. */
-export function resolveSandboxScopeKey(scope: "session" | "agent" | "shared", sessionKey: string) {
+export function resolveSandboxScopeKey(
+  scope: "session" | "agent" | "shared",
+  sessionKey: string,
+  options?: { workspaceDir?: string },
+) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") {
     return "shared";
   }
+  const workspaceDir = options?.workspaceDir?.trim();
+  const workspaceScopeSuffix = workspaceDir
+    ? `:workspace:${hashTextSha256(resolveUserPath(workspaceDir)).slice(0, 8)}`
+    : "";
   if (scope === "session") {
-    return trimmed;
+    return `${trimmed}${workspaceScopeSuffix}`;
   }
   const agentId = resolveAgentIdFromSessionKey(trimmed);
-  return `agent:${agentId}`;
+  return `agent:${agentId}${workspaceScopeSuffix}`;
 }
 
 /** Extracts the agent id represented by a sandbox scope key, when one exists. */

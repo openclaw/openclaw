@@ -88,7 +88,9 @@ async function ensureSandboxWorkspaceLayout(params: {
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
   );
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
+  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey, {
+    workspaceDir: agentWorkspaceDir,
+  });
   const sandboxWorkspaceDir =
     cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;

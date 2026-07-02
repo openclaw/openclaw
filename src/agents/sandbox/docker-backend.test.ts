@@ -2,6 +2,7 @@
 // handling for sandbox and browser containers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxConfig } from "./types.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -21,7 +22,8 @@ vi.mock("./docker.js", async () => {
   };
 });
 
-const { dockerSandboxBackendManager } = await import("./docker-backend.js");
+const { createDockerSandboxBackend, dockerSandboxBackendManager } =
+  await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -41,6 +43,55 @@ function createConfig(): OpenClawConfig {
         },
       },
       list: [],
+    },
+  };
+}
+
+function createSandboxConfig(): SandboxConfig {
+  return {
+    mode: "all",
+    backend: "docker",
+    scope: "agent",
+    workspaceAccess: "rw",
+    workspaceRoot: "~/.openclaw/sandboxes",
+    docker: {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "oc-test-",
+      workdir: "/workspace",
+      readOnlyRoot: true,
+      tmpfs: ["/tmp", "/var/tmp", "/run"],
+      network: "none",
+      capDrop: ["ALL"],
+      env: {},
+      dns: [],
+      extraHosts: [],
+      binds: ["/tmp/customer/workspace:/workspace:rw"],
+      dangerouslyAllowReservedContainerTargets: true,
+    },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
+    },
+    browser: {
+      enabled: false,
+      image: "openclaw-sandbox-browser:bookworm-slim",
+      containerPrefix: "oc-browser-",
+      network: "openclaw-sandbox-browser",
+      cdpPort: 9222,
+      vncPort: 5900,
+      noVncPort: 6080,
+      headless: true,
+      enableNoVnc: false,
+      autoStart: false,
+      autoStartTimeoutMs: 5_000,
+      allowHostControl: false,
+    },
+    tools: {},
+    prune: {
+      idleHours: 0,
+      maxAgeDays: 0,
     },
   };
 }
@@ -86,6 +137,25 @@ describe("docker sandbox backend manager", () => {
       actualConfigLabel: "openclaw-sandbox:bookworm-slim",
       configLabelMatch: true,
     });
+  });
+
+  it("forwards the resolved scope key to Docker container creation", async () => {
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+
+    await createDockerSandboxBackend({
+      sessionKey: "agent:poly:msteams:channel-1",
+      scopeKey: "agent:poly:workspace:tenant123",
+      workspaceDir: "/tmp/customer/workspace",
+      agentWorkspaceDir: "/tmp/customer/workspace",
+      cfg: createSandboxConfig(),
+    });
+
+    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:poly:msteams:channel-1",
+        scopeKey: "agent:poly:workspace:tenant123",
+      }),
+    );
   });
 
   it("matches browser runtimes against sandbox.browser.image", async () => {
