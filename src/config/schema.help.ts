@@ -1084,6 +1084,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Filesystem path to a custom CA bundle used to verify an HTTPS managed proxy endpoint certificate.",
   "proxy.loopbackMode":
     'Controls Gateway loopback control-plane routing while managed proxy mode is active: "gateway-only", "proxy", or "block".',
+  "proxy.enhancedNoProxy":
+    "When true, the global Undici dispatcher uses OpenClaw's enhanced NO_PROXY matcher, " +
+    "supporting CIDR ranges (10.0.0.0/8) and octet wildcards (192.168.*.*) that " +
+    "Undici's built-in matcher does not handle. Default is false (opt-in). " +
+    "WARNING: Enabling this changes process-wide egress routing — matching requests bypass " +
+    "the configured proxy and connect directly. Rollback: set to false or remove the setting.",
   "models.providers.*.request.tls":
     "Optional TLS settings used when connecting directly to the upstream model endpoint.",
   "models.providers.*.request.tls.ca":

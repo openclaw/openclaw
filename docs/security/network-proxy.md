@@ -24,14 +24,20 @@ You can also set the URL through the environment while `proxy.enabled: true` sta
 OPENCLAW_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
 ```
 
+When `proxy.enhancedNoProxy` is enabled, the `NO_PROXY` environment variable is also
+evaluated by OpenClaw's enhanced matcher, which adds support for CIDR ranges
+(`10.0.0.0/8`) and octet wildcards (`192.168.*.*`) that Undici's built-in
+matcher does not handle. Default is `false` (opt-in).
+
 `proxy.proxyUrl` takes precedence over `OPENCLAW_PROXY_URL`. If `proxy.enabled` is `true` but no valid URL resolves, protected commands fail startup rather than falling back to direct network access.
 
-| Key                  | Type                                 | Default        | Notes                                                                                                                                 |
-| -------------------- | ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `proxy.enabled`      | boolean                              | unset          | Must be `true` to activate routing.                                                                                                   |
-| `proxy.proxyUrl`     | string                               | unset          | `http://` or `https://` forward proxy URL. Credentials embedded in the URL are treated as sensitive and redacted from snapshots/logs. |
-| `proxy.tls.caFile`   | string                               | unset          | CA bundle for verifying an `https://` proxy endpoint signed by a private CA.                                                          |
-| `proxy.loopbackMode` | `gateway-only` \| `proxy` \| `block` | `gateway-only` | Controls loopback bypass behavior; see below.                                                                                         |
+| Key                     | Type                                 | Default        | Notes                                                                                                                                 |
+| ----------------------- | ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `proxy.enabled`         | boolean                              | unset          | Must be `true` to activate routing.                                                                                                   |
+| `proxy.proxyUrl`        | string                               | unset          | `http://` or `https://` forward proxy URL. Credentials embedded in the URL are treated as sensitive and redacted from snapshots/logs. |
+| `proxy.tls.caFile`      | string                               | unset          | CA bundle for verifying an `https://` proxy endpoint signed by a private CA.                                                          |
+| `proxy.loopbackMode`    | `gateway-only` \| `proxy` \| `block` | `gateway-only` | Controls loopback bypass behavior; see below.                                                                                         |
+| `proxy.enhancedNoProxy` | boolean                              | `false`        | Enables enhanced NO_PROXY matcher for CIDR/octet-wildcard patterns. WARNING: may bypass proxy for matching destinations.              |
 
 For managed gateway services, store the URL in config so it survives reinstall, rather than relying on foreground env:
 

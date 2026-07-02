@@ -21,12 +21,34 @@ const {
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
   class AgentLocal {
+    public dispatchCalls: Array<{ options: Record<string, unknown>; handler: Record<string, unknown> }> = [];
     constructor(public readonly options?: Record<string, unknown>) {}
+    close(cb?: () => void): void {
+      cb?.();
+    }
+    destroy(cb?: () => void): void {
+      cb?.();
+    }
+    dispatch(options: Record<string, unknown>, handler: Record<string, unknown>): boolean {
+      this.dispatchCalls.push({ options, handler });
+      return true;
+    }
   }
 
   class EnvHttpProxyAgentLocal {
+    public dispatchCalls: Array<{ options: Record<string, unknown>; handler: Record<string, unknown> }> = [];
     public readonly capturedHttpProxy = process.env.HTTP_PROXY;
     constructor(public readonly options?: Record<string, unknown>) {}
+    close(cb?: () => void): void {
+      cb?.();
+    }
+    destroy(cb?: () => void): void {
+      cb?.();
+    }
+    dispatch(options: Record<string, unknown>, handler: Record<string, unknown>): boolean {
+      this.dispatchCalls.push({ options, handler });
+      return true;
+    }
   }
 
   class ProxyAgentLocal {
@@ -69,6 +91,13 @@ const {
 
   let currentDispatcher: unknown = new AgentLocal();
 
+  // Track created dispatcher instances for dispatch routing verification.
+  const testCapturedInstances: {
+    bypassAgent: AgentLocal | null;
+    proxyAgent: EnvHttpProxyAgentLocal | null;
+  } = { bypassAgent: null, proxyAgent: null };
+  (globalThis as unknown as Record<string, unknown>).testCapturedInstances = testCapturedInstances;
+
   const getGlobalDispatcher = vi.fn(() => currentDispatcher);
   const setGlobalDispatcherLocal = vi.fn((next: unknown) => {
     currentDispatcher = next;
@@ -83,21 +112,27 @@ const {
     (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcherLocal,
   );
   const createHttp1AgentLocal = vi.fn(
-    (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new AgentLocal({
+    (options?: Record<string, unknown>, timeoutMs?: number) => {
+      const agent = new AgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
-      }),
+      });
+      testCapturedInstances.bypassAgent = agent;
+      return agent;
+    },
   );
   const createHttp1EnvHttpProxyAgentLocal = vi.fn(
-    (options?: Record<string, unknown>, timeoutMs?: number) =>
-      new EnvHttpProxyAgentLocal({
+    (options?: Record<string, unknown>, timeoutMs?: number) => {
+      const agent = new EnvHttpProxyAgentLocal({
         ...options,
         ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
         allowH2: false,
         clientFactory: "ip-safe-test-client-factory",
-      }),
+      });
+      testCapturedInstances.proxyAgent = agent;
+      return agent;
+    },
   );
   const loadUndiciGlobalDispatcherDepsLocal = vi.fn(() => ({
     Agent: AgentLocal,
@@ -143,6 +178,7 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+  matchesNoProxy: vi.fn(() => false),
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
   resolveEnvHttpProxyUrl: vi.fn(() => undefined),
 }));
@@ -160,6 +196,7 @@ vi.mock("../wsl.js", () => ({
 import { isWSL2Sync } from "../wsl.js";
 import {
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
 } from "./proxy-env.js";
@@ -176,6 +213,14 @@ let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").f
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
 let noProxySubprocessOutput = "";
+
+/** Access captured dispatcher instances from the vi.hoisted block. */
+function getTestInstances(): {
+  bypassAgent: { dispatchCalls: Array<unknown> } | null;
+  proxyAgent: { dispatchCalls: Array<unknown> } | null;
+} {
+  return (globalThis as unknown as Record<string, unknown>).testCapturedInstances as never;
+}
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeAll(async () => {
@@ -209,7 +254,10 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     ]) {
       delete env[key];
     }
-    noProxySubprocessOutput = execNodeEvalSync(source, { env, imports: ["tsx"] });
+    noProxySubprocessOutput = execNodeEvalSync(source, {
+      env,
+      imports: ["tsx"],
+    });
   });
 
   beforeEach(() => {
@@ -247,7 +295,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(Agent);
     expect(next.options).toEqual({
       bodyTimeout: 1_900_000,
@@ -269,7 +319,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     ensureGlobalUndiciStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
@@ -282,6 +334,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
 
   it("preserves explicit env proxy options when replacing EnvHttpProxyAgent dispatcher", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(matchesNoProxy).mockReturnValue(false);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
       httpProxy: "socks5://proxy.test:1080",
       httpsProxy: "socks5://proxy.test:1080",
@@ -291,7 +344,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     ensureGlobalUndiciStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.httpProxy).toBe("socks5://proxy.test:1080");
     expect(next.options?.httpsProxy).toBe("socks5://proxy.test:1080");
@@ -315,7 +370,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       ensureGlobalUndiciStreamTimeouts();
 
       expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-      const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+      const next = getCurrentDispatcher() as {
+        options?: Record<string, unknown>;
+      };
       expect(next).toBeInstanceOf(EnvHttpProxyAgent);
       expect(next.options).toEqual(
         expect.objectContaining({
@@ -361,9 +418,13 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     next.destroy();
     expect(dispatcher.closed).toBe(true);
     expect(dispatcher.destroyed).toBe(true);
-    expect(next.request({ origin: "https://request.example.test", path: "/", method: "GET" })).toBe(
-      true,
-    );
+    expect(
+      next.request({
+        origin: "https://request.example.test",
+        path: "/",
+        method: "GET",
+      }),
+    ).toBe(true);
     expect(next.dispatch({ origin: "https://example.test", path: "/", method: "GET" }, {})).toBe(
       true,
     );
@@ -615,7 +676,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     ensureGlobalUndiciStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
@@ -631,7 +694,9 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     ensureGlobalUndiciStreamTimeouts();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
@@ -659,7 +724,9 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     ensureGlobalUndiciEnvProxyDispatcher();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.allowH2).toBe(false);
   });
@@ -674,7 +741,9 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     ensureGlobalUndiciEnvProxyDispatcher();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    const next = getCurrentDispatcher() as {
+      options?: Record<string, unknown>;
+    };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options).toEqual({
       httpProxy: "socks5://proxy.test:1080",
@@ -698,7 +767,9 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
       ensureGlobalUndiciEnvProxyDispatcher();
 
       expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-      const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+      const next = getCurrentDispatcher() as {
+        options?: Record<string, unknown>;
+      };
       expect(next).toBeInstanceOf(EnvHttpProxyAgent);
       expect(next.options).toEqual({
         httpProxy: "https://proxy.example:8443",
@@ -789,6 +860,141 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("dispatch routes matching origin to bypass agent when matchesNoProxy returns true", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(matchesNoProxy).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      dispatch?: (opts: Record<string, unknown>, handler: Record<string, unknown>) => boolean;
+    };
+
+    const result = dispatcher.dispatch?.(
+      { origin: "https://no-proxy-match.example.com", path: "/", method: "GET" },
+      {},
+    );
+
+    expect(result).toBe(true);
+    expect(getTestInstances().bypassAgent?.dispatchCalls).toHaveLength(1);
+    expect(getTestInstances().proxyAgent?.dispatchCalls).toHaveLength(0);
+  });
+
+  it("dispatch routes non-matching origin to proxy agent when matchesNoProxy returns false", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(matchesNoProxy).mockReturnValue(false);
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      dispatch?: (opts: Record<string, unknown>, handler: Record<string, unknown>) => boolean;
+    };
+
+    const result = dispatcher.dispatch?.(
+      { origin: "https://proxy.example.com", path: "/", method: "GET" },
+      {},
+    );
+
+    expect(result).toBe(true);
+    expect(getTestInstances().proxyAgent?.dispatchCalls).toHaveLength(1);
+    expect(getTestInstances().bypassAgent?.dispatchCalls).toHaveLength(0);
+  });
+
+  it("bypass agent is not used when enhancedNoProxy is disabled (default)", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(matchesNoProxy).mockReturnValue(true);
+
+    // Without explicit enhancedNoProxy: true, the wrapper is bypassed
+    ensureGlobalUndiciEnvProxyDispatcher();
+    const dispatcher = getCurrentDispatcher() as {
+      dispatch?: (opts: Record<string, unknown>, handler: Record<string, unknown>) => boolean;
+    };
+
+    const result = dispatcher.dispatch?.(
+      { origin: "https://any.example.com", path: "/", method: "GET" },
+      {},
+    );
+
+    expect(result).toBe(true);
+    // With enhancedNoProxy disabled, all requests go through the proxy agent
+    expect(getTestInstances().proxyAgent?.dispatchCalls).toHaveLength(1);
+    expect(getTestInstances().bypassAgent?.dispatchCalls).toHaveLength(0);
+  });
+
+  it("dispatch respects per-origin NO_PROXY check with correct origin", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      dispatch?: (opts: Record<string, unknown>, handler: Record<string, unknown>) => boolean;
+    };
+
+    // First dispatch: non-matching
+    vi.mocked(matchesNoProxy).mockReturnValue(false);
+    dispatcher.dispatch?.({ origin: "https://proxy.example.com", path: "/", method: "GET" }, {});
+    expect(matchesNoProxy).toHaveBeenLastCalledWith("https://proxy.example.com");
+
+    // Second dispatch: matching
+    vi.mocked(matchesNoProxy).mockReturnValue(true);
+    dispatcher.dispatch?.({ origin: "https://bypass.example.com", path: "/", method: "GET" }, {});
+    expect(matchesNoProxy).toHaveBeenLastCalledWith("https://bypass.example.com");
+  });
+
+  it("handles dispatch without origin gracefully", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      dispatch?: (opts: Record<string, unknown>, handler: Record<string, unknown>) => boolean;
+    };
+
+    // If origin is not set, should fall through to proxy agent
+    const result = dispatcher.dispatch?.({ path: "/", method: "GET" }, {});
+
+    expect(result).toBe(true);
+    expect(getTestInstances().proxyAgent?.dispatchCalls).toHaveLength(1);
+    expect(getTestInstances().bypassAgent?.dispatchCalls).toHaveLength(0);
+  });
+
+  it("close/destroy on wrapped dispatcher cleans both underlying agents", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      close?: (cb?: (err?: unknown) => void) => void;
+      destroy?: (cb?: (err?: unknown) => void) => void;
+    };
+
+    expect(typeof dispatcher?.close).toBe("function");
+    expect(typeof dispatcher?.destroy).toBe("function");
+
+    // close and destroy should not throw
+    expect(() => dispatcher.close?.()).not.toThrow();
+    expect(() => dispatcher.destroy?.()).not.toThrow();
+  });
+
+  it("close/destroy on wrapped dispatcher reaches both underlying agents via callback", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+
+    ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: true });
+    const dispatcher = getCurrentDispatcher() as {
+      close?: (cb?: (err?: unknown) => void) => void;
+      destroy?: (cb?: (err?: unknown) => void) => void;
+    };
+
+    // Callback-style: both dispatchers should settle without error
+    dispatcher.close?.((err) => {
+      expect(err).toBeUndefined();
+    });
+    dispatcher.destroy?.((err) => {
+      expect(err).toBeUndefined();
+    });
   });
 });
 
@@ -882,6 +1088,49 @@ describe("forceResetGlobalDispatcher", () => {
 
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(getCurrentDispatcher()).toBe(dispatcher);
+  });
+
+  it("close/destroy on wrapped EnvHttpProxyAgent cleans both dispatchers", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    const dispatcher = getCurrentDispatcher() as {
+      close?: () => void;
+      destroy?: () => void;
+    };
+    expect(typeof dispatcher?.close).toBe("function");
+    expect(typeof dispatcher?.destroy).toBe("function");
+
+    // close and destroy should not throw
+    expect(() => dispatcher.close?.()).not.toThrow();
+    expect(() => dispatcher.destroy?.()).not.toThrow();
+  });
+
+  it("close/destroy on wrapped dispatcher reaches both underlying agents (#97234)", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    // Verify the wrapper is callable and both underlying dispatchers
+    // respond to close/destroy without throwing.
+    const dispatcher = getCurrentDispatcher() as {
+      close?: (cb?: (err?: unknown) => void) => void;
+      destroy?: (cb?: (err?: unknown) => void) => void;
+    };
+    expect(typeof dispatcher?.close).toBe("function");
+    expect(typeof dispatcher?.destroy).toBe("function");
+    // Callback-style: both dispatchers should settle without error
+    dispatcher.close?.((err) => {
+      expect(err).toBeUndefined();
+    });
+    dispatcher.destroy?.((err) => {
+      expect(err).toBeUndefined();
+    });
   });
 });
 

@@ -966,6 +966,15 @@ export async function runCli(argv: string[] = process.argv) {
     const { startProxy } = await loadProxyLifecycleModule();
     proxyHandle = await startProxy(config);
     installProxySignalHandlers();
+    // Wire the enhancedNoProxy flag from config to the global env-proxy
+    // dispatcher so both the initial bootstrap and the final gateway-run
+    // refresh apply the same setting.  The dispatcher rebuilds when the
+    // bootstrap key changes.
+    if (config?.enhancedNoProxy !== undefined) {
+      const { ensureGlobalUndiciEnvProxyDispatcher } =
+        await import("../infra/net/undici-global-dispatcher.js");
+      ensureGlobalUndiciEnvProxyDispatcher({ enhancedNoProxy: config.enhancedNoProxy });
+    }
   };
   if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
     const config = await readBestEffortCliConfig();

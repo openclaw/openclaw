@@ -5,6 +5,7 @@ import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   DiscordConfigSchema,
   SlackConfigSchema,
@@ -507,6 +508,40 @@ describe("config schema", () => {
     expect(tags).toContain("security");
     expect(tags).toContain("network");
     expect(tags).toContain("storage");
+  });
+
+  it("tags proxy.enhancedNoProxy as network/security/advanced config", () => {
+    const tags = deriveTagsForPath("proxy.enhancedNoProxy");
+    expect(tags).toContain("network");
+    expect(tags).toContain("security");
+    expect(tags).toContain("advanced");
+  });
+
+  it("accepts proxy.enhancedNoProxy: true in ProxyConfigSchema", () => {
+    const parsed = ProxyConfigSchema.parse({
+      enhancedNoProxy: true,
+    });
+    expect(parsed).toEqual({ enhancedNoProxy: true });
+  });
+
+  it("accepts proxy.enhancedNoProxy: false in ProxyConfigSchema", () => {
+    const parsed = ProxyConfigSchema.parse({
+      enhancedNoProxy: false,
+    });
+    expect(parsed).toEqual({ enhancedNoProxy: false });
+  });
+
+  it("makes proxy.enhancedNoProxy optional in ProxyConfigSchema", () => {
+    const parsed = ProxyConfigSchema.parse({});
+    expect(parsed).toEqual({});
+  });
+
+  it("rejects non-boolean proxy.enhancedNoProxy values", () => {
+    expect(() =>
+      ProxyConfigSchema.parse({
+        enhancedNoProxy: "yes",
+      }),
+    ).toThrow();
   });
 
   it("derives tools/performance tags for web fetch timeout paths", () => {
