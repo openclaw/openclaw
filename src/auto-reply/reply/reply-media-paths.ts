@@ -1,5 +1,6 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -15,7 +16,6 @@ import { logVerbose } from "../../globals.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { appendReplyMediaFailureWarning, copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -51,7 +51,7 @@ function resolveReplyMediaMaxBytes(params: {
     resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
   return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
     ? Math.floor(limitMb * 1024 * 1024)
-    : MEDIA_MAX_BYTES;
+    : maxBytesForKind("document");
 }
 
 export function createReplyMediaPathNormalizer(params: {
