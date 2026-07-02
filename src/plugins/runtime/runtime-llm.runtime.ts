@@ -497,7 +497,6 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           cacheRead: normalizedUsage?.cacheRead ?? 0,
           cacheWrite: normalizedUsage?.cacheWrite ?? 0,
           total: normalizedUsage?.total ?? 0,
-          ...(costUsd !== undefined ? { costUsd } : {}),
         },
       });
 
