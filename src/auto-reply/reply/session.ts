@@ -307,8 +307,6 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
-// A single retry was insufficient under bursts of rapid consecutive turns
-// on the same sessionKey. See the `!committed.ok` branch below.
 const MAX_SESSION_INIT_ATTEMPTS = 4;
 
 /** Initializes or reuses the reply session state for one inbound turn. */

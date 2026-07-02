@@ -1,5 +1,3 @@
-// Exercises the real (non-mocked) session-accessor functions under an
-// induced revision-conflict burst, mirroring the retry loop in session.ts.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
