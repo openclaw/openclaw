@@ -481,29 +481,63 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
+    it("allows validated host-local TXT attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
       try {
-        const outsidePath = path.join(tempDir, "secret.txt");
+        const outsidePath = path.join(tempDir, "note.txt");
         await fs.writeFile(outsidePath, "secret", "utf8");
 
-        await expect(
-          runMessageAction({
-            cfg: {
-              ...cfg,
-              tools: { fs: { workspaceOnly: false } },
-            },
-            action: "sendAttachment",
-            params: {
-              channel: "attachmentchat",
-              target: "+15551234567",
-              media: outsidePath,
-              message: "caption",
-            },
-          }),
-        ).rejects.toThrow(/Host-local media sends only allow/i);
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("note.txt");
+        expect(payload.contentType).toBe("text/plain");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("allows host-local APK attachments when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-apk-"));
+      try {
+        const outsidePath = path.join(tempDir, "build.apk");
+        await fs.writeFile(outsidePath, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("build.apk");
+        expect(payload.contentType).toBe("application/vnd.android.package-archive");
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

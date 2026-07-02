@@ -596,18 +596,34 @@ describe("loadWebMedia", () => {
     }
   });
 
-  it("rejects host-read text files outside local roots", async () => {
-    const secretFile = path.join(fixtureRoot, "secret.txt");
-    await fs.writeFile(secretFile, "secret", "utf8");
-    await expectLoadWebMediaErrorCode(
-      loadWebMedia(secretFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-        readFile: async (filePath) => await fs.readFile(filePath),
-        hostReadCapability: true,
-      }),
-      "path-not-allowed",
-    );
+  it("allows host-read TXT files", async () => {
+    const txtFile = path.join(fixtureRoot, "note.txt");
+    await fs.writeFile(txtFile, "secret", "utf8");
+    const result = await loadWebMedia(txtFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/plain");
+  });
+
+  it.each([
+    { label: "JSON", fileName: "payload.json", expectedContentType: "application/json" },
+    { label: "YAML", fileName: "config.yaml", expectedContentType: "application/yaml" },
+    { label: "YML", fileName: "config.yml", expectedContentType: "application/yaml" },
+  ])("allows host-read $label files", async ({ fileName, expectedContentType }) => {
+    const textFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(textFile, '{"ok":true}\n', "utf8");
+    const result = await loadWebMedia(textFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe(expectedContentType);
   });
 
   it("rejects renamed host-read text files even when the extension looks allowed", async () => {
@@ -648,6 +664,32 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe("text/markdown");
+  });
+
+  it.each([
+    { label: "LOG", fileName: "debug.log", content: "still text\n" },
+    {
+      label: "binary JSON lookalike",
+      fileName: "payload.json",
+      content: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    },
+    {
+      label: "binary YAML lookalike",
+      fileName: "config.yaml",
+      content: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    },
+  ])("rejects host-read $label files", async ({ fileName, content }) => {
+    const blockedFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(blockedFile, content);
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(blockedFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
   });
 
   it("rejects host-read HTML files without a separate security-boundary approval", async () => {
@@ -692,6 +734,12 @@ describe("loadWebMedia", () => {
       fileName: "archive.7z",
       contentType: "application/x-7z-compressed",
       buffer: Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4]),
+    },
+    {
+      label: "APK",
+      fileName: "archive.apk",
+      contentType: "application/vnd.android.package-archive",
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
     },
   ])("allows host-read $label files", async ({ fileName, contentType, buffer }) => {
     const archiveFile = path.join(fixtureRoot, fileName);

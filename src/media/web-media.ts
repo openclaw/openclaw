@@ -136,6 +136,9 @@ const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
+  "application/json",
+  "application/vnd.android.package-archive",
+  "application/yaml",
   "application/msword",
   "application/pdf",
   "application/vnd.ms-excel",
@@ -150,9 +153,15 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
 ]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV
-// and Markdown, so host-read needs an explicit text validation fallback.
-const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+// file-type returns undefined (no magic bytes) for plain-text formats like TXT,
+// JSON, YAML, CSV, and Markdown, so host-read needs an explicit text validation fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
+  "application/json",
+  "application/yaml",
+  "text/csv",
+  "text/markdown",
+  "text/plain",
+]);
 // HTML remains deliberately outside the host-read allowlist pending a separate
 // security-boundary review, but extension-declared .html files still need to
 // fail closed instead of falling through to binary/media sniffing.
@@ -240,6 +249,16 @@ function isValidatedHostReadText(buffer?: Buffer): boolean {
   return printableRatio > 0.95;
 }
 
+function isAllowedHostReadTextMime(mime: string | undefined, filePath?: string): boolean {
+  if (!mime) {
+    return false;
+  }
+  if (mime === "text/plain") {
+    return getFileExtension(filePath) === ".txt";
+  }
+  return HOST_READ_TEXT_PLAIN_ALIASES.has(mime);
+}
+
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
 }
@@ -277,7 +296,7 @@ function assertHostReadMediaAllowed(params: {
   // host-read should reject those instead of returning early on the sniff.
   if (declaredMime && HOST_READ_DECLARED_TEXT_MIMES.has(declaredMime)) {
     if (
-      HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
+      isAllowedHostReadTextMime(declaredMime, params.filePath) &&
       !params.sniffedContentType &&
       params.buffer &&
       isValidatedHostReadText(params.buffer)
@@ -286,7 +305,7 @@ function assertHostReadMediaAllowed(params: {
     }
     throw new LocalMediaAccessError(
       "path-not-allowed",
-      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
+      "hostReadCapability permits only validated TXT/JSON/YAML/CSV/Markdown documents for local reads",
     );
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
@@ -315,7 +334,7 @@ function assertHostReadMediaAllowed(params: {
   if (
     !sniffedMime &&
     normalizedMime &&
-    HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
+    isAllowedHostReadTextMime(normalizedMime, params.filePath) &&
     params.buffer &&
     isValidatedHostReadText(params.buffer)
   ) {
@@ -333,7 +352,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, APKs, validated TXT/JSON/YAML, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 

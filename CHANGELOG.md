@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Docs: https://docs.openclaw.ai
 
@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
+- Media/Gateway: allow validated host-local `txt/json/yaml/yml` document sends and preserve `.apk` attachments as `application/vnd.android.package-archive` instead of dropping them behind the host-read media gate.
 
 ## 2026.5.26
 
