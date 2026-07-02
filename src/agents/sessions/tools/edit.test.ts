@@ -30,6 +30,15 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function expectRejectedMessage(run: Promise<unknown>): Promise<string> {
+    try {
+      await run;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("Expected edit call to reject");
+  }
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     const filePath = await createTempFile("actual current content");
     const tool = createEditTool(tmpDir);
@@ -44,6 +53,179 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
+  });
+
+  it("shows closest candidate lines when oldText misses by indentation", async () => {
+    const filePath = await createTempFile("function run() {\n  return total + 1;\n}\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "    return total + 1;", newText: "    return total + 2;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 2:");
+    expect(message).toContain('expected: "    return total + 1;"');
+    expect(message).toContain('found:    "  return total + 1;"');
+    expect(message).toContain(
+      "hint:     indentation differs (expected 4 leading whitespace chars, found 2)",
+    );
+    expect(message).toContain("Current file contents:");
+  });
+
+  it("renders escaped oldText differences in mismatch candidates", async () => {
+    const filePath = await createTempFile(String.raw`const regex = "\\bword";` + "\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            {
+              oldText: String.raw`const regex = "\bword";`,
+              newText: String.raw`const regex = "\\bother";`,
+            },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain(String.raw`expected: "const regex = \"\\bword\";"`);
+    expect(message).toContain(String.raw`found:    "const regex = \"\\\\bword\";"`);
+    expect(message).toContain("hint:     backslash escaping differs");
+  });
+
+  it("shows closest candidate lines for indexed multi-edit mismatches", async () => {
+    const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\nconst gamma = 3;\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "const alpha = 1;", newText: "const alpha = 10;" },
+            { oldText: "  const beta = 2;", newText: "  const beta = 20;" },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Could not find edits[1]");
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 2:");
+    expect(message).toContain('expected: "  const beta = 2;"');
+    expect(message).toContain('found:    "const beta = 2;"');
+    expect(message).toContain(
+      "hint:     indentation differs (expected 2 leading whitespace chars, found 0)",
+    );
+  });
+
+  it("does not scan mismatch candidates beyond the configured line limit", async () => {
+    const firstScannedLines = Array.from(
+      { length: 2000 },
+      (_value, index) => `const filler${index + 1} = ${index + 1};`,
+    );
+    const filePath = await createTempFile(
+      [...firstScannedLines, "const nearbyNeedle = 1;"].join("\n"),
+    );
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "const nearbyNeedle = 2;", newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain("- line 2001:");
+    expect(message).not.toContain('found:    "const nearbyNeedle = 1;"');
+  });
+
+  it("bounds no-newline mismatch candidates before scoring", async () => {
+    const longLine = `const nearbyNeedle = ${"x".repeat(5000)};tail-marker`;
+    const cappedPrefix = longLine.slice(0, 141);
+    const filePath = await createTempFile(longLine);
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: `  ${cappedPrefix}`, newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 1:");
+    expect(message).toContain("hint:     indentation differs");
+    expect(message).not.toContain("tail-marker");
+  });
+
+  it("does not scan past long unterminated lines for mismatch candidates", async () => {
+    const longUnterminatedLine = `const hugeLine = ${"x".repeat(300_000)}`;
+    const filePath = await createTempFile(`${longUnterminatedLine}\nconst nearbyNeedle = 1;`);
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "const nearbyNeedle = 2;", newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain("- line 2:");
+    expect(message).not.toContain('found:    "const nearbyNeedle = 1;"');
+  });
+
+  it("does not attach candidates from the wrong edit list for mixed no-op mismatches", async () => {
+    const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "const alpha = 1;", newText: "const alpha = 1;" },
+            { oldText: "const beta = 2;", newText: "const beta = 20;" },
+            { oldText: "  const gamma = 3;", newText: "  const gamma = 30;" },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Could not find edits[2]");
+    expect(message).not.toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain('expected: "const alpha = 1;"');
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {
