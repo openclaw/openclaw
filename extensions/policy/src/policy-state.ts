@@ -168,6 +168,7 @@ export type PolicyGatewayExposureEvidence = {
     | "httpEndpoint"
     | "httpUrlFetch"
     | "nodeCommand"
+    | "nodeDenyCommand"
     | "remote"
     | "tailscale";
   readonly source: string;
@@ -2860,6 +2861,31 @@ function pushGatewayNodeCommandEvidence(
   entries: PolicyGatewayExposureEvidence[],
   nodes: Record<string, unknown>,
 ): void {
+  const deniedCommands = new Set(
+    Array.isArray(nodes.denyCommands)
+      ? nodes.denyCommands
+          .filter((command): command is string => typeof command === "string")
+          .map((command) => command.trim())
+      : [],
+  );
+  if (Array.isArray(nodes.denyCommands)) {
+    nodes.denyCommands.forEach((command, index) => {
+      if (typeof command !== "string") {
+        return;
+      }
+      const normalized = command.trim();
+      if (normalized === "") {
+        return;
+      }
+      entries.push({
+        id: `gateway-node-deny-command-${normalized}`,
+        kind: "nodeDenyCommand",
+        source: `oc://openclaw.config/gateway/nodes/denyCommands/#${index}`,
+        value: normalized,
+        command: normalized,
+      });
+    });
+  }
   if (!Array.isArray(nodes.allowCommands)) {
     return;
   }
@@ -2868,7 +2894,7 @@ function pushGatewayNodeCommandEvidence(
       return;
     }
     const normalized = command.trim();
-    if (normalized === "") {
+    if (normalized === "" || deniedCommands.has(normalized)) {
       return;
     }
     entries.push({

@@ -348,29 +348,52 @@ function gatewayNodeCommandFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const denied = new Set(
-    readStringList(policy, ["gateway", "nodes", "denyCommands"], { lowercase: false }),
-  );
-  if (denied.size === 0) {
+  if (!hasValidOptionalStringList(policy, ["gateway", "nodes", "denyCommands"])) {
     return [];
   }
-  return (evidence.gatewayExposure ?? [])
-    .filter(
-      (entry) =>
-        entry.kind === "nodeCommand" && entry.command !== undefined && denied.has(entry.command),
-    )
-    .map((entry): HealthFinding => {
+  const policyDenied = readStringList(policy, ["gateway", "nodes", "denyCommands"], {
+    lowercase: false,
+  });
+  if (policyDenied.length === 0) {
+    return [];
+  }
+  const configDenied = new Set(
+    (evidence.gatewayExposure ?? [])
+      .filter((entry) => entry.kind === "nodeDenyCommand" && entry.command !== undefined)
+      .map((entry) => entry.command),
+  );
+  return policyDenied
+    .filter((command) => !configDenied.has(command))
+    .map((command): HealthFinding => {
       return {
         checkId: CHECK_IDS.policyGatewayNodeCommandDenied,
         severity: "error",
-        message: `Gateway node command '${entry.command ?? entry.id}' is denied by policy.`,
+        message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
+        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        target: "oc://openclaw.config/gateway/nodes/denyCommands",
         requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
-        fixHint:
-          "Remove the command from gateway.nodes.allowCommands or update policy after review.",
+        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
       };
     });
+}
+
+function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return true;
+    }
+    current = current[part];
+  }
+  return (
+    current === undefined ||
+    (Array.isArray(current) &&
+      current.every((entry) => typeof entry === "string" && entry.trim() !== ""))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

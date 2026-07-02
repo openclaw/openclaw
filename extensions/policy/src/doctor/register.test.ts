@@ -6697,7 +6697,7 @@ describe("registerPolicyDoctorChecks", () => {
             requireUrlAllowlists: true,
           },
           nodes: {
-            denyCommands: ["system.run", "system.run.prepare", "system.which"],
+            denyCommands: ["system.run"],
           },
         },
       }),
@@ -6760,12 +6760,76 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/gateway-node-command-denied",
           severity: "error",
-          ocPath: "oc://openclaw.config/gateway/nodes/allowCommands/#2",
+          ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
           requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
         }),
       ]),
     );
     expect(result.findings).toHaveLength(13);
+  });
+
+  it("does not report gateway node commands denied by runtime config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        nodes: {
+          allowCommands: ["system.run"],
+          denyCommands: ["system.run"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          nodes: {
+            denyCommands: ["system.run"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports gateway node commands denied by policy without explicit extra allows", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      gateway: {
+        nodes: {},
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          nodes: {
+            denyCommands: ["system.run"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/gateway-node-command-denied",
+        severity: "error",
+        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
+      }),
+    ]);
   });
 
   it("reports omitted gateway bind when non-loopback exposure is denied", async () => {
