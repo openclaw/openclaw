@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import {
   channelPluginBlockerHitToHealthFinding,
+  channelPluginBlockerHitToRepairEffect,
   collectConfiguredChannelPluginBlockerWarnings,
   isWarningBlockedByChannelPlugin,
   scanConfiguredChannelPluginBlockers,
@@ -73,6 +74,12 @@ describe("channel plugin blockers", () => {
       target: "discord",
       requirement: "missing explicit enablement",
       fixHint: "Fix plugin enablement before relying on setup guidance for this channel.",
+    });
+    expect(channelPluginBlockerHitToRepairEffect(hits[0])).toEqual({
+      kind: "other",
+      action: "would-require-channel-plugin-activation",
+      target: "discord for channels.discord",
+      dryRunSafe: true,
     });
   });
 
