@@ -31,6 +31,9 @@ const PendingWorkStateSchema = z.object({
   delayMs: z.number().int().nonnegative(),
   electedAt: z.number().int().nonnegative(),
   dueAt: z.number().int().nonnegative(),
+  // Retry/recovery eligibility timestamp. `dueAt` remains the semantic maturity
+  // time for anchored rows; recoveryDueAt only delays redelivery attempts.
+  recoveryDueAt: z.number().int().nonnegative().optional(),
   maxChainLength: z.number().int().positive(),
   chainStartedAt: z.number().int().nonnegative().optional(),
   accumulatedChainTokens: z.number().int().nonnegative().optional(),
@@ -38,8 +41,19 @@ const PendingWorkStateSchema = z.object({
   parentRunId: z.string().optional(),
   chainId: z.string().optional(),
   traceparent: z.string().optional(),
+  // Finalization anchor + provenance. Origin identity is audit-only and must
+  // stay separate from parentRunId so same-session work never becomes orphan-
+  // reap eligible through its electing run.
+  anchorPending: z.boolean().optional(),
+  anchorFinalizedAt: z.number().int().nonnegative().optional(),
+  originRunId: z.string().optional(),
+  originTurnId: z.string().optional(),
   releasedAt: z.number().int().nonnegative().optional(),
+  deliveredAt: z.number().int().nonnegative().optional(),
   turnGrantedAt: z.number().int().nonnegative().optional(),
+  foldedAt: z.number().int().nonnegative().optional(),
+  overdueByMs: z.number().int().nonnegative().optional(),
+  disposition: z.enum(["granted", "folded-active"]).optional(),
   retryCount: z.number().int().nonnegative().optional(),
   // Consecutive PRE-drive busy-skip (requests-in-flight/draining/queue-busy)
   // count for diagnostics and rate state. DISTINCT from retryCount — a busy-skip
@@ -78,6 +92,7 @@ export type PendingContinuationWork = {
   delayMs: number;
   electedAt: number;
   dueAt: number;
+  recoveryDueAt?: number;
   maxChainLength: number;
   chainStartedAt?: number;
   accumulatedChainTokens?: number;
@@ -85,6 +100,14 @@ export type PendingContinuationWork = {
   parentRunId?: string;
   chainId?: string;
   traceparent?: string;
+  anchorPending?: boolean;
+  anchorFinalizedAt?: number;
+  originRunId?: string;
+  originTurnId?: string;
+  deliveredAt?: number;
+  foldedAt?: number;
+  overdueByMs?: number;
+  disposition?: "granted" | "folded-active";
   retryCount?: number;
   // Consecutive busy-skip count for diagnostics/rate state. Distinct from
   // retryCount (the transient-error fail-bound). Never penalizes.
@@ -119,13 +142,23 @@ function decodeWorkState(flow: TaskFlowRecord): PendingWorkState | undefined {
 
 function finalizeDeliveredWorkFlow(flow: TaskFlowRecord, state: PendingWorkState): void {
   const now = Date.now();
+  const foldedActive = state.disposition === "folded-active";
+  const { recoveryDueAt: _recoveryDueAt, ...terminalState } = state;
   const finished = finishFlow({
     flowId: flow.flowId,
     expectedRevision: flow.revision,
-    currentStep: "Same-session continuation turn granted",
+    currentStep: foldedActive
+      ? "folded-into-active-turn: recovered delivered fold note"
+      : "Same-session continuation turn granted",
     stateJson: {
-      ...state,
-      turnGrantedAt: state.turnGrantedAt ?? now,
+      ...terminalState,
+      ...(foldedActive
+        ? { foldedAt: state.foldedAt ?? now }
+        : {
+            deliveredAt: state.deliveredAt ?? now,
+            turnGrantedAt: state.turnGrantedAt ?? state.deliveredAt ?? now,
+          }),
+      disposition: state.disposition ?? (foldedActive ? "folded-active" : "granted"),
       busySkipCount: 0,
     },
     updatedAt: now,
@@ -154,6 +187,7 @@ function workToRuntime(
     delayMs: state.delayMs,
     electedAt: state.electedAt,
     dueAt: state.dueAt,
+    ...(state.recoveryDueAt !== undefined ? { recoveryDueAt: state.recoveryDueAt } : {}),
     maxChainLength: state.maxChainLength,
     ...(state.chainStartedAt !== undefined ? { chainStartedAt: state.chainStartedAt } : {}),
     ...(state.accumulatedChainTokens !== undefined
@@ -163,6 +197,16 @@ function workToRuntime(
     ...(state.parentRunId ? { parentRunId: state.parentRunId } : {}),
     ...(state.chainId ? { chainId: state.chainId } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
+    ...(state.anchorPending !== undefined ? { anchorPending: state.anchorPending } : {}),
+    ...(state.anchorFinalizedAt !== undefined
+      ? { anchorFinalizedAt: state.anchorFinalizedAt }
+      : {}),
+    ...(state.originRunId ? { originRunId: state.originRunId } : {}),
+    ...(state.originTurnId ? { originTurnId: state.originTurnId } : {}),
+    ...(state.deliveredAt !== undefined ? { deliveredAt: state.deliveredAt } : {}),
+    ...(state.foldedAt !== undefined ? { foldedAt: state.foldedAt } : {}),
+    ...(state.overdueByMs !== undefined ? { overdueByMs: state.overdueByMs } : {}),
+    ...(state.disposition !== undefined ? { disposition: state.disposition } : {}),
     ...(state.retryCount !== undefined ? { retryCount: state.retryCount } : {}),
     ...(state.busySkipCount !== undefined ? { busySkipCount: state.busySkipCount } : {}),
     ...(state.idleRetry ? { idleRetry: state.idleRetry } : {}),
@@ -181,6 +225,7 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
     delayMs: work.delayMs,
     electedAt: work.electedAt,
     dueAt: work.dueAt,
+    ...(work.recoveryDueAt !== undefined ? { recoveryDueAt: work.recoveryDueAt } : {}),
     maxChainLength: work.maxChainLength,
     ...(work.chainStartedAt !== undefined ? { chainStartedAt: work.chainStartedAt } : {}),
     ...(work.accumulatedChainTokens !== undefined
@@ -190,9 +235,15 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
     ...(work.parentRunId ? { parentRunId: work.parentRunId } : {}),
     ...(work.chainId ? { chainId: work.chainId } : {}),
     ...(work.traceparent ? { traceparent: work.traceparent } : {}),
+    ...(work.originRunId ? { originRunId: work.originRunId } : {}),
+    ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
     // #1135: a continue_work captured during an active turn parks on the
     // end-of-turn lifecycle event from the moment it is enqueued, so the marker
     // must survive the durable write (not just live on the runtime object).
+    // Anchors persist too so delayed work remains tied to the electing turn's
+    // finalization across gateway restart.
+    ...(work.anchorPending !== undefined ? { anchorPending: work.anchorPending } : {}),
+    ...(work.anchorFinalizedAt !== undefined ? { anchorFinalizedAt: work.anchorFinalizedAt } : {}),
     ...(work.busySkipCount !== undefined ? { busySkipCount: work.busySkipCount } : {}),
     ...(work.idleRetry ? { idleRetry: work.idleRetry } : {}),
   };
@@ -264,6 +315,9 @@ export function consumePendingWork(
       finalizeDeliveredWorkFlow(flow, state);
       continue;
     }
+    if (state.anchorPending === true) {
+      continue;
+    }
     const canConsumeRunning =
       flow.status === "running" &&
       options.includeRunning === true &&
@@ -276,7 +330,8 @@ export function consumePendingWork(
       state.idleRetry !== undefined &&
       (options.includeIdleRetry === true ||
         (options.includeRunningIdleRetry === true && flow.status === "running"));
-    if (now < state.dueAt && !idleRetryReady) {
+    const retryEligibleAt = Math.max(state.dueAt, state.recoveryDueAt ?? state.dueAt);
+    if (now < retryEligibleAt && !idleRetryReady) {
       continue;
     }
     const releasedAt = Date.now();
@@ -318,8 +373,75 @@ function buildFallbackWorkState(work: PendingContinuationWork): PendingWorkState
     delayMs: work.delayMs,
     electedAt: work.electedAt,
     dueAt: work.dueAt,
+    ...(work.recoveryDueAt !== undefined ? { recoveryDueAt: work.recoveryDueAt } : {}),
     maxChainLength: work.maxChainLength,
+    ...(work.anchorPending !== undefined ? { anchorPending: work.anchorPending } : {}),
+    ...(work.anchorFinalizedAt !== undefined ? { anchorFinalizedAt: work.anchorFinalizedAt } : {}),
+    ...(work.originRunId ? { originRunId: work.originRunId } : {}),
+    ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
   };
+}
+
+export function finalizeAnchorPendingWork(
+  sessionKey: string,
+  anchorFinalizedAt: number,
+  options: { activeSessionId?: string; matureOverdueAnchors?: boolean } = {},
+): number {
+  let anchored = 0;
+  for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
+    if (
+      !isContinuationWorkFlow(flow) ||
+      flow.status !== "queued" ||
+      flow.cancelRequestedAt != null
+    ) {
+      continue;
+    }
+    const state = decodeWorkState(flow);
+    if (!state || state.succeeded || state.anchorPending !== true) {
+      continue;
+    }
+    if (
+      options.activeSessionId !== undefined &&
+      (state.originTurnId === undefined || state.originTurnId === options.activeSessionId)
+    ) {
+      continue;
+    }
+    const effectiveAnchorFinalizedAt =
+      options.matureOverdueAnchors === true && anchorFinalizedAt - state.electedAt >= state.delayMs
+        ? anchorFinalizedAt - state.delayMs
+        : anchorFinalizedAt;
+    const {
+      anchorPending: _anchorPending,
+      idleRetry: _idleRetry,
+      recoveryDueAt: _recoveryDueAt,
+      ...stateWithoutPending
+    } = state;
+    const dueAt = effectiveAnchorFinalizedAt + state.delayMs;
+    const updated = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        currentStep: "Anchored same-session continuation wake to electing turn finalization",
+        stateJson: {
+          ...stateWithoutPending,
+          dueAt,
+          anchorFinalizedAt: effectiveAnchorFinalizedAt,
+        },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+        updatedAt: effectiveAnchorFinalizedAt,
+      },
+    });
+    if (updated.applied) {
+      anchored++;
+    } else {
+      log.warn(
+        `[continuation:work-anchor-not-committed] flowId=${flow.flowId} expectedRevision=${flow.revision}`,
+      );
+    }
+  }
+  return anchored;
 }
 
 /**
@@ -342,7 +464,7 @@ function finishContinuationWorkFlow(
   const state = current ? decodeWorkState(current) : undefined;
   const now = Date.now();
   const baseState: PendingWorkState = state ?? buildFallbackWorkState(work);
-  const { idleRetry: _idleRetry, ...terminalState } = baseState;
+  const { idleRetry: _idleRetry, recoveryDueAt: _recoveryDueAt, ...terminalState } = baseState;
   const finished = finishFlow({
     flowId: work.flowId,
     expectedRevision: work.expectedRevision,
@@ -373,6 +495,63 @@ export function markPendingWorkTurnGranted(work: PendingContinuationWork): boole
   });
 }
 
+export function markPendingWorkFolded(
+  work: PendingContinuationWork,
+  params: { summary: string; foldedAt: number; overdueByMs: number },
+): boolean {
+  return finishContinuationWorkFlow(work, {
+    currentStep: `folded-into-active-turn: ${params.summary}`.slice(0, 200),
+    stateExtra: {
+      disposition: "folded-active",
+      foldedAt: params.foldedAt,
+      overdueByMs: params.overdueByMs,
+      busySkipCount: 0,
+    },
+    notCommittedTag: "work-fold-not-committed",
+  });
+}
+
+export function markPendingWorkFoldDelivered(
+  work: PendingContinuationWork,
+  params: { foldedAt: number; overdueByMs: number },
+): boolean {
+  if (!work.flowId || work.expectedRevision === undefined) {
+    return false;
+  }
+  const current = getTaskFlowById(work.flowId);
+  const state = current ? decodeWorkState(current) : undefined;
+  const succeeded = { point: "optimal", durability: "durable" } as const;
+  const updated = updateFlowRecordByIdExpectedRevision({
+    flowId: work.flowId,
+    expectedRevision: work.expectedRevision,
+    patch: {
+      currentStep: "Continuation fold note delivered (durable mark)",
+      stateJson: {
+        ...(state ?? buildFallbackWorkState(work)),
+        disposition: "folded-active",
+        foldedAt: params.foldedAt,
+        overdueByMs: params.overdueByMs,
+        busySkipCount: 0,
+        succeeded,
+      },
+      updatedAt: params.foldedAt,
+    },
+  });
+  if (!updated.applied || !updated.flow) {
+    log.warn(
+      `[continuation:work-fold-deliver-mark-not-committed] flowId=${work.flowId} expectedRevision=${work.expectedRevision}`,
+    );
+    return false;
+  }
+  work.expectedRevision = updated.flow.revision;
+  work.disposition = "folded-active";
+  work.foldedAt = params.foldedAt;
+  work.overdueByMs = params.overdueByMs;
+  work.busySkipCount = 0;
+  work.succeeded = succeeded;
+  return true;
+}
+
 /**
  * Durably mark a continuation wake delivered, BEFORE the persist-gap (#990 locus-3).
  *
@@ -399,7 +578,12 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
     expectedRevision: work.expectedRevision,
     patch: {
       currentStep: "Continuation wake delivered (durable mark)",
-      stateJson: { ...(state ?? buildFallbackWorkState(work)), succeeded },
+      stateJson: {
+        ...(state ?? buildFallbackWorkState(work)),
+        deliveredAt: now,
+        disposition: "granted",
+        succeeded,
+      },
       updatedAt: now,
     },
   });
@@ -410,6 +594,7 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
     return false;
   }
   work.expectedRevision = updated.flow.revision;
+  work.deliveredAt = now;
   work.succeeded = succeeded;
   return true;
 }
@@ -438,10 +623,16 @@ export function requeuePendingWork(
     dueAt: work.dueAt,
     maxChainLength: work.maxChainLength,
   };
-  const { idleRetry: _idleRetry, ...stateWithoutIdleRetry } = baseState;
+  const {
+    idleRetry: _idleRetry,
+    recoveryDueAt: _recoveryDueAt,
+    ...stateWithoutIdleRetry
+  } = baseState;
+  const preserveSemanticDueAt = baseState.anchorFinalizedAt !== undefined;
   const nextState: PendingWorkState = {
     ...stateWithoutIdleRetry,
-    dueAt: params.dueAt,
+    dueAt: preserveSemanticDueAt ? baseState.dueAt : params.dueAt,
+    ...(preserveSemanticDueAt ? { recoveryDueAt: params.dueAt } : {}),
     ...(params.retryCount !== undefined ? { retryCount: params.retryCount } : {}),
     ...(params.busySkipCount !== undefined ? { busySkipCount: params.busySkipCount } : {}),
     ...(params.idleRetry ? { idleRetry: params.idleRetry } : {}),
@@ -563,10 +754,11 @@ export function peekSoonestQueuedWorkDueAt(
     if (!state) {
       continue;
     }
-    if (options.after !== undefined && state.dueAt <= options.after) {
+    const queuedDueAt = Math.max(state.dueAt, state.recoveryDueAt ?? state.dueAt);
+    if (options.after !== undefined && queuedDueAt <= options.after) {
       continue;
     }
-    soonest = soonest === undefined ? state.dueAt : Math.min(soonest, state.dueAt);
+    soonest = soonest === undefined ? queuedDueAt : Math.min(soonest, queuedDueAt);
   }
   return soonest;
 }
@@ -591,10 +783,11 @@ export function peekSoonestRunningWorkRecoveryDueAt(
     if (state.succeeded) {
       continue;
     }
+    const semanticOrRetryDueAt = Math.max(state.dueAt, state.recoveryDueAt ?? state.dueAt);
     const recoveryDueAt =
       state.idleRetry !== undefined
         ? flow.updatedAt + staleMs
-        : Math.max(state.dueAt, flow.updatedAt + staleMs);
+        : Math.max(semanticOrRetryDueAt, flow.updatedAt + staleMs);
     if (recoveryDueAt <= now) {
       return now;
     }
