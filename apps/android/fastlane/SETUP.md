@@ -76,7 +76,7 @@ uses it. With `ANDROID_SCREENSHOT_AVD` or `--avd <name>`, the script can boot a
 headless emulator, wait for boot completion, stabilize animation settings,
 capture screenshots, and shut down only the emulator it started.
 
-Upload metadata, release notes, and the Play AAB to the internal testing track:
+Upload metadata, release notes, and the Play AAB to the configured Google Play track:
 
 ```bash
 pnpm android:release:upload

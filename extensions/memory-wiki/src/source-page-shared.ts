@@ -16,7 +16,10 @@ type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 async function readExistingImportedSourcePage(vault: VaultRoot, pagePath: string): Promise<string> {
   try {
     return await vault.readText(pagePath);
-  } catch {
+  } catch (error) {
+    if (error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink")) {
+      return "";
+    }
     return await vault.readText(pagePath);
   }
 }

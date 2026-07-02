@@ -1784,7 +1784,13 @@ jobs:
             if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
+            if [[ "$attempt" -eq 3 ]]; then
+              break
+            fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
+            # SwiftPM can invalidate a restored binary artifact while planning.
+            # Reset so the next attempt downloads a complete dependency graph.
+            swift package --package-path apps/macos reset
             sleep $((attempt * 20))
           done
           exit 1
