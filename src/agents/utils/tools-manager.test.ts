@@ -6,6 +6,7 @@ import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const extractArchiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -14,6 +15,10 @@ vi.mock("../../infra/net/fetch-guard.js", () => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: spawnSyncMock,
+}));
+
+vi.mock("../../infra/archive.js", () => ({
+  extractArchive: extractArchiveMock,
 }));
 
 let originalAgentDir: string | undefined;
@@ -89,7 +94,7 @@ describe("ensureTool", () => {
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
-  it("extracts Windows zip downloads with trusted System32 tools", async () => {
+  it("extracts Windows zip downloads via safe archive API with size limits", async () => {
     vi.doMock("node:os", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:os")>()),
       arch: () => "x64",
@@ -99,6 +104,9 @@ describe("ensureTool", () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
+    extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
+      writeFileSync(join(params.destDir, "rg.exe"), "binary");
+    });
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
@@ -110,49 +118,21 @@ describe("ensureTool", () => {
         release: downloadRelease,
         finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.zip",
       });
-    spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-      if (command === "C:\\Windows\\System32\\tar.exe") {
-        return {
-          error: undefined,
-          status: 1,
-          stderr: Buffer.from("tar failed"),
-          stdout: Buffer.alloc(0),
-        };
-      }
-      if (command === "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe") {
-        const extractDir = args.at(-1);
-        if (!extractDir) {
-          throw new Error("expected extraction destination");
-        }
-        writeFileSync(join(extractDir, "rg.exe"), "binary");
-        return {
-          error: undefined,
-          status: 0,
-          stderr: Buffer.alloc(0),
-          stdout: Buffer.alloc(0),
-        };
-      }
-      return {
-        error: new Error(`unexpected command: ${command}`),
-        status: null,
-        stderr: Buffer.alloc(0),
-        stdout: Buffer.alloc(0),
-      };
-    });
 
     await expect(ensureTool("rg", true)).resolves.toBe(join(tempAgentDir!, "bin", "rg.exe"));
 
-    expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      2,
-      "C:\\Windows\\System32\\tar.exe",
-      expect.any(Array),
-      { stdio: "pipe" },
-    );
-    expect(spawnSyncMock).toHaveBeenNthCalledWith(
-      3,
-      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      expect.any(Array),
-      { stdio: "pipe" },
+    expect(extractArchiveMock).toHaveBeenCalledOnce();
+    expect(extractArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        archivePath: expect.stringContaining(".zip"),
+        destDir: expect.stringContaining("extract_tmp_rg_"),
+        timeoutMs: 60_000,
+        limits: expect.objectContaining({
+          maxArchiveBytes: expect.any(Number),
+          maxExtractedBytes: expect.any(Number),
+          maxEntries: expect.any(Number),
+        }),
+      }),
     );
   });
 });

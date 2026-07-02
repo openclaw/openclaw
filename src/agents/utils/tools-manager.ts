@@ -3,7 +3,7 @@
  *
  * Locates or downloads pinned helper binaries such as fd and ripgrep.
  */
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -20,11 +20,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
+import { extractArchive } from "../../infra/archive.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import {
-  getWindowsPowerShellExePath,
-  getWindowsSystem32ExePath,
-} from "../../infra/windows-install-roots.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -211,89 +208,31 @@ function findBinaryRecursively(rootDir: string, binaryFileName: string): string 
   return null;
 }
 
-function formatSpawnFailure(result: SpawnSyncReturns<Buffer>): string {
-  if (result.error?.message) {
-    return result.error.message;
-  }
-  const stderr = result.stderr?.toString().trim();
-  if (stderr) {
-    return stderr;
-  }
-  const stdout = result.stdout?.toString().trim();
-  if (stdout) {
-    return stdout;
-  }
-  return `exit status ${result.status ?? "unknown"}`;
-}
-
-function runExtractionCommand(command: string, args: string[]): string | null {
-  const result = spawnSync(command, args, { stdio: "pipe" });
-  if (!result.error && result.status === 0) {
-    return null;
-  }
-  return `${command}: ${formatSpawnFailure(result)}`;
-}
-
-function extractTarGzArchive(archivePath: string, extractDir: string, assetName: string): void {
-  const failure = runExtractionCommand("tar", ["xzf", archivePath, "-C", extractDir]);
-  if (failure) {
-    throw new Error(`Failed to extract ${assetName}: ${failure}`);
-  }
-}
-
-function getWindowsTarCommand(): string {
-  return getWindowsSystem32ExePath("tar.exe");
-}
-
-function extractZipArchive(archivePath: string, extractDir: string, assetName: string): void {
-  const failures: string[] = [];
-
-  if (platform() === "win32") {
-    // Windows ships bsdtar as tar.exe, which supports zip files. Prefer the
-    // System32 binary over Git Bash's GNU tar, which does not handle zip archives.
-    const tarFailure = runExtractionCommand(getWindowsTarCommand(), [
-      "xf",
+async function extractArchiveSafe(
+  archivePath: string,
+  extractDir: string,
+  assetName: string,
+): Promise<void> {
+  // Use the safe archive extraction from @openclaw/fs-safe which enforces
+  // size limits (archive, extracted, per-entry), entry count caps, and
+  // symlink/hardlink traversal protection. Without these bounds a malicious
+  // archive (ZIP bomb) could exhaust disk or memory during extraction.
+  try {
+    await extractArchive({
       archivePath,
-      "-C",
-      extractDir,
-    ]);
-    if (!tarFailure) {
-      return;
-    }
-    failures.push(tarFailure);
-
-    const script =
-      "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-    const powershellFailure = runExtractionCommand(getWindowsPowerShellExePath(), [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      script,
-      archivePath,
-      extractDir,
-    ]);
-    if (!powershellFailure) {
-      return;
-    }
-    failures.push(powershellFailure);
-  } else {
-    const unzipFailure = runExtractionCommand("unzip", ["-q", archivePath, "-d", extractDir]);
-    if (!unzipFailure) {
-      return;
-    }
-    failures.push(unzipFailure);
-
-    const tarFailure = runExtractionCommand("tar", ["xf", archivePath, "-C", extractDir]);
-    if (!tarFailure) {
-      return;
-    }
-    failures.push(tarFailure);
+      destDir: extractDir,
+      timeoutMs: 60_000,
+      limits: {
+        maxArchiveBytes: 100 * 1024 * 1024,
+        maxExtractedBytes: 500 * 1024 * 1024,
+        maxEntries: 1000,
+      },
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
-
-  throw new Error(`Failed to extract ${assetName}: ${failures.join("; ")}`);
 }
 
 // Download and install a tool
@@ -338,10 +277,8 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   mkdirSync(extractDir, { recursive: true });
 
   try {
-    if (assetName.endsWith(".tar.gz")) {
-      extractTarGzArchive(archivePath, extractDir, assetName);
-    } else if (assetName.endsWith(".zip")) {
-      extractZipArchive(archivePath, extractDir, assetName);
+    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
+      await extractArchiveSafe(archivePath, extractDir, assetName);
     } else {
       throw new Error(`Unsupported archive format: ${assetName}`);
     }
