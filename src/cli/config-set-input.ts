@@ -150,7 +150,9 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     fs.closeSync(fd);
   }
   if (bytesRead > MAX_BATCH_FILE_BYTES) {
-    throw new Error(`Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES} bytes)`);
+    throw new Error(
+      `Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES.toLocaleString("en-US")} bytes / 1 MB)`,
+    );
   }
   const raw = buf.toString("utf8", 0, bytesRead);
   return parseBatchEntries(raw, "--batch-file");

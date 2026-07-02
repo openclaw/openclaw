@@ -2747,7 +2747,10 @@ export function registerConfigCli(program: Command) {
       false,
     )
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
-    .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
+    .option(
+      "--batch-file <path>",
+      "Batch mode: read JSON array of set operations from file (max 1 MB)",
+    )
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
       await runConfigSet({
         path,
