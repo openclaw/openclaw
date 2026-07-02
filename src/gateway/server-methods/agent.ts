@@ -13,6 +13,7 @@ import {
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -640,9 +641,8 @@ type GatewayAgentTaskTrackingMode = "cli" | "plugin_subagent" | "none";
 function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
   sessionKey?: string;
-  acpTurnSource?: "manual_spawn";
   inputProvenance?: InputProvenance;
-  log: GatewayRequestContext["logGateway"];
+  confirmedAcpManualSpawn?: boolean;
 }): GatewayAgentTaskTrackingMode {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
@@ -650,24 +650,45 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
     return "plugin_subagent";
   }
-  if (
-    params.acpTurnSource === "manual_spawn" &&
-    resolveCanUseInternalRuntimeHandoff(params.client) &&
-    isAcpSessionKey(params.sessionKey)
-  ) {
-    try {
-      if (readAcpSessionMeta({ sessionKey: params.sessionKey }) != null) {
-        return "none";
-      }
-    } catch (err) {
-      params.log.warn(
-        `failed to read ACP session metadata for ${params.sessionKey}; falling back to cli task tracking: ${formatForLog(
-          err,
-        )}`,
-      );
-    }
+  if (params.confirmedAcpManualSpawn) {
+    return "none";
   }
   return "cli";
+}
+
+function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return (
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function isConfirmedAcpManualSpawnTaskOwner(params: {
+  acpTurnSource?: string;
+  sessionKey?: string;
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+}): boolean {
+  const sessionKey = params.sessionKey;
+  if (
+    !isTrustedBackendAcpSpawnClient(params.client) ||
+    params.acpTurnSource !== "manual_spawn" ||
+    sessionKey == null ||
+    !isAcpSessionKey(sessionKey)
+  ) {
+    return false;
+  }
+  try {
+    return readAcpSessionMeta({ sessionKey }) != null;
+  } catch (err) {
+    params.logGateway.warn(
+      `failed to read ACP session metadata for manual-spawn task tracking ${sessionKey}; falling back to cli task tracking: ${formatForLog(
+        err,
+      )}`,
+    );
+    return false;
+  }
 }
 
 async function registerPluginSubagentRunFromGateway(params: {
@@ -1953,6 +1974,10 @@ export const agentHandlers: GatewayRequestHandlers = {
                 policy: resetPolicy,
               })
           : undefined;
+        const visibleRequest =
+          request.bootstrapContextRunKind !== "cron" &&
+          request.bootstrapContextRunKind !== "heartbeat" &&
+          !request.internalEvents?.length;
         const resolveFailedSessionTranscriptMissingForEntry = (
           candidateEntry: SessionEntry | undefined,
         ) => {
@@ -2187,6 +2212,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             : freshSessionId;
           const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
           const shouldClearReusedTerminalState =
+            visibleRequest &&
             !freshRotatedSessionId &&
             freshCanReuseSession &&
             (freshEntry?.status === "failed" ||
@@ -2709,9 +2735,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
         client,
         sessionKey: resolvedSessionKey,
-        acpTurnSource: request.acpTurnSource,
         inputProvenance,
-        log: context.logGateway,
+        confirmedAcpManualSpawn: isConfirmedAcpManualSpawnTaskOwner({
+          acpTurnSource: request.acpTurnSource,
+          sessionKey: resolvedSessionKey,
+          client,
+          logGateway: context.logGateway,
+        }),
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";

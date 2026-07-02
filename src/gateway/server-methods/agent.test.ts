@@ -520,6 +520,14 @@ function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+function deviceTokenBackendGatewayClient(): AgentHandlerArgs["client"] {
+  const client = requireValue(backendGatewayClient(), "expected backend client");
+  return {
+    ...client,
+    isDeviceTokenAuth: true,
+  } as AgentHandlerArgs["client"];
+}
+
 async function waitForAgentCommandCall<
   T extends AgentCommandCall = AgentCommandCall,
 >(): Promise<T> {
@@ -1821,6 +1829,78 @@ describe("gateway agent handler", () => {
             endedAt: undefined,
             runtimeMs: undefined,
             abortedLastRun: undefined,
+          });
+        },
+      );
+    },
+  );
+
+  it.each(["failed", "timeout", "killed"] as const)(
+    "preserves terminal %s state during internal heartbeat session reuse",
+    async (status) => {
+      const sessionId = `${status}-heartbeat-session`;
+      await withTempDir(
+        { prefix: `openclaw-gateway-terminal-${status}-heartbeat-` },
+        async (root) => {
+          const sessionsDir = `${root}/sessions`;
+          await fs.mkdir(sessionsDir, { recursive: true });
+          await fs.writeFile(`${sessionsDir}/${sessionId}.jsonl`, "", "utf8");
+          mocks.loadSessionEntry.mockReturnValue({
+            cfg: {},
+            storePath: `${sessionsDir}/sessions.json`,
+            entry: {
+              sessionId,
+              status,
+              startedAt: 100,
+              endedAt: 200,
+              runtimeMs: 100,
+              abortedLastRun: true,
+              updatedAt: Date.now(),
+            },
+            canonicalKey: "agent:main:main",
+          });
+          let capturedEntry: Record<string, unknown> | undefined;
+          mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+            const store: Record<string, Record<string, unknown>> = {
+              "agent:main:main": {
+                sessionId,
+                status,
+                startedAt: 100,
+                endedAt: 200,
+                runtimeMs: 100,
+                abortedLastRun: true,
+                updatedAt: Date.now(),
+              },
+            };
+            const result = await updater(store);
+            capturedEntry = result as Record<string, unknown>;
+            return result;
+          });
+          mocks.agentCommand.mockResolvedValue({
+            payloads: [{ text: "ok" }],
+            meta: { durationMs: 100 },
+          });
+
+          await invokeAgent(
+            {
+              message: "heartbeat",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              bootstrapContextRunKind: "heartbeat",
+              idempotencyKey: `preserve-terminal-${status}-heartbeat`,
+            },
+            { reqId: `preserve-terminal-${status}-heartbeat` },
+          );
+          const call = await waitForAgentCommandCall();
+
+          expect(call.sessionId).toBe(sessionId);
+          expectRecordFields(capturedEntry, {
+            sessionId,
+            status,
+            startedAt: 100,
+            endedAt: 200,
+            runtimeMs: 100,
+            abortedLastRun: true,
           });
         },
       );
@@ -4947,6 +5027,41 @@ describe("gateway agent handler", () => {
         });
         await waitForAssertion(() => {
           expectRecordFields(findTaskByRunId("acp-operator-write"), {
+            runtime: "cli",
+            childSessionKey,
+          });
+        });
+      });
+    });
+
+    it("keeps CLI tracking when a device-token backend caller sets acpTurnSource", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-acp-device-token-" }, async (root) => {
+        useTestStateDir(root);
+        resetTaskRegistryForTests();
+        const childSessionKey = "agent:main:acp:child-device-token";
+        mockAcpChildSessionEntry(childSessionKey);
+        mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "device-token acp manual spawn",
+            sessionKey: childSessionKey,
+            acpTurnSource: "manual_spawn",
+            idempotencyKey: "acp-device-token",
+          },
+          { reqId: "acp-device-token", client: deviceTokenBackendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId: "acp-device-token",
+          childSessionKey,
+        });
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("acp-device-token"), {
             runtime: "cli",
             childSessionKey,
           });

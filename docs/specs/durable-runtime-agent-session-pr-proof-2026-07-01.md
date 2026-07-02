@@ -134,6 +134,29 @@ idempotency keys`). Later proof-doc updates are docs-only.
   - 2 files, 262 tests passed.
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/fan-in.test.ts src/durable/subagent.test.ts src/durable/agent-turn.test.ts`
   - 3 files, 14 tests passed.
+- Reviewer follow-up validation after restoring current-main ACP and terminal
+  session invariants, rerun on 2026-07-03:
+  - ACP manual-spawn CLI task suppression is now limited to the trusted
+    in-process `gateway-client` backend caller, excludes device-token auth, and
+    still requires persisted ACP child metadata. Device-token backend and
+    operator-write ACP-shaped calls keep CLI task tracking.
+  - Reused failed/timeout/killed terminal session state is cleared only for
+    visible user requests. Heartbeat internal reuse preserves terminal status,
+    timing, and abort markers.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/agent.test.ts`
+    - 2 files, 358 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-chat.agent-events.test.ts`
+    - 1 file, 99 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts src/gateway/server-methods/chat-history-omission-logging.test.ts src/gateway/session-utils.fs.test.ts`
+    - 7 files, 293 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/system-prompt.test.ts`
+    - 1 file, 92 tests passed.
+  - `node scripts/generate-docs-map.mjs --check`
+    - passed with `docs/docs_map.md is up to date`.
+  - `./node_modules/.bin/oxfmt --check --threads=1 src/gateway/server-methods/agent.ts src/gateway/server-methods/agent.test.ts`
+    - passed.
+  - `git diff --check`
+    - passed.
 
 ## Typecheck and Schema Proof
 
