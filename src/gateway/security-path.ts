@@ -101,12 +101,12 @@ export function canonicalizePathVariant(pathname: string): string {
 }
 
 function prefixMatch(pathname: string, prefix: string): boolean {
-  return (
-    pathname === prefix ||
-    pathname.startsWith(`${prefix}/`) ||
-    // Fail closed when malformed %-encoding follows the protected prefix.
-    pathname.startsWith(`${prefix}%`)
-  );
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function prefixMatchMalformedRawPath(pathname: string, prefix: string): boolean {
+  // Fail closed when malformed %-encoding follows the protected prefix.
+  return prefixMatch(pathname, prefix) || pathname.startsWith(`${prefix}%`);
 }
 
 export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
@@ -152,7 +152,9 @@ export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly s
   if (!canonical.malformedEncoding) {
     return false;
   }
-  return normalizedPrefixes.some((prefix) => prefixMatch(canonical.rawNormalizedPath, prefix));
+  return normalizedPrefixes.some((prefix) =>
+    prefixMatchMalformedRawPath(canonical.rawNormalizedPath, prefix),
+  );
 }
 
 export const PROTECTED_PLUGIN_ROUTE_PREFIXES = ["/api/channels"] as const;
