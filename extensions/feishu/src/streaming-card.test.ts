@@ -69,15 +69,15 @@ describe("FeishuStreamingSession", () => {
         let status = 200;
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
             release,
           };
         }
@@ -102,11 +102,10 @@ describe("FeishuStreamingSession", () => {
           }
         }
         return {
-          response: {
-            ok,
+          response: new Response(JSON.stringify({ code: 0, msg: "ok" }), {
             status,
-            json: async () => ({ code: 0, msg: "ok" }),
-          },
+            headers: { "Content-Type": "application/json" },
+          }),
           release,
         };
       },
@@ -125,19 +124,22 @@ describe("FeishuStreamingSession", () => {
           const token = `token-${authTokens.length + 1}`;
           authTokens.push(token);
           return {
-            response: { ok: true, json: async () => resolveAuthJson(token) },
+            response: new Response(JSON.stringify(resolveAuthJson(token)), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
             release,
           };
         }
         return {
-          response: {
-            ok: true,
-            json: async () => ({
+          response: new Response(
+            JSON.stringify({
               code: 0,
               msg: "ok",
               data: { card_id: `card-${authTokens.length}` },
             }),
-          },
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
           release,
         };
       },
@@ -385,15 +387,15 @@ describe("FeishuStreamingSession", () => {
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
             release,
           };
         }
@@ -642,5 +644,44 @@ describe("resolveStreamingCardSendMode", () => {
         replyInThread: true,
       }),
     ).toBe("create");
+  });
+});
+
+describe("Feishu streaming card oversized response rejection", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rejects oversized token responses and cancels the stream", async () => {
+    let canceled = false;
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const client = { im: { message: { create: vi.fn() } } } as never;
+    const session = new FeishuStreamingSession(client, {
+      appId: "test-id",
+      appSecret: "test-secret",
+    });
+    const error = await session.start("chat_id", "open_id").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("feishu.streamingCard.token");
+    expect(canceled).toBe(true);
   });
 });
