@@ -432,6 +432,130 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toStrictEqual([]);
   });
 
+  it("does not let unreadable provider tool parameters abort sibling normalization", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const unreadable = {
+      name: "fuzzplugin_unreadable",
+      description: "",
+    };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const healthy = {
+      name: "healthy_union",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            anyOf: [
+              { const: "append", type: "string" },
+              { const: "replace", type: "string" },
+            ],
+          },
+        },
+      },
+    };
+    const tools = [unreadable, healthy] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]).toBe(unreadable);
+    expect(normalized[1]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["append", "replace"],
+        },
+      },
+    });
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools,
+      }),
+    ).toEqual([
+      {
+        toolName: "fuzzplugin_unreadable",
+        toolIndex: 0,
+        violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+      },
+      {
+        toolName: "healthy_union",
+        toolIndex: 1,
+        violations: ["healthy_union.parameters.properties.mode.anyOf"],
+      },
+    ]);
+  });
+
+  it("normalizes non-configurable provider tool parameters on cloned tools", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const immutableTool = {
+      name: "fuzzplugin_immutable",
+      description: "",
+    };
+    Object.defineProperty(immutableTool, "parameters", {
+      enumerable: true,
+      configurable: false,
+      writable: false,
+      value: {
+        type: "object",
+        properties: {
+          mode: {
+            anyOf: [
+              { const: "append", type: "string" },
+              { const: "replace", type: "string" },
+            ],
+          },
+        },
+      },
+    });
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [immutableTool] as never,
+    });
+
+    expect(normalized[0]).not.toBe(immutableTool);
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["append", "replace"],
+        },
+      },
+    });
+  });
+
   it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
 

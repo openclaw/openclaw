@@ -68,14 +68,8 @@ export function normalizeGeminiToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    return {
-      ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
-    };
+  return normalizeProviderToolParameters(ctx, {
+    normalize: cleanSchemaForGemini,
   });
 }
 
@@ -86,16 +80,169 @@ export function inspectGeminiToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
+  return inspectProviderToolSchemasForUnsupportedKeywords(ctx, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS);
+}
+
+type ProviderToolEntry =
+  | {
+      readonly ok: true;
+      readonly tool: AnyAgentTool;
+      readonly toolIndex: number;
+    }
+  | {
+      readonly ok: false;
+      readonly diagnostic: ProviderToolSchemaDiagnostic;
+    };
+
+function readProviderToolEntries(tools: readonly AnyAgentTool[]): ProviderToolEntry[] {
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return [
+      {
+        ok: false,
+        diagnostic: {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0] is unreadable"],
+        },
+      },
+    ];
+  }
+
+  const entries: ProviderToolEntry[] = [];
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    try {
+      entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
+    } catch {
+      entries.push({
+        ok: false,
+        diagnostic: {
+          toolName: `tool[${toolIndex}]`,
+          toolIndex,
+          violations: [`tool[${toolIndex}] is unreadable`],
+        },
+      });
+    }
+  }
+  return entries;
+}
+
+function readProviderToolField<TField extends "name" | "parameters">(
+  tool: AnyAgentTool,
+  field: TField,
+): { readonly ok: true; readonly value: AnyAgentTool[TField] } | { readonly ok: false } {
+  try {
+    return { ok: true, value: tool[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readProviderToolName(
+  tool: AnyAgentTool,
+  toolIndex: number,
+): { readonly toolName: string; readonly violations: string[] } {
+  const nameRead = readProviderToolField(tool, "name");
+  const toolName =
+    nameRead.ok && typeof nameRead.value === "string" && nameRead.value
+      ? nameRead.value
+      : `tool[${toolIndex}]`;
+  return {
+    toolName,
+    violations: nameRead.ok ? [] : [`${toolName}.name is unreadable`],
+  };
+}
+
+function replaceProviderToolParameters(
+  tool: AnyAgentTool,
+  parameters: AnyAgentTool["parameters"],
+): AnyAgentTool {
+  const next = Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool;
+  const descriptors = Object.getOwnPropertyDescriptors(tool);
+  descriptors.parameters = {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: parameters,
+  };
+  Object.defineProperties(next, descriptors);
+  return next;
+}
+
+function normalizeProviderToolParameters(
+  ctx: ProviderNormalizeToolSchemasContext,
+  options: {
+    readonly normalize: (parameters: unknown) => unknown;
+    readonly normalizeMissing?: () => unknown;
+  },
+): AnyAgentTool[] {
+  return readProviderToolEntries(ctx.tools).flatMap((entry) => {
+    if (!entry.ok) {
       return [];
     }
-    return [{ toolName: tool.name, toolIndex, violations }];
+    const { tool } = entry;
+    const parametersRead = readProviderToolField(tool, "parameters");
+    if (!parametersRead.ok) {
+      return [tool];
+    }
+    if (parametersRead.value == null && options.normalizeMissing) {
+      return replaceProviderToolParameters(
+        tool,
+        options.normalizeMissing() as AnyAgentTool["parameters"],
+      );
+    }
+    if (!parametersRead.value || typeof parametersRead.value !== "object") {
+      return tool;
+    }
+    try {
+      const parameters = options.normalize(parametersRead.value);
+      return parameters === parametersRead.value
+        ? tool
+        : replaceProviderToolParameters(tool, parameters as AnyAgentTool["parameters"]);
+    } catch {
+      return [tool];
+    }
+  });
+}
+
+function inspectProviderToolSchemasForUnsupportedKeywords(
+  ctx: ProviderNormalizeToolSchemasContext,
+  unsupportedKeywords: ReadonlySet<string>,
+): ProviderToolSchemaDiagnostic[] {
+  return readProviderToolEntries(ctx.tools).flatMap((entry) => {
+    if (!entry.ok) {
+      return [entry.diagnostic];
+    }
+    const { tool, toolIndex } = entry;
+    const { toolName, violations: descriptorViolations } = readProviderToolName(tool, toolIndex);
+    const parametersRead = readProviderToolField(tool, "parameters");
+    if (!parametersRead.ok) {
+      return [
+        {
+          toolName,
+          toolIndex,
+          violations: [...descriptorViolations, `${toolName}.parameters is unreadable`],
+        },
+      ];
+    }
+    const schemaPath = `${toolName}.parameters`;
+    let violations: string[];
+    try {
+      violations = findUnsupportedSchemaKeywords(
+        parametersRead.value,
+        schemaPath,
+        unsupportedKeywords,
+      );
+    } catch {
+      violations = [`${schemaPath} is unreadable`];
+    }
+    const allViolations = [...descriptorViolations, ...violations];
+    if (allViolations.length === 0) {
+      return [];
+    }
+    return [{ toolName, toolIndex, violations: allViolations }];
   });
 }
 
@@ -109,20 +256,9 @@ export function normalizeOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
-  return ctx.tools.map((tool) => {
-    if (tool.parameters == null) {
-      return {
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
-      };
-    }
-    if (typeof tool.parameters !== "object") {
-      return tool;
-    }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
-    };
+  return normalizeProviderToolParameters(ctx, {
+    normalize: normalizeOpenAIStrictCompatSchema,
+    normalizeMissing: () => normalizeOpenAIStrictCompatSchema({}),
   });
 }
 
@@ -504,17 +640,8 @@ export function normalizeDeepSeekToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
-    }
-    const parameters = normalizeDeepSeekSchema(tool.parameters);
-    return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
+  return normalizeProviderToolParameters(ctx, {
+    normalize: normalizeDeepSeekSchema,
   });
 }
 
@@ -525,17 +652,10 @@ export function inspectDeepSeekToolSchemas(
   /** Provider tool-schema inspection context containing the active tool list. */
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  return inspectProviderToolSchemasForUnsupportedKeywords(
+    ctx,
+    DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
+  );
 }
 
 /**
