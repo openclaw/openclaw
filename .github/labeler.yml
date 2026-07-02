@@ -58,6 +58,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: silmaril-firewall":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/silmaril-firewall/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
