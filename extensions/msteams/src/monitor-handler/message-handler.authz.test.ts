@@ -954,4 +954,136 @@ describe("msteams monitor handler authz", () => {
     expect(ctx.SupplementalContext).toEqual({});
     expect(ctx.BodyForAgent).toBe("Current message");
   });
+
+  it("allows group chat messages when groupAllowFrom contains the conversation id", async () => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["19:group@thread.tacv2"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity());
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("allows channel messages when groupAllowFrom contains the channel conversation id", async () => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["19:channel@thread.tacv2"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createChannelThreadActivity());
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("strips the ;messageid= suffix before matching groupAllowFrom conversation ids", async () => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["19:group@thread.tacv2"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-suffix",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        conversation: {
+          id: "19:group@thread.tacv2;messageid=1782122147084",
+          conversationType: "groupChat",
+        },
+      }),
+    );
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:group@thread.tacv2");
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("supports legacy @thread.skype conversation ids in groupAllowFrom", async () => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["19:legacy@thread.skype"],
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-skype",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        conversation: {
+          id: "19:legacy@thread.skype;messageid=123456789",
+          conversationType: "groupChat",
+        },
+      }),
+    );
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:legacy@thread.skype");
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("does not allow DMs by conversation id in allowFrom", async () => {
+    resetThreadMocks();
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["19:dm@thread.tacv2"],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerPersonalActivity("msg-dm-conv"));
+
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+  });
 });

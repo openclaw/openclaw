@@ -18,6 +18,7 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
+const MSTEAMS_CONVERSATION_ID_KIND = "plugin:msteams-conversation-id" as const;
 const msteamsIngressIdentity = {
   key: "sender-id",
   normalize: normalizeIngressValue,
@@ -29,14 +30,28 @@ const msteamsIngressIdentity = {
       normalizeSubject: normalizeIngressValue,
       dangerous: true,
     },
+    {
+      key: "conversation-id",
+      kind: MSTEAMS_CONVERSATION_ID_KIND,
+      normalizeEntry: normalizeAllowlistConversationId,
+      normalizeSubject: normalizeAllowlistConversationId,
+    },
   ],
   isWildcardEntry: (entry) => normalizeIngressValue(entry) === "*",
   resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `msteams-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "id"}`,
+    `msteams-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : fieldKey === "conversation-id" ? "conversation-id" : "id"}`,
 } satisfies StableChannelIngressIdentityParams;
 
 function normalizeIngressValue(value?: string | null): string | null {
   return normalizeOptionalLowercaseString(value) ?? null;
+}
+
+function normalizeAllowlistConversationId(value?: string | null): string | null {
+  const trimmed = normalizeOptionalLowercaseString(value);
+  if (!trimmed) {
+    return null;
+  }
+  return normalizeMSTeamsConversationId(trimmed);
 }
 
 export async function resolveMSTeamsSenderAccess(params: {
@@ -84,7 +99,10 @@ export async function resolveMSTeamsSenderAccess(params: {
     readStoreAllowFrom: pairing.readAllowFromStore,
     subject: {
       stableId: senderId,
-      aliases: { "sender-name": senderName },
+      aliases: {
+        "sender-name": senderName,
+        ...(!isDirectMessage ? { "conversation-id": conversationId } : {}),
+      },
     },
     conversation: {
       kind: isDirectMessage ? "direct" : convType === "channel" ? "channel" : "group",

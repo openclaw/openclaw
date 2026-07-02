@@ -153,7 +153,7 @@ Disable with:
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
-- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Conversation IDs may include the `19:...` form with either `@thread.tacv2` or `@thread.skype`; any `;messageid=...` runtime suffix is ignored.
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
