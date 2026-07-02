@@ -1491,6 +1491,37 @@ export async function dispatchReplyFromConfig(
         queueDepth: 1,
         staleActiveProgressAbortMs: visibleReplyRecoveryWaitMs,
       });
+    // A committed session reset/rotation replaces the store entry's sessionId,
+    // but the reply registry is keyed by the stable session key, so a leftover
+    // operation registered under the archived sessionId keeps the slot latched.
+    // Without this check the first post-reset visible turn (including the reset
+    // acknowledgement) waits out the full stuck-session abort window before the
+    // recovery one-shot reclaims the slot. An operation whose sessionId no
+    // longer matches the freshly-resolved store entry is provably superseded;
+    // a legitimately concurrent fresh operation carries the current sessionId
+    // and is never touched, and terminal-recovery operations stay protected
+    // exactly as in the terminal-session force-clear below.
+    if (phase === "dispatch" && replyTurnKind === "visible") {
+      const activeBeforeAdmission = replyRunRegistry.get(dispatchOperationSessionKey);
+      if (activeBeforeAdmission && !activeBeforeAdmission.terminalRecovery) {
+        const currentSessionId = resolveSessionStoreLookup(
+          { ...ctx, SessionKey: dispatchOperationSessionKey },
+          cfg,
+        ).entry?.sessionId;
+        if (
+          currentSessionId &&
+          activeBeforeAdmission.sessionId !== currentSessionId &&
+          forceClearReplyRunBySessionId(
+            activeBeforeAdmission.sessionId,
+            new Error("clearing stale reply operation from a rotated session"),
+          )
+        ) {
+          logVerbose(
+            `dispatch-from-config: cleared stale reply operation from rotated session for ${dispatchOperationSessionKey}`,
+          );
+        }
+      }
+    }
     let admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,

@@ -9,6 +9,7 @@ import {
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
+  sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -50,6 +51,97 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     vi.useRealTimers();
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
+    sessionStoreMocks.currentEntry = undefined;
+  });
+
+  it("clears a leftover reply operation from a rotated session without waiting for recovery", async () => {
+    const sessionKey = "agent:main:telegram:direct:rotated-session-leftover";
+    const staleOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "archived-session",
+      resetTriggered: false,
+    });
+    staleOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = { sessionId: "rotated-session", updatedAt: Date.now() };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "post-reset reply" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "first post-reset turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(staleOperation.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
+  });
+
+  it("does not clear an active reply operation whose session id matches the store entry", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:current-session-active";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "second telegram direct turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(activeOperation.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
+    activeOperation.complete();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(activeOperation.result).toMatchObject({ kind: "completed" });
   });
 
   it("recovers stale visible reply work and retries dispatch admission", async () => {
