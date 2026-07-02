@@ -48,10 +48,9 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayRow: some View {
         HStack(spacing: 12) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(self.gatewayStateColor)
-                .frame(width: 30, height: 30)
+            ProIconBadge(
+                systemName: "antenna.radiowaves.left.and.right",
+                color: self.gatewayStateColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Gateway")
                     .font(.subheadline.weight(.semibold))
@@ -104,10 +103,7 @@ struct RootTabsPhoneControlHub: View {
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: destination.systemImage)
-                .font(.body.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
             Text(destination.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
