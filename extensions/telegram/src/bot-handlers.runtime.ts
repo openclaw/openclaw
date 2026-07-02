@@ -66,6 +66,7 @@ import {
 } from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
+  isDurablyRetryableInboundMediaError,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
@@ -80,6 +81,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
@@ -2271,18 +2273,24 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_parameters: {
-              message_id: msg.message_id,
-              allow_sending_without_reply: true,
-            },
-          }),
-      }).catch(() => {});
-      releaseDispatchDedupeKeys(dispatchDedupeKeys);
+      const retryable = isDurablyRetryableInboundMediaError(mediaErr);
+      if (retryable) {
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
+      }
+      if (!(retryable && isTelegramSpooledReplayUpdate(ctx.update))) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_parameters: {
+                message_id: msg.message_id,
+                allow_sending_without_reply: true,
+              },
+            }),
+        }).catch(() => {});
+      }
+      releaseDispatchDedupeKeys(dispatchDedupeKeys, retryable ? mediaErr : undefined);
       return;
     }
 
@@ -3396,6 +3404,12 @@ export const registerTelegramHandlers = ({
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
       if (err instanceof TelegramPairingStoreReadError) {
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+        // Spooled replays are durably retried; live updates get one apology
+        // because they are acked without replay.
+        if (isTelegramSpooledReplayUpdate(event.ctx.update)) {
+          return;
+        }
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
           runtime,

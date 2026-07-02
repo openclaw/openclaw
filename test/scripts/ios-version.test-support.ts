@@ -13,7 +13,7 @@ export function installIosFixtureCleanup(): void {
 }
 
 export function writeIosFixture(params: {
-  version: string;
+  version?: string;
   changelog: string;
   packageVersion?: string;
   releaseNotes?: string;
@@ -27,12 +27,7 @@ export function writeIosFixture(params: {
   });
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
-    `${JSON.stringify({ version: params.packageVersion ?? "2026.4.6" }, null, 2)}\n`,
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "apps", "ios", "version.json"),
-    `${JSON.stringify({ version: params.version }, null, 2)}\n`,
+    `${JSON.stringify({ version: params.packageVersion ?? params.version ?? "2026.4.6" }, null, 2)}\n`,
     "utf8",
   );
   fs.writeFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), params.changelog, "utf8");

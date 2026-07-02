@@ -35,7 +35,7 @@ import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   claimNextTelegramSpooledUpdate,
-  deleteTelegramSpooledUpdate,
+  completeTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -135,14 +135,15 @@ const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS = 2 * TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS;
-const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS = 5_000;
-const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS = 60_000;
+const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
+const TELEGRAM_SPOOLED_RETRY_BASE_MS = 1_000;
+const TELEGRAM_SPOOLED_RETRY_MAX_MS = 3 * 60_000;
+const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
@@ -178,20 +179,30 @@ function resolveNonRetryableSpooledUpdateFailure(
 
 function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = Date.now()): number {
   const attempts = update.attempts ?? 0;
-  if (
-    !update.lastError ||
-    !REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(update.lastError) ||
-    update.lastAttemptAt === undefined ||
-    attempts <= 0
-  ) {
+  if (!update.lastError || update.lastAttemptAt === undefined || attempts <= 0) {
     return 0;
   }
   const exponent = Math.min(attempts - 1, 8);
   const delayMs = Math.min(
-    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS,
-    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS * 2 ** exponent,
+    TELEGRAM_SPOOLED_RETRY_MAX_MS,
+    TELEGRAM_SPOOLED_RETRY_BASE_MS * 2 ** exponent,
   );
   return Math.max(0, update.lastAttemptAt + delayMs - now);
+}
+
+function resolveSpooledUpdateAttemptNumber(update: TelegramSpooledUpdate): number {
+  return (update.attempts ?? 0) + 1;
+}
+
+function shouldDeadLetterRetryableSpooledUpdate(
+  update: TelegramSpooledUpdate,
+  attempt: number,
+  now = Date.now(),
+): boolean {
+  return (
+    attempt >= TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS &&
+    now - update.receivedAt >= TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS
+  );
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -685,7 +696,7 @@ export class TelegramPollingSession {
     }
     try {
       params.stopClaimRefresh();
-      await deleteTelegramSpooledUpdate(params.update);
+      await completeTelegramSpooledUpdate(params.update);
       return true;
     } catch (err) {
       this.opts.log(
@@ -736,7 +747,7 @@ export class TelegramPollingSession {
         return;
       }
       try {
-        await deleteTelegramSpooledUpdate(params.update);
+        await completeTelegramSpooledUpdate(params.update);
       } catch (err) {
         this.opts.log(
           `[telegram][diag] spooled update ${params.update.updateId} completed after buffered processing but processing marker cleanup failed: ${formatErrorMessage(err)}`,
@@ -813,6 +824,7 @@ export class TelegramPollingSession {
     err: unknown;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<void> {
+    const laneKey = this.#spooledUpdateLaneKey(params.update);
     const nonRetryable = resolveNonRetryableSpooledUpdateFailure(params.err);
     if (nonRetryable) {
       try {
@@ -837,6 +849,33 @@ export class TelegramPollingSession {
         );
       }
     }
+    const attempt = resolveSpooledUpdateAttemptNumber(params.update);
+    if (shouldDeadLetterRetryableSpooledUpdate(params.update, attempt)) {
+      const message = formatErrorMessage(params.err);
+      try {
+        const failed = await failTelegramSpooledUpdateClaim({
+          update: params.update,
+          reason: "retry-limit-exceeded",
+          message,
+        });
+        if (!failed) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${params.update.updateId} on lane ${laneKey} reached retry limit, but no processing marker remained to dead-letter.`,
+          );
+          return;
+        }
+        // Retryable poison updates must eventually become tombstones, but not
+        // during ordinary transient provider or state-store outages.
+        this.opts.log(
+          `[telegram][warn] spooled update ${params.update.updateId} on lane ${laneKey} reached retry limit after ${attempt} attempts; dead-lettered: ${message}`,
+        );
+        return;
+      } catch (failErr) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} on lane ${laneKey} reached retry limit, but could not be dead-lettered: ${formatErrorMessage(failErr)}`,
+        );
+      }
+    }
     try {
       await releaseTelegramSpooledUpdateClaim(params.update, {
         lastError: formatErrorMessage(params.err),
@@ -848,7 +887,7 @@ export class TelegramPollingSession {
       return;
     }
     this.opts.log(
-      `[telegram][diag] spooled update ${params.update.updateId} failed; keeping for retry: ${formatErrorMessage(params.err)}`,
+      `[telegram][diag] spooled update ${params.update.updateId} failed; keeping for retry attempt ${attempt + 1}/${TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS}: ${formatErrorMessage(params.err)}`,
     );
   }
 
@@ -933,6 +972,8 @@ export class TelegramPollingSession {
       if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
         blockedByLane.add(handlerKey);
       }
+      // Release increments attempts and stamps lastAttemptAt. The drain blocks
+      // that lane until the retry window expires so poison rows cannot hot-loop.
       if (resolveSpooledUpdateRetryDelayMs(update) > 0) {
         retryDelayedLaneKeys.add(laneKey);
       }
@@ -1365,7 +1406,9 @@ export class TelegramPollingSession {
         drainActive = false;
         if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
           drainRequested = false;
-          void drainOnce();
+          // Handler finalizers clear active lane guards in microtasks; redrain
+          // after them so newly unblocked same-lane rows can claim immediately.
+          void Promise.resolve().then(drainOnce);
         }
       }
     };
@@ -1682,6 +1725,9 @@ export const testing = {
   resetTelegramRestartBackoffState,
   resolveTelegramRestartDelayMs,
   resolveSpooledUpdateRetryDelayMs,
+  shouldDeadLetterRetryableSpooledUpdate,
+  spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
+  spooledRetryDeadLetterMinAgeMs: TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
   isolatedIngressBacklogStallMs: ISOLATED_INGRESS_BACKLOG_STALL_MS,
   spooledClaimRefreshIntervalMs: TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>

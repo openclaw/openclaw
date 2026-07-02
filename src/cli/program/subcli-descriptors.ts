@@ -72,6 +72,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "attach",
+    description: "Attach Claude Code to a gateway session with scoped MCP tools",
+    hasSubcommands: false,
+  },
+  {
     name: "tui",
     description: "Open a terminal UI connected to the Gateway",
     hasSubcommands: false,

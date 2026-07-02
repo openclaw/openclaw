@@ -416,7 +416,7 @@ describe("Anthropic provider", () => {
               { type: "text", text: "before image" },
               { type: "image", data: imageData, mimeType: "image/png" },
               {
-                type: "resource",
+                type: "resource" as const,
                 resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
               },
               { type: "text", text: "after image" },

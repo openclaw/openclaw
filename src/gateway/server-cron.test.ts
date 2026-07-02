@@ -9,7 +9,9 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
-}) => Promise<{ status: "ok"; summary: string }>;
+  onExecutionStarted?: (execution: { jobId: string; sessionKey?: string }) => void;
+  onExecutionPhase?: (execution: { jobId: string; sessionKey?: string }) => void;
+}) => Promise<{ status: "ok"; summary: string; sessionKey?: string }>;
 
 const {
   enqueueSystemEventMock,
@@ -26,6 +28,7 @@ const {
   abortAndDrainEmbeddedAgentRunMock,
   retireSessionMcpRuntimeMock,
   requestSafeGatewayRestartMock,
+  getProcessSupervisorMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   consumeSelectedSystemEventEntriesMock: vi.fn((_sessionKey, entries) => entries ?? []),
@@ -77,6 +80,10 @@ const {
       coalesced: false,
       cooldownMsApplied: 0,
     },
+  })),
+  getProcessSupervisorMock: vi.fn(() => ({
+    spawn: vi.fn(),
+    cancelScope: vi.fn(),
   })),
 }));
 
@@ -185,7 +192,12 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
-import { buildGatewayCronService } from "./server-cron.js";
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: getProcessSupervisorMock,
+}));
+
+import type { CronJob } from "../cron/types.js";
+import { buildGatewayCronService, fireOnExitJob } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
   const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
@@ -290,10 +302,55 @@ describe("buildGatewayCronService", () => {
     abortAndDrainEmbeddedAgentRunMock.mockClear();
     retireSessionMcpRuntimeMock.mockClear();
     requestSafeGatewayRestartMock.mockClear();
+    getProcessSupervisorMock.mockReset();
+    getProcessSupervisorMock.mockReturnValue({
+      spawn: vi.fn(),
+      cancelScope: vi.fn(),
+    });
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+  });
+
+  it("stops on-exit watcher children when the direct cron service stops", async () => {
+    vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
+    const cancelRun = vi.fn();
+    const cancelScope = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit",
+      startedAtMs: 0,
+      wait: () => new Promise(() => {}),
+      cancel: cancelRun,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+    const cfg = createCronConfig("server-cron-stop-exit-watchers");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    const job = await state.cron.add({
+      name: "watch build",
+      enabled: true,
+      schedule: { kind: "on-exit", command: "sleep 60" },
+      payload: { kind: "systemEvent", text: "done" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+    });
+    await state.reconcileExitWatchers?.();
+
+    try {
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+      state.cron.stop();
+      expect(cancelRun).toHaveBeenCalledWith("manual-cancel");
+      expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
+    } finally {
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("backs off isolated cron setup timeout without gateway restart", async () => {
@@ -1399,12 +1456,17 @@ describe("buildGatewayCronService", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
+      const runSessionKey = `agent:main:cron:${job.id}:run:run-1`;
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async ({ onExecutionStarted }) => {
+        onExecutionStarted?.({ jobId: job.id, sessionKey: runSessionKey });
+        return { status: "ok", summary: "ok", sessionKey: runSessionKey };
+      });
 
       await state.cron.run(job.id, "force");
 
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys([sessionKey]);
+      expectCleanupForSessionKeys([runSessionKey]);
     } finally {
       state.cron.stop();
     }
@@ -1618,5 +1680,66 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
     }
+  });
+});
+
+describe("fireOnExitJob (on-exit fire routing)", () => {
+  type ForceRunMock = (jobId: string, payload?: CronJob["payload"]) => Promise<void>;
+
+  const job = (payload: unknown, extra: Partial<CronJob> = {}): CronJob =>
+    ({ id: "job-x", payload, ...extra }) as unknown as CronJob;
+  const exit = {
+    exitCode: 3,
+    reason: "exit",
+    stdout: "built ok\n",
+    stderr: "warned\n",
+    timedOut: false,
+    noOutputTimedOut: false,
+  };
+
+  it("executes an agentTurn payload via the force-run path, not a text wake", async () => {
+    const run = vi.fn<ForceRunMock>(async () => {});
+    const wake = vi.fn();
+    await fireOnExitJob(job({ kind: "agentTurn", message: "go" }), exit, {
+      run,
+    });
+    expect(run.mock.calls[0]?.[1]).toMatchObject({
+      kind: "agentTurn",
+      message: expect.stringContaining("Exit code: 3"),
+    });
+    expect(run.mock.calls[0]?.[1]).toMatchObject({
+      message: expect.stringContaining("stdout:\nbuilt ok"),
+    });
+    expect(run.mock.calls[0]?.[0]).toBe("job-x");
+    expect(wake).not.toHaveBeenCalled();
+  });
+
+  it("executes a command payload via the force-run path", async () => {
+    const run = vi.fn<ForceRunMock>(async () => {});
+    const wake = vi.fn();
+    await fireOnExitJob(job({ kind: "command", argv: ["echo", "hi"] }), exit, {
+      run,
+    });
+    expect(run).toHaveBeenCalledWith("job-x", undefined);
+    expect(wake).not.toHaveBeenCalled();
+  });
+
+  it("executes a systemEvent payload via the force-run path", async () => {
+    const run = vi.fn<ForceRunMock>(async () => {});
+    const wake = vi.fn();
+    await fireOnExitJob(
+      job({ kind: "systemEvent", text: "done" }, { sessionKey: "sk-1", agentId: "agent-1" }),
+      exit,
+      { run },
+    );
+    expect(run.mock.calls[0]?.[1]).toMatchObject({
+      kind: "systemEvent",
+      text: expect.stringContaining("Exit code: 3"),
+    });
+    expect(run.mock.calls[0]?.[1]).toMatchObject({
+      text: expect.stringContaining("stderr:\nwarned"),
+    });
+    expect(run.mock.calls[0]?.[0]).toBe("job-x");
+    expect(wake).not.toHaveBeenCalled();
   });
 });

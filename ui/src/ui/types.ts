@@ -590,7 +590,8 @@ export type CronSortDir = "asc" | "desc";
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
+  | { kind: "on-exit"; command: string; cwd?: string };
 
 export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
