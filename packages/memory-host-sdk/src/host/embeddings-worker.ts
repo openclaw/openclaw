@@ -178,17 +178,38 @@ function resolveWorkerExecArgv(): string[] {
  * binary (the old Cellar or version-specific path is removed).  When that
  * happens the worker fork fails with ENOENT.
  *
- * This function checks whether `process.execPath` is still on disk and falls
- * back to searching `PATH` for a `node` binary when it is not.
+ * Resolution order:
+ *  1. `process.execPath` on disk                     → best case, zero overhead
+ *  2. Homebrew stable symlink from stale Cellar path  → P1: deterministic
+ *  3. `node` / `node.exe` on `$PATH`                  → ambient fallback
+ *  4. `process.execPath` as-is                        → fork() produces ENOENT
  */
 function resolveWorkerExecPath(): string {
   try {
     accessSync(process.execPath, constants.X_OK);
     return process.execPath;
   } catch {
-    // process.execPath no longer exists — try to find node on PATH.
+    // process.execPath no longer exists.
   }
 
+  // P1: Resolve a stale Homebrew Cellar path to the stable opt/bin symlink
+  // that survives `brew upgrade` (e.g. /opt/homebrew/opt/node/bin/node).
+  const resolved = resolveHomebrewStablePath(process.execPath);
+  if (resolved !== process.execPath) {
+    try {
+      accessSync(resolved, constants.X_OK);
+      console.warn(
+        `[memory-host-sdk] Warning: process.execPath (${process.execPath}) no longer exists, ` +
+          `resolved Homebrew stable symlink: ${resolved}. ` +
+          "Consider restarting the gateway to use the current Node.js installation.",
+      );
+      return resolved;
+    } catch {
+      // Symlink also gone — unlikely but continue to PATH fallback.
+    }
+  }
+
+  // General fallback: search PATH for a working node binary.
   const nodeName = process.platform === "win32" ? "node.exe" : "node";
   const pathDirs = (process.env.PATH ?? "").split(path.delimiter);
   for (const dir of pathDirs) {
@@ -206,8 +227,48 @@ function resolveWorkerExecPath(): string {
     }
   }
 
-  // Nothing found — fall through.  fork() will produce a clear ENOENT error.
+  // Nothing found — fork() will produce a clear ENOENT error.
   return process.execPath;
+}
+
+/**
+ * Sync helper: match a Homebrew Cellar node path and resolve to the stable
+ * opt/bin symlink if one exists on disk.
+ *
+ * Mirrors the async logic in `src/infra/stable-node-path.ts` but runs
+ * synchronously so it can be called from the sync `ensureChild()` path.
+ */
+function resolveHomebrewStablePath(nodePath: string): string {
+  const cellarMatch = nodePath.match(
+    /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node$/,
+  );
+  if (!cellarMatch) {
+    return nodePath;
+  }
+  const prefix = cellarMatch[1];
+  const formula = cellarMatch[2];
+
+  // Try the opt symlink — works for both "node" and "node@<version>" formulas.
+  const optPath = path.resolve(prefix, "opt", formula, "bin", "node");
+  try {
+    accessSync(optPath, constants.X_OK);
+    return optPath;
+  } catch {
+    // fall through
+  }
+
+  // For the default "node" formula, try the direct bin symlink.
+  if (formula === "node") {
+    const binPath = path.resolve(prefix, "bin", "node");
+    try {
+      accessSync(binPath, constants.X_OK);
+      return binPath;
+    } catch {
+      // fall through
+    }
+  }
+
+  return nodePath;
 }
 
 /** IPC client that serializes local embedding calls through one child process. */
