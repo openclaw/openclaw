@@ -14,6 +14,7 @@ import {
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
+import { readFeishuBotIdentityRevision, setFeishuBotIdentityState } from "./monitor.state.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -22,6 +23,7 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const startBotIdentityRecoveryMock = vi.hoisted(() => vi.fn());
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 
@@ -46,11 +48,20 @@ vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
 
+vi.mock("./monitor.bot-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor.bot-identity.js")>();
+  return {
+    ...actual,
+    startBotIdentityRecovery: startBotIdentityRecoveryMock,
+  };
+});
+
 afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./bot.js");
   vi.doUnmock("./monitor.transport.js");
   vi.doUnmock("./thread-bindings.js");
+  vi.doUnmock("./monitor.bot-identity.js");
   vi.resetModules();
 });
 
@@ -473,6 +484,7 @@ describe("resolveReactionSyntheticEvent", () => {
 
 describe("monitorSingleAccount lifecycle", () => {
   beforeEach(() => {
+    startBotIdentityRecoveryMock.mockReset();
     createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
       stop: vi.fn(),
     }));
@@ -524,6 +536,63 @@ describe("monitorSingleAccount lifecycle", () => {
       | { stop: ReturnType<typeof vi.fn> }
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts bot identity recovery even when startup aborts after identity is unknown", async () => {
+    setFeishuRuntime(createFeishuMonitorRuntime());
+    const controller = new AbortController();
+    controller.abort();
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      abortSignal: controller.signal,
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: undefined,
+      },
+    });
+
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledTimes(1);
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        abortSignal: undefined,
+        staleRevision: readFeishuBotIdentityRevision("default"),
+      }),
+    );
+  });
+
+  it("passes no stale revision for active lifecycle bot identity recovery", async () => {
+    setFeishuRuntime(createFeishuMonitorRuntime());
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: undefined,
+      },
+    });
+
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        abortSignal: undefined,
+        staleRevision: undefined,
+      }),
+    );
+  });
+
+  it("records a changed identity revision after a replacement lifecycle restores the bot", async () => {
+    setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
+    const staleRevision = readFeishuBotIdentityRevision("default");
+
+    setFeishuBotIdentityState("default", { botOpenId: "ou_replacement", botName: "Bot" });
+
+    expect(readFeishuBotIdentityRevision("default")).toBeGreaterThan(staleRevision);
   });
 });
 

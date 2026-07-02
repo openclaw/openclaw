@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
 import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
-import { setFeishuBotIdentityState } from "./monitor.state.js";
+import { readFeishuBotIdentityRevision, setFeishuBotIdentityState } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 // Delays must be >= PROBE_ERROR_TTL_MS (60s) so each retry makes a real network request
@@ -27,6 +27,7 @@ async function retryBotIdentityProbe(
   accountId: string,
   runtime: RuntimeEnv | undefined,
   abortSignal: AbortSignal | undefined,
+  staleRevision: number | undefined,
 ): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -42,6 +43,12 @@ async function retryBotIdentityProbe(
     }
 
     const identity = await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+    if (staleRevision !== undefined && readFeishuBotIdentityRevision(accountId) !== staleRevision) {
+      log(
+        `feishu[${accountId}]: bot identity background retry stopped because a newer lifecycle updated identity`,
+      );
+      return;
+    }
     const resolved = applyBotIdentityState(accountId, identity);
     if (resolved.botOpenId) {
       log(
@@ -67,9 +74,11 @@ export function startBotIdentityRecovery(params: {
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  staleRevision?: number;
 }): void {
   const { account, accountId, runtime, abortSignal } = params;
   const log = runtime?.log ?? console.log;
+  const staleRevision = params.staleRevision;
 
   log(
     `feishu[${accountId}]: bot open_id unknown; starting background retry (delays: ${BOT_IDENTITY_RETRY_DELAYS_MS.map((delay) => `${delay / 1000}s`).join(", ")})`,
@@ -78,5 +87,5 @@ export function startBotIdentityRecovery(params: {
     `feishu[${accountId}]: requireMention group messages stay gated until bot identity recovery succeeds`,
   );
 
-  void retryBotIdentityProbe(account, accountId, runtime, abortSignal);
+  void retryBotIdentityProbe(account, accountId, runtime, abortSignal, staleRevision);
 }
