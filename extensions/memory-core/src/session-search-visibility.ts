@@ -44,6 +44,14 @@ function filterSessionKeysByScopedAgent(params: {
   });
 }
 
+function synthesizeLiveOwnerSessionKey(params: {
+  ownerAgentId: string | undefined;
+  stem: string;
+}): string[] {
+  const ownerAgentId = normalizeAgentIdForCompare(params.ownerAgentId);
+  return ownerAgentId ? [`agent:${ownerAgentId}:${params.stem}`] : [];
+}
+
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -132,17 +140,19 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       continue;
     }
-    const archivedOwnerMatchesScope = Boolean(
-      identity.archived &&
-      ((identity.ownerAgentId &&
-        (!scopedAgentId ||
-          normalizeAgentIdForCompare(identity.ownerAgentId) ===
-            normalizeAgentIdForCompare(scopedAgentId))) ||
-        (isQmdSessionHit && scopedAgentId)),
+    const ownerMatchesScope = Boolean(
+      identity.ownerAgentId &&
+      (!scopedAgentId ||
+        normalizeAgentIdForCompare(identity.ownerAgentId) ===
+          normalizeAgentIdForCompare(scopedAgentId)),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope
-      ? (identity.ownerAgentId ?? scopedAgentId)
-      : undefined;
+    const qmdArchivedOwnerMatchesScope = Boolean(
+      identity.archived && isQmdSessionHit && scopedAgentId,
+    );
+    const archivedOwnerAgentId =
+      identity.archived && (ownerMatchesScope || qmdArchivedOwnerMatchesScope)
+        ? (identity.ownerAgentId ?? scopedAgentId)
+        : undefined;
     const liveKeys = identity.liveStem
       ? resolveTranscriptStemToSessionKeys({
           store: combinedSessionStore,
@@ -156,12 +166,20 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       keys:
         liveKeys.length > 0
           ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+          : (() => {
+              const resolvedKeys = resolveTranscriptStemToSessionKeys({
+                store: combinedSessionStore,
+                stem: identity.stem,
+                allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+                ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+              });
+              return resolvedKeys.length > 0 || identity.archived || !ownerMatchesScope
+                ? resolvedKeys
+                : synthesizeLiveOwnerSessionKey({
+                    ownerAgentId: identity.ownerAgentId,
+                    stem: identity.stem,
+                  });
+            })(),
     });
     if (keys.length === 0) {
       continue;

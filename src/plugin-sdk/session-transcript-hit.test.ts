@@ -176,6 +176,16 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
       archived: false,
     });
   });
+
+  it("extracts owner metadata from agent-scoped live session paths", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/main/live-uuid.jsonl")).toEqual(
+      {
+        stem: "live-uuid",
+        ownerAgentId: "main",
+        archived: false,
+      },
+    );
+  });
 });
 
 describe("resolveTranscriptStemToSessionKeys", () => {

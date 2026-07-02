@@ -1270,6 +1270,14 @@ function filterSessionKeysByScopedAgent(params: {
   });
 }
 
+function synthesizeLiveOwnerSessionKey(params: {
+  ownerAgentId: string | undefined;
+  stem: string;
+}): string[] {
+  const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
+  return ownerAgentId ? [`agent:${ownerAgentId}:${params.stem}`] : [];
+}
+
 async function createSessionMemoryPathVisibilityChecker(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -1316,15 +1324,17 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
-    const archivedOwnerMatchesScope = Boolean(
-      identity.archived &&
-      ((identity.ownerAgentId &&
-        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
-        (isQmdSessionPath && scopedAgentId)),
+    const ownerMatchesScope = Boolean(
+      identity.ownerAgentId &&
+      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope
-      ? (identity.ownerAgentId ?? scopedAgentId)
-      : undefined;
+    const qmdArchivedOwnerMatchesScope = Boolean(
+      identity.archived && isQmdSessionPath && scopedAgentId,
+    );
+    const archivedOwnerAgentId =
+      identity.archived && (ownerMatchesScope || qmdArchivedOwnerMatchesScope)
+        ? (identity.ownerAgentId ?? scopedAgentId)
+        : undefined;
     const liveKeys = identity.liveStem
       ? resolveTranscriptStemToSessionKeys({
           store: combinedSessionStore,
@@ -1338,12 +1348,20 @@ async function createSessionMemoryPathVisibilityChecker(params: {
       keys:
         liveKeys.length > 0
           ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+          : (() => {
+              const resolvedKeys = resolveTranscriptStemToSessionKeys({
+                store: combinedSessionStore,
+                stem: identity.stem,
+                allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+                ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+              });
+              return resolvedKeys.length > 0 || identity.archived || !ownerMatchesScope
+                ? resolvedKeys
+                : synthesizeLiveOwnerSessionKey({
+                    ownerAgentId: identity.ownerAgentId,
+                    stem: identity.stem,
+                  });
+            })(),
     });
     if (!guard) {
       return Boolean(scopedAgentId && keys.length > 0);
