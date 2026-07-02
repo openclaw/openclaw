@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { writeMemoryWikiImportRunRecord } from "./import-runs-state.js";
+import {
+  readLegacyMemoryWikiImportRunRecords,
+  writeMemoryWikiImportRunRecord,
+} from "./import-runs-state.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 
 const tempDirs: string[] = [];
@@ -76,5 +79,34 @@ describe("memory-wiki import runs", () => {
       activeRuns: 1,
       rolledBackRuns: 1,
     });
+  });
+
+  it("skips malformed legacy import-run files instead of throwing", async () => {
+    const vaultRoot = await makeTempVault();
+    const dir = path.join(vaultRoot, ".openclaw-wiki", "import-runs");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "valid.json"),
+      JSON.stringify({
+        version: 1,
+        runId: "valid-run",
+        importType: "chatgpt",
+        exportPath: "/tmp/old",
+        sourcePath: "/tmp/old/conversations.json",
+        appliedAt: "2026-04-09T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/old.md"],
+        updatedPaths: [],
+      }),
+    );
+    // Partial write / editor save with a syntax error -> not valid JSON.
+    await fs.writeFile(path.join(dir, "broken.json"), "{ not valid json , ");
+
+    const records = await readLegacyMemoryWikiImportRunRecords(vaultRoot);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.runId).toBe("valid-run");
   });
 });
