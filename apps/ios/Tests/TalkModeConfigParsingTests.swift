@@ -377,6 +377,24 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
+    @Test func `relay close restarts enabled continuous realtime`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_prepareEnabledRealtimeSessionForClose()
+
+        manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
+        manager._test_handleRealtimeRelayStatus("Ready")
+
+        #expect(manager.statusText == "Reconnecting")
+        #expect(manager._test_rapidRealtimeRestartCount() == 1)
+        manager.isEnabled = false
+    }
+
+    @Test func `recurring realtime ready status preserves push to talk capture`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        #expect(manager._test_realtimeStatusPreservesPushToTalkCapture())
+    }
+
     @Test func `relay retry clears stale fallback trigger but keeps last issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
@@ -451,6 +469,35 @@ struct TalkModeManagerTests {
             #expect(parsed.executionMode == .realtimeRelay)
             #expect(routing.route == .realtimeRelay)
         }
+    }
+
+    @Test func `restarts an enabled continuous realtime session after provider close`() {
+        #expect(TalkModeManager._test_shouldRestartRealtimeSession(
+            isEnabled: true,
+            gatewayConnected: true,
+            captureIsContinuous: true))
+        #expect(!TalkModeManager._test_shouldRestartRealtimeSession(
+            isEnabled: false,
+            gatewayConnected: true,
+            captureIsContinuous: true))
+        #expect(!TalkModeManager._test_shouldRestartRealtimeSession(
+            isEnabled: true,
+            gatewayConnected: false,
+            captureIsContinuous: true))
+        #expect(!TalkModeManager._test_shouldRestartRealtimeSession(
+            isEnabled: true,
+            gatewayConnected: true,
+            captureIsContinuous: false))
+
+        #expect(TalkModeManager._test_realtimeRestartAttempt(
+            previousRapidRestarts: 1,
+            activeDuration: 5) == 2)
+        #expect(TalkModeManager._test_realtimeRestartAttempt(
+            previousRapidRestarts: 2,
+            activeDuration: 31) == 1)
+        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
+        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
+        #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
