@@ -56,6 +56,7 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
+import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
@@ -65,7 +66,6 @@ import {
 } from "./components/chat-sidebar.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
-import { renderChat, resetChatViewState, type ChatProps } from "./view.ts";
 
 type ChatRouteData = {
   sessionKey: string;

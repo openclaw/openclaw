@@ -52,6 +52,7 @@ import {
   type ChatHost,
 } from "./chat-send.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import type { ChatProps } from "./chat-view.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
@@ -80,7 +81,6 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
-import type { ChatProps } from "./view.ts";
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;

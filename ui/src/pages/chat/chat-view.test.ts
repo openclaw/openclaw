@@ -26,6 +26,7 @@ import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
+import { renderChat, resetChatViewState } from "./chat-view.ts";
 import { renderChatQueue } from "./components/chat-composer.ts";
 import { renderChatQuotaPill } from "./components/chat-controls.ts";
 import {
@@ -35,7 +36,6 @@ import {
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
-import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: ChatHeaderTestState) => {
