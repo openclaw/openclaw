@@ -58,6 +58,42 @@ export function withTelegramPromptContextTimestampMs(
   };
 }
 
+type TelegramOutboundGroupHistoryRecord = {
+  chatId: string | number;
+  messageId: number;
+  text?: string;
+  messageThreadId?: number;
+  timestamp?: number;
+};
+
+type TelegramOutboundGroupHistoryRecorder = (record: TelegramOutboundGroupHistoryRecord) => void;
+
+const outboundGroupHistoryRecorders = new Map<string, TelegramOutboundGroupHistoryRecorder>();
+
+export function registerTelegramOutboundGroupHistoryRecorder(params: {
+  accountId: string;
+  recorder: TelegramOutboundGroupHistoryRecorder;
+}): () => void {
+  outboundGroupHistoryRecorders.set(params.accountId, params.recorder);
+  return () => {
+    if (outboundGroupHistoryRecorders.get(params.accountId) === params.recorder) {
+      outboundGroupHistoryRecorders.delete(params.accountId);
+    }
+  };
+}
+
+function resolveOutboundCacheMessageTimestamp(
+  msg: TelegramOutboundPromptContextMessage,
+): number | undefined {
+  if (
+    typeof msg.openclaw_prompt_context_timestamp_ms === "number" &&
+    Number.isFinite(msg.openclaw_prompt_context_timestamp_ms)
+  ) {
+    return msg.openclaw_prompt_context_timestamp_ms;
+  }
+  return typeof msg.date === "number" && Number.isFinite(msg.date) ? msg.date * 1000 : undefined;
+}
+
 function inferTelegramChatType(chatId: string | number): "private" | "supergroup" {
   return String(chatId).startsWith("-") ? "supergroup" : "private";
 }
@@ -110,14 +146,23 @@ export async function recordOutboundMessageForPromptContext(params: {
   promptContextTimestampMs?: number;
 }): Promise<void> {
   try {
+    const cacheMessage = buildOutboundCacheMessage(params);
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
     });
     await cache.record({
       accountId: params.account.accountId,
       chatId: params.chatId,
-      msg: buildOutboundCacheMessage(params) as Message,
+      msg: cacheMessage as Message,
       ...(params.messageThreadId !== undefined ? { threadId: params.messageThreadId } : {}),
+    });
+    const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
+    outboundGroupHistoryRecorders.get(params.account.accountId)?.({
+      chatId: params.chatId,
+      messageId: params.messageId,
+      text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
+      ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
+      ...(timestamp !== undefined ? { timestamp } : {}),
     });
   } catch (error) {
     logVerbose(`telegram: failed to record outbound message context: ${String(error)}`);
