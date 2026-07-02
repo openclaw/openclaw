@@ -31,6 +31,7 @@ import {
   type CliOutput,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
+  type CliThinkingDelta,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
   resolveCliStreamJsonOutputLimits,
@@ -1098,6 +1099,7 @@ function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1126,6 +1128,7 @@ function createTurn(params: {
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
+      onThinkingDelta: params.onThinkingDelta,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
       onCommentaryText: params.onCommentaryText,
@@ -1197,6 +1200,7 @@ export async function runClaudeLiveSessionTurn(params: {
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1320,6 +1324,7 @@ export async function runClaudeLiveSessionTurn(params: {
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
+      onThinkingDelta: params.onThinkingDelta,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
       onCommentaryText: params.onCommentaryText,

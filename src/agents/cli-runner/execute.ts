@@ -34,6 +34,7 @@ import {
   parseCliOutput,
   type CliOutput,
   type CliStreamingDelta,
+  type CliThinkingDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -1017,6 +1018,28 @@ export async function executePreparedCliRun(
             },
           });
         };
+        // Emit-always: thinking reaches the agent-event bus and session archive
+        // like the embedded reasoning stream; /reasoning and /verbose gate only
+        // presentation. Text stays raw here to match the thinking-stream contract
+        // shared with embedded-agent-subscribe, which archives untransformed
+        // reasoning regardless of source.
+        const emitCliThinkingDelta = ({
+          text,
+          delta,
+          isReasoningSnapshot,
+        }: CliThinkingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { text, delta, ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}) },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1037,6 +1060,7 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
+            onThinkingDelta: emitCliThinkingDelta,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1064,6 +1088,7 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
+                onThinkingDelta: emitCliThinkingDelta,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

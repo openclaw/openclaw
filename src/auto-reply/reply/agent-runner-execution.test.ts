@@ -3246,7 +3246,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("bridges CLI assistant agent events into onReasoningStream for live reasoning preview (opus-4-7 text_delta path)", async () => {
+  it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3260,13 +3260,18 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking", delta: "Thinking" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking about it", delta: " about it" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking about it", delta: " about it", isReasoningSnapshot: true },
       });
       return { payloads: [{ text: "Thinking about it" }], meta: {} };
     });
@@ -3302,11 +3307,21 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    const reasoningTexts = onReasoningStream.mock.calls.map((call) => call[0].text);
-    expect(reasoningTexts).toEqual(["Thinking", "Thinking about it"]);
+    expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "Thinking",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+      {
+        text: "Thinking about it",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+    ]);
   });
 
-  it("does not bridge CLI assistant events to onReasoningStream when silentExpected is set", async () => {
+  it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3320,12 +3335,12 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "heartbeat scratch text", delta: "heartbeat scratch text" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
       });
       return { payloads: [{ text: "final" }], meta: {} };

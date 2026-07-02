@@ -671,6 +671,7 @@ export function createFollowupRunner(params: {
           originatingChatType: queued.originatingChatType,
           originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
+          reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         });
         if (noticePayloads.length === 0) {
           return;
@@ -1421,6 +1422,7 @@ export function createFollowupRunner(params: {
         originatingReplyToMode: queued.originatingReplyToMode,
         originatingTo: queued.originatingTo,
         originatingThreadId: queued.originatingThreadId,
+        reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,
