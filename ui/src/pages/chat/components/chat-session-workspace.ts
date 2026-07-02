@@ -86,6 +86,17 @@ function workspaceAgentId(state: SessionWorkspaceHost): string {
     : (activeAgentId ?? scopedAgentId ?? fallback);
 }
 
+function clearWorkspaceSearchTimer(workspace: SessionWorkspaceState | undefined) {
+  if (workspace?.browserSearchTimer) {
+    globalThis.clearTimeout(workspace.browserSearchTimer);
+    workspace.browserSearchTimer = null;
+  }
+}
+
+export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
+  clearWorkspaceSearchTimer(state.sessionWorkspaceState);
+}
+
 function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   const sessionKey = state.sessionKey;
   const agentId = workspaceAgentId(state);
@@ -93,6 +104,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
   }
+  clearWorkspaceSearchTimer(current);
   const next: SessionWorkspaceState = {
     activeId: null,
     agentId,
@@ -400,10 +412,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     },
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
-      if (workspace.browserSearchTimer) {
-        globalThis.clearTimeout(workspace.browserSearchTimer);
-        workspace.browserSearchTimer = null;
-      }
+      clearWorkspaceSearchTimer(workspace);
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadWorkspace(state, workspace, true);
@@ -414,9 +423,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     onOpenFile: (path) => openFile(state, workspace, path),
     onSearch: (search) => {
       workspace.browserSearch = search;
-      if (workspace.browserSearchTimer) {
-        globalThis.clearTimeout(workspace.browserSearchTimer);
-      }
+      clearWorkspaceSearchTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;
         loadWorkspace(state, workspace, true);

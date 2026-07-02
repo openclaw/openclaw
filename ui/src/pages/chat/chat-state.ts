@@ -79,7 +79,10 @@ import {
   refreshCurrentChatSessionList,
 } from "./chat-session.ts";
 import type { ChatProps } from "./chat-view.ts";
-import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
+import {
+  clearSessionWorkspaceTimers,
+  type SessionWorkspaceHost,
+} from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
   ChatComposerPersistenceController,
@@ -1141,6 +1144,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       this.cleanups.pop()?.();
     }
     const state = this.stateValue;
+    if (state) {
+      clearSessionWorkspaceTimers(state);
+    }
     state?.realtimeTalkSession?.stop();
     if (state) {
       state.realtimeTalkSession = null;
