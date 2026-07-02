@@ -1815,6 +1815,21 @@ function getActiveSlashMenuOptionLabel(): string {
   return `${command} ${cmd.description}`;
 }
 
+function scrollActiveSlashMenuOptionIntoView(): void {
+  const activeId = getActiveSlashMenuOptionId();
+  if (!activeId) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const activeOption = document.getElementById(activeId);
+    const menu = activeOption?.closest<HTMLElement>(".slash-menu");
+    if (!activeOption || !menu) {
+      return;
+    }
+    activeOption.scrollIntoView({ block: "nearest" });
+  });
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -2507,11 +2522,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -2538,11 +2555,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();

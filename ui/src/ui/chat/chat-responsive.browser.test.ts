@@ -1,10 +1,13 @@
 // Control UI tests cover chat responsive behavior.
 import { chromium, type Browser, type Page } from "playwright";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
+  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
@@ -23,6 +26,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 const pageBrowsers = new WeakMap<Page, Browser>();
+let realChatServer: ControlUiE2eServer | null = null;
 
 type ControlRect = {
   x: number;
@@ -418,6 +422,11 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 describeBrowserLayout("chat responsive browser layout", () => {
+  afterAll(async () => {
+    await realChatServer?.close();
+    realChatServer = null;
+  });
+
   it.each([
     [1120, 740],
     [1366, 900],
@@ -880,6 +889,104 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(
         scrolledInput.y + scrolledInput.height + 1,
       );
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("scrolls the keyboard-active slash option into view in short landscape", async () => {
+    realChatServer ??= await startControlUiE2eServer();
+    const page = await openBrowserPage(568, 320);
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [
+            {
+              text: "Short landscape slash command keyboard regression fixture.",
+              type: "text",
+            },
+          ],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    try {
+      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page
+        .getByText("Short landscape slash command keyboard regression fixture.")
+        .waitFor({ timeout: 10_000 });
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await textarea.fill("/");
+      await textarea.focus();
+
+      const initiallyHidden = await page.evaluate(() => {
+        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const options = Array.from(
+          document.querySelectorAll<HTMLElement>(".slash-menu-item[role='option']"),
+        );
+        const hiddenOption = options.find((option) => {
+          const menuRect = menu?.getBoundingClientRect();
+          const optionRect = option.getBoundingClientRect();
+          return Boolean(menuRect && optionRect.bottom > menuRect.bottom + 1);
+        });
+        if (!menu || !hiddenOption) {
+          throw new Error("Expected an initially hidden slash option");
+        }
+        menu.scrollTop = 0;
+        const menuRect = menu.getBoundingClientRect();
+        const itemRect = hiddenOption.getBoundingClientRect();
+        return {
+          id: hiddenOption.id,
+          index: options.indexOf(hiddenOption),
+          visible: itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1,
+        };
+      });
+      expect(initiallyHidden.visible).toBe(false);
+
+      for (let index = 0; index < initiallyHidden.index; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await page.waitForFunction((expectedId) => {
+        const input = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        return input?.getAttribute("aria-activedescendant") === expectedId;
+      }, initiallyHidden.id);
+      await page.waitForFunction((expectedId) => {
+        const active = document.getElementById(expectedId);
+        const menu = active?.closest<HTMLElement>(".slash-menu");
+        if (!active || !menu) {
+          return false;
+        }
+        const menuRect = menu.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        return activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1;
+      }, initiallyHidden.id);
+
+      const result = await page.evaluate(() => {
+        const input = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
+        if (!input || !menu || !active) {
+          throw new Error("Expected active slash option after keyboard navigation");
+        }
+        const menuRect = menu.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        return {
+          activeDescendant: input.getAttribute("aria-activedescendant"),
+          focusedTag: document.activeElement?.tagName,
+          scrollTop: menu.scrollTop,
+          visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
+        };
+      });
+
+      expect(result.focusedTag).toBe("TEXTAREA");
+      expect(result.activeDescendant).toBe(initiallyHidden.id);
+      expect(result.scrollTop).toBeGreaterThan(0);
+      expect(result.visible).toBe(true);
     } finally {
       await closeBrowserPage(page);
     }
