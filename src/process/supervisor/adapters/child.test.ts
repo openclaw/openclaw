@@ -459,7 +459,7 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
-  it("escapes gemini prompt metacharacters through cmd wrapper on Windows (#98573)", async () => {
+  it("quote-wraps gemini prompt metacharacters through cmd wrapper on Windows (#98573)", async () => {
     setPlatform("win32");
 
     await createAdapterHarness({
@@ -468,15 +468,17 @@ describe("createChildAdapter", () => {
     });
 
     const spawnArgs = firstSpawnWithFallbackParams();
-    // The prompt arg must be safe for cmd.exe: no unescaped &|<> in the
-    // command line, and no throw from escapeForWindowsCmdExe.
+    // The prompt arg contains spaces, so it is wrapped in double quotes.
+    // Inside double quotes, &|<> are literal in cmd.exe — no caret escaping
+    // is needed or desired (carets would appear as literal chars in output).
     // argv = [cmd.exe, /d, /s, /c, <command-line>]
     const cmdLine = spawnArgs.argv?.[4];
     expect(cmdLine).toBeDefined();
-    // Metacharacters must be caret-escaped
-    expect(cmdLine).toContain("^&");
-    expect(cmdLine).toContain("^|");
-    expect(cmdLine).toContain("^>");
+    expect(cmdLine).toContain('"install foo & run bar | baz > out.txt"');
+    // No caret artifacts — metacharacters pass through literally inside quotes
+    expect(cmdLine).not.toContain("^&");
+    expect(cmdLine).not.toContain("^|");
+    expect(cmdLine).not.toContain("^>");
     // The spawn must have succeeded (no throw)
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
