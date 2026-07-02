@@ -661,81 +661,31 @@ describe("fal image-generation provider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("forwards the 1K resolution for Nano Banana 2 Lite edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            images: [{ url: "https://v3.fal.media/files/example/nb2-lite-1k.png" }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("nb2-lite-1k-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
+  it.each(["1K", "2K", "4K"] as const)(
+    "rejects %s resolution overrides for Nano Banana 2 Lite",
+    async (resolution) => {
+      vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+        apiKey: "fal-test-key",
+        source: "env",
+        mode: "api-key",
       });
+      setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
 
-    const provider = buildFalImageGenerationProvider();
-    await provider.generateImage({
-      provider: "fal",
-      model: "google/nano-banana-2-lite",
-      prompt: "1K resolution",
-      cfg: {},
-      aspectRatio: "1:1",
-      resolution: "1K",
-      inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
-    });
-
-    expectFalJsonPost({
-      call: 1,
-      url: "https://fal.run/google/nano-banana-2-lite/edit",
-      body: {
-        prompt: "1K resolution",
-        aspect_ratio: "1:1",
-        resolution: "1K",
-        num_images: 1,
-        output_format: "png",
-        image_urls: [`data:image/png;base64,${Buffer.from("src").toString("base64")}`],
-      },
-    });
-  });
-
-  it("rejects 2K/4K resolution overrides for Nano Banana 2 Lite edits", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-
-    const provider = buildFalImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "fal",
-        model: "google/nano-banana-2-lite",
-        prompt: "resolution too high",
-        cfg: {},
-        aspectRatio: "1:1",
-        resolution: "2K",
-        inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("fal Nano Banana 2 Lite supports resolution values: 1K");
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+      const provider = buildFalImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "fal",
+          model: "google/nano-banana-2-lite",
+          prompt: "unsupported resolution",
+          cfg: {},
+          aspectRatio: "1:1",
+          resolution,
+          inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
+        }),
+      ).rejects.toThrow("fal Nano Banana 2 Lite does not support resolution overrides");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects Nano Banana 2 Lite edits above 14 reference images", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
@@ -761,7 +711,78 @@ describe("fal image-generation provider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("routes Grok Imagine edits through /quality/edit with lowercase resolution", async () => {
+  it.each([
+    {
+      label: "Nano Banana 2 Lite",
+      model: "google/nano-banana-2-lite",
+      aspectRatio: "3:2",
+      resolution: undefined,
+      expectedBody: {
+        prompt: "generate without references",
+        aspect_ratio: "3:2",
+        num_images: 1,
+        output_format: "png",
+      },
+    },
+    {
+      label: "Grok Imagine",
+      model: "xai/grok-imagine-image",
+      aspectRatio: "16:9",
+      resolution: "2K" as const,
+      expectedBody: {
+        prompt: "generate without references",
+        aspect_ratio: "16:9",
+        resolution: "2k",
+        num_images: 1,
+        output_format: "png",
+      },
+    },
+  ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("generated-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: testCase.model,
+      prompt: "generate without references",
+      cfg: {},
+      aspectRatio: testCase.aspectRatio,
+      resolution: testCase.resolution,
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: `https://fal.run/${testCase.model}`,
+      body: testCase.expectedBody,
+    });
+  });
+
+  it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -802,7 +823,7 @@ describe("fal image-generation provider", () => {
 
     expectFalJsonPost({
       call: 1,
-      url: "https://fal.run/xai/grok-imagine-image/quality/edit",
+      url: "https://fal.run/xai/grok-imagine-image/edit",
       body: {
         prompt: "make it more realistic",
         aspect_ratio: "16:9",

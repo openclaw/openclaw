@@ -112,7 +112,7 @@ const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
-type FalEditEndpointSuffix = "edit" | "image-to-image" | "quality/edit";
+type FalEditEndpointSuffix = "edit" | "image-to-image";
 type FalImageModelSchema = {
   geometry: "image_size" | "native_aspect_ratio";
   aspectRatios?: readonly string[];
@@ -243,15 +243,14 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       supportsOutputFormat: true,
     };
   }
-  // Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image) — same aspect_ratio contract
-  // and image_urls reference contract as Nano Banana 2, but the fal endpoint suffix
-  // is /edit (not /image-to-image), and the /edit endpoint accepts only a single
-  // `resolution` value ("1K") — verified against the live fal API on 2026-07-01.
+  // Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image) uses /edit and the same
+  // aspect_ratio/image_urls contracts as Nano Banana 2. Its published schema
+  // has no resolution field, so explicit resolution overrides fail locally.
   if (model.startsWith("google/nano-banana-2-lite")) {
     return {
       geometry: "native_aspect_ratio",
       aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS,
-      resolutions: ["1K"],
+      resolutions: [],
       referenceImages: "image_urls",
       maxInputImages: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal Nano Banana 2 Lite",
@@ -261,9 +260,9 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       supportsOutputFormat: true,
     };
   }
-  // Grok Imagine (xAI) — text-to-image at /xai/grok-imagine-image, edit at
-  // /xai/grok-imagine-image/quality/edit. Accepts up to 3 reference images via
-  // image_urls, aspect_ratio enum, and lowercase resolution enum (1k/2k only).
+  // Grok Imagine (xAI) — text-to-image at /xai/grok-imagine-image, standard
+  // edits at /xai/grok-imagine-image/edit. Explicit quality/edit model paths
+  // remain unchanged. Accepts up to 3 reference images via image_urls.
   if (model.startsWith("xai/grok-imagine-image")) {
     return {
       geometry: "native_aspect_ratio",
@@ -274,7 +273,7 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       maxInputImages: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
       referenceLimitLabel: "fal Grok Imagine",
       referenceLimitNoun: "reference image",
-      appendEditPath: "quality/edit",
+      appendEditPath: "edit",
       supportsCount: true,
       supportsOutputFormat: true,
     };
@@ -490,10 +489,8 @@ function applyFalImageGeometry(params: {
       // - `resolutions: ["1K", "2K"]` with `resolutionCase: "lower"` (Grok
       //   Imagine): validate against the allowlist and lowercase before
       //   sending.
-      // - `resolutions: ["1K"]` (Nano Banana 2 Lite): the fal endpoint
-      //   exposes a `resolution` field but only accepts the literal `"1K"`;
-      //   anything else (including `"1k"`, `"2K"`, `"4K"`) returns 422.
-      // - `resolutions: []` (reserved): reject any override entirely.
+      // - `resolutions: []` (Nano Banana 2 Lite): reject overrides when the
+      //   published endpoint schema has no resolution field.
       const allowedResolutions = params.schema.resolutions;
       if (allowedResolutions === undefined) {
         params.requestBody.resolution = params.resolution;
