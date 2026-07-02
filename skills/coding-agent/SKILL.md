@@ -48,6 +48,9 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
+- For Grok Build coding work through ACPX, use the `grok-build` target; Grok
+  still owns its own auth, cached login, `XAI_API_KEY` handling, and model
+  selection.
 
 ## Notification block
 

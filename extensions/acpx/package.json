@@ -10,7 +10,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.55.0",
     "@zed-industries/codex-acp": "0.16.0",
-    "acpx": "0.11.2",
+    "acpx": "0.12.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
