@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
@@ -169,6 +170,46 @@ function resolveWorkerExecArgv(): string[] {
   return args;
 }
 
+/**
+ * Resolve a working Node.js executable path for forking the embedding worker.
+ *
+ * `child_process.fork()` defaults to `process.execPath`, which after a
+ * Homebrew / system-package-manager Node upgrade may point to a deleted
+ * binary (the old Cellar or version-specific path is removed).  When that
+ * happens the worker fork fails with ENOENT.
+ *
+ * This function checks whether `process.execPath` is still on disk and falls
+ * back to searching `PATH` for a `node` binary when it is not.
+ */
+function resolveWorkerExecPath(): string {
+  try {
+    accessSync(process.execPath, constants.X_OK);
+    return process.execPath;
+  } catch {
+    // process.execPath no longer exists — try to find node on PATH.
+  }
+
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter);
+  for (const dir of pathDirs) {
+    const candidate = path.resolve(dir, nodeName);
+    try {
+      accessSync(candidate, constants.X_OK);
+      console.warn(
+        `[memory-host-sdk] Warning: process.execPath (${process.execPath}) no longer exists, ` +
+          `resolving node from PATH: ${candidate}. ` +
+          "Consider restarting the gateway to use the current Node.js installation.",
+      );
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  // Nothing found — fall through.  fork() will produce a clear ENOENT error.
+  return process.execPath;
+}
+
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
@@ -234,6 +275,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: resolveWorkerExecPath(),
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
