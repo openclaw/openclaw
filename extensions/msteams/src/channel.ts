@@ -224,6 +224,7 @@ function normalizeActionConversationTarget(raw?: string | null): string | undefi
 function hasMatchingMSTeamsChannelRoute(params: {
   teams: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>["teams"];
   conversationId: string;
+  allowTeamScopedWildcard?: boolean;
 }): boolean {
   const target = normalizeActionConversationTarget(params.conversationId);
   if (!target) {
@@ -234,7 +235,10 @@ function hasMatchingMSTeamsChannelRoute(params: {
     if (teamKey === "*" && Object.keys(channels).length === 0) {
       return true;
     }
-    if (channels["*"] || channels[target] || channels[`conversation:${target}`]) {
+    if (channels[target] || channels[`conversation:${target}`]) {
+      return true;
+    }
+    if ((params.allowTeamScopedWildcard !== false || teamKey === "*") && channels["*"]) {
       return true;
     }
   }
@@ -258,6 +262,7 @@ function isMSTeamsReadTargetAllowed(params: {
     return hasMatchingMSTeamsChannelRoute({
       teams: params.cfg.teams,
       conversationId: directConversationId,
+      allowTeamScopedWildcard: false,
     });
   }
   const parsed = parseMSTeamsTeamChannelInput(params.target);

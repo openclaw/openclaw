@@ -366,6 +366,33 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("does not allow direct conversation read targets via team-scoped wildcards", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "*": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
   it("advertises upload-file in the message tool surface", () => {
     expect(
       msteamsPlugin.actions?.describeMessageTool?.({
