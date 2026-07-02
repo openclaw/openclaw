@@ -136,11 +136,15 @@ export function resolveMcpTransport(
           resourceUrl: resolved.url,
         })
       : baseFetch;
+  const transportFetch =
+    resolved.auth === "oauth" && authProvider
+      ? authProvider.wrapFetchForTokenRefresh(httpFetch)
+      : httpFetch;
   if (resolved.transportType === "streamable-http") {
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
-        fetch: httpFetch,
+        fetch: transportFetch,
         authProvider,
       }),
       description: resolved.description,
@@ -155,9 +159,12 @@ export function resolveMcpTransport(
   return {
     transport: new SSEClientTransport(new URL(resolved.url), {
       requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
-      fetch: httpFetch,
+      fetch: transportFetch,
       eventSourceInit: {
-        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
+        fetch: buildSseEventSourceFetch(
+          resolved.auth === "oauth" ? {} : sseHeaders,
+          transportFetch,
+        ),
       },
       authProvider,
     }),

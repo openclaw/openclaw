@@ -1,4 +1,5 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -6,6 +7,14 @@ type StreamableTransportOptions = {
   requestInit?: RequestInit;
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   authProvider?: unknown;
+};
+
+type OAuthTestProvider = {
+  saveTokens(tokens: {
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+  }): Promise<void>;
 };
 
 const {
@@ -331,6 +340,66 @@ describe("resolveMcpTransport", () => {
 
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
+  });
+
+  it("reuses rotated OAuth refresh tokens through streamable HTTP transports", async () => {
+    await withTempHome(
+      async () => {
+        runtimeFetchMock.mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              access_token: "new-access",
+              refresh_token: "new-refresh",
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+
+        resolveMcpTransport("probe", {
+          url: "https://mcp.example.com/mcp",
+          transport: "streamable-http",
+          auth: "oauth",
+        });
+
+        const options = latestStreamableTransportOptions();
+        const provider = options.authProvider as OAuthTestProvider;
+        const fetch = latestStreamableFetch();
+        await provider.saveTokens({
+          access_token: "old-access",
+          refresh_token: "old-refresh",
+          token_type: "Bearer",
+        });
+        const refreshInit = () => ({
+          method: "POST",
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: "old-refresh",
+          }),
+        });
+
+        const first = await fetch("https://auth.example.com/token", refreshInit());
+        const second = await fetch("https://auth.example.com/token", refreshInit());
+
+        await expect(first.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        await expect(second.json()).resolves.toMatchObject({
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+        });
+        expect(runtimeFetchMock).toHaveBeenCalledOnce();
+      },
+      {
+        prefix: "openclaw-mcp-transport-oauth-refresh-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
   });
 
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
