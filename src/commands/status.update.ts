@@ -2,6 +2,7 @@
 // Wraps registry/git update checks and formats compact update rows/hints.
 
 import { formatCliCommand } from "../cli/command-format.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
@@ -65,7 +66,10 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
 }
 
 /** Formats the actionable update hint shown in status footers. */
-export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
+export function formatUpdateAvailableHint(
+  update: UpdateCheckResult,
+  params?: { isContainerEnvironment?: boolean },
+): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
     return null;
@@ -79,6 +83,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
     details.push(`npm ${availability.latestVersion}`);
   }
   const suffix = details.length > 0 ? ` (${details.join(" · ")})` : "";
+  if (params?.isContainerEnvironment ?? isContainerEnvironment()) {
+    return `Update available${suffix}. OpenClaw is running inside a container; pull a newer image version and redeploy the container.`;
+  }
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 

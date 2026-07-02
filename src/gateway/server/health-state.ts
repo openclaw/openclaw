@@ -5,6 +5,7 @@ import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js"
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -27,7 +28,9 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const updateAvailable = getUpdateAvailable() ?? undefined;
+  const updateAvailable = isContainerEnvironment()
+    ? undefined
+    : (getUpdateAvailable() ?? undefined);
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   const snapshot: Snapshot = {
