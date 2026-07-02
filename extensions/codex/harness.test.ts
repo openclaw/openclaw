@@ -1,4 +1,5 @@
 // Codex tests cover harness plugin behavior.
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import {
@@ -53,6 +54,13 @@ describe("Codex agent harness supports()", () => {
     });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
+  });
+
+  it("advertises the same context-engine capabilities as the Codex app-server host", () => {
+    expect(harness.contextEngineHostCapabilities).toEqual(
+      CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.capabilities,
+    );
+    expect(harness.contextEngineHostCapabilities).toContain("reference-context");
   });
 });
 

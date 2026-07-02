@@ -199,6 +199,14 @@ Required members:
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
+<ParamField path="referenceContext" type="Array<{ id?: string; kind: string; trust?: string; content: string; source?: string | Record<string, unknown> }>">
+  Lower-authority historical or retrieved context owned by the host. Return this
+  when the model should see summaries, memories, or retrieval snippets as
+  quoted reference data rather than as fresh conversation messages or new
+  instructions. Hosts that support this lane render it below system,
+  developer, and current-user authority; `trust` is metadata and does not raise
+  prompt authority.
+</ParamField>
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
   Controls which token estimate the runner uses for preemptive overflow
   prechecks. Defaults to `"assembled"`, which means only the assembled
@@ -281,9 +289,12 @@ info: {
 }
 ```
 
-Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`.
-Generic CLI backends do not, so engines that require it are rejected before the
-CLI process starts.
+Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`
+and `reference-context`. Declare `reference-context` when the engine returns
+`referenceContext` and must rely on host-owned lower-authority rendering instead
+of encoding historical context as user messages. Generic CLI backends do not
+satisfy these agent-run assembly capabilities, so engines that require them are
+rejected before the CLI process starts.
 
 ### Failure isolation
 

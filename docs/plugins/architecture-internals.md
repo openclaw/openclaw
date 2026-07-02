@@ -1098,6 +1098,12 @@ shape, and redacted tool results in a thread-bootstrap projection so fresh
 backend threads retain tool continuity without copying raw secret-bearing
 payloads.
 
+`assemble()` may also return `referenceContext` for lower-authority historical
+or retrieved context. Use this for summaries, memories, or retrieval snippets
+that should be rendered as host-owned quoted reference data instead of fresh
+conversation messages. Engines that require this lane should declare the
+`reference-context` host capability for `agent-run`.
+
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
