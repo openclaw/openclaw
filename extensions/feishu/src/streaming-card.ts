@@ -8,6 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
@@ -117,12 +118,12 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
+  const data = await readProviderJsonResponse<{
     code: number;
     msg: string;
     tenant_access_token?: string;
     expire?: number;
-  };
+  }>(response, "feishu.streamingCard.token");
   await release();
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
@@ -280,11 +281,11 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
+    const createData = await readProviderJsonResponse<{
       code: number;
       msg: string;
       data?: { card_id: string };
-    };
+    }>(createRes, "feishu.streamingCard.createCard");
     await releaseCreate();
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
