@@ -35,6 +35,7 @@ import {
 } from "./matrix/actions.js";
 import { withResolvedActionClient } from "./matrix/actions/client.js";
 import type { MatrixActionClientOpts } from "./matrix/actions/types.js";
+import { resolveMatrixAllowListMatch } from "./matrix/monitor/allowlist.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import { reactMatrixMessage, resolveMatrixRoomId } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
@@ -105,6 +106,49 @@ function resolveMatrixReadGroupPolicy(params: {
   return params.accountConfig.allowlistOnly === true && groupPolicy === "open"
     ? "allowlist"
     : groupPolicy;
+}
+
+function normalizeMatrixReadRoomId(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutChannelPrefix = trimmed.replace(/^(?:matrix:)?(?:room|channel):/iu, "");
+  return withoutChannelPrefix.trim() || undefined;
+}
+
+function isMatrixDirectUserAllowlisted(params: {
+  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  userId: string;
+}): boolean {
+  return resolveMatrixAllowListMatch({
+    allowList: (params.accountConfig.dm?.allowFrom ?? []).map(String),
+    userId: params.userId,
+  }).allowed;
+}
+
+function isCurrentMatrixDirectReadAllowed(params: {
+  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  roomId: string;
+  toolContext?: MatrixToolActionContext;
+}): boolean {
+  const dmPolicy = params.accountConfig.dm?.policy ?? "pairing";
+  if (dmPolicy === "disabled") {
+    return false;
+  }
+  const contextRoomId = normalizeMatrixReadRoomId(params.toolContext?.currentChannelId);
+  const requestedRoomId = normalizeMatrixReadRoomId(params.roomId);
+  const directUserId = params.toolContext?.currentDirectUserId;
+  if (!contextRoomId || !requestedRoomId || contextRoomId !== requestedRoomId || !directUserId) {
+    return false;
+  }
+  if (dmPolicy === "open") {
+    return true;
+  }
+  return isMatrixDirectUserAllowlisted({
+    accountConfig: params.accountConfig,
+    userId: directUserId,
+  });
 }
 
 async function resolveMatrixReadRoomConfig(params: {
@@ -180,6 +224,16 @@ async function assertMatrixReadTargetAllowed(params: {
     if (roomConfig?.config && !roomConfig.allowed) {
       throw new Error("Matrix read target room is not allowed.");
     }
+    return;
+  }
+  if (
+    roomId &&
+    isCurrentMatrixDirectReadAllowed({
+      accountConfig: params.accountConfig,
+      roomId,
+      toolContext: params.toolContext,
+    })
+  ) {
     return;
   }
   if (!roomId || groupPolicy === "disabled" || !roomConfig?.allowed) {

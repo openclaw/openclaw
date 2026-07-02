@@ -329,7 +329,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
   });
 
-  it("blocks forged trusted current Matrix DM reads under default group allowlist", async () => {
+  it("allows current Matrix DM reads from dm.allowFrom under default group allowlist", async () => {
     const cfg = {
       channels: {
         matrix: {
@@ -344,6 +344,41 @@ describe("handleMatrixAction pollVote", () => {
         {
           action: "readMessages",
           roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ details: { ok: true } });
+
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
+      cfg,
+      limit: undefined,
+      before: undefined,
+      after: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("blocks current Matrix DM reads when the requested room is not current", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!other:example",
         },
         cfg,
         {

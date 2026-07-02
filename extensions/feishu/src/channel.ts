@@ -826,6 +826,39 @@ function assertFeishuFetchedMessageReadTargetAllowed(params: {
   }
 }
 
+async function assertFeishuReactionReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  accountId?: string;
+  messageId: string;
+  requestedTarget?: FeishuReadTarget;
+  getMessageFeishu: (params: {
+    cfg: ClawdbotConfig;
+    messageId: string;
+    accountId?: string;
+  }) => Promise<unknown>;
+}) {
+  assertFeishuMessageIdReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    requestedTarget: params.requestedTarget,
+  });
+  if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
+    return;
+  }
+  const message = await params.getMessageFeishu({
+    cfg: params.cfg,
+    messageId: params.messageId,
+    accountId: params.accountId,
+  });
+  assertFeishuFetchedMessageReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    requestedTarget: params.requestedTarget,
+    message,
+  });
+}
+
 function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
   return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
@@ -1346,11 +1379,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               if (!emoji) {
                 throw new Error("Emoji is required to remove a Feishu reaction.");
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
+              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              assertFeishuMessageIdReadTargetAllowed({
+              await assertFeishuReactionReadTargetAllowed({
                 cfg: ctx.cfg,
                 account,
+                accountId: ctx.accountId ?? undefined,
+                messageId,
+                getMessageFeishu,
                 ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
               });
               const matches = await listReactionsFeishu({
@@ -1377,11 +1413,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
                 );
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
+              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              assertFeishuMessageIdReadTargetAllowed({
+              await assertFeishuReactionReadTargetAllowed({
                 cfg: ctx.cfg,
                 account,
+                accountId: ctx.accountId ?? undefined,
+                messageId,
+                getMessageFeishu,
                 ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
               });
               const reactions = await listReactionsFeishu({
@@ -1416,10 +1455,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu reactions lookup requires messageId.");
             }
-            const { listReactionsFeishu } = await loadFeishuChannelRuntime();
-            assertFeishuMessageIdReadTargetAllowed({
+            const { getMessageFeishu, listReactionsFeishu } = await loadFeishuChannelRuntime();
+            await assertFeishuReactionReadTargetAllowed({
               cfg: ctx.cfg,
               account,
+              accountId: ctx.accountId ?? undefined,
+              messageId,
+              getMessageFeishu,
               ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
             });
             const reactions = await listReactionsFeishu({
