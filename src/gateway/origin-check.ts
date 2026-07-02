@@ -10,13 +10,25 @@ import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
+      matchedBy:
+        | "allowlist"
+        | "host-header-fallback"
+        | "private-same-origin"
+        | "local-loopback"
+        | "origin-pattern";
+      matchedPattern?: string;
     }
   | { ok: false; reason: string };
 
-function parseOrigin(
-  originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+type ParsedOrigin = {
+  origin: string;
+  host: string;
+  hostname: string;
+  protocol: string;
+  port: string;
+};
+
+function parseOrigin(originRaw?: string): ParsedOrigin | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
@@ -26,18 +38,42 @@ function parseOrigin(
     return {
       origin: normalizeLowercaseStringOrEmpty(url.origin),
       host: normalizeLowercaseStringOrEmpty(url.host),
-      hostname: normalizeLowercaseStringOrEmpty(url.hostname),
+      hostname: normalizeLowercaseStringOrEmpty(url.hostname).replace(/\.+$/, ""),
+      protocol: normalizeLowercaseStringOrEmpty(url.protocol),
+      port: normalizeLowercaseStringOrEmpty(url.port),
     };
   } catch {
     return null;
   }
 }
 
-/** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
+/** Parse an allowedOriginPattern into its components for matching. Returns null for invalid patterns. */
+function parseOriginPattern(
+  pattern: string,
+): { protocol: string; hostname: string; portWildcard: boolean } | null {
+  // Manual parse — new URL rejects * as invalid port.
+  const match = pattern.match(/^(https?):\/\/(\[?[^\]]+\]?|[^:/]+):\*$/);
+  if (!match) {
+    return null;
+  }
+  const hostname = normalizeLowercaseStringOrEmpty(match[2]).replace(/\.+$/, "");
+  // Runtime guard: reject non-loopback hostnames even if schema validation was bypassed.
+  if (!isLoopbackHost(hostname)) {
+    return null;
+  }
+  return {
+    protocol: normalizeLowercaseStringOrEmpty(match[1] + ":"),
+    hostname,
+    portWildcard: true,
+  };
+}
+
+/** Validate a browser Origin against explicit allowlist, same-host, local dev rules, and origin patterns. */
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
+  allowedOriginPatterns?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
 }): OriginCheckResult {
@@ -53,6 +89,22 @@ export function checkBrowserOrigin(params: {
   );
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
+  }
+
+  // Allowed origin patterns — constrained loopback port wildcards.
+  const patterns = params.allowedOriginPatterns ?? [];
+  for (const pattern of patterns) {
+    const parsed = parseOriginPattern(pattern);
+    if (!parsed) {
+      continue;
+    }
+    if (
+      parsed.protocol === parsedOrigin.protocol &&
+      parsed.hostname === parsedOrigin.hostname &&
+      parsed.portWildcard
+    ) {
+      return { ok: true, matchedBy: "origin-pattern", matchedPattern: pattern };
+    }
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
