@@ -614,6 +614,17 @@ export class CodexNativeSubagentMonitor {
     });
   }
 
+  private markCompletionDeliveryFailed(completion: CodexNativeSubagentCompletion): void {
+    const taskRuntime = this.getTaskRuntimeForChild(completion.childThreadId);
+    if (!taskRuntime) {
+      return;
+    }
+    taskRuntime.setDetachedTaskDeliveryStatusByRunId({
+      runId: codexNativeSubagentRunId(completion.childThreadId),
+      deliveryStatus: "failed",
+    });
+  }
+
   private scheduleCompletionDeliveryRetry(childState: ChildState): void {
     if (!childState.pendingCompletion || childState.completionDeliveryTimer) {
       return;
@@ -624,6 +635,16 @@ export class CodexNativeSubagentMonitor {
         Math.min(attempt, this.completionDeliveryRetryDelaysMs.length - 1)
       ];
     childState.completionDeliveryAttempt += 1;
+    // #97593: Give up after exhausting the retry schedule so a permanently
+    // non-durable delivery (e.g. silent subagent completion in a
+    // message_tool_only session) cannot re-run the parent agent forever.
+    if (childState.completionDeliveryAttempt > this.completionDeliveryRetryDelaysMs.length) {
+      const completion = childState.pendingCompletion;
+      childState.pendingCompletion = undefined;
+      childState.pendingCompletionEventAt = undefined;
+      this.markCompletionDeliveryFailed(completion);
+      return;
+    }
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
       const state = this.parentStates.get(childState.parentThreadId);

@@ -1286,6 +1286,125 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  it("stops retrying after exhausting the retry schedule on permanently non-durable delivery (#97593)", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      // Always non-durable — simulates a permanently non-durable handoff
+      // (e.g. silent subagent completion in a message_tool_only session).
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "completion delivery did not produce a parent response",
+      });
+      // Two-entry schedule: 10ms + 20ms = 2 retries, then give up.
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [10, 20],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child final result",
+        }),
+      );
+
+      // First delivery attempt (before any timer).
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // Retry 1 (10ms).
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+
+      // Retry 2 (20ms).
+      await vi.advanceTimersByTimeAsync(20);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      // Exhausted — no more retries.  Advance well past any possible timer.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      // Delivery status must be "failed", not "pending".
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "failed",
+        }),
+      );
+
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it(
+    "stops retrying with real timers after exhausting the retry schedule — verifies no fake-timer dependency (#97593)",
+    async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      // Always non-durable — simulates a permanently non-durable handoff.
+      runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+        delivered: false,
+        path: "direct" as const,
+        error: "completion delivery did not produce a parent response",
+      });
+      // Short schedule: 50ms + 100ms = 2 retries, then give up.
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+        completionDeliveryRetryDelaysMs: [50, 100],
+      });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:discord:channel:C123",
+        taskRuntimeScope: createTaskScope(),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client);
+      await client.notify(
+        nativeCompletionNotification({
+          agentPath: "child-thread",
+          statusLabel: "completed",
+          result: "child final result",
+        }),
+      );
+
+      // First delivery attempt is synchronous.
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+      // Wait for all retries + generous buffer.
+      // Schedule [50, 100] = 2 retries, total ~150ms. Wait 500ms for safety.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Must be exactly 3 total attempts (1 initial + 2 retries = delays.length + 1).
+      // No more retries → the give-up gate stopped the loop.
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      // Delivery status must be terminal "failed".
+      expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "failed",
+        }),
+      );
+
+      // Extra wait to prove retries have definitively stopped.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(3);
+
+      client.close();
+    },
+  );
+
   it("reconciles completed native subagents from child rollout transcripts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");
