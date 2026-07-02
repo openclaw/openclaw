@@ -140,6 +140,13 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     if (
       !wantsProbe &&
+      // Admin (sensitive) callers always get a fresh snapshot so the
+      // runtime-config drift summary, fingerprint values, and any other
+      // admin-only diagnostic in the live snapshot are not masked by the
+      // 60s non-sensitive cache. Without this, `openclaw health` could show
+      // a 30-second-old "ok" right after disk-config drift appeared on a
+      // restart-required path and the operator would miss the warning.
+      !includeSensitive &&
       cached &&
       !cachedDiffersFromRuntime &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
