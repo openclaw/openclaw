@@ -262,24 +262,32 @@ export async function acquireGatewayLock(
   while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
-      const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
-      const payload: LockPayload = {
-        pid: process.pid,
-        createdAt: resolveTimestampMsToIsoString(now()),
-        configPath,
-      };
-      if (typeof startTime === "number" && Number.isFinite(startTime)) {
-        payload.startTime = startTime;
+      try {
+        const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
+        const payload: LockPayload = {
+          pid: process.pid,
+          createdAt: resolveTimestampMsToIsoString(now()),
+          configPath,
+        };
+        if (typeof startTime === "number" && Number.isFinite(startTime)) {
+          payload.startTime = startTime;
+        }
+        await handle.writeFile(JSON.stringify(payload), "utf8");
+        return {
+          lockPath,
+          configPath,
+          release: async () => {
+            await handle.close().catch(() => undefined);
+            await fs.rm(lockPath, { force: true });
+          },
+        };
+      } catch (writeErr) {
+        // Write failed after acquiring the lock file; close the fd and
+        // remove the partial lock so a retry can start from a clean state.
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw writeErr;
       }
-      await handle.writeFile(JSON.stringify(payload), "utf8");
-      return {
-        lockPath,
-        configPath,
-        release: async () => {
-          await handle.close().catch(() => undefined);
-          await fs.rm(lockPath, { force: true });
-        },
-      };
     } catch (err) {
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
