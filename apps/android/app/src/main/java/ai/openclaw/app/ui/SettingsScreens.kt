@@ -896,8 +896,6 @@ private fun GatewaySettingsScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
-  val savedBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
-  val savedGatewayToken by viewModel.gatewayToken.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -907,27 +905,16 @@ private fun GatewaySettingsScreen(
   var passwordInput by remember { mutableStateOf("") }
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
-  var pendingSetupResetConfig by remember { mutableStateOf<GatewayConnectConfig?>(null) }
+  var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
 
-  fun saveAndConnect(
-    config: GatewayConnectConfig,
-    resetSetupAuth: Boolean,
-  ) {
+  fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
-    viewModel.saveGatewayConfigAndConnect(
-      host = config.host,
-      port = config.port,
-      tls = config.tls,
-      token = config.token,
-      bootstrapToken = config.bootstrapToken,
-      password = config.password,
-      resetSetupAuth = resetSetupAuth,
-    )
+    viewModel.saveGatewayConfigAndConnect(plan)
   }
 
-  pendingSetupResetConfig?.let { config ->
+  pendingSetupResetPlan?.let { plan ->
     AlertDialog(
-      onDismissRequest = { pendingSetupResetConfig = null },
+      onDismissRequest = { pendingSetupResetPlan = null },
       title = { Text("Replace gateway setup?") },
       text = {
         Text(
@@ -939,15 +926,15 @@ private fun GatewaySettingsScreen(
       confirmButton = {
         TextButton(
           onClick = {
-            pendingSetupResetConfig = null
-            saveAndConnect(config = config, resetSetupAuth = true)
+            pendingSetupResetPlan = null
+            saveAndConnect(plan)
           },
         ) {
           Text("Replace setup")
         }
       },
       dismissButton = {
-        TextButton(onClick = { pendingSetupResetConfig = null }) {
+        TextButton(onClick = { pendingSetupResetPlan = null }) {
           Text("Cancel")
         }
       },
@@ -1014,8 +1001,9 @@ private fun GatewaySettingsScreen(
         ClawPrimaryButton(
           text = "Save & Connect",
           onClick = {
-            val config =
-              resolveGatewaySettingsConnectConfig(
+            val plan =
+              resolveGatewayConnectPlan(
+                useSetupCode = setupCode.isNotBlank(),
                 setupCode = setupCode,
                 savedManualHost = manualHost,
                 savedManualPort = manualPort.toString(),
@@ -1023,29 +1011,18 @@ private fun GatewaySettingsScreen(
                 manualHostInput = hostInput,
                 manualPortInput = portInput,
                 manualTlsInput = tlsInput,
-                savedBootstrapToken = savedBootstrapToken,
-                savedGatewayToken = savedGatewayToken,
                 tokenInput = tokenInput,
                 bootstrapTokenInput = bootstrapTokenInput,
                 passwordInput = passwordInput,
               )
-            if (config == null) {
+            if (plan == null) {
               validationText = "Enter a valid setup code or gateway address."
               return@ClawPrimaryButton
             }
-            if (gatewaySettingsRequiresSetupAuthReset(setupCode)) {
-              pendingSetupResetConfig = config
+            if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
+              pendingSetupResetPlan = plan
             } else {
-              val endpointChanged =
-                gatewaySettingsManualEndpointChanged(
-                  savedManualHost = manualHost,
-                  savedManualPort = manualPort.toString(),
-                  savedManualTls = manualTls,
-                  manualHostInput = hostInput,
-                  manualPortInput = portInput,
-                  manualTlsInput = tlsInput,
-                )
-              saveAndConnect(config = config, resetSetupAuth = endpointChanged)
+              saveAndConnect(plan)
             }
           },
           modifier = Modifier.fillMaxWidth(),
