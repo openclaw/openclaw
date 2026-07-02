@@ -694,6 +694,7 @@ describe("feishuPlugin actions", () => {
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_allowed",
       chatId: "oc_group_1",
+      chatType: "group",
       content: "allowed",
       contentType: "text",
     });
@@ -719,6 +720,46 @@ describe("feishuPlugin actions", () => {
     expect(getMessageFeishuMock).toHaveBeenCalledWith({
       cfg: expect.objectContaining({ channels: expect.any(Object) }),
       messageId: "om_allowed",
+      accountId: undefined,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+  });
+
+  it("reads trusted direct messages allowed by Feishu dmPolicy", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_direct",
+      chatId: "oc_direct_1",
+      chatType: "p2p",
+      content: "direct",
+      contentType: "text",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { messageId: "om_direct" },
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_main",
+            appSecret: "secret_main",
+            dmPolicy: "allowlist",
+            allowFrom: ["ou_user_1"],
+            groupPolicy: "allowlist",
+            groups: {
+              oc_group_1: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: undefined,
+      toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+    } as never);
+
+    expect(getMessageFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      messageId: "om_direct",
       accountId: undefined,
     });
     const details = resultDetails(result);
@@ -771,6 +812,39 @@ describe("feishuPlugin actions", () => {
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks trusted-context fetched message reads outside the Feishu group allowlist", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      chatType: "group",
+      content: "outside",
+      contentType: "text",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "read",
+        params: { messageId: "om_blocked" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "chat:oc_group_1", currentMessageId: "om_blocked" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).toHaveBeenCalled();
   });
 
   it("blocks trusted-context Feishu reads before fetching when messageId is not current", async () => {
@@ -1418,6 +1492,86 @@ describe("feishuPlugin actions", () => {
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(listReactionsFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("lists trusted direct message reactions allowed by Feishu dmPolicy", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_direct",
+      chatId: "oc_direct_1",
+      chatType: "p2p",
+      content: "direct",
+      contentType: "text",
+    });
+    listReactionsFeishuMock.mockResolvedValueOnce([{ reactionId: "r1", operatorType: "user" }]);
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "reactions",
+      params: { messageId: "om_direct" },
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_main",
+            appSecret: "secret_main",
+            dmPolicy: "allowlist",
+            allowFrom: ["ou_user_1"],
+            groupPolicy: "allowlist",
+            groups: {
+              oc_group_1: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: undefined,
+      toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+    } as never);
+
+    expect(getMessageFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      messageId: "om_direct",
+      accountId: undefined,
+    });
+    expect(listReactionsFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      messageId: "om_direct",
+      accountId: undefined,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+  });
+
+  it("blocks Feishu reaction reads when the trusted-context target message is outside the group allowlist", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      chatType: "group",
+      content: "outside",
+      contentType: "text",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "reactions",
+        params: { messageId: "om_blocked" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "chat:oc_group_1", currentMessageId: "om_blocked" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
