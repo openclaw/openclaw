@@ -124,6 +124,48 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
+  it("keeps explicit cancellation separate from upstream lifecycle aborts", () => {
+    const upstreamAbortController = new AbortController();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-lifecycle-abort",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbortController.signal,
+    });
+    const explicitAbortSignal = operation.explicitAbortSignal;
+
+    expect(operation.abortSignal.aborted).toBe(false);
+    expect(explicitAbortSignal?.aborted).toBe(false);
+
+    upstreamAbortController.abort(new Error("reply lifecycle timeout"));
+
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(explicitAbortSignal?.aborted).toBe(false);
+    expect(operation.result).toBeNull();
+
+    operation.abortByUser();
+
+    expect(explicitAbortSignal?.aborted).toBe(true);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("aborts the explicit cancellation signal on restart abort", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-restart-abort",
+      resetTriggered: false,
+    });
+    const explicitAbortSignal = operation.explicitAbortSignal;
+
+    operation.abortForRestart();
+
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(explicitAbortSignal?.aborted).toBe(true);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
   it("runs completeThen callbacks after active state clears", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
