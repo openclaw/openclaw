@@ -803,6 +803,20 @@ function assertFeishuTrustedDirectReadTargetAllowed(params: {
   }
 }
 
+function assertFeishuMemberInfoReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  memberId: string;
+}) {
+  if (shouldVerifyFeishuMessageReadTarget(params)) {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
+  assertFeishuTrustedDirectReadTargetAllowed({
+    account: params.account,
+    directId: params.memberId,
+  });
+}
+
 function shouldEnforceFeishuDirectReadTarget(account: ResolvedFeishuAccount): boolean {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   return (dmPolicy as string) === "disabled" || dmPolicy === "allowlist";
@@ -1390,10 +1404,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           if (ctx.action === "member-info") {
-            const runtime = await loadFeishuChannelRuntime();
-            const client = await createFeishuActionClient(account);
             const memberId = resolveFeishuMemberId(ctx.params);
             if (memberId) {
+              assertFeishuMemberInfoReadTargetAllowed({
+                cfg: ctx.cfg,
+                account,
+                memberId,
+              });
+              const runtime = await loadFeishuChannelRuntime();
+              const client = await createFeishuActionClient(account);
               const member = await runtime.getFeishuMemberInfo(
                 client,
                 memberId,
@@ -1411,6 +1430,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu member-info requires memberId or chatId/channelId.");
             }
             assertFeishuReadTargetAllowed({ cfg: ctx.cfg, account, chatId });
+            const runtime = await loadFeishuChannelRuntime();
+            const client = await createFeishuActionClient(account);
             const members = await runtime.getChatMembers(
               client,
               chatId,
