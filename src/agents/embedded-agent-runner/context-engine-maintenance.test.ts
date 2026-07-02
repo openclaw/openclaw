@@ -1500,7 +1500,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("surfaces long-running deferred maintenance and completion via task updates", async () => {
+  it("surfaces long-running deferred maintenance progress without a no-op completion notice", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
@@ -1557,12 +1557,161 @@ describe("runContextEngineMaintenance", () => {
           throw new Error("Expected maintenance release callback to be initialized");
         }
         releaseMaintenance();
-        await waitForAssertion(() =>
-          expectSystemEventContaining(
-            sessionKey,
-            "Background task done: Context engine turn maintenance",
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        expect(
+          peekSystemEvents(sessionKey).some((event) =>
+            event.includes("Background task done: Context engine turn maintenance"),
           ),
-        );
+        ).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("skips deferred turn maintenance when the engine reports no maintenance debt", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      resetSystemEventsForTest();
+
+      const hasDeferredMaintenance = vi.fn(async () => false);
+      const maintain = vi.fn(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
+      const sessionKey = "agent:main:session-no-debt";
+      const backgroundEngine = {
+        info: {
+          id: "test",
+          name: "Test Engine",
+          turnMaintenanceMode: "background" as const,
+          hasDeferredMaintenance,
+        },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }: { messages: unknown[] }) => ({
+          messages,
+          estimatedTokens: 0,
+        }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+      await runContextEngineMaintenance({
+        contextEngine: backgroundEngine,
+        sessionId: "session-no-debt",
+        sessionKey,
+        sessionFile: "/tmp/session-no-debt.jsonl",
+        reason: "turn",
+      });
+
+      expect(hasDeferredMaintenance).toHaveBeenCalledWith({
+        sessionId: "session-no-debt",
+        sessionKey,
+        reason: "turn",
+        runtimeContext: undefined,
+      });
+      expect(maintain).not.toHaveBeenCalled();
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+      expect(listTasksForOwnerKey(sessionKey)).toEqual([]);
+    });
+  });
+
+  it("uses the same resolved session key for the maintenance hint and deferred worker", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const hasDeferredMaintenance = vi.fn(async () => true);
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const sessionId = "session-empty-key";
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+            hasDeferredMaintenance,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId,
+          sessionKey: "",
+          sessionFile: "/tmp/session-empty-key.jsonl",
+          reason: "turn",
+        });
+
+        expect(hasDeferredMaintenance).toHaveBeenCalledWith({
+          sessionId,
+          sessionKey: sessionId,
+          reason: "turn",
+          runtimeContext: undefined,
+        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        expect(listTasksForOwnerKey(sessionId)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("preserves deferred turn maintenance when the engine has no maintenance debt hint", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const sessionKey = "agent:main:session-no-hint";
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-no-hint",
+          sessionKey,
+          sessionFile: "/tmp/session-no-hint.jsonl",
+          reason: "turn",
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
       } finally {
         vi.useRealTimers();
       }
