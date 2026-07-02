@@ -18,6 +18,7 @@ import {
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
 import {
+  getAllowAlwaysUnavailableReason,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecHost,
@@ -53,6 +54,7 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  allowAlwaysPersistenceKind?: "one-shot" | null;
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -377,7 +379,10 @@ export function buildExecApprovalPendingReplyPayload(
   }
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      getAllowAlwaysUnavailableReason({
+        ask: params.ask,
+        allowAlwaysPersistenceKind: params.allowAlwaysPersistenceKind,
+      }) ?? "",
     );
   }
   const info: string[] = [];
