@@ -22,6 +22,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -82,6 +83,7 @@ import {
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
@@ -514,6 +516,7 @@ export async function compactEmbeddedAgentSessionDirect(
       agentId: fallbackAgentId,
       sessionId: params.sessionId,
       sessionKey: fallbackSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.config,
@@ -865,6 +868,45 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
 
     const runAbortController = new AbortController();
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolvedMessageProvider,
+      chatType: params.chatType,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: model.provider,
+      modelId,
+      modelApi: model.api,
+      modelContextWindowTokens: contextTokenBudget,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
+      skillsSnapshot: skillsSnapshotForRun,
+      sandboxToolPolicy: sandbox?.tools,
+    });
     const toolsRaw = createOpenClawCodingTools({
       exec: {
         ...params.execOverrides,
@@ -873,6 +915,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       },
       sandbox,
       messageProvider: resolvedMessageProvider,
+      chatType: params.chatType,
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
       runSessionKey:
@@ -894,13 +937,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       agentDir,
       cwd: effectiveCwd,
       workspaceDir: effectiveWorkspace,
-      spawnWorkspaceDir:
-        effectiveCwd !== effectiveWorkspace
-          ? resolvedWorkspace
-          : resolveAttemptSpawnWorkspaceDir({
-              sandbox,
-              resolvedWorkspace,
-            }),
+      spawnWorkspaceDir,
       config: params.config,
       abortSignal: runAbortController.signal,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -910,6 +947,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       modelApi: model.api,
       modelContextWindowTokens: contextTokenBudget,
       skillsSnapshot: skillsSnapshotForRun,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
         workspaceDir: effectiveWorkspace,
       }),
@@ -974,6 +1012,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
@@ -1052,7 +1092,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     const runtimeInfo = {
       host: machineName,
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: `${provider}/${modelId}`,

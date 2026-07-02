@@ -333,6 +333,20 @@ function formatQueueError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function isEmbeddedQueueHandleMessageInjectable(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+): boolean {
+  try {
+    return handle.isStopped === undefined ? handle.isStreaming() : !handle.isStopped();
+  } catch (err) {
+    diag.warn(
+      `queue message failed: sessionId=${sessionId} reason=injectable_check_failed err=${String(err)}`,
+    );
+    return false;
+  }
+}
+
 export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
@@ -395,7 +409,7 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
-  if (!handle.isStreaming()) {
+  if (!isEmbeddedQueueHandleMessageInjectable(sessionId, handle)) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }

@@ -176,8 +176,13 @@ describe("qa suite runtime flow", () => {
         createGatewayConfig: vi.fn(),
         buildAgentDelivery: vi.fn(),
         requiredPluginIds: [],
+        supportedActions: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
+        reset: vi.fn(),
+        sendInbound: vi.fn(),
+        waitForNoOutbound: vi.fn(),
+        waitForOutbound: vi.fn(),
         state: {
           reset: vi.fn(),
           getSnapshot: vi.fn(),
@@ -303,7 +308,7 @@ describe("qa suite runtime flow", () => {
     });
 
     await call.deps.webOpenPage({ url: "https://openclaw.ai" });
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai" });
+    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
     expect(env.webSessionIds.has("page-1")).toBe(true);
   });
 });

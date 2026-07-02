@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-## 2026.6.9 - 2026-06-23
+## 2026.6.11 - 2026-07-01
 
-Adds settings detail panels, refreshes the Android overview controls, and routes exec approvals into the in-app inbox.
+Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
 
-Improves chat acknowledgement handling, gateway pairing readiness, microphone foreground-service behavior, and release screenshot reliability.
+Adds clearer recovery guidance for TLS fingerprint timeouts, mobile protocol mismatches, and gateway auth states.
+
+Refreshes native Android localization coverage, including Swedish app naming and localized gateway trust flows.
 
 ## 2026.6.2 - 2026-06-02
 

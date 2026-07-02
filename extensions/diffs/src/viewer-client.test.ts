@@ -172,6 +172,24 @@ describe("hydrateViewer", () => {
     expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
     warn.mockRestore();
   });
+
+  it("replaces stale controllers when hydrating the current cards again", async () => {
+    renderCard();
+    const { controllers, hydrateViewer } = await import("./viewer-client.js");
+    controllers.splice(0);
+
+    await hydrateViewer();
+    expect(controllers).toHaveLength(1);
+    const firstController = controllers[0];
+
+    document.body.innerHTML = "";
+    renderCard();
+    await hydrateViewer();
+
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0]).not.toBe(firstController);
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("viewerState initialization", () => {

@@ -30,7 +30,7 @@ or an explicit manual dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                 | Always on non-draft pushes and PRs                  |
 | `check-dependencies`               | Production Knip dependency-only pass plus the unused-file allowlist guard                                 | Node-relevant changes                               |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, embedded built-artifact checks, and reusable artifacts | Node-relevant changes                               |
-| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, and CI-routing checks                             | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes such as bundled, protocol, QA Smoke CI, and CI-routing checks                | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two sharded plugin contract checks                                                                        | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two sharded channel contract checks                                                                       | Node-relevant changes                               |
 | `checks-node-core-*`               | Core Node test shards, excluding channel, bundled, contract, and extension lanes                          | Node-relevant changes                               |
@@ -90,9 +90,9 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Normal CI then packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites; heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU. Pull requests on the canonical repository use an additional compact admission plan: the same per-config groups run in isolated subprocesses inside the current 34-job Linux Node plan, so a single PR does not register the full 70-plus-job Node matrix. `main` pushes, manual dispatches, and release gates retain the full matrix. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
-Once admitted, canonical Linux CI permits up to 12 concurrent Node jobs and 8 for
-the smaller fast/check lanes; Windows and Android stay at two because those
-runner pools are narrower.
+Once admitted, canonical Linux CI permits up to 24 concurrent Node test jobs and
+12 for the smaller fast/check lanes; Windows and Android stay at two because
+those runner pools are narrower.
 
 The compact PR plan emits 18 Node jobs for the current suite: whole-config
 groups are batched in isolated subprocesses with a 120-minute batch timeout,
@@ -133,15 +133,33 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runners
 
-| Runner                          | Jobs                                                                                                                                                                                                                                                                                                            |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                                                                           |
-| `blacksmith-4vcpu-ubuntu-2404`  | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                           |
-| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                                                          |
-| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                |
-| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                              |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                             |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                       |
+| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                |
+| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                               |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                     |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                   |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                  |
+
+## Runner registration budget
+
+OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
+runner registrations per 5 minutes in `ghx api rate_limit`. Re-check
+`actions_runner_registration` before each tuning pass because GitHub can change
+this bucket. The limit is shared by all Blacksmith runner registrations in the
+`openclaw` organization, so adding another Blacksmith installation does not add
+a new bucket.
+
+Treat Blacksmith labels as the scarce resource for burst control. Jobs that
+only route, notify, summarize, select shards, or run short CodeQL scans should
+stay on GitHub-hosted runners unless they have measured Blacksmith-specific
+needs. Any new Blacksmith matrix, larger `max-parallel`, or high-frequency
+workflow must show its worst-case registration count and keep the org-level
+target below about 60% of the live bucket. With the current 10,000-registration
+bucket, that means a 6,000-registration operating target, leaving headroom for
+concurrent repositories, retries, and burst overlap.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -469,7 +487,7 @@ For normal PRs, follow scoped CI/check evidence instead of treating parity as a 
 
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -479,6 +497,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 | `/codeql-security-high/channel-runtime-boundary`  | Core channel implementation contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, audit touchpoints              |
 | `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                |
 | `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                           |
+| `/codeql-security-high/process-exec-boundary`     | Local shell, process spawn helpers, subprocess-owning bundled plugin runtimes, and workflow script glue                             |
 | `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, package-manager install, source-loading, and Plugin SDK package contract trust surfaces |
 
 ### Platform-specific security shards
@@ -488,7 +507,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 
 ### Critical Quality categories
 
-`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `agent-runtime-boundary`, `config-boundary`, `core-auth-secrets`, `channel-runtime-boundary`, `gateway-runtime-boundary`, `memory-runtime-boundary`, `mcp-process-runtime-boundary`, `provider-runtime-boundary`, `session-diagnostics-boundary`, `plugin-boundary`, `plugin-sdk-package-contract`, and `plugin-sdk-reply-runtime` shards for agent command/model/tool execution and reply dispatch code, config schema/migration/IO code, auth/secrets/sandbox/security code, core channel and bundled channel plugin runtime, gateway protocol/server-method, memory runtime/SDK glue, MCP/process/outbound delivery, provider runtime/model catalog, session diagnostics/delivery queues, plugin loader, Plugin SDK/package-contract, or Plugin SDK reply runtime changes. CodeQL config and quality workflow changes run all twelve PR quality shards.
+`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on GitHub-hosted Linux runners so quality scans do not spend Blacksmith runner-registration budget. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `agent-runtime-boundary`, `config-boundary`, `core-auth-secrets`, `channel-runtime-boundary`, `gateway-runtime-boundary`, `memory-runtime-boundary`, `mcp-process-runtime-boundary`, `provider-runtime-boundary`, `session-diagnostics-boundary`, `plugin-boundary`, `plugin-sdk-package-contract`, and `plugin-sdk-reply-runtime` shards for agent command/model/tool execution and reply dispatch code, config schema/migration/IO code, auth/secrets/sandbox/security code, core channel and bundled channel plugin runtime, gateway protocol/server-method, memory runtime/SDK glue, MCP/process/outbound delivery, provider runtime/model catalog, session diagnostics/delivery queues, plugin loader, Plugin SDK/package-contract, or Plugin SDK reply runtime changes. CodeQL config and quality workflow changes run all twelve PR quality shards.
 
 Manual dispatch accepts:
 
@@ -636,7 +655,16 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test"
 ```
 
-Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
+Read the final JSON summary. The useful fields are `provider`, `leaseId`,
+`syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. For delegated
+Blacksmith Testbox runs, the Crabbox wrapper exit code and JSON summary are the
+command result. The linked GitHub Actions run owns hydration and keepalive; it
+can finish as `cancelled` when the Testbox is stopped externally after the SSH
+command has already returned. Treat that as a cleanup/status artifact unless
+the wrapper `exitCode` is non-zero or the command output shows a failed test.
+One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically;
+if a run is interrupted or cleanup is unclear, inspect live boxes and stop only
+the boxes you created:
 
 ```bash
 blacksmith testbox list --all

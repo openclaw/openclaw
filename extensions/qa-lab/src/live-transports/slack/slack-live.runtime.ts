@@ -2037,6 +2037,7 @@ export async function runSlackQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "slack",
   });
   await fs.writeFile(

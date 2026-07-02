@@ -5,6 +5,7 @@ import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import {
   abortAgentHarnessRun,
+  attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult,
@@ -104,11 +105,12 @@ function createDeferred<T>() {
 function flushAsync() {
   // Pump enough microtasks for the attempt to settle past every
   // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // resolveCopilotWorkspaceBootstrapContext, createSession, etc.).
+  // BYOK proxy setup, resolveCopilotWorkspaceBootstrapContext,
+  // createSession, etc.).
   // Each chained `then` is one tick; tests rely on this to observe
   // `sdk.sessions[0]` being populated before they emit deltas.
   const tick = () => Promise.resolve();
-  return tick().then(tick).then(tick);
+  return tick().then(tick).then(tick).then(tick).then(tick);
 }
 
 function waitForEventLoopTurn(): Promise<void> {
@@ -2338,6 +2340,152 @@ describe("runCopilotAttempt", () => {
     expect(options.useLoggedInUser).toBe(false);
   });
 
+  it("pool keying: BYOK does not resolve unrelated GitHub auth", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    await runCopilotAttempt(
+      makeParams({
+        auth: { gitHubToken: "unrelated-token" } as never,
+        model: {
+          api: "openai-responses",
+          baseUrl: "https://api.example.test/v1",
+          id: "gpt-test",
+          provider: "custom-openai",
+        } as never,
+        resolvedApiKey: "byok-token",
+        authProfileId: "custom-openai:main",
+      } as never),
+      { pool },
+    );
+
+    const key = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[0] as {
+      authMode: string;
+      authProfileId?: string;
+    };
+    const options = (vi.mocked(pool["acquire"]).mock.calls[0] as unknown[] | undefined)?.[1] as {
+      gitHubToken?: string;
+      useLoggedInUser?: boolean;
+    };
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { apiKey?: string; baseUrl?: string };
+    };
+
+    expect(key.authMode).toBe("byok");
+    expect(key.authProfileId).toBe("custom-openai:main");
+    expect(options.gitHubToken).toBeUndefined();
+    expect(options.useLoggedInUser).toBe(false);
+    expect(cfg.provider).toEqual(
+      expect.objectContaining({
+        apiKey: "byok-token",
+        baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+      }),
+    );
+  });
+
+  it("forwards BYOK provider headers on the model request turn", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+
+    await runCopilotAttempt(
+      makeParams({
+        model: {
+          api: "anthropic-messages",
+          baseUrl: "https://anthropic.example.test",
+          headers: {
+            "X-Tenant": "tenant-a",
+            "X-Trace": "trace-1",
+          },
+          id: "claude-test",
+          provider: "anthropic-proxy",
+        } as never,
+        resolvedApiKey: "byok-token",
+        authProfileId: "anthropic-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { headers?: Record<string, string> };
+    };
+    const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+      requestHeaders?: Record<string, string>;
+    };
+    expect(cfg.provider?.headers).toEqual({
+      "X-Tenant": "tenant-a",
+      "X-Trace": "trace-1",
+    });
+    expect(sendOptions.requestHeaders).toEqual({
+      "X-Tenant": "tenant-a",
+      "X-Trace": "trace-1",
+    });
+  });
+
+  it("preserves prepared BYOK header-auth without synthesizing SDK apiKey auth", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const model = attachModelProviderRequestTransport(
+      {
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.test/v1",
+        headers: { "x-api-key": "header-secret" },
+        id: "gpt-test",
+        provider: "custom-header-proxy",
+      },
+      { auth: { mode: "header", headerName: "x-api-key", value: "header-secret" } },
+    );
+
+    await runCopilotAttempt(
+      makeParams({
+        model: model as never,
+        resolvedApiKey: "header-secret",
+        authProfileId: "custom-header-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      provider?: { apiKey?: string; headers?: Record<string, string> };
+    };
+    const sendOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
+      requestHeaders?: Record<string, string>;
+    };
+    expect(cfg.provider).toEqual(
+      expect.objectContaining({
+        headers: { "x-api-key": "header-secret" },
+      }),
+    );
+    expect(cfg.provider).not.toHaveProperty("apiKey");
+    expect(sendOptions.requestHeaders).toEqual({ "x-api-key": "header-secret" });
+  });
+
+  it("rejects BYOK providers with request transport policy overrides before creating a SDK session", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const model = attachModelProviderRequestTransport(
+      {
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.test/v1",
+        id: "gpt-test",
+        provider: "custom-header-proxy",
+      },
+      { proxy: { mode: "env-proxy" } },
+    );
+
+    const result = await runCopilotAttempt(
+      makeParams({
+        model: model as never,
+        resolvedApiKey: "header-secret",
+        authProfileId: "custom-header-proxy:main",
+      } as never),
+      { pool },
+    );
+
+    expect(getPromptErrorCode(result)).toBe("model_not_supported");
+    expect((result.promptError as Error | undefined)?.message).toContain("request proxy");
+    expect(sdk.createSession).not.toHaveBeenCalled();
+  });
+
   describe("session-level gitHubToken (independent of client-level)", () => {
     // The SDK contract (@github/copilot-sdk/dist/types.d.ts:1168-1178)
     // makes `SessionConfig.gitHubToken` independent of the client-level
@@ -2399,6 +2547,37 @@ describe("runCopilotAttempt", () => {
       expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
       const resumeCfg = sdk.resumeSession.mock.calls[0]?.[1] as { gitHubToken?: string };
       expect(resumeCfg.gitHubToken).toBe("contract-token-resume");
+    });
+
+    it("BYOK provider config is forwarded to resumeSession", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          auth: { gitHubToken: "unrelated-token" } as never,
+          model: {
+            api: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            id: "gpt-test",
+            provider: "custom-openai",
+          } as never,
+          resolvedApiKey: "byok-token",
+          authProfileId: "custom-openai:main",
+          initialReplayState: { sdkSessionId: "resume-target" } as never,
+        } as never),
+        { pool },
+      );
+
+      const resumeCfg = sdk.resumeSession.mock.calls[0]?.[1] as {
+        provider?: { apiKey?: string; baseUrl?: string };
+      };
+      expect(resumeCfg.provider).toEqual(
+        expect.objectContaining({
+          apiKey: "byok-token",
+          baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{24}\/v1$/),
+        }),
+      );
     });
 
     it("SessionConfig.gitHubToken is omitted when useLoggedInUser is the resolved mode", async () => {

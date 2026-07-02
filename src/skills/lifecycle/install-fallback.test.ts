@@ -1,8 +1,7 @@
 // Install fallback tests cover alternate skill install paths when primary paths fail.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
@@ -82,11 +81,13 @@ function commandCallAt(
   ];
 }
 
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-fallback-test-" });
+
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
   beforeAll(async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
+    workspaceDir = await suiteTempDirs.setup();
     skillsMocks.loadWorkspaceSkillEntries.mockReturnValue([
       makeSkillEntry(workspaceDir, "go-tool-single", {
         kind: "go",
@@ -112,7 +113,7 @@ describe("skills-install fallback edge cases", () => {
 
   afterAll(async () => {
     skillsInstallTesting.setDepsForTest();
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    await suiteTempDirs.cleanup();
   });
 
   it("handles sudo probe failures for go install without apt fallback", async () => {

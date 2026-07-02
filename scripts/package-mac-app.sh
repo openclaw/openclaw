@@ -194,7 +194,9 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
@@ -283,6 +285,10 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
+
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
 CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
@@ -302,33 +308,6 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
 else
   echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
   exit 1
-fi
-
-echo "📦 Copying Textual resources"
-TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-TEXTUAL_BUNDLE=""
-for candidate in \
-  "$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle" \
-  "$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
-do
-  if [ -d "$candidate" ]; then
-    TEXTUAL_BUNDLE="$candidate"
-    break
-  fi
-done
-if [ -z "$TEXTUAL_BUNDLE" ]; then
-  TEXTUAL_BUNDLE="$(find "$BUILD_ROOT" -type d \( -name "textual_Textual.bundle" -o -name "Textual_Textual.bundle" \) -print -quit)"
-fi
-if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
-  cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
-else
-  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
-    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
-  else
-    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
-    exit 1
-  fi
 fi
 
 running_packaged_app_pids() {

@@ -2445,6 +2445,59 @@ describe("handleSendChat", () => {
     expect(userMessage.role).toBe("user");
   });
 
+  it("escapes reply sender labels and clears reply state after chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-1");
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps reply state when chat.send fails before acceptance", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return Promise.resolve({ runId: "run-failed", status: "error" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-2");
+    expect(host.chatMessage).toBe("retry this");
+  });
+
   it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {

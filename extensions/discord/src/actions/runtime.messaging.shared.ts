@@ -38,7 +38,10 @@ export type DiscordMessagingActionContext = {
   accountId?: string;
   resolveChannelId: () => string;
   assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => Promise<void>;
-  assertGuildReadTargetAllowed: (params: { guildId: string }) => Promise<void>;
+  assertGuildReadTargetAllowed: (params: {
+    guildId: string;
+    channelTargetRequiredMessage?: string;
+  }) => Promise<void>;
   resolveReactionChannelId: () => Promise<string>;
   withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
   withReactionRuntimeOptions: <T extends Record<string, unknown> = Record<string, never>>(
@@ -357,7 +360,7 @@ export function createDiscordMessagingActionContext(params: {
         throw new Error("Discord read target channel is not allowed.");
       }
     },
-    assertGuildReadTargetAllowed: async ({ guildId }) => {
+    assertGuildReadTargetAllowed: async ({ guildId, channelTargetRequiredMessage }) => {
       const guildInfo = await resolveReadGuildEntry(guildId);
       if (
         !isDiscordGroupAllowedByPolicy({
@@ -374,7 +377,8 @@ export function createDiscordMessagingActionContext(params: {
         !allowsAllDiscordGuildChannels(guildInfo.channels)
       ) {
         throw new Error(
-          "Discord message search requires channelId or channelIds so each read target can be authorized.",
+          channelTargetRequiredMessage ??
+            "Discord message search requires channelId or channelIds so each read target can be authorized.",
         );
       }
     },

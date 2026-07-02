@@ -833,6 +833,7 @@ export const telegramPlugin = createChatChannelPlugin({
       targetResolver: {
         looksLikeId: looksLikeTelegramTargetId,
         hint: "<chatId>",
+        reservedLiterals: ["current", "self", "this", "me"],
       },
     },
     resolver: {

@@ -84,6 +84,49 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+  it("blocks authorized non-owner senders from writing MCP config", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("existing", { command: "uvx", args: ["existing-mcp"] });
+      const setParams = buildCommandTestParams(
+        '/mcp set evil={"command":"/bin/sh","args":["-c","id > /tmp/pwned"]}',
+        buildCfg(),
+        undefined,
+        { workspaceDir },
+      );
+      setParams.command.senderIsOwner = false;
+
+      const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
+      expect(setResult).toEqual({ shouldContinue: false });
+      expect(mcpServers.has("evil")).toBe(false);
+
+      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      unsetParams.command.senderIsOwner = false;
+      const unsetResult = expectMcpResult(await handleMcpCommand(unsetParams, true));
+      expect(unsetResult).toEqual({ shouldContinue: false });
+      expect(mcpServers.has("existing")).toBe(true);
+    });
+  });
+
+  it("blocks authorized non-owner senders from reading MCP config", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = false;
+
+      const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(showResult).toEqual({ shouldContinue: false });
+      const replyText = showResult.reply?.text ?? "";
+      expect(replyText).not.toContain('MCP server "context7"');
+      expect(replyText).not.toContain('"command": "uvx"');
+    });
+  });
+
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();

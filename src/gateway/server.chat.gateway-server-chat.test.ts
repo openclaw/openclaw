@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -1533,8 +1534,8 @@ describe("gateway server chat", () => {
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async (dir) => {
-        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-        process.env.OPENCLAW_STATE_DIR = dir;
+        const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+        setTestEnvValue("OPENCLAW_STATE_DIR", dir);
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1616,11 +1617,7 @@ describe("gateway server chat", () => {
           expect(serializedAssistant).not.toContain("data:image/png;base64");
           expect(serializedAssistant).not.toContain(pngB64);
         } finally {
-          if (previousStateDir == null) {
-            delete process.env.OPENCLAW_STATE_DIR;
-          } else {
-            process.env.OPENCLAW_STATE_DIR = previousStateDir;
-          }
+          envSnapshot.restore();
         }
       },
       { sessionId: "sess-managed-image-history" },

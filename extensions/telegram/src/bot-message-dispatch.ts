@@ -38,7 +38,10 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildHistoryContextFromEntries,
+  createChannelHistoryWindow,
+} from "openclaw/plugin-sdk/reply-history";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
@@ -72,11 +75,11 @@ import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
+  getSessionEntry,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
+  type SessionEntry,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
@@ -107,7 +110,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
-import { includesRecentTelegramGroupHistoryContext } from "./group-history-context.js";
+import { selectTelegramGroupHistoryAfterLastSelf } from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -117,7 +120,10 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import {
+  recordOutboundMessageForPromptContext,
+  withTelegramPromptContextTimestampMs,
+} from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -143,6 +149,7 @@ import {
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
+import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
@@ -243,33 +250,38 @@ export type TelegramDispatchResult =
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
-type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
+type CurrentTurnTranscriptFinal = { text: string; timestamp: number };
 type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
-type FreshTelegramSessionStoreLoader = ((agentId: string) => {
+type FreshTelegramSessionEntryLoader = ((
+  agentId: string,
+  sessionKey: string,
+) => {
   storePath: string;
-  store: TelegramSessionStore;
+  entry?: SessionEntry;
 }) & {
   clear: () => void;
 };
 
-function createFreshTelegramSessionStoreLoader(params: {
+function createFreshTelegramSessionEntryLoader(params: {
   cfg: OpenClawConfig;
   telegramDeps: TelegramBotDeps;
-}): FreshTelegramSessionStoreLoader {
-  const storesByPath = new Map<string, TelegramSessionStore>();
-  const load = ((agentId: string) => {
+}): FreshTelegramSessionEntryLoader {
+  const entriesByPathAndKey = new Map<string, SessionEntry | undefined>();
+  const load = ((agentId: string, sessionKey: string) => {
     const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
-    const cachedStore = storesByPath.get(storePath);
-    if (cachedStore) {
-      return { storePath, store: cachedStore };
+    const cacheKey = `${storePath}\0${sessionKey}`;
+    if (entriesByPathAndKey.has(cacheKey)) {
+      return { storePath, entry: entriesByPathAndKey.get(cacheKey) };
     }
-    const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-      skipCache: true,
+    const entry = (params.telegramDeps.getSessionEntry ?? getSessionEntry)({
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
     });
-    storesByPath.set(storePath, store);
-    return { storePath, store };
-  }) as FreshTelegramSessionStoreLoader;
-  load.clear = () => storesByPath.clear();
+    entriesByPathAndKey.set(cacheKey, entry);
+    return { storePath, entry };
+  }) as FreshTelegramSessionEntryLoader;
+  load.clear = () => entriesByPathAndKey.clear();
   return load;
 }
 
@@ -277,7 +289,7 @@ function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId } = params;
   const configDefault = resolveTelegramConfigReasoningDefault(cfg, agentId);
@@ -285,8 +297,7 @@ function resolveTelegramReasoningLevel(params: {
     return configDefault;
   }
   try {
-    const { store } = params.loadFreshSessionStore(agentId);
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const { entry } = params.loadFreshSessionEntry(agentId, sessionKey);
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
       return level;
@@ -317,11 +328,10 @@ function resolveTelegramMirroredTranscriptText(
 
 function resolveTelegramScopedTranscriptSession(params: {
   agentId: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
   sessionKey: string;
 }): TelegramScopedTranscriptSession | undefined {
-  const { store, storePath } = params.loadFreshSessionStore(params.agentId);
-  const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+  const { entry, storePath } = params.loadFreshSessionEntry(params.agentId, params.sessionKey);
   const sessionId = entry?.sessionId?.trim();
   return sessionId ? { sessionId, storePath } : undefined;
 }
@@ -329,7 +339,7 @@ function resolveTelegramScopedTranscriptSession(params: {
 async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   idempotencyKey: string;
-  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
+  loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
   route: TelegramMessageContext["route"];
   sessionKey: string;
   payload: TelegramTranscriptMirrorPayload;
@@ -340,7 +350,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   }
   const session = resolveTelegramScopedTranscriptSession({
     agentId: params.route.agentId,
-    loadFreshSessionStore: params.loadFreshSessionStore,
+    loadFreshSessionEntry: params.loadFreshSessionEntry,
     sessionKey: params.sessionKey,
   });
   if (!session) {
@@ -364,22 +374,14 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   }
 }
 
-const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
-
-function clipProgressMarkdownText(text: string): string {
-  if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
-    return text;
-  }
-  return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
-}
 
 function sanitizeProgressMarkdownText(text: string): string {
   return text.replaceAll("`", "'");
 }
 
 function formatProgressAsMarkdownCode(text: string): string {
-  const clipped = clipProgressMarkdownText(text);
+  const clipped = clipTelegramProgressText(text);
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
@@ -399,7 +401,7 @@ function escapeTelegramProgressHtml(text: string): string {
 }
 
 function renderTelegramProgressStringLine(text: string): string {
-  const clipped = clipProgressMarkdownText(text.trim());
+  const clipped = clipTelegramProgressText(text.trim());
   const italic = clipped.match(/^_(.*)_$/u);
   if (italic) {
     return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
@@ -418,7 +420,7 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
-    parts.push(`<code>${escapeTelegramProgressHtml(clipProgressMarkdownText(detail))}</code>`);
+    parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(detail))}</code>`);
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
@@ -531,14 +533,6 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
-function includesRecoveredTelegramGroupHistoryContext(context: TelegramMessageContext): boolean {
-  return Boolean(
-    context.isGroup &&
-    context.groupHistoryContextMode &&
-    includesRecentTelegramGroupHistoryContext(context.groupHistoryContextMode),
-  );
-}
-
 function buildRecoveredTelegramBody(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
@@ -546,11 +540,7 @@ function buildRecoveredTelegramBody(params: {
   historyKey?: string;
   threadSpec: TelegramThreadSpec;
 }): string {
-  if (
-    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
-    !params.historyKey ||
-    params.context.historyLimit <= 0
-  ) {
+  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
     return params.currentMessage;
   }
   const groupLabel = buildGroupLabel(
@@ -559,11 +549,15 @@ function buildRecoveredTelegramBody(params: {
     params.threadSpec.id,
   );
   const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  return createChannelHistoryWindow({
-    historyMap: params.context.groupHistories,
-  }).buildPendingContext({
-    historyKey: params.historyKey,
-    limit: params.context.historyLimit,
+  const fullEntries = (params.context.groupHistories.get(params.historyKey) ?? []).slice(
+    -params.context.historyLimit,
+  );
+  const pendingEntries =
+    params.context.ctxPayload.InboundEventKind === "room_event"
+      ? fullEntries
+      : selectTelegramGroupHistoryAfterLastSelf(fullEntries).slice(-params.context.historyLimit);
+  return buildHistoryContextFromEntries({
+    entries: pendingEntries,
     currentMessage: params.currentMessage,
     formatEntry: (entry) =>
       formatInboundEnvelope({
@@ -575,6 +569,7 @@ function buildRecoveredTelegramBody(params: {
         senderLabel: entry.sender,
         envelope: envelopeOptions,
       }),
+    excludeLast: false,
   });
 }
 
@@ -605,15 +600,14 @@ function buildRecoveredTelegramChatActionSender(params: {
   };
 }
 
-function migrateRecoveredTelegramRoomEventHistory(params: {
+function migrateRecoveredTelegramGroupHistory(params: {
   context: TelegramMessageContext;
   recoveredHistoryKey?: string;
 }) {
   const originalHistoryKey = params.context.historyKey;
   const recoveredHistoryKey = params.recoveredHistoryKey;
   if (
-    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
-    params.context.ctxPayload.InboundEventKind !== "room_event" ||
+    !params.context.isGroup ||
     !originalHistoryKey ||
     !recoveredHistoryKey ||
     originalHistoryKey === recoveredHistoryKey ||
@@ -679,19 +673,27 @@ function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
     : params.context.historyKey;
-  const includeRecoveredGroupHistory = includesRecoveredTelegramGroupHistoryContext(params.context);
-  migrateRecoveredTelegramRoomEventHistory({
-    context: params.context,
-    recoveredHistoryKey,
-  });
+  const recoveredHistoryEntries =
+    recoveredHistoryKey && params.context.historyLimit > 0
+      ? (params.context.groupHistories.get(recoveredHistoryKey) ?? []).slice(
+          -params.context.historyLimit,
+        )
+      : [];
+  const recoveredWatermarkedHistoryEntries = selectTelegramGroupHistoryAfterLastSelf(
+    recoveredHistoryEntries,
+  ).slice(-params.context.historyLimit);
   const recoveredInboundHistory =
-    includeRecoveredGroupHistory && recoveredHistoryKey && params.context.historyLimit > 0
-      ? createChannelHistoryWindow({
-          historyMap: params.context.groupHistories,
-        }).buildInboundHistory({
-          historyKey: recoveredHistoryKey,
-          limit: params.context.historyLimit,
-        })
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? params.context.ctxPayload.InboundEventKind === "room_event"
+        ? createChannelHistoryWindow({
+            historyMap: params.context.groupHistories,
+          }).buildInboundHistory({
+            historyKey: recoveredHistoryKey,
+            limit: params.context.historyLimit,
+          })
+        : recoveredWatermarkedHistoryEntries.length > 0
+          ? recoveredWatermarkedHistoryEntries
+          : undefined
       : params.context.ctxPayload.InboundHistory;
   const recoveredBodyForAgent = extractCurrentTelegramBody(
     params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
@@ -712,6 +714,10 @@ function resolveDispatchTelegramContext(params: {
     context: params.context,
     threadId: threadSpec.id,
     action: "record_voice",
+  });
+  migrateRecoveredTelegramGroupHistory({
+    context: params.context,
+    recoveredHistoryKey,
   });
   return {
     ...params.context,
@@ -763,7 +769,7 @@ export const dispatchTelegramMessage = async ({
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
-  const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
+  const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const {
     ctxPayload,
     msg,
@@ -773,8 +779,6 @@ export const dispatchTelegramMessage = async ({
     topicConfig,
     threadSpec,
     historyKey,
-    historyLimit,
-    groupHistories,
     route,
     skillFilter,
     sendTyping,
@@ -899,7 +903,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
-    loadFreshSessionStore,
+    loadFreshSessionEntry,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
@@ -1010,6 +1014,8 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const durableReasoningPayloadsEnabled =
+    resolvedReasoningLevel === "on" || Boolean(reasoningLane.stream);
   const streamToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
@@ -1049,6 +1055,7 @@ export const dispatchTelegramMessage = async ({
     active: Boolean(answerLane.stream),
     seed: progressSeed,
     formatLine: formatTelegramProgressLine,
+    reasoningGate: streamReasoningInProgressDraft,
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;
@@ -1434,14 +1441,6 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
-  const clearGroupHistory = () => {
-    if (isGroup && historyKey) {
-      createChannelHistoryWindow({ historyMap: groupHistories }).clear({
-        historyKey,
-        limit: historyLimit,
-      });
-    }
-  };
   const beginDeliveryCorrelation = () =>
     beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
@@ -1450,9 +1449,6 @@ export const dispatchTelegramMessage = async ({
         outboundAccountId: route.accountId,
         markInboundEventDelivered: () => {
           deliveryState.markDelivered();
-          if (isRoomEvent) {
-            clearGroupHistory();
-          }
         },
       },
       { inboundEventKind: ctxPayload.InboundEventKind },
@@ -1461,13 +1457,18 @@ export const dispatchTelegramMessage = async ({
   const sessionKey = ctxPayload.SessionKey;
   let transcriptMirrorSequence = 0;
   const transcriptMirrorTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
-  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+  let currentTurnTranscriptFinal: CurrentTurnTranscriptFinal | undefined;
+  const resolveCurrentTurnTranscriptFinal = async (): Promise<
+    CurrentTurnTranscriptFinal | undefined
+  > => {
     if (!sessionKey) {
       return undefined;
     }
+    if (currentTurnTranscriptFinal) {
+      return currentTurnTranscriptFinal;
+    }
     try {
-      const { store, storePath } = loadFreshSessionStore(route.agentId);
-      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const { entry: sessionEntry, storePath } = loadFreshSessionEntry(route.agentId, sessionKey);
       if (!sessionEntry?.sessionId) {
         return undefined;
       }
@@ -1480,11 +1481,24 @@ export const dispatchTelegramMessage = async ({
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
-      return latest.text;
+      currentTurnTranscriptFinal = {
+        text: latest.text,
+        timestamp: latest.timestamp,
+      };
+      return currentTurnTranscriptFinal;
     } catch (err) {
       logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
       return undefined;
     }
+  };
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
+    (await resolveCurrentTurnTranscriptFinal())?.text;
+  const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
+    const final = await resolveCurrentTurnTranscriptFinal();
+    if (final?.text.trim() !== text.trim()) {
+      return undefined;
+    }
+    return final.timestamp;
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
@@ -1515,7 +1529,7 @@ export const dispatchTelegramMessage = async ({
           await mirrorTelegramAssistantReplyToTranscript({
             cfg,
             idempotencyKey,
-            loadFreshSessionStore,
+            loadFreshSessionEntry,
             route,
             sessionKey,
             payload,
@@ -1606,13 +1620,19 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
-      return projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([payload], {
+      const keepReasoningLane = payload.isReasoning === true && durableReasoningPayloadsEnabled;
+      const payloadForPlan = keepReasoningLane ? { ...payload } : payload;
+      if (keepReasoningLane) {
+        delete payloadForPlan.isReasoning;
+      }
+      const normalized = projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([payloadForPlan], {
           cfg,
           sessionKey: ctxPayload.SessionKey,
           surface: "telegram",
         }),
       )[0];
+      return normalized;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {
@@ -1628,6 +1648,14 @@ export const dispatchTelegramMessage = async ({
         return false;
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
+      const promptContextTimestampMs =
+        options?.durable && deliverablePayload.text
+          ? await resolvePromptContextTimestampMs(deliverablePayload.text)
+          : undefined;
+      const effectivePayload = withTelegramPromptContextTimestampMs(
+        deliverablePayload,
+        promptContextTimestampMs,
+      );
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
@@ -1638,7 +1666,7 @@ export const dispatchTelegramMessage = async ({
           accountId: route.accountId,
           agentId: route.agentId,
           ctxPayload,
-          payload: deliverablePayload,
+          payload: effectivePayload,
           info: { kind: "final" },
           replyToMode,
           threadId: threadSpec.id,
@@ -1649,13 +1677,13 @@ export const dispatchTelegramMessage = async ({
           },
           silent,
           requiredCapabilities: deriveDurableFinalDeliveryRequirements({
-            payload: deliverablePayload,
-            replyToId: deliverablePayload.replyToId,
+            payload: effectivePayload,
+            replyToId: effectivePayload.replyToId,
             threadId: threadSpec.id,
             silent,
             payloadTransport: true,
             extraCapabilities: {
-              nativeQuote: usesNativeTelegramQuote(deliverablePayload),
+              nativeQuote: usesNativeTelegramQuote(effectivePayload),
             },
           }),
         });
@@ -1673,7 +1701,7 @@ export const dispatchTelegramMessage = async ({
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
         transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
-        replies: [deliverablePayload],
+        replies: [effectivePayload],
         onVoiceRecording: sendRecordVoice,
         silent,
         mediaLoader: telegramDeps.loadWebMedia,
@@ -1698,6 +1726,10 @@ export const dispatchTelegramMessage = async ({
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
       try {
+        const promptContextContent =
+          result.delivery.promptContextContent ?? result.delivery.content;
+        const promptContextTimestampMs =
+          await resolvePromptContextTimestampMs(promptContextContent);
         await (
           telegramDeps.recordOutboundMessageForPromptContext ??
           recordOutboundMessageForPromptContext
@@ -1707,7 +1739,8 @@ export const dispatchTelegramMessage = async ({
           chatId: deliveryBaseOptions.chatId,
           message: { message_id: result.delivery.messageId },
           messageId: result.delivery.messageId,
-          text: result.delivery.promptContextContent ?? result.delivery.content,
+          text: promptContextContent,
+          ...(promptContextTimestampMs !== undefined ? { promptContextTimestampMs } : {}),
           ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
         });
       } catch (error) {
@@ -1865,18 +1898,19 @@ export const dispatchTelegramMessage = async ({
       markProgressFinalDelivered();
       return { kind: "sent" };
     };
-    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      await resolveTranscriptBackedChannelFinalText({
+    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> => {
+      const candidate = await resolveCurrentTurnTranscriptFinal();
+      return await resolveTranscriptBackedChannelFinalText({
         finalText: text,
-        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+        resolveCandidateText: async () => candidate?.text,
       });
+    };
 
     if (isDmTopic) {
       try {
-        const { store } = loadFreshSessionStore(route.agentId);
         const sessionKeyLocal = ctxPayload.SessionKey;
         if (sessionKeyLocal) {
-          const entry = resolveSessionStoreEntry({ store, sessionKey: sessionKeyLocal }).existing;
+          const { entry } = loadFreshSessionEntry(route.agentId, sessionKeyLocal);
           isFirstTurnInSession = !entry?.systemSent;
         } else {
           logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
@@ -1885,7 +1919,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
       }
     }
-    loadFreshSessionStore.clear();
+    loadFreshSessionEntry.clear();
 
     if (statusReactionController && !isRoomEvent) {
       void statusReactionController.setThinking();
@@ -2418,6 +2452,7 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
@@ -2630,9 +2665,6 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
-    if (!isRoomEvent || deliveryState.snapshot().delivered) {
-      clearGroupHistory();
-    }
     return { kind: "completed" };
   }
   let sentFallback = false;
@@ -2713,18 +2745,11 @@ export const dispatchTelegramMessage = async ({
     );
   }
 
-  const shouldClearGroupHistory =
-    !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
-
   if (retryableDispatchFailure && retryDispatchErrors && !hasFinalResponse) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
 
   if (!hasFinalResponse) {
-    if (!shouldClearGroupHistory) {
-      return { kind: "completed" };
-    }
-    clearGroupHistory();
     return { kind: "completed" };
   }
 
@@ -2795,9 +2820,6 @@ export const dispatchTelegramMessage = async ({
         });
       },
     });
-  }
-  if (shouldClearGroupHistory) {
-    clearGroupHistory();
   }
   return { kind: "completed" };
 };

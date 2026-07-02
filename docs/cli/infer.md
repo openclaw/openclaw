@@ -129,7 +129,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
 - For `image describe`, `--file` accepts local paths and HTTP(S) image URLs. Remote URLs use the normal media-fetch SSRF policy.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai/<model>` uses the OpenAI provider path with either API-key or ChatGPT/Codex OAuth auth.
+- For `image describe`, an explicit `--model` runs that provider/model first, then tries configured `agents.defaults.imageModel.fallbacks` when the model call fails. Input preparation errors, such as missing files or unsupported URLs, fail before fallback attempts. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai/<model>` uses the OpenAI provider path with either API-key or ChatGPT/Codex OAuth auth.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -235,6 +235,8 @@ Notes:
 - For `image describe` and `image describe-many`, use `--prompt` to give the vision model a task-specific instruction such as OCR, comparison, UI inspection, or concise captioning.
 - Use `--timeout-ms` with slow local vision models or cold Ollama starts.
 - For `image describe`, `--model` must be an image-capable `<provider/model>`.
+  When set, OpenClaw tries that explicit model first and then configured
+  image-model fallbacks if the model call fails.
 - For local Ollama vision models, pull the model first and set `OLLAMA_API_KEY` to any placeholder value, for example `ollama-local`. See [Ollama](/providers/ollama#vision-and-image-description).
 
 ## Audio

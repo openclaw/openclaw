@@ -4,6 +4,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   interactiveReplyToPresentation,
   normalizeInteractiveReply,
@@ -27,6 +28,7 @@ import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
@@ -292,11 +294,7 @@ function buildFeishuPayloadCard(params: {
         },
       ];
 
-  const identityTitle = params.identity
-    ? params.identity.emoji
-      ? `${params.identity.emoji} ${params.identity.name ?? ""}`.trim()
-      : (params.identity.name ?? "")
-    : "";
+  const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
   const title = presentation?.title ?? identityTitle;
   const template = resolveFeishuCardTemplate(
     presentation?.tone === "danger"
@@ -323,6 +321,27 @@ function buildFeishuPayloadCard(params: {
   });
 }
 
+// Keep this aligned with the shared fallback renderer: guidance is valid only
+// when the fallback text exposes a command the user can copy.
+function hasVisibleFallbackCommand(
+  blocks: readonly MessagePresentationBlock[] | undefined,
+): boolean {
+  return (
+    blocks?.some(
+      (block) =>
+        block.type === "buttons" &&
+        block.buttons.some(
+          (button) =>
+            !button.disabled &&
+            button.action?.type === "command" &&
+            !button.url &&
+            !button.webApp?.url &&
+            !button.web_app?.url,
+        ),
+    ) ?? false
+  );
+}
+
 function renderFeishuPresentationPayload({
   payload,
   presentation,
@@ -339,6 +358,8 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
+  // Core consumes presentation before sendPayload; carry the fallback fact.
+  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   return {
     ...payload,
     text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
@@ -347,6 +368,7 @@ function renderFeishuPresentationPayload({
       feishu: {
         ...existingFeishuData,
         card,
+        ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
       },
     },
   };
@@ -508,21 +530,32 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (commentTarget) {
+      const normalizedPresentation =
+        normalizeMessagePresentation(ctx.payload.presentation) ??
+        (() => {
+          const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+          return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+        })();
+      const presentationFallbackText = renderMessagePresentationFallbackText({
+        text: ctx.payload.text,
+        presentation: normalizedPresentation,
+      });
+      // Direct delivery retains blocks; core-rendered delivery carries the fact.
+      const fallbackHasCommand =
+        hasVisibleFallbackCommand(normalizedPresentation?.blocks) ||
+        (isRecord(ctx.payload.channelData?.feishu) &&
+          ctx.payload.channelData.feishu.fallbackHasCommand === true);
+      const text = fallbackHasCommand
+        ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
+        : presentationFallbackText;
+
       return await sendTextMediaPayload({
         channel: "feishu",
         ctx: {
           ...ctx,
           payload: {
             ...ctx.payload,
-            text: renderMessagePresentationFallbackText({
-              text: ctx.payload.text,
-              presentation:
-                normalizeMessagePresentation(ctx.payload.presentation) ??
-                (() => {
-                  const interactive = normalizeInteractiveReply(ctx.payload.interactive);
-                  return interactive ? interactiveReplyToPresentation(interactive) : undefined;
-                })(),
-            }),
+            text,
             interactive: undefined,
             presentation: undefined,
             channelData: undefined,
@@ -616,9 +649,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (useCard) {
         const header = identity
           ? {
-              title: identity.emoji
-                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
-                : (identity.name ?? ""),
+              title: resolveFeishuIdentityHeaderTitle(identity),
               template: "blue" as const,
             }
           : undefined;

@@ -287,6 +287,42 @@ describe("writeCliImages", () => {
     }
   });
 
+  it("sweeps stale workspace-scoped CLI image files", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-sweep-"),
+    );
+    const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
+    const stalePath = path.join(imageRoot, "stale.png");
+    const freshPath = path.join(imageRoot, "fresh.png");
+    const image: ImageContent = {
+      type: "image",
+      data: "bmV3LWltYWdl",
+      mimeType: "image/png",
+    };
+
+    await fs.mkdir(imageRoot, { recursive: true });
+    await fs.writeFile(stalePath, "stale");
+    await fs.writeFile(freshPath, "fresh");
+    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
+    await fs.utimes(stalePath, staleTime, staleTime);
+
+    const written = await writeCliImages({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      workspaceDir,
+      images: [image],
+    });
+
+    try {
+      await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
+      await expect(fs.readFile(written.paths[0])).resolves.toEqual(
+        Buffer.from(image.data, "base64"),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("hydrates prompt media refs into codex image args through the helper seams", async () => {
     const tempDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),

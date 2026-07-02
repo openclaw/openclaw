@@ -3,10 +3,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
+  getModelProviderRequestTransport,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
 
@@ -153,6 +155,17 @@ describe("agent harness runtime SDK facade", () => {
     await import("./agent-harness-runtime.js");
 
     expect(loadResearchAutocapture).not.toHaveBeenCalled();
+  });
+
+  it("exposes attached model request transport metadata helpers", () => {
+    const model = attachModelProviderRequestTransport(
+      { id: "gpt-test", provider: "custom-openai" },
+      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
+    );
+
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
+    });
   });
 });
 
