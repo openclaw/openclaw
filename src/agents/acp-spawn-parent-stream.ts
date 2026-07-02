@@ -4,6 +4,7 @@ import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { formatProviderModelRef } from "../auto-reply/model-runtime.js";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
@@ -67,6 +68,94 @@ function formatProxyEnvSummary(keys: string[]): string {
     return "proxy env: none";
   }
   return `proxy env: ${keys.join(", ")}`;
+}
+
+function buildLifecycleFallbackNotice(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const selectedProvider = normalizeOptionalString(data?.selectedProvider);
+  const selectedModel = normalizeOptionalString(data?.selectedModel);
+  const activeProvider = normalizeOptionalString(data?.activeProvider);
+  const activeModel = normalizeOptionalString(data?.activeModel);
+  const reasonSummary = normalizeOptionalString(data?.reasonSummary);
+  if (!selectedModel || !activeModel) {
+    return undefined;
+  }
+  const selected = formatProviderModelRef(selectedProvider ?? "", selectedModel);
+  const active = formatProviderModelRef(activeProvider ?? "", activeModel);
+  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary ?? "selected model unavailable"})`;
+}
+
+function formatLifecycleFallbackStepModelRef(value: unknown): string | undefined {
+  const modelRef = normalizeOptionalString(value);
+  if (!modelRef) {
+    return undefined;
+  }
+  const separator = modelRef.indexOf("/");
+  if (separator <= 0 || separator >= modelRef.length - 1) {
+    return undefined;
+  }
+  return formatProviderModelRef(modelRef.slice(0, separator), modelRef.slice(separator + 1));
+}
+
+function formatLifecycleFallbackStepReason(value: unknown): string | undefined {
+  return normalizeOptionalString(value)?.replace(/_/g, " ");
+}
+
+function buildFallbackNoticeDedupeKey(
+  selected: string | undefined,
+  active: string | undefined,
+): string | undefined {
+  return selected && active ? `${selected}\0${active}` : undefined;
+}
+
+function buildLifecycleFallbackNoticeDedupeKey(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const selectedProvider = normalizeOptionalString(data?.selectedProvider);
+  const selectedModel = normalizeOptionalString(data?.selectedModel);
+  const activeProvider = normalizeOptionalString(data?.activeProvider);
+  const activeModel = normalizeOptionalString(data?.activeModel);
+  if (!selectedModel || !activeModel) {
+    return undefined;
+  }
+  return buildFallbackNoticeDedupeKey(
+    formatProviderModelRef(selectedProvider ?? "", selectedModel),
+    formatProviderModelRef(activeProvider ?? "", activeModel),
+  );
+}
+
+function buildLifecycleFallbackStepNotice(
+  data: Record<string, unknown> | undefined,
+  originalSelectedModel: string | undefined,
+  reasonSummary: string | undefined,
+): string | undefined {
+  const outcome = normalizeOptionalString(data?.fallbackStepFinalOutcome);
+  if (outcome !== "succeeded") {
+    return undefined;
+  }
+  const selected =
+    originalSelectedModel ?? formatLifecycleFallbackStepModelRef(data?.fallbackStepFromModel);
+  const active = formatLifecycleFallbackStepModelRef(data?.fallbackStepToModel);
+  if (!selected || !active) {
+    return undefined;
+  }
+  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary ?? "selected model unavailable"})`;
+}
+
+function buildLifecycleFallbackClearedNotice(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  const selectedProvider = normalizeOptionalString(data?.selectedProvider);
+  const selectedModel = normalizeOptionalString(data?.selectedModel);
+  if (!selectedModel) {
+    return undefined;
+  }
+  const selected = formatProviderModelRef(selectedProvider ?? "", selectedModel);
+  const previous = normalizeOptionalString(data?.previousActiveModel);
+  return previous && previous !== selected
+    ? `↪️ Model Fallback cleared: ${selected} (was ${previous})`
+    : `↪️ Model Fallback cleared: ${selected}`;
 }
 
 function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -382,6 +471,11 @@ export function startAcpSpawnParentStreamRelay(params: {
     mainKey: params.mainKey,
     sessionScope: params.sessionScope,
   };
+  let lastFallbackNoticeText: string | undefined;
+  let lastFallbackNoticeKey: string | undefined;
+  let fallbackStepOriginalSelectedModel: string | undefined;
+  let fallbackStepFirstFailureReason: string | undefined;
+  const fallbackStepFailedModels = new Set<string>();
   const wake = () => {
     if (!shouldSurfaceUpdates) {
       return;
@@ -413,6 +507,18 @@ export function startAcpSpawnParentStreamRelay(params: {
       deliveryContext: params.deliveryContext,
     });
     wake();
+  };
+  const emitFallbackNotice = (
+    notice: string,
+    contextKey: string,
+    dedupeKey: string | undefined = notice,
+  ) => {
+    if (notice === lastFallbackNoticeText || dedupeKey === lastFallbackNoticeKey) {
+      return;
+    }
+    lastFallbackNoticeText = notice;
+    lastFallbackNoticeKey = dedupeKey;
+    emit(`${relayLabel}: ${notice}`, contextKey);
   };
   const emitStartNotice = () => {
     recordTaskRunProgressByRunId({
@@ -722,8 +828,80 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
+    const lifecycleData = asObjectRecord(event.data);
+    const phase = normalizeOptionalString(lifecycleData?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    if (phase === "fallback" || phase === "fallback_step") {
+      flushPending();
+      if (phase === "fallback_step") {
+        const stepFromModel = formatLifecycleFallbackStepModelRef(
+          lifecycleData?.fallbackStepFromModel,
+        );
+        const stepToModel = formatLifecycleFallbackStepModelRef(lifecycleData?.fallbackStepToModel);
+        const stepReason = formatLifecycleFallbackStepReason(
+          lifecycleData?.fallbackStepFromFailureReason,
+        );
+        const stepChainPosition = asFiniteNumber(lifecycleData?.fallbackStepChainPosition);
+        if (stepChainPosition != null && stepChainPosition <= 1) {
+          fallbackStepOriginalSelectedModel = stepFromModel;
+          fallbackStepFirstFailureReason = undefined;
+          fallbackStepFailedModels.clear();
+        } else {
+          fallbackStepOriginalSelectedModel ??= stepFromModel;
+        }
+        if (stepFromModel) {
+          if (!fallbackStepFailedModels.has(stepFromModel)) {
+            fallbackStepFailedModels.add(stepFromModel);
+            fallbackStepFirstFailureReason ??= stepReason;
+          }
+          fallbackStepOriginalSelectedModel ??= stepFromModel;
+        }
+        fallbackStepFirstFailureReason ??= stepReason;
+        const failedAttemptCount = fallbackStepFailedModels.size;
+        const stepReasonSummary = fallbackStepFirstFailureReason
+          ? failedAttemptCount > 1
+            ? `${fallbackStepFirstFailureReason} (+${failedAttemptCount - 1} more attempts)`
+            : fallbackStepFirstFailureReason
+          : undefined;
+        const notice = buildLifecycleFallbackStepNotice(
+          lifecycleData,
+          fallbackStepOriginalSelectedModel,
+          stepReasonSummary,
+        );
+        if (notice) {
+          emitFallbackNotice(
+            notice,
+            `${contextPrefix}:fallback`,
+            buildFallbackNoticeDedupeKey(fallbackStepOriginalSelectedModel, stepToModel),
+          );
+        }
+        return;
+      }
+      const notice = buildLifecycleFallbackNotice(lifecycleData);
+      if (notice) {
+        emitFallbackNotice(
+          notice,
+          `${contextPrefix}:fallback`,
+          buildLifecycleFallbackNoticeDedupeKey(lifecycleData),
+        );
+      }
+      fallbackStepOriginalSelectedModel = undefined;
+      fallbackStepFirstFailureReason = undefined;
+      fallbackStepFailedModels.clear();
+      return;
+    }
+    if (phase === "fallback_cleared") {
+      flushPending();
+      fallbackStepOriginalSelectedModel = undefined;
+      fallbackStepFirstFailureReason = undefined;
+      fallbackStepFailedModels.clear();
+      lastFallbackNoticeKey = undefined;
+      const notice = buildLifecycleFallbackClearedNotice(lifecycleData);
+      if (notice) {
+        emit(`${relayLabel}: ${notice}`, `${contextPrefix}:fallback-cleared`);
+      }
+      return;
+    }
     if (phase === "end") {
       flushReplaceableAssistantSnapshot();
       flushPending();

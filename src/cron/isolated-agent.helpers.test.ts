@@ -288,6 +288,31 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayload).toEqual({ text: "section 2" });
   });
 
+  it("keeps leading fallback notices when finalAssistantVisibleText replaces text payloads", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "↪️ Model Fallback: minimax/MiniMax-M3 (selected zai/glm-5-turbo; timeout)",
+          isFallbackNotice: true,
+        },
+        { text: "partial streamed reply" },
+        { text: "final answer" },
+      ],
+      finalAssistantVisibleText: "final answer",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([
+      {
+        text: "↪️ Model Fallback: minimax/MiniMax-M3 (selected zai/glm-5-turbo; timeout)",
+        isFallbackNotice: true,
+      },
+      { text: "final answer" },
+    ]);
+    expect(result.outputText).toBe("final answer");
+    expect(result.synthesizedText).toBe("final answer");
+  });
+
   it("keeps structured-content detection scoped to the last delivery payload", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],

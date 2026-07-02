@@ -222,6 +222,136 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("relays model fallback lifecycle notices to the parent session", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fallback",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-fallback",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-fallback",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback",
+        selectedProvider: "zai",
+        selectedModel: "glm-5-turbo",
+        activeProvider: "minimax",
+        activeModel: "MiniMax-M3",
+        reasonSummary: "timeout",
+      },
+    });
+
+    expect(collectedTexts()).toContain(
+      "codex: ↪️ Model Fallback: minimax/MiniMax-M3 (selected zai/glm-5-turbo; timeout)",
+    );
+    expect(requestHeartbeatMock).toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("relays production fallback_step lifecycle notices to the parent session", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fallback-step",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-fallback-step",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-fallback-step",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "zai/glm-5-turbo",
+        fallbackStepToModel: "minimax/MiniMax-M3",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "succeeded",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback",
+        selectedProvider: "zai",
+        selectedModel: "glm-5-turbo",
+        activeProvider: "minimax",
+        activeModel: "MiniMax-M3",
+        reasonSummary: "timeout",
+      },
+    });
+
+    const fallbackNotices = collectedTexts().filter((text) => text.includes("Model Fallback:"));
+    expect(fallbackNotices).toEqual([
+      "codex: ↪️ Model Fallback: minimax/MiniMax-M3 (selected zai/glm-5-turbo; timeout)",
+    ]);
+    expect(requestHeartbeatMock).toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("does not announce transient fallback_step handoffs before a candidate succeeds", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fallback-step-multihop",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-fallback-step-multihop",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "proof-fail/fail-model",
+        fallbackStepToModel: "proof-mid/mid-model",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepChainPosition: 1,
+        fallbackStepFinalOutcome: "next_fallback",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "proof-mid/mid-model",
+        fallbackStepToModel: "proof-ok/ok-model",
+        fallbackStepFromFailureReason: "overloaded",
+        fallbackStepChainPosition: 2,
+        fallbackStepFinalOutcome: "succeeded",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-fallback-step-multihop",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback",
+        selectedProvider: "proof-fail",
+        selectedModel: "fail-model",
+        activeProvider: "proof-ok",
+        activeModel: "ok-model",
+        reasonSummary: "timeout (+1 more attempts)",
+      },
+    });
+
+    const fallbackNotices = collectedTexts().filter((text) => text.includes("Model Fallback:"));
+    expect(fallbackNotices).toEqual([
+      "codex: ↪️ Model Fallback: proof-ok/ok-model (selected proof-fail/fail-model; timeout (+1 more attempts))",
+    ]);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(2);
+    relay.dispose();
+  });
+
   it("remaps cron-run parent session keys while relaying stream events", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-cron",
