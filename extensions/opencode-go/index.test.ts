@@ -10,7 +10,10 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeGoLiveProviderConfig,
+  listOpencodeGoModelCatalogEntries,
+} from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -512,5 +515,23 @@ describe("opencode-go provider plugin", () => {
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen/go",
     });
+  });
+
+  it("keeps manifest model catalog in sync with runtime catalog", () => {
+    const runtimeModelIds = listOpencodeGoModelCatalogEntries().map(
+      (entry: { id: string }) => entry.id,
+    );
+    const manifestModelIds = (
+      manifest.modelCatalog?.providers?.["opencode-go"]?.models ?? []
+    ).map((model: { id: string }) => model.id);
+
+    expect(manifestModelIds.length).toBe(runtimeModelIds.length);
+
+    for (const id of runtimeModelIds) {
+      expect(manifestModelIds).toContain(id);
+    }
+    for (const id of manifestModelIds) {
+      expect(runtimeModelIds).toContain(id);
+    }
   });
 });
