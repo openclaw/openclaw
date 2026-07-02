@@ -154,49 +154,50 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  if (params.callback.type === "select-index") {
-    const modelSet = params.byProvider.get(params.callback.provider);
+  const { callback } = params;
+  if (callback.type === "select-index") {
+    const modelSet = params.byProvider.get(callback.provider);
     if (!modelSet || modelSet.size === 0) {
       return {
         kind: "ambiguous",
-        model: `<index:${params.callback.index}>`,
+        model: `<index:${callback.index}>`,
         matchingProviders: [],
       };
     }
     // The keyboard sorts the provider's models alphabetically before paginating,
     // so the index in the callback maps directly to the sorted list position.
     const sortedModels = [...modelSet].toSorted((left, right) => left.localeCompare(right));
-    const model = sortedModels[params.callback.index];
+    const model = sortedModels[callback.index];
     if (!model) {
       return {
         kind: "ambiguous",
-        model: `<index:${params.callback.index}>`,
+        model: `<index:${callback.index}>`,
         matchingProviders: [],
       };
     }
-    return { kind: "resolved", provider: params.callback.provider, model };
+    return { kind: "resolved", provider: callback.provider, model };
   }
 
-  if (params.callback.provider) {
+  if (callback.provider) {
     return {
       kind: "resolved",
-      provider: params.callback.provider,
-      model: params.callback.model,
+      provider: callback.provider,
+      model: callback.model,
     };
   }
   const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
+    params.byProvider.get(id)?.has(callback.model),
   );
   if (matchingProviders.length === 1) {
     return {
       kind: "resolved",
       provider: matchingProviders[0],
-      model: params.callback.model,
+      model: callback.model,
     };
   }
   return {
     kind: "ambiguous",
-    model: params.callback.model,
+    model: callback.model,
     matchingProviders,
   };
 }
