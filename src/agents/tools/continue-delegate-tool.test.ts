@@ -310,6 +310,33 @@ describe("continue_delegate tool", () => {
     ]);
   });
 
+  it("accepts targeted silent-wake returns without fanoutMode", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "targeted return",
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+    });
+    expect(result).not.toHaveProperty("fanoutMode");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "targeted return",
+        mode: "silent-wake",
+        targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      }),
+    ]);
+  });
+
   it("persists multi-recipient target metadata from snake_case input", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
@@ -363,6 +390,31 @@ describe("continue_delegate tool", () => {
     });
     expect(consumePendingDelegates("test-session")).toEqual([
       expect.objectContaining({ task: "return to everyone", fanoutMode: "all" }),
+    ]);
+  });
+
+  it("accepts tree fanout without explicit target keys", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "fan out to ancestors",
+      mode: "silent-wake",
+      fanoutMode: "tree",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+      fanoutMode: "tree",
+    });
+    expect(result).not.toHaveProperty("targetSessionKey");
+    expect(result).not.toHaveProperty("targetSessionKeys");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "fan out to ancestors",
+        mode: "silent-wake",
+        fanoutMode: "tree",
+      }),
     ]);
   });
 
@@ -420,7 +472,9 @@ describe("continue_delegate tool", () => {
         targetSessionKey: "agent:main:root",
         fanoutMode: "tree",
       }),
-    ).rejects.toThrow("fanoutMode cannot be combined with targetSessionKey or targetSessionKeys");
+    ).rejects.toThrow(
+      "For a targeted return, use targetSessionKey or targetSessionKeys and omit fanoutMode.",
+    );
   });
 
   it("stages post-compaction delegates as silent-wake delegates", async () => {

@@ -180,7 +180,9 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       }
       if (fanoutMode && (targetSessionKey || (targetSessionKeys && targetSessionKeys.length > 0))) {
         throw new ToolInputError(
-          "fanoutMode cannot be combined with targetSessionKey or targetSessionKeys.",
+          "fanoutMode cannot be combined with targetSessionKey or targetSessionKeys. " +
+            "For a targeted return, use targetSessionKey or targetSessionKeys and omit fanoutMode. " +
+            "For tree/all fanout, use fanoutMode and omit explicit target keys.",
         );
       }
       const targetingFields = {

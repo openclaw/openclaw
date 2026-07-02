@@ -36,6 +36,7 @@ const EMPTY_USAGE = {
 };
 
 const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
+const REPEATED_TOOL_ERROR_LIMIT = 2;
 
 type AssistantMessageUpdateEvent = Extract<
   AssistantMessageEvent,
@@ -52,6 +53,18 @@ type AssistantMessageUpdateEvent = Extract<
       | "toolcall_end";
   }
 >;
+
+type RepeatedToolErrorState = {
+  lastKey?: string;
+  repeatCount: number;
+};
+
+type RepeatedToolErrorDiagnostic = {
+  toolName: string;
+  normalizedArgs: string;
+  error: string;
+  repeatCount: number;
+};
 
 function appendTextDeltaToAssistantMessage(
   message: AssistantMessage,
@@ -86,6 +99,130 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   }
   const content = message.content.filter((item) => item.type !== "toolCall");
   return content.length === message.content.length ? message : { ...message, content };
+}
+
+function normalizeToolErrorValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeToolErrorValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, normalizeToolErrorValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function stringifyNormalizedToolErrorValue(value: unknown): string {
+  return JSON.stringify(normalizeToolErrorValue(value)) ?? "null";
+}
+
+function extractToolResultErrorText(result: ToolResultMessage): string {
+  const details = result.details;
+  if (details && typeof details === "object") {
+    const record = details as Record<string, unknown>;
+    if (typeof record.error === "string" && record.error.trim()) {
+      return record.error.trim();
+    }
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message.trim();
+    }
+  }
+  return result.content
+    .flatMap((entry) => (entry.type === "text" ? [entry.text.trim()] : []))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function observeRepeatedToolError(params: {
+  state: RepeatedToolErrorState;
+  assistantMessage: AssistantMessage;
+  toolResults: ToolResultMessage[];
+}): RepeatedToolErrorDiagnostic | undefined {
+  const errorResult = params.toolResults.find((result) => result.isError);
+  if (!errorResult) {
+    params.state.lastKey = undefined;
+    params.state.repeatCount = 0;
+    return undefined;
+  }
+  const toolCall = params.assistantMessage.content.find(
+    (entry): entry is AgentToolCall =>
+      entry.type === "toolCall" &&
+      entry.id === errorResult.toolCallId &&
+      entry.name === errorResult.toolName,
+  );
+  if (!toolCall) {
+    params.state.lastKey = undefined;
+    params.state.repeatCount = 0;
+    return undefined;
+  }
+  const error = extractToolResultErrorText(errorResult);
+  if (!error) {
+    params.state.lastKey = undefined;
+    params.state.repeatCount = 0;
+    return undefined;
+  }
+  const normalizedArgs = stringifyNormalizedToolErrorValue(toolCall.arguments);
+  const key = stringifyNormalizedToolErrorValue({
+    toolName: errorResult.toolName,
+    args: toolCall.arguments,
+    error,
+  });
+  params.state.repeatCount = params.state.lastKey === key ? params.state.repeatCount + 1 : 1;
+  params.state.lastKey = key;
+  if (params.state.repeatCount < REPEATED_TOOL_ERROR_LIMIT) {
+    return undefined;
+  }
+  return {
+    toolName: errorResult.toolName,
+    normalizedArgs,
+    error,
+    repeatCount: params.state.repeatCount,
+  };
+}
+
+function createRepeatedToolErrorAssistantMessage(
+  config: AgentLoopConfig,
+  diagnostic: RepeatedToolErrorDiagnostic,
+): AssistantMessage {
+  const text =
+    `Stopped after ${diagnostic.repeatCount} identical failed ${diagnostic.toolName} tool calls. ` +
+    diagnostic.error;
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: config.model.api,
+    provider: config.model.provider,
+    model: config.model.id,
+    usage: EMPTY_USAGE,
+    stopReason: "error",
+    errorMessage: text,
+    errorCode: "repeated_tool_error",
+    errorType: "tool_error_loop",
+    diagnostics: [
+      {
+        type: "repeated_tool_error",
+        timestamp: Date.now(),
+        error: {
+          name: "RepeatedToolError",
+          message: text,
+          code: "repeated_tool_error",
+        },
+        details: {
+          toolName: diagnostic.toolName,
+          normalizedArgs: diagnostic.normalizedArgs,
+          error: diagnostic.error,
+          repeatCount: diagnostic.repeatCount,
+          disposition: "terminated",
+        },
+      },
+    ],
+    timestamp: Date.now(),
+  };
 }
 
 /**
@@ -276,6 +413,7 @@ async function runLoop(
   let config = initialConfig;
   let firstTurn = true;
   let turnOpen = true;
+  const repeatedToolErrorState: RepeatedToolErrorState = { repeatCount: 0 };
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
   const stopIfAborted = async (): Promise<boolean> => {
@@ -370,10 +508,30 @@ async function runLoop(
           currentContext.messages.push(result);
           newMessages.push(result);
         }
+      } else if (message.stopReason !== "toolUse") {
+        repeatedToolErrorState.lastKey = undefined;
+        repeatedToolErrorState.repeatCount = 0;
       }
 
       await emit({ type: "turn_end", message, toolResults });
       turnOpen = false;
+      const repeatedToolError = observeRepeatedToolError({
+        state: repeatedToolErrorState,
+        assistantMessage: message,
+        toolResults,
+      });
+      if (repeatedToolError) {
+        const terminalMessage = createRepeatedToolErrorAssistantMessage(config, repeatedToolError);
+        newMessages.push(terminalMessage);
+        await emit({ type: "turn_start" });
+        turnOpen = true;
+        await emit({ type: "message_start", message: terminalMessage });
+        await emit({ type: "message_end", message: terminalMessage });
+        await emit({ type: "turn_end", message: terminalMessage, toolResults: [] });
+        turnOpen = false;
+        await emit({ type: "agent_end", messages: newMessages });
+        return;
+      }
       if (await stopIfAborted()) {
         return;
       }

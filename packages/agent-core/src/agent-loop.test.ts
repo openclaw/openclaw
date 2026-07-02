@@ -287,6 +287,172 @@ describe("agentLoop streaming updates", () => {
 });
 
 describe("runAgentLoop deferred tool hydration", () => {
+  function repeatedToolErrorAssistantMessage(args: Record<string, unknown>): AssistantMessage {
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: `call-${JSON.stringify(args)}`,
+          name: "continue_delegate",
+          arguments: args,
+        },
+      ],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: TEST_USAGE,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+  }
+
+  it("terminates before another model call after repeated identical tool errors", async () => {
+    const invalidArgs = {
+      task: "R-CONTINUATION-MIXED-SURFACE-FANOUT depth-2 targeted return arrived",
+      delaySeconds: 22,
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKeys: [],
+      fanoutMode: "tree",
+      model: "default",
+    };
+    const execute = vi.fn(async () => {
+      throw new Error("fanoutMode cannot be combined with targetSessionKey or targetSessionKeys.");
+    });
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 2) {
+        throw new Error("model was called after repeated tool error breaker tripped");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = repeatedToolErrorAssistantMessage(invalidArgs);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "schedule targeted return", timestamp: Date.now() }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            name: "continue_delegate",
+            label: "continue_delegate",
+            description: "Continuation delegate",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute,
+          },
+        ],
+      },
+      config,
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+    const terminal = messages.at(-1) as AssistantMessage;
+    expect(terminal).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorCode: "repeated_tool_error",
+      errorType: "tool_error_loop",
+    });
+    expect(terminal.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Stopped after 2 identical failed continue_delegate"),
+      }),
+    ]);
+    expect(terminal.diagnostics?.[0]?.details).toMatchObject({
+      toolName: "continue_delegate",
+      error: "fanoutMode cannot be combined with targetSessionKey or targetSessionKeys.",
+      repeatCount: 2,
+      disposition: "terminated",
+    });
+  });
+
+  it("allows a corrected retry with changed arguments after an initial tool error", async () => {
+    const invalidArgs = {
+      task: "return to main",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      fanoutMode: "tree",
+    };
+    const correctedArgs = {
+      task: "return to main",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+    };
+    const execute = vi
+      .fn<AgentTool["execute"]>()
+      .mockRejectedValueOnce(
+        new Error("fanoutMode cannot be combined with targetSessionKey or targetSessionKeys."),
+      )
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "scheduled" }],
+        details: { status: "scheduled" },
+      });
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          streamCalls === 1
+            ? repeatedToolErrorAssistantMessage(invalidArgs)
+            : streamCalls === 2
+              ? repeatedToolErrorAssistantMessage(correctedArgs)
+              : {
+                  role: "assistant" as const,
+                  content: [{ type: "text" as const, text: "done" }],
+                  api: model.api,
+                  provider: model.provider,
+                  model: model.id,
+                  usage: TEST_USAGE,
+                  stopReason: "stop" as const,
+                  timestamp: Date.now(),
+                };
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "schedule targeted return", timestamp: Date.now() }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            name: "continue_delegate",
+            label: "continue_delegate",
+            description: "Continuation delegate",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute,
+          },
+        ],
+      },
+      config,
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(3);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  });
+
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
     const execute = vi.fn(
       async (): Promise<AgentToolResult<unknown>> => ({
