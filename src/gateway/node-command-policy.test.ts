@@ -8,10 +8,15 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type {
+  PluginNodeHostCommandRegistration,
+  PluginNodeInvokePolicyRegistration,
+} from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
+  listDangerousPluginNodeCommands,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
@@ -21,9 +26,8 @@ describe("gateway/node-command-policy", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  function installCanvasPluginDefaults() {
-    const registry = createEmptyPluginRegistry();
-    (registry.nodeInvokePolicies ??= []).push({
+  function createCanvasPolicyRegistration(): PluginNodeInvokePolicyRegistration {
+    return {
       pluginId: "canvas",
       pluginName: "Canvas",
       source: "/extensions/canvas/index.ts",
@@ -35,7 +39,110 @@ describe("gateway/node-command-policy", () => {
         foregroundRestrictedOnIos: true,
         handle: (ctx) => ctx.invokeNode(),
       },
-    });
+    };
+  }
+
+  function createUnreadablePolicyRegistration(): PluginNodeInvokePolicyRegistration {
+    return {
+      pluginId: "bad-policy",
+      source: "/extensions/bad/index.ts",
+      get policy() {
+        throw new Error("node command policy getter exploded");
+      },
+    };
+  }
+
+  function createUnreadableNodeHostCommandRegistration(): PluginNodeHostCommandRegistration {
+    return {
+      pluginId: "bad-command",
+      source: "/extensions/bad/index.ts",
+      get command() {
+        throw new Error("node command metadata getter exploded");
+      },
+    };
+  }
+
+  function createUnreadableDangerousPolicyRegistration(): PluginNodeInvokePolicyRegistration {
+    return {
+      pluginId: "dangerous-policy",
+      source: "/extensions/bad/index.ts",
+      policy: {
+        commands: ["dangerous.default"],
+        defaultPlatforms: ["windows"],
+        get dangerous() {
+          throw new Error("node policy dangerous getter exploded");
+        },
+        handle: (ctx) => ctx.invokeNode(),
+      },
+    };
+  }
+
+  function createDangerousPolicyWithUnreadableDefaults(): PluginNodeInvokePolicyRegistration {
+    return {
+      pluginId: "dangerous-policy",
+      source: "/extensions/bad/index.ts",
+      policy: {
+        commands: ["dangerous.default"],
+        get defaultPlatforms() {
+          throw new Error("node policy defaultPlatforms getter exploded");
+        },
+        dangerous: true,
+        handle: (ctx) => ctx.invokeNode(),
+      },
+    };
+  }
+
+  function createUnreadableDangerousNodeHostCommandRegistration(): PluginNodeHostCommandRegistration {
+    return {
+      pluginId: "dangerous-command",
+      source: "/extensions/bad/index.ts",
+      command: {
+        command: "plugin.exec",
+        get dangerous() {
+          throw new Error("node command dangerous getter exploded");
+        },
+        handle: async () => "{}",
+      },
+    };
+  }
+
+  function installCanvasPluginDefaults() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push(createCanvasPolicyRegistration());
+    setActivePluginRegistry(registry);
+  }
+
+  function installUnreadableDangerousPolicy() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push(createUnreadableDangerousPolicyRegistration());
+    setActivePluginRegistry(registry);
+  }
+
+  function installDangerousPolicyWithUnreadableDefaults() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push(createDangerousPolicyWithUnreadableDefaults());
+    setActivePluginRegistry(registry);
+  }
+
+  function installUnreadableDangerousNodeHostCommand() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeHostCommands ??= []).push(createUnreadableDangerousNodeHostCommandRegistration());
+    setActivePluginRegistry(registry);
+  }
+
+  function installCanvasPluginDefaultsWithUnreadableSibling() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push(
+      createUnreadablePolicyRegistration(),
+      createCanvasPolicyRegistration(),
+    );
+    setActivePluginRegistry(registry);
+  }
+
+  function installUnreadableNodeHostCommandSibling() {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeHostCommands ??= []).push(createUnreadableNodeHostCommandRegistration());
+    (registry.nodeInvokePolicies ??= []).push(createCanvasPolicyRegistration());
     setActivePluginRegistry(registry);
   }
 
@@ -107,6 +214,60 @@ describe("gateway/node-command-policy", () => {
 
     expect(allowlist.has("canvas.snapshot")).toBe(true);
     expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("skips unreadable plugin policy siblings while preserving default commands", () => {
+    installCanvasPluginDefaultsWithUnreadableSibling();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("skips unreadable dangerous command siblings while preserving default commands", () => {
+    installUnreadableNodeHostCommandSibling();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("treats unreadable plugin policy dangerous metadata as dangerous", () => {
+    installUnreadableDangerousPolicy();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("dangerous.default")).toBe(false);
+    expect(listDangerousPluginNodeCommands()).toEqual(["dangerous.default"]);
+  });
+
+  it("keeps dangerous metadata when policy default platforms are unreadable", () => {
+    installDangerousPolicyWithUnreadableDefaults();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("dangerous.default")).toBe(false);
+    expect(listDangerousPluginNodeCommands()).toEqual(["dangerous.default"]);
+  });
+
+  it("treats unreadable node host command dangerous metadata as dangerous", () => {
+    installUnreadableDangerousNodeHostCommand();
+
+    expect(listDangerousPluginNodeCommands()).toEqual(["plugin.exec"]);
   });
 
   it("does not grant host command defaults for platform prefix aliases", () => {
@@ -250,5 +411,11 @@ describe("gateway/node-command-policy", () => {
 
     expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
     expect(isForegroundRestrictedPluginNodeCommand("system.run")).toBe(false);
+  });
+
+  it("skips unreadable foreground restriction siblings while preserving matching metadata", () => {
+    installCanvasPluginDefaultsWithUnreadableSibling();
+
+    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
   });
 });
