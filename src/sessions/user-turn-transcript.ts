@@ -567,6 +567,7 @@ export function createUserTurnTranscriptRecorder(
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    overrideMessage?: PersistedUserTurnMessage;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -581,7 +582,8 @@ export function createUserTurnTranscriptRecorder(
       return await selfPersistencePromise;
     }
     selfPersistencePromise = (async () => {
-      const resolvedMessage = options.message ?? (await resolveMessageForPersistence());
+      const resolvedMessage =
+        options.overrideMessage ?? options.message ?? (await resolveMessageForPersistence());
       if (!resolvedMessage) {
         return undefined;
       }
@@ -688,6 +690,7 @@ export function createUserTurnTranscriptRecorder(
         target: options?.target,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
+        overrideMessage: options?.overrideMessage,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
