@@ -139,10 +139,20 @@ function findModelAliasCandidate(
 ): ModelAliasCandidate | undefined {
   const aliasKey = normalizeLowercaseStringOrEmpty(raw);
   let match: ModelAliasCandidate | undefined;
+  const conflicts: string[] = [];
   for (const candidate of listModelAliasCandidates(cfg)) {
     if (normalizeLowercaseStringOrEmpty(candidate.alias) === aliasKey) {
-      match = candidate;
+      if (!match) {
+        match = candidate;
+      } else {
+        conflicts.push(candidate.keyRaw);
+      }
     }
+  }
+  if (conflicts.length > 0) {
+    getLog().warn(
+      `Duplicate model alias "${sanitizeModelWarningValue(raw)}" found in models: ${conflicts.map((k) => sanitizeModelWarningValue(k)).join(", ")}. Using "${sanitizeModelWarningValue(match!.keyRaw)}".`,
+    );
   }
   return match;
 }

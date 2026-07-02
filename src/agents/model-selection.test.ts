@@ -2807,6 +2807,72 @@ describe("normalizeModelSelection", () => {
   });
 });
 
+describe("findModelAliasCandidate", () => {
+  it("warns on duplicate model aliases and keeps the first match", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "gpt4" },
+            models: {
+              "openai/gpt-4o": { alias: "gpt4" },
+              "anthropic/claude-sonnet-4-6": { alias: "gpt4" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-4o" });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Duplicate model alias "gpt4" found in models'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  });
+
+  it("does not warn when model aliases are unique", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "sonnet" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+              "openai/gpt-4o": { alias: "gpt4" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  });
+});
+
 describe("resolveSubagentConfiguredModelSelection", () => {
   it("prefers agents.defaults.subagents.model over the agent primary model", () => {
     const cfg = {
