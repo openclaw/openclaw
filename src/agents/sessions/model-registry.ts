@@ -152,6 +152,12 @@ const ProviderAuthModeSchema = Type.Union([
   Type.Literal("token"),
 ]);
 type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
+const ModelInputSchema = Type.Union([
+  Type.Literal("text"),
+  Type.Literal("image"),
+  Type.Literal("audio"),
+  Type.Literal("video"),
+]);
 
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
@@ -162,7 +168,7 @@ const ModelDefinitionSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-  input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+  input: Type.Optional(Type.Array(ModelInputSchema)),
   cost: Type.Optional(
     Type.Object({
       input: Type.Number(),
@@ -926,7 +932,7 @@ export interface ProviderConfigInput {
     baseUrl?: string;
     reasoning: boolean;
     thinkingLevelMap?: Model["thinkingLevelMap"];
-    input: ("text" | "image")[];
+    input: Model["input"];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;

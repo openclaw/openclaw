@@ -174,6 +174,44 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("preserves audio and video inputs from generated plugin catalog shards", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "minimax", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            apiKey: "MINIMAX_API_KEY",
+            models: [
+              {
+                id: "MiniMax-M3",
+                name: "MiniMax M3",
+                input: ["text", "image", "video", "audio"],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ minimax: { type: "api_key", key: "sk-test" } }),
+      modelsPath,
+      { pluginMetadataSnapshot: pluginOwnerSnapshot("minimax", "minimax") },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual([
+      "text",
+      "image",
+      "video",
+      "audio",
+    ]);
+  });
+
   it("isolates invalid generated plugin catalog shards from valid models", () => {
     const modelsPath = writeModelsJsonWithPluginCatalogs({
       root: {
