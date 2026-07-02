@@ -21,7 +21,6 @@ import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
-import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
@@ -44,23 +43,51 @@ import kotlin.math.roundToInt
 /**
  * CameraX-backed capture service used by gateway camera commands.
  */
-internal fun cleanupCameraClipSession(
-  recordingStopNeeded: Boolean,
-  stopRecording: () -> Unit,
-  cameraBound: Boolean,
-  unbindCamera: () -> Unit,
-  temporaryFile: File?,
-  callerOwnsFile: Boolean,
-  deleteTemporaryFile: (File) -> Unit,
-) {
-  if (recordingStopNeeded) {
-    runCatching { stopRecording() }
+internal class CameraClipSession(
+  private val unbind: () -> Unit,
+  private val deleteTemporaryFile: (File) -> Unit,
+) : AutoCloseable {
+  private var recording: AutoCloseable? = null
+  private var temporaryFile: File? = null
+  private var closed = false
+
+  fun ownRecording(recording: AutoCloseable) {
+    check(!closed) { "camera clip session is closed" }
+    this.recording = recording
   }
-  if (cameraBound) {
-    runCatching { unbindCamera() }
+
+  fun ownFile(file: File): File {
+    check(!closed) { "camera clip session is closed" }
+    check(temporaryFile == null) { "camera clip session already owns a file" }
+    temporaryFile = file
+    return file
   }
-  if (!callerOwnsFile && temporaryFile != null) {
-    runCatching { deleteTemporaryFile(temporaryFile) }
+
+  fun transferFile(): File {
+    check(!closed) { "camera clip session is closed" }
+    return checkNotNull(temporaryFile) { "camera clip session has no file" }
+      .also { temporaryFile = null }
+  }
+
+  override fun close() {
+    if (closed) return
+    closed = true
+
+    var failure: Throwable? = null
+
+    fun cleanup(action: () -> Unit) {
+      try {
+        action()
+      } catch (err: Throwable) {
+        failure?.addSuppressed(err) ?: run { failure = err }
+      }
+    }
+
+    // Keep teardown symmetric across bind, warmup, recording, finalize, and success exits.
+    cleanup { recording?.close() }
+    cleanup(unbind)
+    temporaryFile?.let { file -> cleanup { deleteTemporaryFile(file) } }
+    failure?.let { throw it }
   }
 }
 
@@ -255,40 +282,38 @@ class CameraCaptureManager(
         androidx.camera.core.Preview
           .Builder()
           .build()
-      // Provide a dummy SurfaceTexture so the preview pipeline activates
-      val surfaceTexture = android.graphics.SurfaceTexture(0)
-      surfaceTexture.setDefaultBufferSize(640, 480)
+      // Allocate the dummy preview surface only after CameraX requests it; its result owns release.
       preview.setSurfaceProvider { request ->
+        val surfaceTexture = android.graphics.SurfaceTexture(0)
+        surfaceTexture.setDefaultBufferSize(640, 480)
         val surface = android.view.Surface(surfaceTexture)
-        request.provideSurface(surface, context.mainExecutor()) { result ->
+        request.provideSurface(surface, context.mainExecutor()) {
           surface.release()
           surfaceTexture.release()
         }
       }
 
       provider.unbindAll()
-      var cameraBound = false
-      var recording: Recording? = null
-      var recordingStopRequested = false
-      var file: File? = null
-      var callerOwnsFile = false
-      try {
+      CameraClipSession(
+        unbind = { provider.unbind(preview, videoCapture) },
+        deleteTemporaryFile = { file ->
+          check(!file.exists() || file.delete()) { "failed to delete temporary camera clip" }
+        },
+      ).use { session ->
         android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
         val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
-        cameraBound = true
         android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
 
         // Give camera pipeline time to initialize before recording
         android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
         kotlinx.coroutines.delay(1_500)
 
-        val clipFile = File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir)
-        file = clipFile
+        val clipFile = session.ownFile(File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir))
         val outputOptions = FileOutputOptions.Builder(clipFile).build()
 
         val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
         android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${clipFile.absolutePath}")
-        recording =
+        val recording =
           videoCapture.output
             .prepareRecording(context, outputOptions)
             .apply {
@@ -306,22 +331,18 @@ class CameraCaptureManager(
                 finalized.complete(event)
               }
             }
+        session.ownRecording(recording)
 
         android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
-        try {
-          kotlinx.coroutines.delay(durationMs.toLong())
-        } finally {
-          android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
-          recording.stop()
-          recordingStopRequested = true
-        }
+        kotlinx.coroutines.delay(durationMs.toLong())
+        android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
+        recording.close()
 
         val finalizeEvent =
           try {
             withTimeout(15_000) { finalized.await() }
           } catch (err: kotlinx.coroutines.TimeoutCancellationException) {
             android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
-            withContext(Dispatchers.IO) { clipFile.delete() }
             throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
           }
         if (finalizeEvent.hasError()) {
@@ -333,24 +354,16 @@ class CameraCaptureManager(
           // Check file size for debugging
           val fileSize = withContext(Dispatchers.IO) { if (clipFile.exists()) clipFile.length() else -1 }
           android.util.Log.e("CameraCaptureManager", "clip: file exists=${clipFile.exists()} size=$fileSize")
-          withContext(Dispatchers.IO) { clipFile.delete() }
           throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
         }
 
         val fileSize = withContext(Dispatchers.IO) { clipFile.length() }
         android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
 
-        callerOwnsFile = true
-        FilePayload(file = clipFile, durationMs = durationMs.toLong(), hasAudio = includeAudio)
-      } finally {
-        cleanupCameraClipSession(
-          recordingStopNeeded = recording != null && !recordingStopRequested,
-          stopRecording = { recording?.stop() },
-          cameraBound = cameraBound,
-          unbindCamera = { provider.unbindAll() },
-          temporaryFile = file,
-          callerOwnsFile = callerOwnsFile,
-          deleteTemporaryFile = { it.delete() },
+        FilePayload(
+          file = session.transferFile(),
+          durationMs = durationMs.toLong(),
+          hasAudio = includeAudio,
         )
       }
     }

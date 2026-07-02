@@ -26,50 +26,57 @@ class CameraHandlerTest {
   }
 
   @Test
-  fun cleanupCameraClipSession_stopsRecordingUnbindsCameraAndDeletesOwnedFile() {
+  fun cameraClipSession_closesRecordingUnbindsAndDeletesOwnedFile() {
     val tempFile = File.createTempFile("openclaw-clip-test-", ".mp4")
-    var stopped = false
-    var unbound = false
-    var deletedFile: File? = null
+    val cleanup = mutableListOf<String>()
+    val session =
+      CameraClipSession(
+        unbind = { cleanup += "unbind" },
+        deleteTemporaryFile = { file ->
+          cleanup += "file"
+          assertSame(tempFile, file)
+          file.delete()
+        },
+      )
+    session.ownRecording(AutoCloseable { cleanup += "recording" })
+    session.ownFile(tempFile)
 
-    cleanupCameraClipSession(
-      recordingStopNeeded = true,
-      stopRecording = { stopped = true },
-      cameraBound = true,
-      unbindCamera = { unbound = true },
-      temporaryFile = tempFile,
-      callerOwnsFile = false,
-      deleteTemporaryFile = {
-        deletedFile = it
-        it.delete()
-      },
-    )
+    session.close()
+    session.close()
 
-    assertTrue(stopped)
-    assertTrue(unbound)
-    assertSame(tempFile, deletedFile)
+    assertEquals(listOf("recording", "unbind", "file"), cleanup)
     assertFalse(tempFile.exists())
   }
 
   @Test
-  fun cleanupCameraClipSession_keepsFileReturnedToCallerAndSkipsAlreadyStoppedRecording() {
+  fun cameraClipSession_unbindsBeforeRecordingStarts() {
+    val cleanup = mutableListOf<String>()
+
+    CameraClipSession(
+      unbind = { cleanup += "unbind" },
+      deleteTemporaryFile = { cleanup += "file" },
+    ).close()
+
+    assertEquals(listOf("unbind"), cleanup)
+  }
+
+  @Test
+  fun cameraClipSession_keepsFileTransferredToCaller() {
     val tempFile = File.createTempFile("openclaw-clip-test-", ".mp4")
     try {
-      var stopped = false
-      var unbound = false
+      val cleanup = mutableListOf<String>()
+      val session =
+        CameraClipSession(
+          unbind = { cleanup += "unbind" },
+          deleteTemporaryFile = { cleanup += "file" },
+        )
+      session.ownRecording(AutoCloseable { cleanup += "recording" })
+      session.ownFile(tempFile)
 
-      cleanupCameraClipSession(
-        recordingStopNeeded = false,
-        stopRecording = { stopped = true },
-        cameraBound = true,
-        unbindCamera = { unbound = true },
-        temporaryFile = tempFile,
-        callerOwnsFile = true,
-        deleteTemporaryFile = { it.delete() },
-      )
+      assertSame(tempFile, session.transferFile())
+      session.close()
 
-      assertFalse(stopped)
-      assertTrue(unbound)
+      assertEquals(listOf("recording", "unbind"), cleanup)
       assertTrue(tempFile.exists())
     } finally {
       tempFile.delete()
