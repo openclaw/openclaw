@@ -280,6 +280,7 @@ function setWorkflowInput(params: {
 function resolveComfyNetworkPolicy(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
+  explicitAllowPrivateNetwork: boolean;
 }): ComfyNetworkPolicy {
   let parsed: URL;
   try {
@@ -289,8 +290,27 @@ function resolveComfyNetworkPolicy(params: {
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
-  if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
+  if (!hostname || !params.allowPrivateNetwork) {
     return {};
+  }
+  // Local mode auto-trusts loopback/IP targets and Compose-style single-label
+  // service names; public-looking FQDNs require the operator's explicit
+  // allowPrivateNetwork opt-in.
+  if (
+    !params.explicitAllowPrivateNetwork &&
+    !isPrivateOrLoopbackHost(hostname) &&
+    !isSingleLabelServiceHostname(hostname)
+  ) {
+    return {};
+  }
+
+  if (!params.explicitAllowPrivateNetwork && isSingleLabelServiceHostname(hostname)) {
+    return {
+      apiPolicy: {
+        allowedHostnames: [hostname],
+        hostnameAllowlist: [hostname],
+      },
+    };
   }
 
   const hostnamePolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]);
@@ -298,6 +318,10 @@ function resolveComfyNetworkPolicy(params: {
   return {
     apiPolicy: mergeSsrFPolicies(hostnamePolicy, privateNetworkPolicy),
   };
+}
+
+function isSingleLabelServiceHostname(hostname: string): boolean {
+  return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/u.test(hostname);
 }
 
 async function readJsonResponse<T>(params: {
@@ -720,13 +744,14 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
+  const explicitAllowPrivateNetwork =
+    readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
-      allowPrivateNetwork:
-        mode === "local" || readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true,
+      allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
       defaultHeaders:
         mode === "cloud"
           ? {
@@ -746,6 +771,7 @@ export async function runComfyWorkflow(params: {
   const networkPolicy = resolveComfyNetworkPolicy({
     baseUrl: normalizedBaseUrl,
     allowPrivateNetwork,
+    explicitAllowPrivateNetwork,
   });
 
   if (params.inputImage) {

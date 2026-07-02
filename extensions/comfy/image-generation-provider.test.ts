@@ -21,6 +21,7 @@ type FetchGuardRequest = {
   url?: unknown;
   auditContext?: unknown;
   timeoutMs?: unknown;
+  policy?: unknown;
   init?: {
     method?: unknown;
     headers?: HeadersInit;
@@ -39,6 +40,52 @@ function fetchRequest(call: number): FetchGuardRequest {
 function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
+
+function mockLocalImageResponses(promptId = "local-prompt-1") {
+  fetchWithSsrFGuardMock
+    .mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ prompt_id: promptId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          [promptId]: {
+            outputs: {
+              "9": {
+                images: [{ filename: "generated.png", subfolder: "", type: "output" }],
+              },
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      response: new Response(Buffer.from("png-data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+}
+
+const COMFY_SERVICE_HOST_LOCAL_POLICY = {
+  allowedHostnames: ["comfyui"],
+  hostnameAllowlist: ["comfyui"],
+};
+
+const COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY = {
+  hostnameAllowlist: ["comfyui", "*.comfyui"],
+  allowPrivateNetwork: true,
+};
 
 describe("comfy image-generation provider", () => {
   beforeEach(() => {
@@ -202,6 +249,128 @@ describe("comfy image-generation provider", () => {
         outputNodeIds: ["9"],
       },
     });
+  });
+
+  it("honors local private-network access for service-discovery hostnames", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalImageResponses("compose-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        baseUrl: "http://comfyui:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    const submitRequest = fetchRequest(1);
+    expect(submitRequest.url).toBe("http://comfyui:8188/prompt");
+    expect(submitRequest.policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+    expect(fetchRequest(2).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+    expect(fetchRequest(3).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+  });
+
+  it("keeps local public-looking hostnames strict without explicit private-network access", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalImageResponses("public-host-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        baseUrl: "http://images.example.com:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://images.example.com:8188/prompt");
+    expect(fetchRequest(1).policy).toBeUndefined();
+  });
+
+  it("keeps cloud service-discovery hostnames strict without explicit private-network access", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "strict-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        apiKey: "comfy-test-key",
+        baseUrl: "http://comfyui:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://comfyui:8188/api/prompt");
+    expect(fetchRequest(1).policy).toBeUndefined();
+  });
+
+  it("honors explicit cloud private-network access for service-discovery hostnames", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "private-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        apiKey: "comfy-test-key",
+        baseUrl: "http://comfyui:8188",
+        allowPrivateNetwork: true,
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://comfyui:8188/api/prompt");
+    expect(fetchRequest(1).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(2).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(3).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(4).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(5).policy).toBeUndefined();
   });
 
   it("caps oversized local workflow timeouts", async () => {
