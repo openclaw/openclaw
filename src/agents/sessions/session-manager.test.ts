@@ -2566,6 +2566,29 @@ describe("parseSessionEntries", () => {
     expect(entries).toHaveLength(2);
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it("parseJsonlEntries logs warning for malformed lines via loadEntriesFromFile", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const entries = loadEntriesFromFile(sessionFile);
+
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        (call[0] as string).includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
 });
 
 function readMessageContent(entry: SessionEntry): unknown {
