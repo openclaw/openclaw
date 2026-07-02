@@ -140,6 +140,7 @@ type RunMessageActionInput = {
   toolContext?: {
     currentChannelId?: string;
     currentMessagingTarget?: string;
+    currentDirectUserId?: string;
     currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
@@ -1557,6 +1558,42 @@ describe("message tool agent routing", () => {
       currentChannelProvider: "slack",
       currentThreadTs: "111.222",
       replyToMode: "all",
+    });
+  });
+
+  it("forwards the current direct user id through createOpenClawTools to the message tool", async () => {
+    mockSendResult({ channel: "matrix", to: "room:!dm:example.org" });
+    const plugin = createChannelPlugin({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      blurb: "test",
+      actions: ["read"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
+
+    const tool = createOpenClawTools({
+      config: {} as never,
+      agentChannel: "matrix",
+      currentChannelId: "room:!dm:example.org",
+      currentDirectUserId: "@alice:example.org",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "read",
+      channel: "matrix",
+      target: "room:!dm:example.org",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelId: "room:!dm:example.org",
+      currentDirectUserId: "@alice:example.org",
+      currentChannelProvider: "matrix",
     });
   });
 });

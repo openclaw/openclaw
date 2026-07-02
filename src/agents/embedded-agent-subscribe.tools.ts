@@ -903,6 +903,7 @@ function resolveMessagingToolThreadEvidence(params: {
     config?: OpenClawConfig;
     currentChannelId?: string;
     currentMessagingTarget?: string;
+    currentDirectUserId?: string;
     currentThreadId?: string;
     currentMessageId?: string | number;
     replyToMode?: "off" | "first" | "all" | "batched";
@@ -944,6 +945,7 @@ function resolveMessagingToolThreadEvidence(params: {
           toolContext: {
             currentChannelId,
             currentMessagingTarget,
+            currentDirectUserId: params.options?.currentDirectUserId,
             currentThreadTs: currentThreadId,
             currentMessageId: params.options?.currentMessageId,
             replyToMode,
@@ -972,6 +974,7 @@ export function extractMessagingToolSend(
     config?: OpenClawConfig;
     currentChannelId?: string;
     currentMessagingTarget?: string;
+    currentDirectUserId?: string;
     currentThreadId?: string;
     currentMessageId?: string | number;
     replyToMode?: "off" | "first" | "all" | "batched";

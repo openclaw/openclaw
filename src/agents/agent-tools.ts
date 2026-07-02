@@ -460,6 +460,8 @@ export function createOpenClawCodingTools(options?: {
   currentChannelId?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
+  /** Transport-owned direct peer id for trusted same-DM read actions. */
+  currentDirectUserId?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
   /** Channel-owned sender/chat metadata exposed to subprocess environments. */
@@ -913,6 +915,7 @@ export function createOpenClawCodingTools(options?: {
             pluginToolDenylist,
             currentChannelId: options?.currentChannelId,
             currentMessagingTarget: options?.currentMessagingTarget,
+            currentDirectUserId: options?.currentDirectUserId,
             currentThreadTs: options?.currentThreadTs,
             currentMessageId: options?.currentMessageId,
             modelProvider: options?.modelProvider,
@@ -1001,6 +1004,7 @@ export function createOpenClawCodingTools(options?: {
             : undefined,
           currentChannelId: options?.currentChannelId,
           currentMessagingTarget: options?.currentMessagingTarget,
+          currentDirectUserId: options?.currentDirectUserId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
           currentInboundAudio: options?.currentInboundAudio,

@@ -2118,6 +2118,7 @@ async function runEmbeddedAgentInternal(
             chatId: params.chatId,
             channelContext: params.channelContext,
             currentMessagingTarget: params.currentMessagingTarget,
+            currentDirectUserId: params.currentDirectUserId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
