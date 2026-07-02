@@ -618,10 +618,18 @@ async function executeToolCallsSequential(
   const messages: ToolResultMessage[] = [];
 
   for (const toolCall of toolCalls) {
+    const canonicalToolCall = await canonicalizeToolCall(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
-      toolName: toolCall.name,
+      toolName: canonicalToolCall.name,
       args: toolCall.arguments,
     });
 
@@ -636,7 +644,7 @@ async function executeToolCallsSequential(
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
       finalized = {
-        toolCall,
+        toolCall: canonicalToolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -682,10 +690,18 @@ async function executeToolCallsParallel(
   const finalizedCalls: FinalizedToolCallEntry[] = [];
 
   for (const toolCall of toolCalls) {
+    const canonicalToolCall = await canonicalizeToolCall(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
-      toolName: toolCall.name,
+      toolName: canonicalToolCall.name,
       args: toolCall.arguments,
     });
 
@@ -699,7 +715,7 @@ async function executeToolCallsParallel(
     );
     if (preparation.kind === "immediate") {
       const finalized = {
-        toolCall,
+        toolCall: canonicalToolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -899,6 +915,37 @@ async function resolveToolCallTool(
   }
   resolvedToolCalls?.set(toolCall, resolution);
   return resolution;
+}
+
+// Resolve the canonical tool identity BEFORE the first lifecycle event fires, so
+// a single toolCallId carries one name from tool_execution_start through
+// tool_execution_update/_end and the persisted tool_result. Without this, an
+// aliased call starts as e.g. `KnowledgeSearch` and finishes as `memory_search`,
+// splitting the call's identity for event subscribers and session telemetry.
+// Resolution outcomes are cached in resolvedToolCalls, so the prepareToolCall()
+// that follows never re-runs the (potentially side-effectful) deferred resolver.
+// Unresolved calls keep the raw model-emitted name — not-found errors should
+// report what the model actually asked for.
+async function canonicalizeToolCall(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+): Promise<AgentToolCall> {
+  const resolution = await resolveToolCallTool(
+    currentContext,
+    assistantMessage,
+    toolCall,
+    config,
+    signal,
+    resolvedToolCalls,
+  );
+  if (resolution.kind === "resolved" && resolution.tool && resolution.tool.name !== toolCall.name) {
+    return { ...toolCall, name: resolution.tool.name };
+  }
+  return toolCall;
 }
 
 async function prepareToolCall(

@@ -781,6 +781,72 @@ describe("runAgentLoop tool-name alias resolution", () => {
     );
   });
 
+  it("keeps one canonical identity across lifecycle events for an aliased call", async () => {
+    // Regression: tool_execution_start used to fire with the raw alias while
+    // update/end/tool_result carried the canonical name, splitting one
+    // toolCallId across two names for event subscribers and session telemetry.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "search result" }],
+        details: { ok: true },
+      }),
+    );
+    const memSearchTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "search for files", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [memSearchTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    const start = events.find((e) => e.type === "tool_execution_start");
+    const end = events.find((e) => e.type === "tool_execution_end");
+    expect(start).toMatchObject({ toolCallId: "call-alias", toolName: "memory_search" });
+    expect(end).toMatchObject({ toolCallId: "call-alias", toolName: "memory_search" });
+  });
+
+  it("keeps the raw model-emitted name in lifecycle events when no tool resolves", async () => {
+    const readTool: AgentTool = {
+      name: "Read",
+      label: "Read",
+      description: "Read tool",
+      execute: async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "ok" }],
+        details: { ok: true },
+      }),
+      parameters: Type.Object({}),
+    };
+
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "call unknown", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [readTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      makeToolCallStream("UnknownTool"),
+    );
+
+    const start = events.find((e) => e.type === "tool_execution_start");
+    const end = events.find((e) => e.type === "tool_execution_end");
+    expect(start).toMatchObject({ toolName: "UnknownTool" });
+    expect(end).toMatchObject({ toolName: "UnknownTool", isError: true });
+  });
+
   it("resolves tool names case-insensitively", async () => {
     const execute = vi.fn(
       async (): Promise<AgentToolResult<unknown>> => ({
