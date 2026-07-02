@@ -389,6 +389,23 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
+  it("loads the sandbox default message tool scenario from YAML", () => {
+    const scenario = readQaScenarioById("sandbox-default-message-tool");
+    const config = readQaScenarioExecutionConfig(scenario.id);
+
+    expect(scenario.sourcePath).toBe(
+      "qa/scenarios/channels/sandbox-default-message-tool.yaml",
+    );
+    expect(scenario.coverage?.secondary).toContain("runtime.tool-policy");
+    expect(config).toMatchObject({
+      conversationId: "qa-sandbox-message-tool-room",
+      expectedMarker: "QA-SANDBOX-MESSAGE-OK",
+    });
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toStrictEqual([
+      "posts visible room output through message in the default sandbox policy",
+    ]);
+  });
+
   it("loads the QA bus tool trace visibility harness scenario", () => {
     const scenario = readQaScenarioById("qa-bus-tool-trace-visibility");
     const config = readQaScenarioExecutionConfig(scenario.id) as
