@@ -497,6 +497,10 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          audit: {
+            source: "gateway.tool.restart",
+            sessionKey,
+          },
           // Ownership and sentinel routing use the same trusted session identity,
           // so model-supplied params cannot queue work into another session.
           sessionKey,

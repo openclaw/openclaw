@@ -94,7 +94,18 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
+  if (isReasoning) {
+    const reasoningText = taggedReasoning || strippedAnswer || text;
+    return { reasoningText: formatReasoningMessage(reasoningText) };
+  }
+
+  if (!taggedReasoning && strippedAnswer === text) {
+    return { answerText: text };
+  }
+
+  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
+  const answerText = strippedAnswer || undefined;
+  return { reasoningText, answerText };
 }
 
 type BufferedFinalAnswer = {

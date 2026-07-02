@@ -93,10 +93,19 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(result.status).toBe("deferred");
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: "test.safe",
-    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({
+            safe: false,
+            summary: "restart deferred: 1 queued or active operation(s)",
+          }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        reason: "test.safe",
+      }),
+    );
   });
 
   it("surfaces coalesced restart requests", () => {
@@ -150,12 +159,18 @@ describe("safe gateway restart coordinator", () => {
 
     expect(result.status).toBe("scheduled");
     expect(result.preflight.safe).toBe(false);
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
-      delayMs: 0,
-      preservePendingEmitHooksOnDeferralBypass: true,
-      reason: "test.skip-deferral",
-      skipDeferral: true,
-    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({ safe: false }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        preservePendingEmitHooksOnDeferralBypass: true,
+        reason: "test.skip-deferral",
+        skipDeferral: true,
+      }),
+    );
   });
 
   it("omits skipDeferral when not requested", () => {
@@ -181,9 +196,15 @@ describe("safe gateway restart coordinator", () => {
       },
     });
 
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: "test.no-skip",
-    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({ safe: true }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        reason: "test.no-skip",
+      }),
+    );
   });
 });

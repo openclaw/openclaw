@@ -369,6 +369,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             skipCooldown: updateWasPackageSwap || handoff?.status === "started",
             audit: {
               actor: actor.actor,
+              source: "gateway.update.run",
               deviceId: actor.deviceId,
               clientIp: actor.clientIp,
               changedPaths: [],

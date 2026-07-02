@@ -51,11 +51,14 @@ function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
 }
 
 function expectRestartRequest(skipDeferral: boolean) {
-  expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
-    reason: "operator",
-    delayMs: 0,
-    skipDeferral,
-  });
+  expect(requestSafeGatewayRestart).toHaveBeenCalledWith(
+    expect.objectContaining({
+      audit: { source: "gateway.restart.request" },
+      reason: "operator",
+      delayMs: 0,
+      skipDeferral,
+    }),
+  );
 }
 
 describe("gateway.restart.request handler", () => {

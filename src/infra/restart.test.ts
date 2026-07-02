@@ -1,4 +1,7 @@
 // Covers gateway restart process and supervisor paths.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -36,7 +39,13 @@ vi.mock("../config/paths.js", () => ({
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const {
+  testing: restartTesting,
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} = await import("./restart.js");
+const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
+  await import("../state/openclaw-state-db.js");
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
@@ -74,6 +83,89 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
   }
   return call as [unknown, unknown, unknown];
 }
+
+describe("restart diagnostics", () => {
+  it("redacts session keys in restart warning fields", () => {
+    const redacted = restartTesting.formatRestartSessionKeyForLog(
+      "agent:main:discord:channel:1515157916540211291",
+    );
+
+    expect(redacted).toMatch(/^<redacted:[a-f0-9]{12}>$/);
+    expect(redacted).not.toContain("discord");
+    expect(redacted).not.toContain("1515157916540211291");
+    expect(restartTesting.formatRestartSessionKeyForLog(undefined)).toBe("unspecified");
+  });
+
+  it("keeps truncated restart audit payloads valid JSON", () => {
+    const serialized = restartTesting.serializeRestartAuditJson({
+      context: `quote-heavy:${'\\"'.repeat(15_000)}`,
+    });
+
+    expect(serialized).not.toBeNull();
+    expect(serialized?.length).toBeLessThanOrEqual(20_000);
+    expect(() => JSON.parse(serialized ?? "")).not.toThrow();
+    expect(JSON.parse(serialized ?? "")).toEqual(
+      expect.objectContaining({
+        truncated: true,
+        originalLength: expect.any(Number),
+        preview: expect.any(String),
+      }),
+    );
+  });
+
+  it("redacts session keys in durable restart audit storage", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-audit-test-"));
+    const sessionKey = "agent:main:discord:channel:1515157916540211291";
+    try {
+      withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+        const result = scheduleGatewaySigusr1Restart({
+          delayMs: 60_000,
+          reason: "test restart audit redaction",
+          sessionKey,
+          skipCooldown: true,
+          audit: {
+            source: "gateway_tool",
+            sessionKey,
+            context: {
+              nestedSessionKey: sessionKey,
+              token: "secret-token-value",
+            },
+            preflight: {
+              requesterSessionKey: sessionKey,
+              authorization: "Bearer secret-token-value",
+            },
+          },
+        });
+
+        expect(result.ok).toBe(true);
+        const { db } = openOpenClawStateDatabase({ env: process.env });
+        const row = db
+          .prepare(
+            "SELECT session_key, audit_json, preflight_json FROM gateway_restart_audit ORDER BY created_at DESC LIMIT 1",
+          )
+          .get() as {
+          session_key: string | null;
+          audit_json: string | null;
+          preflight_json: string | null;
+        };
+        closeOpenClawStateDatabase();
+        restartTesting.resetSigusr1State();
+
+        expect(row.session_key).toMatch(/^<redacted:[a-f0-9]{12}>$/);
+        expect(row.audit_json).toContain("<redacted:");
+        expect(row.audit_json).toContain('"token":"<redacted>"');
+        expect(row.preflight_json).toContain("<redacted:");
+        expect(row.preflight_json).toContain('"authorization":"<redacted>"');
+        expect(JSON.stringify(row)).not.toContain("1515157916540211291");
+        expect(JSON.stringify(row)).not.toContain("secret-token-value");
+      });
+    } finally {
+      restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabase();
+      rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+});
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {

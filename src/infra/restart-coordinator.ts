@@ -7,7 +7,11 @@ import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  type RestartAuditInfo,
+  type ScheduledRestart,
+} from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
@@ -174,13 +178,25 @@ export function requestSafeGatewayRestart(
     skipDeferral?: boolean;
     preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
+    audit?: RestartAuditInfo;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
   const skipDeferral = opts.skipDeferral === true;
+  const reason = opts.reason ?? "gateway.restart.safe";
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
-    reason: opts.reason ?? "gateway.restart.safe",
+    reason,
+    audit: {
+      source: "requestSafeGatewayRestart",
+      ...opts.audit,
+      preflight,
+      context: {
+        ...opts.audit?.context,
+        preflightSummary: preflight.summary,
+        preflightCounts: preflight.counts,
+      },
+    },
     ...(opts.preservePendingEmitHooks === true || skipDeferral
       ? { preservePendingEmitHooksOnDeferralBypass: true }
       : {}),

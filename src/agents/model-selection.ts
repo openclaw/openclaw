@@ -94,6 +94,20 @@ function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
 }
 
+function shouldPreserveProviderlessPersistedModelRaw(params: {
+  provider?: string | undefined;
+  model: string;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+}): boolean {
+  return (
+    !params.provider &&
+    !params.model.includes("/") &&
+    params.allowManifestNormalization === false &&
+    params.allowPluginNormalization === false
+  );
+}
+
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider?: unknown;
   overrideProvider?: unknown;
@@ -106,6 +120,16 @@ export function resolvePersistedOverrideModelRef(params: {
   const overrideModel = normalizeOptionalString(params.overrideModel);
   if (!overrideModel) {
     return null;
+  }
+  if (
+    shouldPreserveProviderlessPersistedModelRaw({
+      provider: overrideProvider,
+      model: overrideModel,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    })
+  ) {
+    return { provider: defaultProvider, model: overrideModel };
   }
   const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
   return (
@@ -138,6 +162,15 @@ export function resolvePersistedModelRef(params: {
   if (runtimeModel) {
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
+    }
+    if (
+      shouldPreserveProviderlessPersistedModelRaw({
+        model: runtimeModel,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+      })
+    ) {
+      return { provider: defaultProvider, model: runtimeModel };
     }
     return (
       parseModelRef(runtimeModel, defaultProvider, {
