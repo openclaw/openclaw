@@ -35,7 +35,6 @@ import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   OpenAICompletionsCompat,
@@ -58,7 +57,11 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -92,10 +95,6 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
 
 function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
-}
-
-function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image";
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -1161,7 +1160,8 @@ export function convertMessages(
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some((c) => c.type === "image");
+        const imageContentBlocks = extractToolResultImageBlocks(toolMsg.content);
+        const hasImages = imageContentBlocks.length > 0;
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
@@ -1180,15 +1180,13 @@ export function convertMessages(
         params.push(toolResultMsg);
 
         if (hasImages && model.input.includes("image")) {
-          for (const block of toolMsg.content) {
-            if (isImageContentBlock(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: {
-                  url: `data:${block.mimeType};base64,${block.data}`,
-                },
-              });
-            }
+          for (const block of imageContentBlocks) {
+            imageBlocks.push({
+              type: "image_url",
+              image_url: {
+                url: `data:${block.mimeType};base64,${block.data}`,
+              },
+            });
           }
         }
       }

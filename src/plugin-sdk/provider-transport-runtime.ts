@@ -7,7 +7,10 @@ export { stripSystemPromptCacheBoundary } from "../agents/system-prompt-cache-bo
 export { transformTransportMessages } from "../agents/transport-message-transform.js";
 export {
   describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
   extractToolResultText,
+  isToolResultImageBlock,
+  normalizeToolResultBlocks,
 } from "../llm/providers/tool-result-text.js";
 export {
   coerceTransportToolCallArguments,

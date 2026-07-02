@@ -16,6 +16,7 @@ import {
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
   extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
@@ -651,10 +652,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter(
-            (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
-          )
+        ? extractToolResultImageBlocks(msg.content)
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
