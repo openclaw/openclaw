@@ -130,7 +130,7 @@ struct CommandCenterTab: View {
                 hasLeadingAction: headerLeadingAction != nil,
                 showsHeaderMark: self.showsHeaderMark)
             {
-                OpenClawProMark(size: 28, shadowRadius: 5)
+                OpenClawMascot(scale: .nav)
             }
         } accessory: {
             Button(action: self.openSettings) {

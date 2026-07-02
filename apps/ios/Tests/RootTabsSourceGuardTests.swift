@@ -101,7 +101,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("sidebarDeviceMenu"))
         #expect(sidebarColumn.contains("self.sidebarIdentityHeader"))
         #expect(source.contains("private var sidebarIdentityHeader: some View"))
-        #expect(source.contains("OpenClawProMark(size: 30"))
+        #expect(source.contains("OpenClawMascot(scale: .section)"))
         #expect(source.contains("Text(\"OpenClaw\")"))
         #expect(source.contains("private var sidebarGatewayStatusTitle: String"))
         #expect(source.contains("private var sidebarGatewayStatusColor: Color"))

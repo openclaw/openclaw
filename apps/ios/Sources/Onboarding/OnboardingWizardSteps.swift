@@ -7,7 +7,7 @@ struct OnboardingIntroStep: View {
         VStack(spacing: 0) {
             Spacer()
 
-            OpenClawProMark(size: 64, shadowRadius: 14)
+            OpenClawMascot(scale: .emptyState)
                 .padding(.bottom, 18)
 
             Text("Welcome to OpenClaw")
