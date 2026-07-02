@@ -75,6 +75,7 @@ function createResolveToolsParams(params?: {
   toolDenylist?: readonly string[];
   existingToolNames?: Set<string>;
   env?: NodeJS.ProcessEnv;
+  hasAuthForProvider?: (providerId: string) => boolean;
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
 }) {
@@ -84,6 +85,7 @@ function createResolveToolsParams(params?: {
     ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
+    ...(params?.hasAuthForProvider ? { hasAuthForProvider: params.hasAuthForProvider } : {}),
     ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
     ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
@@ -372,7 +374,6 @@ function createXaiToolManifest() {
     },
     toolMetadata: {
       x_search: {
-        replaySafe: true,
         authSignals: [{ provider: "xai" }],
         configSignals: [
           {
@@ -1271,7 +1272,6 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
-    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -1940,6 +1940,80 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("warns when a plugin tool carries an empty availability group at registration", () => {
+    const warnSpy = installConsoleMethodSpy("warn");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => ({
+          ...makeTool("optional_tool"),
+          availability: { anyOf: [] },
+        }),
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[plugins] tool descriptor authoring error (optional-demo/optional_tool): Empty availability anyOf group",
+    );
+  });
+
+  it("warns on malformed plugin tool availability at registration without hiding the tool", () => {
+    const warnSpy = installConsoleMethodSpy("warn");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => ({
+          ...makeTool("optional_tool"),
+          availability: { kind: "config" },
+        }),
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[plugins] tool descriptor authoring error (optional-demo/optional_tool): Unsupported availability expression",
+    );
+  });
+
+  it("resolves tools without throwing when availability holds malformed nested entries", () => {
+    // Auth-provider collection walks nested allOf/anyOf entries; plugin-authored
+    // primitives like { allOf: ["bad"] } must not crash resolution.
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => ({
+          ...makeTool("optional_tool"),
+          availability: { allOf: ["bad", null] },
+        }),
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        hasAuthForProvider: () => true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {
