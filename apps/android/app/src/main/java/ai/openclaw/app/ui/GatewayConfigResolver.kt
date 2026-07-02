@@ -244,7 +244,10 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
-private fun gatewayPort(port: Int, defaultPort: Int): Int? =
+private fun gatewayPort(
+  port: Int,
+  defaultPort: Int,
+): Int? =
   when {
     port == -1 -> defaultPort
     port in 1..65535 -> port
