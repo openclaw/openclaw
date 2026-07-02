@@ -5,6 +5,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 import { loadGatewayTlsRuntime } from "./gateway.js";
 
@@ -191,5 +192,159 @@ describe("loadGatewayTlsRuntime", () => {
     // normalization (it trims), so they must not fall back to default names.
     expect(result.certPath).not.toContain("gateway-cert.pem");
     expect(result.keyPath).not.toContain("gateway-key.pem");
+  });
+
+  it("upgrades existing CN-only OpenClaw-generated cert to include subjectAltName", async () => {
+    const defaultCertPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-cert.pem");
+    const defaultKeyPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-key.pem");
+    const gatewayTlsDir = path.join(CONFIG_DIR, "gateway", "tls");
+    await import("node:fs/promises").then((fs) => fs.mkdir(gatewayTlsDir, { recursive: true }));
+    try {
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const opensslPath = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+      if (opensslPath) {
+        await execFileAsync(opensslPath, [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-sha256",
+          "-days",
+          "3650",
+          "-nodes",
+          "-keyout",
+          defaultKeyPath,
+          "-out",
+          defaultCertPath,
+          "-subj",
+          "/CN=openclaw-gateway",
+        ]);
+      } else {
+        return; // skip: openssl not available
+      }
+
+      const fs = await import("node:fs/promises");
+      const x509Before = new X509Certificate(await fs.readFile(defaultCertPath, "utf8"));
+      expect(x509Before.subject).toContain("CN=openclaw-gateway");
+      expect(x509Before.subjectAltName).toBeFalsy();
+
+      const result = await loadGatewayTlsRuntime({
+        enabled: true,
+        certPath: "",
+        keyPath: "",
+        autoGenerate: true,
+      });
+      expect(result.enabled).toBe(true);
+      expect(result.error).toBeUndefined();
+
+      const certPem = await fs.readFile(defaultCertPath, "utf8");
+      const x509After = new X509Certificate(certPem);
+      expect(x509After.subjectAltName).toBeTruthy();
+      expect(x509After.subjectAltName).toContain("DNS:localhost");
+      expect(x509After.subjectAltName).toContain("IP Address:127.0.0.1");
+
+      const opensslBin = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+      if (opensslBin) {
+        const { execFile: opensslExec } = await import("node:child_process");
+        const { promisify: p } = await import("node:util");
+        const sanOutput = await p(opensslExec)(opensslBin, [
+          "x509",
+          "-in",
+          defaultCertPath,
+          "-noout",
+          "-ext",
+          "subjectAltName",
+        ]);
+        expect(sanOutput.stdout).toContain("DNS:localhost");
+        expect(sanOutput.stdout).toContain("IP Address:127.0.0.1");
+      }
+    } finally {
+      // Clean up generated default cert/key files so other tests are not affected.
+      await import("node:fs/promises").then((fs) =>
+        fs.rm(gatewayTlsDir, { recursive: true, force: true }).catch(() => {}),
+      );
+    }
+  });
+
+  it("generates cert with subjectAltName for localhost and hostname", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: true,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+
+    const cert = new X509Certificate(
+      await (await import("node:fs/promises")).readFile(certPath, "utf8"),
+    );
+    const san = cert.subjectAltName;
+    expect(san).toBeTruthy();
+    expect(san).toContain("DNS:localhost");
+    expect(san).toContain("IP Address:127.0.0.1");
+    expect(san).toContain("IP Address:0:0:0:0:0:0:0:1");
+  });
+
+  it("does not upgrade custom certificates with non-OpenClaw CN", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "custom-cert.pem");
+    const keyPath = path.join(dir, "custom-key.pem");
+
+    // Generate a custom cert with a different CN (not openclaw-gateway) and no SAN
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const opensslPath = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+    if (opensslPath) {
+      await execFileAsync(opensslPath, [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-keyout",
+        keyPath,
+        "-out",
+        certPath,
+        "-subj",
+        "/CN=custom-server",
+      ]);
+    } else {
+      return;
+    }
+
+    const x509Before = new X509Certificate(
+      await (await import("node:fs/promises")).readFile(certPath, "utf8"),
+    );
+    expect(x509Before.subject).toContain("CN=custom-server");
+    expect(x509Before.subjectAltName).toBeFalsy();
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: true,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+
+    // Custom cert must not be regenerated — CN and SAN must be unchanged
+    const certPem = await (await import("node:fs/promises")).readFile(certPath, "utf8");
+    const x509After = new X509Certificate(certPem);
+    expect(x509After.subject).toContain("CN=custom-server");
+    expect(x509After.subjectAltName).toBeFalsy();
+    expect(result.fingerprintSha256).toBe(normalizeFingerprint(x509After.fingerprint256 ?? ""));
   });
 });
