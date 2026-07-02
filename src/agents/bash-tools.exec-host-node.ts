@@ -4,6 +4,7 @@
  * and `node.invoke system.run` execution for host=node calls.
  */
 import { randomUUID } from "node:crypto";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
@@ -430,7 +431,9 @@ export async function executeNodeHostCommand(
             const combined = [payload.stdout, payload.stderr, payload.error]
               .filter(Boolean)
               .join("\n");
-            const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = normalizeNotifyOutput(
+              sliceUtf16Safe(combined, combined.length - DEFAULT_NOTIFY_TAIL_CHARS),
+            );
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`
