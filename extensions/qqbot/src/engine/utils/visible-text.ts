@@ -14,21 +14,14 @@ function isInboundMetaSentinelLine(line: string): boolean {
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
 }
 
-function findRawJsonObjectEnd(lines: string[], start: number): number {
-  let depth = 0;
-  let sawBrace = false;
+function findRawJsonValueEnd(lines: string[], start: number): number {
   for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    for (const char of line) {
-      if (char === "{") {
-        depth += 1;
-        sawBrace = true;
-      } else if (char === "}") {
-        depth -= 1;
-      }
-    }
-    if (sawBrace && depth <= 0) {
+    const candidate = lines.slice(start, index + 1).join("\n");
+    try {
+      JSON.parse(candidate);
       return index + 1;
+    } catch {
+      // Keep reading until the echoed raw JSON value is complete.
     }
   }
   return start;
@@ -52,8 +45,9 @@ function skipOneInboundMetaBlock(lines: string[], start: number): number {
     return index < lines.length ? index + 1 : lines.length;
   }
 
-  if ((lines[index] ?? "").trim().startsWith("{")) {
-    const end = findRawJsonObjectEnd(lines, index);
+  const rawJsonStart = (lines[index] ?? "").trimStart();
+  if (rawJsonStart.startsWith("{") || rawJsonStart.startsWith("[")) {
+    const end = findRawJsonValueEnd(lines, index);
     return end > index ? end : lines.length;
   }
 

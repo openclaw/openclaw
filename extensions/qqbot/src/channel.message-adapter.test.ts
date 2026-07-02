@@ -58,9 +58,9 @@ describe("qqbot outbound sanitizeText", () => {
       "}",
       "",
       "Chat history since last reply (untrusted, for context):",
-      "{",
-      '  "items": ["older context"]',
-      "}",
+      "[",
+      '  { "role": "user", "body": "older context with {braces}" }',
+      "]",
       "",
       "final answer",
     ].join("\n");
