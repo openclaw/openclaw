@@ -22,6 +22,18 @@ struct WindowPlacementTests {
     }
 
     @Test
+    func `centered frame clamps onboarding height to visible bounds`() {
+        let bounds = NSRect(x: 0, y: 24, width: 1093, height: 690)
+        let frame = WindowPlacement.centeredFrame(
+            size: NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight),
+            in: bounds)
+        #expect(frame.size.width == OnboardingView.windowWidth)
+        #expect(frame.size.height == bounds.height)
+        #expect(frame.minX == round(bounds.minX + (bounds.width - OnboardingView.windowWidth) / 2))
+        #expect(frame.minY == bounds.minY)
+    }
+
+    @Test
     func `top right frame zero bounds falls back to origin`() {
         let frame = WindowPlacement.topRightFrame(
             size: NSSize(width: 120, height: 80),

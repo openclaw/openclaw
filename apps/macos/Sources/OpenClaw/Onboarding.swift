@@ -47,7 +47,7 @@ final class OnboardingController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.center()
+        window.setFrame(WindowPlacement.centeredFrame(size: window.frame.size), display: false)
         DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -96,9 +96,11 @@ struct OnboardingView: View {
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
+    static let minimumWindowHeight: CGFloat = 465
 
     let pageWidth: CGFloat = Self.windowWidth
     let contentHeight: CGFloat = 460
+    let minimumContentHeight: CGFloat = 260
     let connectionPageIndex = 1
     let wizardPageIndex = 3
     let onboardingChatPageIndex = 8

@@ -8,7 +8,8 @@ extension OnboardingView {
                 .offset(y: 10)
                 .frame(height: 145)
 
-            GeometryReader { _ in
+            GeometryReader { geometry in
+                let contentHeight = max(self.minimumContentHeight, geometry.size.height)
                 HStack(spacing: 0) {
                     ForEach(self.pageOrder, id: \.self) { pageIndex in
                         self.pageView(for: pageIndex)
@@ -19,15 +20,15 @@ extension OnboardingView {
                 .animation(
                     .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
                     value: self.currentPage)
-                .frame(height: self.contentHeight, alignment: .top)
+                .frame(height: contentHeight, alignment: .top)
                 .clipped()
             }
-            .frame(height: self.contentHeight)
+            .frame(minHeight: self.minimumContentHeight)
 
             Spacer(minLength: 0)
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: Self.windowHeight)
+        .frame(width: self.pageWidth, minHeight: Self.minimumWindowHeight, maxHeight: Self.windowHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.currentPage = 0

@@ -780,26 +780,29 @@ extension OnboardingView {
     }
 
     func onboardingChatPage() -> some View {
-        VStack(spacing: 16) {
-            Text("Meet your agent")
-                .font(.largeTitle.weight(.semibold))
-            Text(
-                "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
+        ScrollView {
+            VStack(spacing: 16) {
+                Text("Meet your agent")
+                    .font(.largeTitle.weight(.semibold))
+                Text(
+                    "This is a dedicated onboarding chat. Your agent will introduce itself, " +
+                        "learn who you are, and help you connect WhatsApp or Telegram if you want.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 520)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingGlassCard(padding: 8) {
-                OpenClawChatView(viewModel: self.onboardingChatModel, style: .onboarding)
-                    .frame(maxHeight: .infinity)
+                self.onboardingGlassCard(padding: 8) {
+                    OpenClawChatView(viewModel: self.onboardingChatModel, style: .onboarding)
+                        .frame(minHeight: 260)
+                }
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.bottom, 8)
         }
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, maxHeight: .infinity, alignment: .top)
     }
 
     func readyPage() -> some View {
