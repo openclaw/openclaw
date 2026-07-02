@@ -2,6 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+  type DiagnosticEventMetadata,
+} from "../../infra/diagnostic-events.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
@@ -142,6 +149,7 @@ function primeCompletionMocks() {
 
 describe("runtime.llm.complete", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
@@ -613,6 +621,79 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("emits model usage diagnostics for plugin runtime completions", async () => {
+    const events: Array<{ event: DiagnosticEventPayload; metadata: DiagnosticEventMetadata }> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+      events.push({ event, metadata });
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+        sessionKey: "agent:main:session:abc",
+      },
+    });
+
+    try {
+      await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+    }
+
+    const usageEvent = events.find(({ event }) => event.type === "model.usage");
+    expect(usageEvent?.metadata.trusted).toBe(true);
+    expect(usageEvent?.event).toMatchObject({
+      type: "model.usage",
+      sessionKey: "agent:main:session:abc",
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        promptTokens: 18,
+        total: 25,
+      },
+      costUsd: 0.0042,
+    });
+  });
+
+  it("does not emit model usage diagnostics when diagnostics are disabled", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        diagnostics: { enabled: false },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    try {
+      await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      );
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "model.usage")).toBe(false);
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {

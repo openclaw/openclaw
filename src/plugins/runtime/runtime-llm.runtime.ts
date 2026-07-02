@@ -4,8 +4,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
-import { normalizeUsage } from "../../agents/usage.js";
+import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -215,6 +216,44 @@ function buildUsage(params: {
     ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
+}
+
+function emitPluginLlmUsageDiagnostic(params: {
+  cfg: OpenClawConfig;
+  usage: LlmCompleteUsage;
+  sessionKey?: string;
+  agentId: string;
+  provider: string;
+  model: string;
+}): void {
+  if (!isDiagnosticsEnabled(params.cfg)) {
+    return;
+  }
+  const promptTokens = derivePromptTokens({
+    input: params.usage.inputTokens,
+    cacheRead: params.usage.cacheReadTokens,
+    cacheWrite: params.usage.cacheWriteTokens,
+  });
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    agentId: params.agentId,
+    provider: params.provider,
+    model: params.model,
+    usage: {
+      ...(params.usage.inputTokens !== undefined ? { input: params.usage.inputTokens } : {}),
+      ...(params.usage.outputTokens !== undefined ? { output: params.usage.outputTokens } : {}),
+      ...(params.usage.cacheReadTokens !== undefined
+        ? { cacheRead: params.usage.cacheReadTokens }
+        : {}),
+      ...(params.usage.cacheWriteTokens !== undefined
+        ? { cacheWrite: params.usage.cacheWriteTokens }
+        : {}),
+      ...(promptTokens !== undefined ? { promptTokens } : {}),
+      ...(params.usage.totalTokens !== undefined ? { total: params.usage.totalTokens } : {}),
+    },
+    ...(params.usage.costUsd !== undefined ? { costUsd: params.usage.costUsd } : {}),
+  });
 }
 
 function finiteOption(value: number | undefined): number | undefined {
@@ -474,6 +513,14 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         usage,
+      });
+      emitPluginLlmUsageDiagnostic({
+        cfg,
+        usage,
+        sessionKey: options.authority?.sessionKey,
+        agentId,
+        provider: prepared.selection.provider,
+        model: prepared.selection.modelId,
       });
 
       return {
