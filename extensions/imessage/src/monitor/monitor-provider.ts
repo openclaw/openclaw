@@ -899,10 +899,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // delivered normally.
     const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
     if (message.poll) {
-      pollCommentFolder.rememberPoll(message.id, message.guid, pollFoldAtMs, message.sender);
+      pollCommentFolder.rememberPoll(message.guid, pollFoldAtMs, message.sender);
     } else if (
-      message.reply_to_id != null &&
-      pollCommentFolder.isPollComment(message.reply_to_id, pollFoldAtMs, message.sender)
+      message.reply_to_guid != null &&
+      pollCommentFolder.isPollComment(message.reply_to_guid, pollFoldAtMs, message.sender)
     ) {
       logVerbose(
         "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
