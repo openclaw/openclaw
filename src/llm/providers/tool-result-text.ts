@@ -22,9 +22,30 @@ const MIME_KEY_CANDIDATES = [
 const TEXTUAL_MIME_PATTERN =
   /^(?:text\/|application\/(?:json|ld\+json|x-ndjson|xml|javascript|x-www-form-urlencoded)|[^/]+\/[^+]+\+(?:json|xml)$)/i;
 const OPAQUE_OR_BINARY_FIELD_RE = /^(?:blob|buffer|bytes|encrypted_content|encrypted_stdout)$/i;
+const TEXT_FIELD_CANDIDATES = ["text", "output", "content"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeToolResultBlocks(blocks: unknown): readonly unknown[] {
+  if (Array.isArray(blocks)) {
+    return blocks;
+  }
+  if (blocks === null || blocks === undefined) {
+    return [];
+  }
+  return [blocks];
+}
+
+function primitiveToolResultText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
 }
 
 function readMimeType(value: unknown): string | undefined {
@@ -123,11 +144,11 @@ function truncateProviderToolText(text: string): string {
   return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
-export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
+export function describeToolResultMediaPlaceholder(blocks: unknown): string | undefined {
   let hasImage = false;
   let hasAudio = false;
 
-  for (const block of blocks) {
+  for (const block of normalizeToolResultBlocks(blocks)) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -162,6 +183,10 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
 }
 
 export function extractToolResultBlockText(block: unknown): string | undefined {
+  const primitiveText = primitiveToolResultText(block);
+  if (primitiveText !== undefined) {
+    return primitiveText ? sanitizeSurrogates(primitiveText) : undefined;
+  }
   if (!block || typeof block !== "object") {
     return undefined;
   }
@@ -170,17 +195,25 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
     return undefined;
   }
   if (record.type === "text") {
-    const text = typeof record.text === "string" ? record.text : "";
+    const text = primitiveToolResultText(record.text) ?? "";
     return text ? sanitizeSurrogates(text) : undefined;
+  }
+  if (typeof record.type !== "string") {
+    for (const key of TEXT_FIELD_CANDIDATES) {
+      const text = primitiveToolResultText(record[key]);
+      if (text) {
+        return sanitizeSurrogates(text);
+      }
+    }
   }
   const structured = stringifyStructuredBlock(record);
   return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;
 }
 
-export function extractToolResultText(blocks: readonly unknown[]): string {
+export function extractToolResultText(blocks: unknown): string {
   const explicitTexts: string[] = [];
   const structuredTexts: string[] = [];
-  for (const block of blocks) {
+  for (const block of normalizeToolResultBlocks(blocks)) {
     const text = extractToolResultBlockText(block);
     if (!text) {
       continue;

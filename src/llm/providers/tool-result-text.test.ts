@@ -157,6 +157,23 @@ describe("extractToolResultText", () => {
     expect(text).toContain("…(truncated)…");
     expect(text).not.toContain(tail);
   });
+
+  it("preserves plain string tool-result content", () => {
+    expect(extractToolResultText("plain status output")).toBe("plain status output");
+  });
+
+  it("serializes a single structured tool-result object", () => {
+    const text = extractToolResultText({ type: "json", payload: { ok: true, count: 2 } });
+
+    expect(text).toContain('"type":"json"');
+    expect(text).toContain('"ok":true');
+    expect(text).toContain('"count":2');
+  });
+
+  it("uses text-like fields from non-standard object tool results", () => {
+    expect(extractToolResultText({ output: "status card text" })).toBe("status card text");
+    expect(extractToolResultText({ content: "config text" })).toBe("config text");
+  });
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
