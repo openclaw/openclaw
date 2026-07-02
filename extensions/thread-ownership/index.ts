@@ -190,12 +190,18 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = await readProviderJsonResponse<{ owner?: string }>(
-              resp,
-              "thread-ownership",
-            );
+            let owner: string | undefined;
+            try {
+              const body = await readProviderJsonResponse<{ owner?: string }>(
+                resp,
+                "thread-ownership",
+              );
+              owner = body.owner;
+            } catch {
+              // 409 body parsing is best-effort; cancellation stands regardless.
+            }
             api.logger.info?.(
-              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+              `thread-ownership: cancelled send to ${channelId}:${threadTs}${owner ? ` — owned by ${owner}` : ""}`,
             );
             return { cancel: true };
           }
