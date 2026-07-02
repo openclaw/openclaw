@@ -1586,6 +1586,7 @@ async function runEmbeddedAgentInternal(
       let consecutiveSameModelRateLimitRetries = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let nonDeliverableTurnRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
@@ -3849,6 +3850,22 @@ async function runEmbeddedAgentInternal(
             );
             continue;
           }
+          if (
+            attempt.trajectoryTerminalError === "non_deliverable_terminal_turn" &&
+            payloadCount === 0 &&
+            !aborted &&
+            !timedOut &&
+            !promptError &&
+            nonDeliverableTurnRetryAttempts < 1
+          ) {
+            nonDeliverableTurnRetryAttempts += 1;
+            log.warn(
+              `non-deliverable terminal turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${nonDeliverableTurnRetryAttempts}/1 ` +
+                `(model stopped between tool calls without producing a reply)`,
+            );
+            continue;
+          }
           const incompleteTurnText = emptyAssistantReplyIsSilent
             ? null
             : resolveIncompleteTurnPayloadText({
@@ -3894,6 +3911,10 @@ async function runEmbeddedAgentInternal(
             continue;
           }
           compactionContinuationRetryInstruction = null;
+          const incompleteTurnErrorKind =
+            nonDeliverableTurnRetryAttempts >= 1
+              ? ("non_deliverable_terminal_turn" as const)
+              : ("incomplete_turn" as const);
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -3944,7 +3965,7 @@ async function runEmbeddedAgentInternal(
                 replayInvalid,
                 livenessState,
                 error: {
-                  kind: "incomplete_turn",
+                  kind: incompleteTurnErrorKind,
                   message: "Agent couldn't generate a response.",
                   fallbackSafe: incompleteTurnFallbackSafe,
                   terminalPresentation: terminalToolPresentation !== undefined,
@@ -3999,6 +4020,7 @@ async function runEmbeddedAgentInternal(
                 `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
                 `compactions=${attemptCompactionCount} reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
                 `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
+                `nonDeliverableRetries=${nonDeliverableTurnRetryAttempts}/1 ` +
                 `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
                 (terminalToolPresentation
                   ? "surfacing tool-authored terminal presentation"
@@ -4035,7 +4057,7 @@ async function runEmbeddedAgentInternal(
                 replayInvalid,
                 livenessState,
                 error: {
-                  kind: "incomplete_turn",
+                  kind: incompleteTurnErrorKind,
                   message: "Agent couldn't generate a response.",
                   fallbackSafe: incompleteTurnFallbackSafe,
                   terminalPresentation: terminalToolPresentation !== undefined,

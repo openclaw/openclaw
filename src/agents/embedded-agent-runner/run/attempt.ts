@@ -5782,6 +5782,7 @@ export async function runEmbeddedAttempt(
         // truthiness predicates keep working without a `.length` check.
         clientToolCalls: completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined,
         yieldDetected: yieldDetected || undefined,
+        trajectoryTerminalError: attemptTrajectoryTerminal.terminalError,
       };
     } finally {
       if (trajectoryRecorder && !trajectoryEndRecorded) {

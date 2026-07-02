@@ -30,7 +30,10 @@ import {
   resolveSessionRuntimeOverrideForProvider,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import {
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  NON_DELIVERABLE_TERMINAL_TURN_USER_TEXT,
+} from "./agent-runner-failure-copy.js";
 import {
   PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
@@ -8199,5 +8202,71 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(state.runEmbeddedAgentMock, 1, "fallback candidate", {
       suppressNextUserMessagePersistence: true,
     });
+  });
+
+  it("surfaces specific message when embedded run reports non_deliverable_terminal_turn error", async () => {
+    // The embedded runner (run.ts) already retried internally and exhausted.
+    // run.ts returns the error via meta.error.kind and includes a generic error
+    // payload ("Agent couldn't generate a response."). The reply layer must
+    // replace that generic text with the specific non-deliverable copy.
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      ],
+      meta: {
+        error: {
+          kind: "non_deliverable_terminal_turn",
+          message: "Agent couldn't generate a response.",
+        },
+      },
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    const payloadText = (result as { kind: "final"; payload: { text: string } }).payload.text;
+    expect(payloadText).toBe(NON_DELIVERABLE_TERMINAL_TURN_USER_TEXT);
+  });
+
+  it("calls replyOperation.fail and surfaces specific message for non_deliverable_terminal_turn", async () => {
+    // Verifies the replyOp integration: fail() is called and the specific
+    // non-deliverable copy replaces the generic runner error payload text.
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      ],
+      meta: {
+        error: {
+          kind: "non_deliverable_terminal_turn",
+          message: "Agent couldn't generate a response.",
+        },
+      },
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ replyOperation }),
+    );
+
+    expect(result.kind).toBe("final");
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    const payloadText = (result as { kind: "final"; payload: { text: string } }).payload.text;
+    expect(payloadText).toBe(NON_DELIVERABLE_TERMINAL_TURN_USER_TEXT);
   });
 });

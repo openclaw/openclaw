@@ -5,6 +5,12 @@ export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
 export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
 
+/** Shown when the model stopped between tool calls without producing a reply.
+ *  Retry is idempotent (no output was produced), so the primary remediation is
+ *  to try the same message again. */
+export const NON_DELIVERABLE_TERMINAL_TURN_USER_TEXT =
+  "⚠️ The model stopped between tool calls without producing a reply. Please try the same message again — this usually resolves on retry. If it persists, use /new or a lighter model.";
+
 /** True when text is exactly the generic external run failure copy. */
 function isGenericExternalRunFailureText(text: string | undefined): boolean {
   return text?.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
