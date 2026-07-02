@@ -144,23 +144,47 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function readOptionalString(value: () => unknown): string | undefined {
+  try {
+    const resolved = value();
+    return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
+  description?: string;
+  displaySummary?: string;
+  label?: string;
+  toolName?: string;
+  parameters?: unknown;
+  snapshotFields?: boolean;
 }): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
-  const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const title = params.snapshotFields
+    ? params.label
+    : (params.label ?? readOptionalString(() => (params.tool as { label?: unknown }).label));
+  const toolName = params.toolName ?? params.tool.name;
+  const displaySummary = params.snapshotFields
+    ? params.displaySummary
+    : (params.displaySummary ?? readOptionalString(() => params.tool.displaySummary));
+  const description =
+    params.description ??
+    (params.snapshotFields ? undefined : readOptionalString(() => params.tool.description)) ??
+    "";
   return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(displaySummary ? { displaySummary } : {}),
     optional: params.optional,
     descriptor: {
-      name: params.tool.name,
+      name: toolName,
       ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
+      description,
+      inputSchema: asJsonObject(params.parameters ?? params.tool.parameters),
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName },
     },
   };
 }
