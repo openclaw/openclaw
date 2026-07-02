@@ -58,6 +58,7 @@ Config keys:
 - Group sender allowlist (channel sender access): `channels.irc.groupAllowFrom`
 - Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]`
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
+- `channels.irc.mentionPatterns` — custom regex patterns the bot listens for in channel messages. When set, messages must match at least one pattern to trigger a reply (overrides the default nick-based mention matching). Accepts an array of regex strings. Useful for non-standard nick formats or keyword-based triggering.
 
 Allowlist entries should use stable sender identities (`nick!user@host`).
 Bare nick matching is mutable and only enabled when `channels.irc.dangerouslyAllowNameMatching: true`.
