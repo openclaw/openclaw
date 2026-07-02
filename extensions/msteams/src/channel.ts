@@ -364,11 +364,8 @@ function assertMSTeamsReadTargetAllowed(params: {
     msteamsCfg === undefined
       ? "allowlist"
       : (msteamsCfg.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist");
-  if (!target) {
-    throw new Error("Microsoft Teams read target is not allowed.");
-  }
   const dmTarget = normalizeMSTeamsDmTarget(target);
-  if (dmTarget) {
+  if (dmTarget && target) {
     if (
       !msteamsCfg ||
       !isMSTeamsReadTargetAllowed({

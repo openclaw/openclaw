@@ -690,27 +690,39 @@ describe("feishuPlugin actions", () => {
     });
   });
 
-  it("blocks trusted-context Feishu message reads before fetching in allowlist mode", async () => {
-    await expect(
-      feishuPlugin.actions?.handleAction?.({
-        action: "read",
-        params: { messageId: "om_allowed" },
-        cfg: {
-          channels: {
-            feishu: {
-              enabled: true,
-              appId: "cli_main",
-              appSecret: "secret_main",
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["oc_group_1"],
-            },
+  it("reads messages from chats allowed by Feishu groupAllowFrom", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_allowed",
+      chatId: "oc_group_1",
+      content: "allowed",
+      contentType: "text",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "read",
+      params: { messageId: "om_allowed" },
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_main",
+            appSecret: "secret_main",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["oc_group_1"],
           },
-        } as OpenClawConfig,
-        accountId: undefined,
-        toolContext: { currentChannelId: "chat:oc_group_1" },
-      } as never),
-    ).rejects.toThrow("Feishu read target chat is not allowed.");
-    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+        },
+      } as OpenClawConfig,
+      accountId: undefined,
+      toolContext: { currentChannelId: "chat:oc_group_1" },
+    } as never);
+
+    expect(getMessageFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      messageId: "om_allowed",
+      accountId: undefined,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
   });
 
   it("blocks messageId-only reads before fetching in Feishu allowlist mode", async () => {
@@ -761,7 +773,14 @@ describe("feishuPlugin actions", () => {
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("blocks trusted-context fetched message reads before Feishu provider fetches", async () => {
+  it("blocks trusted-context fetched message reads outside the Feishu group allowlist", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      content: "outside",
+      contentType: "text",
+    });
+
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action: "read",
@@ -783,7 +802,7 @@ describe("feishuPlugin actions", () => {
         toolContext: { currentChannelId: "chat:oc_group_1" },
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
-    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(getMessageFeishuMock).toHaveBeenCalled();
   });
 
   it("blocks disallowed Feishu read targets before fetching the message", async () => {
@@ -1409,7 +1428,14 @@ describe("feishuPlugin actions", () => {
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("blocks Feishu reaction reads before provider fetches when context is trusted", async () => {
+  it("blocks Feishu reaction reads when the trusted-context target message is outside the group allowlist", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      content: "outside",
+      contentType: "text",
+    });
+
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action: "reactions",
@@ -1431,7 +1457,7 @@ describe("feishuPlugin actions", () => {
         toolContext: { currentChannelId: "chat:oc_group_1" },
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
-    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(getMessageFeishuMock).toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
