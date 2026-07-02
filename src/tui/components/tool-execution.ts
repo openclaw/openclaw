@@ -1,8 +1,9 @@
 // Tool execution component renders tool call status and output in the TUI.
-import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
+import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
 // Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
@@ -61,7 +62,7 @@ export class ToolExecutionComponent extends Container {
   private box: Box;
   private header: Text;
   private argsLine: Text;
-  private output: Markdown;
+  private output: HyperlinkMarkdown;
   private toolName: string;
   private args: unknown;
   private result?: ToolResult;
@@ -76,7 +77,7 @@ export class ToolExecutionComponent extends Container {
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
-    this.output = new Markdown("", 0, 0, markdownTheme, {
+    this.output = new HyperlinkMarkdown("", 0, 0, markdownTheme, {
       color: (line) => theme.toolOutput(line),
     });
     this.addChild(new Spacer(1));
