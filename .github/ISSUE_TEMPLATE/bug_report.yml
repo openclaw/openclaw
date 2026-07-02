@@ -72,6 +72,46 @@ body:
       placeholder: No reply is posted in the thread; the attached gateway log shows `reply target not found` at 14:23:08 UTC.
     validations:
       required: true
+  - type: dropdown
+    id: user_flow_stage
+    attributes:
+      label: User flow stage
+      description: Where does this affect a non-technical first-time user or community user?
+      options:
+        - Website or docs discovery
+        - Download or install
+        - Update
+        - Setup or onboarding
+        - Auth or provider setup
+        - First successful task
+        - Daily UI workflow
+        - Recovery or doctor flow
+        - Not user-facing / unsure
+    validations:
+      required: true
+  - type: dropdown
+    id: recovery_path
+    attributes:
+      label: Recovery path for a non-technical user
+      description: How can a non-technical user recover without maintainer help?
+      options:
+        - Can recover in product
+        - Needs docs or support guidance
+        - Needs terminal, config edits, logs, or manual file edits
+        - Cannot recover / blocked
+        - Not applicable / unknown
+    validations:
+      required: true
+  - type: textarea
+    id: less_technical_surface
+    attributes:
+      label: Less-technical product surface
+      description: >
+        If recovery is technical today, describe the in-product button, doctor action,
+        setup step, or inline guidance that would unblock the user.
+      placeholder: >
+        A Doctor button detects the broken provider config and offers Fix without
+        asking the user to open logs or edit files.
   - type: input
     id: version
     attributes:

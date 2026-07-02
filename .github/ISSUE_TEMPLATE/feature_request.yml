@@ -33,6 +33,20 @@ body:
     validations:
       required: true
   - type: textarea
+    id: user_experience_impact
+    attributes:
+      label: User experience impact
+      description: |
+        For user-facing requests, include:
+        - the affected flow stage,
+        - whether a non-technical first-time user can recover in product,
+        - whether recovery requires terminal/config/logs/manual file edits,
+        - the less-technical product surface that should exist.
+      placeholder: |
+        Flow stage: setup/onboarding
+        Current recovery: requires terminal/config edits
+        Less-technical surface: Doctor button that detects the broken state and offers Fix
+  - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
