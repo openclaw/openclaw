@@ -2,17 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
-import type {
-  HealthFinding,
-  HealthRepairEffect,
-  HealthRepairResult,
-} from "../../../flows/health-checks.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import { resolveConfigDir, resolveUserPath } from "../../../utils.js";
-import {
-  collectStalePluginRuntimeSymlinks,
-  removeStalePluginRuntimeSymlinks,
-} from "./plugin-runtime-symlinks.js";
+import { removeStalePluginRuntimeSymlinks } from "./plugin-runtime-symlinks.js";
 
 const LEGACY_DIRECT_CHILD_NAMES = new Set(["plugin-runtime-deps", "bundled-plugin-runtime-deps"]);
 
@@ -440,138 +433,6 @@ export function legacyPluginDependencyStateIssueToHealthFinding(
     requirement: "legacy-plugin-dependency-state-removed",
     fixHint: "Run `openclaw doctor --fix` to remove legacy plugin dependency state.",
   };
-}
-
-function legacyPluginDependencyRemovalEffect(target: string, dryRun: boolean): HealthRepairEffect {
-  return {
-    kind: "state",
-    action: dryRun
-      ? "would-remove-legacy-plugin-dependency-state"
-      : "remove-legacy-plugin-dependency-state",
-    target,
-    dryRunSafe: false,
-  };
-}
-
-function stalePluginRuntimeSymlinkRemovalEffect(
-  target: string,
-  dryRun: boolean,
-): HealthRepairEffect {
-  return {
-    kind: "file",
-    action: dryRun
-      ? "would-remove-stale-plugin-runtime-symlink"
-      : "remove-stale-plugin-runtime-symlink",
-    target,
-    dryRunSafe: false,
-  };
-}
-
-async function prepareLegacyPluginDependencyRemovals(params: {
-  env: NodeJS.ProcessEnv;
-  packageRoot: string | null | undefined;
-}): Promise<{ removalTargets: string[]; staleRoots: string[]; warnings: string[] }> {
-  const targets = await collectLegacyPluginDependencyTargetEntries(params.env, {
-    packageRoot: params.packageRoot,
-  });
-  const cleanupRootPaths = collectCleanupRootPaths(params.env, params.packageRoot);
-  const cleanupRoots = await collectExistingCleanupRoots(cleanupRootPaths);
-  const staleRootCandidates = filterLegacyStaleRootCandidates(targets, cleanupRootPaths);
-  const preparedTargets = await prepareCleanupTargets(staleRootCandidates.targets, cleanupRoots);
-  return {
-    removalTargets: preparedTargets.removalTargets,
-    staleRoots: preparedTargets.staleRoots,
-    warnings: [...staleRootCandidates.warnings, ...preparedTargets.warnings],
-  };
-}
-
-/** Repairs or previews selected legacy plugin dependency state findings. */
-export async function repairLegacyPluginDependencyStateFindings(params: {
-  env?: NodeJS.ProcessEnv;
-  packageRoot?: string | null;
-  findings: readonly HealthFinding[];
-  dryRun?: boolean;
-}): Promise<HealthRepairResult> {
-  const selectedPaths = new Set(
-    params.findings
-      .filter(
-        (finding) =>
-          finding.checkId === "core/doctor/legacy-plugin-dependencies" &&
-          finding.requirement === "legacy-plugin-dependency-state-removed" &&
-          typeof finding.path === "string",
-      )
-      .map((finding) => path.resolve(finding.path as string)),
-  );
-  if (selectedPaths.size === 0) {
-    return {
-      status: "skipped",
-      reason: "no repairable legacy plugin dependency findings were present",
-      changes: [],
-    };
-  }
-
-  const env = params.env ?? process.env;
-  const packageRoot =
-    params.packageRoot ??
-    resolveOpenClawPackageRootSync({
-      argv1: process.argv[1],
-      moduleUrl: import.meta.url,
-      cwd: process.cwd(),
-    });
-  const preparedTargets = await prepareLegacyPluginDependencyRemovals({ env, packageRoot });
-  const removalTargets = preparedTargets.removalTargets.filter((target) =>
-    selectedPaths.has(path.resolve(target)),
-  );
-  if (removalTargets.length === 0) {
-    return {
-      status: "skipped",
-      reason: "selected legacy plugin dependency state no longer needs repair",
-      changes: [],
-      warnings: preparedTargets.warnings,
-    };
-  }
-
-  const changes: string[] = [];
-  const warnings = [...preparedTargets.warnings];
-  const effects: HealthRepairEffect[] = [];
-  const staleSymlinks = await collectStalePluginRuntimeSymlinks(packageRoot, {
-    staleRoots: removalTargets,
-  });
-  for (const symlink of staleSymlinks) {
-    if (params.dryRun === true) {
-      changes.push(`Would remove stale plugin-runtime symlink: ${symlink.path}`);
-    } else {
-      try {
-        await fs.unlink(symlink.path);
-        changes.push(`Removed stale plugin-runtime symlink: ${symlink.path}`);
-      } catch (error) {
-        warnings.push(
-          `Failed to remove stale plugin-runtime symlink ${symlink.path}: ${String(error)}`,
-        );
-        continue;
-      }
-    }
-    effects.push(stalePluginRuntimeSymlinkRemovalEffect(symlink.path, params.dryRun === true));
-  }
-
-  for (const target of removalTargets) {
-    if (params.dryRun === true) {
-      changes.push(`Would remove legacy plugin dependency state: ${target}`);
-    } else {
-      try {
-        await fs.rm(target, { recursive: true, force: true });
-        changes.push(`Removed legacy plugin dependency state: ${target}`);
-      } catch (error) {
-        warnings.push(
-          `Failed to remove legacy plugin dependency state ${target}: ${String(error)}`,
-        );
-        continue;
-      }
-    }
-    effects.push(legacyPluginDependencyRemovalEffect(target, params.dryRun === true));
-  }
-
-  return { changes, warnings, effects };
 }
 
 /** Remove legacy plugin dependency state under trusted OpenClaw cleanup roots. */

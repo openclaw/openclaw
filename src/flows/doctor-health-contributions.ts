@@ -1459,15 +1459,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             legacyPluginDependencyStateIssueToHealthFinding,
           );
         },
-        async repair(ctx, findings) {
-          const { repairLegacyPluginDependencyStateFindings } =
-            await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
-          return await repairLegacyPluginDependencyStateFindings({
-            env: process.env,
-            findings,
-            dryRun: ctx.dryRun,
-          });
-        },
       },
       run: async () => {},
     }),
