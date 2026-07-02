@@ -608,19 +608,24 @@ function resolveFeishuChatId(ctx: {
   return raw;
 }
 
-type FeishuReadTarget = { kind: "group"; id: string } | { kind: "direct"; id: string };
+type FeishuReadTarget =
+  | { kind: "group"; id: string; prefixed?: boolean }
+  | { kind: "direct"; id: string };
 type FeishuReadTargetSource = "explicit" | "current";
 
 function resolveFeishuReadTarget(raw?: string): FeishuReadTarget | undefined {
   if (!raw?.trim()) {
     return undefined;
   }
+  const trimmed = raw.trim();
   const directId = parseFeishuDirectConversationId(raw);
   if (directId) {
     return { kind: "direct", id: directId };
   }
   const groupId = resolveFeishuChatId({ params: { to: raw } });
-  return groupId ? { kind: "group", id: groupId } : undefined;
+  return groupId
+    ? { kind: "group", id: groupId, prefixed: /^(chat|group|channel):/i.test(trimmed) }
+    : undefined;
 }
 
 function sameFeishuReadTarget(
@@ -707,6 +712,20 @@ function shouldVerifyFeishuFetchedReadTarget(params: {
   }
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
   return dmPolicy !== "open";
+}
+
+function shouldRejectFeishuExplicitReadTargetBeforeFetch(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  requestedTarget?: FeishuReadTarget;
+}): boolean {
+  if (shouldVerifyFeishuMessageReadTarget(params)) {
+    return true;
+  }
+  if (params.requestedTarget?.kind === "group" && params.requestedTarget.prefixed) {
+    return false;
+  }
+  return shouldVerifyFeishuFetchedReadTarget(params);
 }
 
 function assertFeishuReadTargetAllowed(params: {
@@ -816,7 +835,7 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
 }) {
   if (
     params.targetSource === "explicit" &&
-    shouldVerifyFeishuFetchedReadTarget({
+    shouldRejectFeishuExplicitReadTargetBeforeFetch({
       cfg: params.cfg,
       account: params.account,
       requestedTarget: params.requestedTarget,
