@@ -11,6 +11,7 @@ const {
   getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
   listChannelsMSTeamsMock,
+  listPinsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -28,6 +29,7 @@ const {
   getMemberInfoMSTeamsMock: vi.fn(),
   getMessageMSTeamsMock: vi.fn(),
   listChannelsMSTeamsMock: vi.fn(),
+  listPinsMSTeamsMock: vi.fn(),
   listReactionsMSTeamsMock: vi.fn(),
   pinMessageMSTeamsMock: vi.fn(),
   reactMessageMSTeamsMock: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("./channel.runtime.js", () => ({
     getMemberInfoMSTeams: getMemberInfoMSTeamsMock,
     getMessageMSTeams: getMessageMSTeamsMock,
     listChannelsMSTeams: listChannelsMSTeamsMock,
+    listPinsMSTeams: listPinsMSTeamsMock,
     listReactionsMSTeams: listReactionsMSTeamsMock,
     pinMessageMSTeams: pinMessageMSTeamsMock,
     reactMessageMSTeams: reactMessageMSTeamsMock,
@@ -68,6 +71,7 @@ const actionMocks = [
   getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
   listChannelsMSTeamsMock,
+  listPinsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -246,6 +250,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getMessageMSTeamsMock,
       mockResult: readMessage,
       action: "read",
+      cfg: openMSTeamsReadCfg,
       actionParams: {
         messageId: padded("msg-1"),
       },
@@ -477,6 +482,88 @@ describe("msteamsPlugin message actions", () => {
         message: readMessage,
       },
     });
+  });
+
+  it("allows implicit read fallback targets inside the Teams route allowlist", async () => {
+    const teamChannelTarget = "team-1/19:target@thread.tacv2";
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: targetChannelId,
+        currentGraphChannelId: teamChannelTarget,
+      },
+      runtimeParams: {
+        to: teamChannelTarget,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("blocks implicit read fallback targets outside the Teams route allowlist", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "team-1": {
+              channels: {
+                "19:allowed@thread.tacv2": {},
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const toolContext = {
+      currentChannelId: targetChannelId,
+      currentGraphChannelId: "team-1/19:target@thread.tacv2",
+    };
+    const scenarios = [
+      { action: "read", params: { messageId: "msg-1" }, mockFn: getMessageMSTeamsMock },
+      { action: "list-pins", params: {}, mockFn: listPinsMSTeamsMock },
+      { action: "reactions", params: { messageId: "msg-1" }, mockFn: listReactionsMSTeamsMock },
+      { action: "search", params: { query: "hello" }, mockFn: searchMessagesMSTeamsMock },
+    ];
+
+    for (const scenario of scenarios) {
+      await expect(
+        runAction({
+          action: scenario.action,
+          cfg,
+          params: scenario.params,
+          toolContext,
+        }),
+      ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+      expect(scenario.mockFn).not.toHaveBeenCalled();
+    }
   });
 
   it("advertises upload-file in the message tool surface", () => {

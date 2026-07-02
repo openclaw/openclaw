@@ -208,10 +208,6 @@ function resolveActionTarget(
       : (currentChannelId?.trim() ?? "");
 }
 
-function hasExplicitActionTarget(params: Record<string, unknown>): boolean {
-  return Boolean(normalizeOptionalString(params.to) ?? normalizeOptionalString(params.target));
-}
-
 function normalizeActionConversationTarget(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   if (!normalized) {
@@ -935,7 +931,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "read") {
-            const enforceReadTarget = hasExplicitActionTarget(ctx.params);
             return await runWithRequiredActionMessageTarget({
               actionLabel: "Read",
               toolParams: ctx.params,
@@ -946,7 +941,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 assertMSTeamsReadTargetAllowed({
                   cfg: ctx.cfg,
                   target: target.to,
-                  enforce: enforceReadTarget,
+                  enforce: true,
                 });
                 const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const message = await getMessageMSTeams({
@@ -998,7 +993,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "list-pins") {
-            const enforceReadTarget = hasExplicitActionTarget(ctx.params);
             return await runWithRequiredActionTarget({
               actionLabel: "List-pins",
               toolParams: ctx.params,
@@ -1009,7 +1003,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 assertMSTeamsReadTargetAllowed({
                   cfg: ctx.cfg,
                   target: to,
-                  enforce: enforceReadTarget,
+                  enforce: true,
                 });
                 const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
@@ -1073,7 +1067,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "reactions") {
-            const enforceReadTarget = hasExplicitActionTarget(ctx.params);
             return await runWithRequiredActionMessageTarget({
               actionLabel: "Reactions",
               toolParams: ctx.params,
@@ -1084,7 +1077,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 assertMSTeamsReadTargetAllowed({
                   cfg: ctx.cfg,
                   target: target.to,
-                  enforce: enforceReadTarget,
+                  enforce: true,
                 });
                 const { listReactionsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listReactionsMSTeams({
@@ -1098,7 +1091,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "search") {
-            const enforceReadTarget = hasExplicitActionTarget(ctx.params);
             return await runWithRequiredActionTarget({
               actionLabel: "Search",
               toolParams: ctx.params,
@@ -1109,7 +1101,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 assertMSTeamsReadTargetAllowed({
                   cfg: ctx.cfg,
                   target: to,
-                  enforce: enforceReadTarget,
+                  enforce: true,
                 });
                 const query = resolveActionQuery(ctx.params);
                 if (!query) {
