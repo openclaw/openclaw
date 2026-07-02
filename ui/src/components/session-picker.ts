@@ -310,7 +310,7 @@ export class SessionPicker extends LitElement {
                 }
               }}
               @blur=${() => {
-                if (normalizeOptionalString(this.query)) {
+                if (this.open && normalizeOptionalString(this.query)) {
                   void this.applySearch();
                 }
               }}
