@@ -2,25 +2,25 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite("Voice Wake manager suppression")
+@Suite("Voice Wake manager suppression", .serialized)
 struct VoiceWakeManagerSuppressionTests {
     @Test
     @MainActor func `clearing Talk suppression restarts after pending start was canceled`() async {
-        let manager = VoiceWakeManager()
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.statusText = "Paused"
 
         manager.setSuppressedByTalk(true)
         manager.setSuppressedByTalk(false)
 
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
         #expect(manager.isListening == false)
     }
 
     @Test
     @MainActor func `external audio resumes pending Voice Wake restart`() async {
-        let manager = VoiceWakeManager()
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.resumeAfterExternalAudioCapture(wasSuspended: true)
 
@@ -29,14 +29,14 @@ struct VoiceWakeManagerSuppressionTests {
 
         manager.resumeAfterExternalAudioCapture(wasSuspended: suspended)
 
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
         #expect(manager.isListening == false)
     }
 
     @Test
     @MainActor func `external audio resumes in flight Voice Wake start`() async {
-        let manager = VoiceWakeManager()
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager._test_setStartInFlight(true)
 
@@ -47,14 +47,14 @@ struct VoiceWakeManagerSuppressionTests {
         manager._test_setStartInFlight(false)
         manager.resumeAfterExternalAudioCapture(wasSuspended: suspended)
 
-        try? await Task.sleep(nanoseconds: 900_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
         #expect(manager.isListening == false)
     }
 
     @Test
     @MainActor func `Talk suppression toggle does not leave Voice Wake externally suspended`() async {
-        let manager = VoiceWakeManager()
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.isListening = true
 
@@ -65,8 +65,8 @@ struct VoiceWakeManagerSuppressionTests {
         manager.setSuppressedByTalk(false)
         manager.resumeAfterExternalAudioCapture(wasSuspended: suspended)
 
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        #expect(manager.statusText.contains("Voice Wake") == true)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
         #expect(manager.isListening == false)
     }
 }

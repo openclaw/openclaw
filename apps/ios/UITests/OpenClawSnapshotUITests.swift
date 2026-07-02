@@ -92,6 +92,67 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.tabBars.buttons["Talk"].isSelected == true)
     }
 
+    func testVoiceWakeResumesAfterTalkModeToggle() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
+        self.addUIInterruptionMonitor(withDescription: "Microphone and speech permissions") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "voice-wake-talk-lifecycle"))
+
+        let voiceSettings = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Voice & Talk").firstMatch)
+        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 8))
+        voiceSettings.tap()
+
+        let voiceWake = try XCTUnwrap(self.app?.switches["Voice Wake"])
+        let talkMode = try XCTUnwrap(self.app?.switches["Talk Mode"])
+        XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
+        XCTAssertTrue(talkMode.exists)
+
+        if talkMode.value as? String == "1" {
+            talkMode.tap()
+        }
+        if voiceWake.value as? String == "1" {
+            voiceWake.tap()
+        }
+
+        voiceWake.tap()
+        XCTAssertEqual(voiceWake.value as? String, "1")
+        talkMode.tap()
+        XCTAssertEqual(talkMode.value as? String, "1")
+        talkMode.tap()
+        XCTAssertEqual(talkMode.value as? String, "0")
+        XCTAssertEqual(voiceWake.value as? String, "1")
+        XCTAssertEqual(self.app?.state, .runningForeground)
+        self.attachScreenshot(named: "voice-wake-after-talk-resume")
+
+        let voiceNavigationBar = try XCTUnwrap(self.app?.navigationBars["Voice & Talk"])
+        voiceNavigationBar.buttons["BackButton"].tap()
+        let diagnostics = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Diagnostics").firstMatch)
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
+        diagnostics.tap()
+        let voiceWakeStatus = try XCTUnwrap(
+            self.app?.descendants(matching: .any)["diagnostics-voice-wake-status"])
+        XCTAssertTrue(voiceWakeStatus.waitForExistence(timeout: 5))
+        let resumed = expectation(
+            for: NSPredicate(format: "value != 'Paused' AND value != 'Off'"),
+            evaluatedWith: voiceWakeStatus)
+        wait(for: [resumed], timeout: 5)
+
+        let diagnosticsNavigationBar = try XCTUnwrap(self.app?.navigationBars["Diagnostics"])
+        diagnosticsNavigationBar.buttons["BackButton"].tap()
+        voiceSettings.tap()
+        XCTAssertTrue(voiceWake.waitForExistence(timeout: 5))
+        voiceWake.tap()
+        XCTAssertEqual(voiceWake.value as? String, "0")
+    }
+
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone composer proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -126,7 +187,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         textField.tap()
         textField.typeText(
-            "Draft a polished launch note that covers the new design, validation, rollout plan, and follow-up details for the team.")
+            "Draft a polished launch note that covers the new design, validation, rollout plan, " +
+                "and follow-up details for the team.")
         let composerGrew = expectation(
             for: NSPredicate { _, _ in textField.frame.height >= compactHeight + 12 },
             evaluatedWith: textField)

@@ -113,9 +113,16 @@ final class VoiceWakeManager: NSObject {
     private var userDefaultsObserver: NSObjectProtocol?
     private var suppressedByTalk: Bool = false
 
-    private static let externalAudioResumeDelayNs: UInt64 = 350_000_000
+    private let externalAudioResumeDelayNs: UInt64
+    private let recognitionErrorRestartDelayNs: UInt64
 
-    override init() {
+    override convenience init() {
+        self.init(externalAudioResumeDelayNs: 350_000_000, recognitionErrorRestartDelayNs: 700_000_000)
+    }
+
+    private init(externalAudioResumeDelayNs: UInt64, recognitionErrorRestartDelayNs: UInt64) {
+        self.externalAudioResumeDelayNs = externalAudioResumeDelayNs
+        self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
         super.init()
         self.triggerWords = VoiceWakePreferences.loadTriggerWords()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
@@ -184,9 +191,7 @@ final class VoiceWakeManager: NSObject {
                 try? await Task.sleep(nanoseconds: delayNs)
             }
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.scheduledStartTask = nil
-            }
+            self?.scheduledStartTask = nil
             await self?.start()
         }
     }
@@ -293,7 +298,7 @@ final class VoiceWakeManager: NSObject {
     func resumeAfterExternalAudioCapture(wasSuspended: Bool) {
         guard wasSuspended else { return }
         self.isSuspendedForExternalAudio = false
-        self.scheduleStart(after: Self.externalAudioResumeDelayNs)
+        self.scheduleStart(after: self.externalAudioResumeDelayNs)
     }
 
     private func startRecognition() throws {
@@ -383,7 +388,7 @@ final class VoiceWakeManager: NSObject {
             self.statusText = "Recognizer error: \(errorText)"
             self.isListening = false
 
-            self.scheduleStart(after: 700_000_000)
+            self.scheduleStart(after: self.recognitionErrorRestartDelayNs)
             return
         }
 
@@ -526,12 +531,21 @@ final class VoiceWakeManager: NSObject {
 
 #if DEBUG
 extension VoiceWakeManager {
+    static func _test_withoutRestartDelays() -> VoiceWakeManager {
+        VoiceWakeManager(externalAudioResumeDelayNs: 0, recognitionErrorRestartDelayNs: 0)
+    }
+
     func _test_handleRecognitionCallback(transcript: String?, segments: [WakeWordSegment], errorText: String?) {
         self.handleRecognitionCallback(transcript: transcript, segments: segments, errorText: errorText)
     }
 
     func _test_setStartInFlight(_ isStarting: Bool) {
         self.isStarting = isStarting
+    }
+
+    func _test_waitForScheduledStart() async {
+        let task = self.scheduledStartTask
+        await task?.value
     }
 }
 #endif
