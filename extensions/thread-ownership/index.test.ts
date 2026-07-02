@@ -272,6 +272,21 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
+    it("cancels when 409 body is malformed (non-JSON)", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response("not valid json", {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+    });
+
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
