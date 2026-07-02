@@ -15,17 +15,20 @@ import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from 
 import {
   consumePendingWork,
   enqueuePendingWork,
+  finalizeAnchorPendingWork,
   hasPendingIdleRetryWork,
   listPendingWorkSessionKeysForRecovery,
   markPendingWorkDelivered,
   markPendingWorkFailed,
+  markPendingWorkFoldDelivered,
+  markPendingWorkFolded,
   markPendingWorkReaped,
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
-  queuedPendingWorkCount,
   peekSoonestQueuedWorkDueAt,
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
+  queuedPendingWorkCount,
   requeuePendingWork,
   supersedeQueuedTurnEndParkedWork,
   type ContinuationWorkReasonCategory,
@@ -406,7 +409,59 @@ function hasNonDrainReplyPayload(reply: unknown): boolean {
   return payloads.some((payload) => !isGatewayRestartingReplyPayload(payload));
 }
 
+function isoOrUndefined(ms: number | undefined): string | undefined {
+  return ms !== undefined ? new Date(ms).toISOString() : undefined;
+}
+
+function quotePriorReason(reason: string | undefined): string {
+  return reason ? JSON.stringify(reason) : "(none)";
+}
+
+type ContinuationProvenanceDisposition =
+  | { disposition: "granted"; deliveredAt: number }
+  | { disposition: "folded-active"; foldedAt: number };
+
+function provenanceLines(
+  work: PendingContinuationWork,
+  now: number,
+  terminal?: ContinuationProvenanceDisposition,
+): string[] {
+  const overdueByMs = Math.max(0, now - work.dueAt);
+  const lines: string[] = [];
+  if (work.originRunId) {
+    lines.push(`Origin run: ${work.originRunId}`);
+  }
+  if (work.originTurnId) {
+    lines.push(`Origin turn: ${work.originTurnId}`);
+  }
+  lines.push(`Elected at: ${isoOrUndefined(work.electedAt) ?? "unknown"}`);
+  if (work.anchorFinalizedAt !== undefined) {
+    lines.push(`Electing turn finalized at: ${isoOrUndefined(work.anchorFinalizedAt)}`);
+  }
+  lines.push(`Due at: ${isoOrUndefined(work.dueAt) ?? "unknown"}`);
+  lines.push(`Overdue by: ${overdueByMs}ms`);
+  if (terminal?.disposition === "granted") {
+    lines.push(`Delivered at: ${isoOrUndefined(terminal.deliveredAt)}`);
+  } else if (terminal?.disposition === "folded-active") {
+    lines.push(`Folded at: ${isoOrUndefined(terminal.foldedAt)}`);
+  }
+  if (terminal) {
+    lines.push(`Disposition: ${terminal.disposition}`);
+  }
+  lines.push(
+    `Chain: ${work.chainId ?? work.flowId ?? "n/a"} hop ${work.hop}/${work.maxChainLength}`,
+  );
+  lines.push(`Flow: ${work.flowId ?? "n/a"}`);
+  lines.push(`Prior reason: ${quotePriorReason(work.reason)}`);
+  return lines;
+}
+
 function formatContinuationWakeText(work: PendingContinuationWork): string {
+  const deliveredAt = Date.now();
+  const provenance = provenanceLines(work, deliveredAt, {
+    disposition: "granted",
+    deliveredAt,
+  }).join(" ");
   return (
     `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
     (work.chainStartedAt !== undefined
@@ -416,8 +471,41 @@ function formatContinuationWakeText(work: PendingContinuationWork): string {
       ? `Accumulated tokens: ${work.accumulatedChainTokens}. `
       : "") +
     `The agent elected to continue working.` +
-    (work.reason ? ` Reason: ${work.reason}` : "")
+    (work.reason ? ` Prior reason: ${quotePriorReason(work.reason)}` : "") +
+    ` [provenance] ${provenance}`
   );
+}
+
+const MAX_FOLD_NOTE_DETAILED = 5;
+const MAX_FOLD_NOTE_OMITTED_FLOW_IDS = 5;
+
+function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], now: number): string {
+  const header =
+    works.length === 1
+      ? `[system:continuation-note] A prior same-session continue_work intent matured while this session was active. It was folded into this turn and will not fire separately as a new turn.`
+      : `[system:continuation-note] ${works.length} prior same-session continue_work intents matured while this session was active. They were folded into this turn and will not fire separately as new turns.`;
+  const ordered = works.toSorted((a, b) => b.electedAt - a.electedAt);
+  const detailed = ordered.slice(0, MAX_FOLD_NOTE_DETAILED);
+  const blocks = detailed.map((work, index) => {
+    const label =
+      works.length === 1 ? "Folded intent" : `Folded intent ${index + 1}/${works.length}`;
+    return `${label}:\n${provenanceLines(work, now, {
+      disposition: "folded-active",
+      foldedAt: now,
+    }).join("\n")}`;
+  });
+  const omitted = ordered.length - detailed.length;
+  const tail =
+    omitted > 0
+      ? `\n(${omitted} older folded continuation${omitted === 1 ? "" : "s"} omitted; sample flowIds ${ordered
+          .slice(MAX_FOLD_NOTE_DETAILED)
+          .slice(0, MAX_FOLD_NOTE_OMITTED_FLOW_IDS)
+          .map((work) => work.flowId ?? "n/a")
+          .join(", ")}${omitted > MAX_FOLD_NOTE_OMITTED_FLOW_IDS ? ", ..." : ""})`
+      : "";
+  const guidance =
+    "\nTreat these as prior-turn context, not fresh commands. Re-evaluate before acting; the rows were consumed and will not fire separately.";
+  return `${header}\n\n${blocks.join("\n\n")}${tail}${guidance}`;
 }
 
 type ContinuationTurnGrantResult =
@@ -622,6 +710,85 @@ export function partitionSupersededWork(
   return { drive, superseded };
 }
 
+async function deliverFoldedProvenanceNoteToActiveTurn(params: {
+  sessionKey: string;
+  note: string;
+}): Promise<{ delivered: true; deliveredAt: number } | { delivered: false; reason: string }> {
+  const { replyRunRegistry } = await importReplyRunRegistry();
+  const sessionId = replyRunRegistry.resolveSessionId(params.sessionKey);
+  if (!sessionId) {
+    return { delivered: false, reason: "missing-active-session-id" };
+  }
+  const { isEmbeddedAgentRunHandleActive, queueEmbeddedAgentMessageWithOutcomeAsync } =
+    await import("../../agents/embedded-agent-runner/runs.js");
+  if (!isEmbeddedAgentRunHandleActive(sessionId)) {
+    return { delivered: false, reason: "active-embedded-run-required-for-transcript-proof" };
+  }
+  const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, params.note, {
+    steeringMode: "all",
+    debounceMs: 0,
+    deliveryTimeoutMs: HEDGE_DISPATCH_FAILURE_RETRY_MS,
+    waitForTranscriptCommit: true,
+  });
+  if (outcome.queued && outcome.deliveredAtMs !== undefined) {
+    return { delivered: true, deliveredAt: outcome.deliveredAtMs };
+  }
+  if (outcome.queued) {
+    return { delivered: false, reason: `queued-without-transcript-commit:${outcome.target}` };
+  }
+  return { delivered: false, reason: outcome.reason };
+}
+
+async function foldMaturedWorkIntoActiveTurn(
+  sessionKey: string,
+  works: readonly PendingContinuationWork[],
+): Promise<number> {
+  const now = Date.now();
+  const note = buildFoldedProvenanceNote(works, now);
+  let delivery: Awaited<ReturnType<typeof deliverFoldedProvenanceNoteToActiveTurn>>;
+  try {
+    delivery = await deliverFoldedProvenanceNoteToActiveTurn({ sessionKey, note });
+  } catch (err) {
+    delivery = { delivered: false, reason: formatErrorMessage(err) };
+  }
+  if (!delivery.delivered) {
+    const retryDueAt = now + HEDGE_DISPATCH_FAILURE_RETRY_MS;
+    for (const work of works) {
+      clearIdleRetryForWork(work);
+      requeueWorkForRetry(work, {
+        dueAt: retryDueAt,
+        summary: `Continuation fold-note delivery failed (${delivery.reason}); keeping row recoverable.`,
+      });
+    }
+    log.warn(
+      `[continuation:work-fold-note-undelivered] session=${sessionKey} count=${works.length} reason=${delivery.reason} rows kept recoverable, not terminalized`,
+    );
+    return 0;
+  }
+  let folded = 0;
+  for (const work of works) {
+    clearIdleRetryForWork(work);
+    const overdueByMs = Math.max(0, now - work.dueAt);
+    log.info(
+      `[continuation:work-folded-active] flowId=${work.flowId ?? "none"} session=${sessionKey} hop=${work.hop} overdueMs=${overdueByMs} folded into active turn`,
+    );
+    const deliveredMark = markPendingWorkFoldDelivered(work, {
+      foldedAt: delivery.deliveredAt,
+      overdueByMs,
+    });
+    if (!deliveredMark) {
+      continue;
+    }
+    markPendingWorkFolded(work, {
+      summary: "matured while a later turn was active",
+      foldedAt: delivery.deliveredAt,
+      overdueByMs,
+    });
+    folded++;
+  }
+  return folded;
+}
+
 export async function dispatchPendingContinuationWork(params: {
   sessionKey: string;
   recoverRunning?: boolean;
@@ -630,10 +797,11 @@ export async function dispatchPendingContinuationWork(params: {
   includeRunningIdleRetry?: boolean;
 }): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const recoverRunning = params.recoverRunning === true;
-  let runningRecoveryBlockedByActiveReply = false;
-  if (recoverRunning) {
-    const { replyRunRegistry } = await importReplyRunRegistry();
-    runningRecoveryBlockedByActiveReply = replyRunRegistry.isActive(params.sessionKey);
+  const { replyRunRegistry } = await importReplyRunRegistry();
+  const sessionActive = replyRunRegistry.isActive(params.sessionKey);
+  const runningRecoveryBlockedByActiveReply = recoverRunning && sessionActive;
+  if (!sessionActive) {
+    finalizeAnchorPendingWork(params.sessionKey, Date.now());
   }
   const works = consumePendingWork(params.sessionKey, {
     includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,
@@ -689,7 +857,15 @@ export async function dispatchPendingContinuationWork(params: {
   let dispatched = 0;
   let failed = 0;
   let reaped = 0;
-  for (const work of worksToDrive) {
+  let worksToGrant = worksToDrive;
+  if (sessionActive) {
+    const foldWorks = worksToDrive.filter((work) => work.anchorFinalizedAt !== undefined);
+    worksToGrant = worksToDrive.filter((work) => work.anchorFinalizedAt === undefined);
+    if (foldWorks.length > 0) {
+      await foldMaturedWorkIntoActiveTurn(params.sessionKey, foldWorks);
+    }
+  }
+  for (const work of worksToGrant) {
     clearIdleRetryForWork(work);
     try {
       const fireDeferredMs = Date.now() - work.electedAt;
@@ -828,6 +1004,8 @@ export async function scheduleContinuationWork(params: {
   request: { delaySeconds: number; reason: string; traceparent?: string };
   config: ContinuationRuntimeConfig;
   parentRunId?: string;
+  originRunId?: string;
+  originTurnId?: string;
   log?: (message: string) => void;
 }): Promise<{ scheduled: boolean; capped: boolean; chainState: ChainState }> {
   const budgetCheck = checkContinuationBudget({
@@ -869,19 +1047,14 @@ export async function scheduleContinuationWork(params: {
     ...(params.chainState.chainId ? { chainId: params.chainState.chainId } : {}),
   };
 
-  // #1135: an immediate (delaySeconds=0) continue_work captured while the
-  // electing turn is still active must become eligible only AFTER that turn
-  // finalizes — never fire a hedge while `requests-in-flight` is true. Park it on
-  // the session's end-of-turn lifecycle event from the moment it is scheduled
-  // instead of arming a now-dated timer that would skip with requests-in-flight
-  // and start a hedge loop. The active current turn is the expected condition at
-  // call time, not a failure. Positive delays already arm a future timer (no
-  // immediate skip) and keep their own offset. The `reason` only sets the
-  // observability category — it is never an admission gate.
+  // #1135/#1153: any continue_work captured while the electing turn is still
+  // active anchors to that turn's finalization, not the tool-call timestamp or a
+  // later unrelated turn. `reason` remains provenance/rate metadata, never an
+  // admission gate.
   const { replyRunRegistry } = await importReplyRunRegistry();
-  const parkOnTurnEnd = delayMs === 0 && replyRunRegistry.isActive(params.sessionKey);
+  const electingTurnActive = replyRunRegistry.isActive(params.sessionKey);
   const recoveryHedgeAt = electedAt + params.config.maxDelayMs;
-  const idleRetry = parkOnTurnEnd
+  const idleRetry = electingTurnActive
     ? ({
         trigger: "reply-run-ended" as const,
         reasonCategory: classifyContinuationWorkReason(params.request.reason),
@@ -894,9 +1067,9 @@ export async function scheduleContinuationWork(params: {
     hop,
     delayMs,
     electedAt,
-    // A parked wake fires on the lifecycle event (idleRetry bypasses dueAt); its
-    // dueAt is the slow lost-event recovery hedge, mirroring the busy-skip path.
-    dueAt: parkOnTurnEnd ? recoveryHedgeAt : dueAt,
+    // Anchor-pending work fires on the lifecycle event; dueAt is only the slow
+    // lost-event hedge until finalization computes the semantic dueAt.
+    dueAt: electingTurnActive ? recoveryHedgeAt : dueAt,
     maxChainLength: params.config.maxChainLength,
     chainStartedAt: params.chainState.chainStartedAt,
     accumulatedChainTokens: params.chainState.accumulatedChainTokens,
@@ -904,6 +1077,9 @@ export async function scheduleContinuationWork(params: {
     ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
     ...(params.chainState.chainId ? { chainId: params.chainState.chainId } : {}),
     ...(params.request.traceparent ? { traceparent: params.request.traceparent } : {}),
+    ...(params.originRunId ? { originRunId: params.originRunId } : {}),
+    ...(params.originTurnId ? { originTurnId: params.originTurnId } : {}),
+    ...(electingTurnActive ? { anchorPending: true } : { anchorFinalizedAt: electedAt }),
     ...(idleRetry ? { idleRetry } : {}),
   };
   const enqueued = enqueuePendingWork(work);
@@ -918,7 +1094,7 @@ export async function scheduleContinuationWork(params: {
     traceparent: params.request.traceparent,
     log: (message) => params.log?.(message),
   });
-  if (parkOnTurnEnd) {
+  if (electingTurnActive) {
     params.log?.(
       `[continuation:work-parked-on-turn-end] session=${params.sessionKey} hop=${hop} reasonCategory=${idleRetry?.reasonCategory ?? "unknown"}`,
     );
@@ -963,6 +1139,8 @@ export async function scheduleContinuationWorkBatch(params: {
   requests: readonly ContinueWorkRequest[];
   config: ContinuationRuntimeConfig;
   parentRunId?: string;
+  originRunId?: string;
+  originTurnId?: string;
   log?: (message: string) => void;
 }): Promise<ContinuationWorkBatchResult> {
   let chainState = params.chainState;
@@ -989,6 +1167,8 @@ export async function scheduleContinuationWorkBatch(params: {
       request,
       config: params.config,
       ...(params.parentRunId !== undefined ? { parentRunId: params.parentRunId } : {}),
+      ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
+      ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
       ...(params.log ? { log: params.log } : {}),
     });
     if (!result.scheduled) {
