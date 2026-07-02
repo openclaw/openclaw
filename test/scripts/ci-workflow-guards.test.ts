@@ -47,6 +47,14 @@ function readTrackedText(relativePath: string): string {
   return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
 }
 
+function readDistRuntimeArtifactRoots(): string[] {
+  return JSON.parse(
+    execFileSync(process.execPath, ["scripts/dist-runtime-build-artifact.mjs", "print-roots"], {
+      encoding: "utf8",
+    }),
+  );
+}
+
 function readAndroidCompileSdk(relativePath: string): number {
   const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
@@ -572,6 +580,37 @@ describe("ci workflow guards", () => {
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
+  });
+
+  it("packs runtime artifacts with package-root runtime resources", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const packStep = buildArtifactSteps.find(
+      (step) => step.name === "Pack built runtime artifacts",
+    );
+    const uploadStep = buildArtifactSteps.find(
+      (step) => step.name === "Upload built runtime artifacts",
+    );
+
+    expect(packStep.run).toBe(
+      "node scripts/dist-runtime-build-artifact.mjs pack-and-smoke --archive dist-runtime-build.tar.zst",
+    );
+    expect(source).not.toContain(
+      "tar --posix -cf dist-runtime-build.tar.zst --use-compress-program",
+    );
+    expect(readDistRuntimeArtifactRoots()).toEqual([
+      "openclaw.mjs",
+      "package.json",
+      "docs/reference/templates",
+      "src/agents/templates",
+      "dist",
+      "dist-runtime",
+    ]);
+    expect(uploadStep.with).toMatchObject({
+      name: "dist-runtime-build",
+      path: "dist-runtime-build.tar.zst",
+    });
   });
 
   it("runs gateway watch after parallel built artifact checks", () => {

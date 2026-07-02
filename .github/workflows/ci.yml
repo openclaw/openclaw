@@ -653,7 +653,7 @@ jobs:
         run: pnpm ui:i18n:check
 
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
+        run: node scripts/dist-runtime-build-artifact.mjs pack-and-smoke --archive dist-runtime-build.tar.zst
 
       - name: Upload built runtime artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
