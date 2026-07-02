@@ -61,10 +61,11 @@ When `llmSlug` is enabled, the hook uses your configured LLM provider to generat
 
 The hook supports optional configuration:
 
-| Option     | Type    | Default | Description                                                                                 |
-| ---------- | ------- | ------- | ------------------------------------------------------------------------------------------- |
-| `messages` | number  | 15      | Number of user/assistant messages to include in the memory file                             |
-| `llmSlug`  | boolean | false   | Use your configured model to generate descriptive filename slugs instead of timestamp slugs |
+| Option     | Type    | Default           | Description                                                                                 |
+| ---------- | ------- | ----------------- | ------------------------------------------------------------------------------------------- |
+| `messages` | number  | 15                | Number of user/assistant messages to include in the memory file                             |
+| `llmSlug`  | boolean | false             | Use your configured model to generate descriptive filename slugs instead of timestamp slugs |
+| `model`    | string  | (agent default)   | Model name or provider-qualified ref to use for LLM slug generation. Supports bare names (`gpt-5.5`), aliases (`claude-sonnet-4-6`), and provider-qualified refs (`anthropic/claude-sonnet-4-6`). When omitted, the agent's default model is used. |
 
 Example configuration:
 

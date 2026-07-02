@@ -356,6 +356,93 @@ describe("session-memory hook", () => {
     expect(generateSlug).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards hook config model override to the slug generator", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "What is 2+2?" },
+      { role: "assistant", content: "2+2 equals 4" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockResolvedValueOnce("math-discussion");
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        await runNewWithPreviousSession({
+          sessionContent,
+          cfg: (tempDir) =>
+            ({
+              agents: { defaults: { workspace: tempDir } },
+              hooks: {
+                internal: {
+                  entries: {
+                    "session-memory": {
+                      enabled: true,
+                      llmSlug: true,
+                      model: "claude-sonnet-4-6",
+                    },
+                  },
+                },
+              },
+            }) satisfies OpenClawConfig,
+        });
+      },
+    );
+
+    expect(generateSlug).toHaveBeenCalledTimes(1);
+    expect(generateSlug).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-sonnet-4-6" }),
+    );
+  });
+
+  it("does not forward model when hook config omits it", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockResolvedValueOnce("greeting");
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        await runNewWithPreviousSession({
+          sessionContent,
+          cfg: (tempDir) =>
+            ({
+              agents: { defaults: { workspace: tempDir } },
+              hooks: {
+                internal: {
+                  entries: {
+                    "session-memory": {
+                      enabled: true,
+                      llmSlug: true,
+                    },
+                  },
+                },
+              },
+            }) satisfies OpenClawConfig,
+        });
+      },
+    );
+
+    expect(generateSlug).toHaveBeenCalledTimes(1);
+    expect(generateSlug).not.toHaveBeenCalledWith(
+      expect.objectContaining({ model: expect.anything() as unknown }),
+    );
+  });
+
   it("does not block reset command handling on opt-in model slug generation", async () => {
     const tempDir = await createCaseWorkspace("workspace");
     const sessionsDir = path.join(tempDir, "sessions");
