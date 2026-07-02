@@ -20,6 +20,8 @@ import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
+  CliBackendForwardedCredentialKind,
+  CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -32,6 +34,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { resolveGoogleAuthCredential, type GoogleAuthCredential } from "../auth-profiles/google.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -108,6 +111,7 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   resolveApiKeyForProfile,
+  resolveGoogleAuthCredential,
 };
 
 async function resolveCliSkillsPrompt(params: {
@@ -207,7 +211,7 @@ export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDep
 export function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
   authProfileId?: string;
-  authCredential?: AuthProfileCredential;
+  authCredential?: unknown;
   preparedExecution?: CliBackendPreparedExecution | null;
 }): boolean {
   return Boolean(
@@ -218,17 +222,48 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
   );
 }
 
-function shouldRefreshAuthProfileForExecution(params: {
-  backendId: string;
+type ForwardableAuthCredential = AuthProfileCredential | GoogleAuthCredential;
+
+function resolveForwardedCredentialProviderId(
+  credential: ForwardableAuthCredential | undefined,
+): string | undefined {
+  if (!credential) {
+    return undefined;
+  }
+  return "providerId" in credential ? credential.providerId : credential.provider;
+}
+
+function resolveForwardedCredentialKind(
+  credential: ForwardableAuthCredential | undefined,
+): string | undefined {
+  if (!credential) {
+    return undefined;
+  }
+  return "kind" in credential ? credential.kind : credential.type;
+}
+
+function isForwardedCredentialKind(
+  value: string | undefined,
+): value is CliBackendForwardedCredentialKind {
+  return value === "api_key" || value === "oauth" || value === "token";
+}
+
+export function shouldForwardAuthCredentialToCliBackend(params: {
+  backend: Pick<CliBackendPlugin, "authProfileForwarding">;
   authProfileId?: string;
-  authCredential?: AuthProfileCredential;
+  authCredential?: ForwardableAuthCredential;
 }): boolean {
+  const capability = params.backend.authProfileForwarding;
+  if (!capability?.supported || !params.authProfileId || !params.authCredential) {
+    return false;
+  }
+  const providerId = resolveForwardedCredentialProviderId(params.authCredential);
+  const credentialKind = resolveForwardedCredentialKind(params.authCredential);
   return Boolean(
-    params.backendId === "google-gemini-cli" &&
-    params.authProfileId &&
-    (params.authCredential?.type === "oauth" ||
-      params.authCredential?.type === "api_key" ||
-      params.authCredential?.type === "token"),
+    providerId &&
+    isForwardedCredentialKind(credentialKind) &&
+    capability.providers.includes(providerId) &&
+    capability.credentialKinds.includes(credentialKind),
   );
 }
 
@@ -290,7 +325,7 @@ export async function prepareCliRunContext(
   let effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
-  let authCredential: AuthProfileCredential | undefined;
+  let authCredential: ForwardableAuthCredential | undefined;
   const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) =>
     loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: options.readOnly ?? true,
@@ -317,32 +352,27 @@ export async function prepareCliRunContext(
   }
   if (
     effectiveAuthProfileId &&
-    shouldRefreshAuthProfileForExecution({
-      backendId: backendResolved.id,
+    shouldForwardAuthCredentialToCliBackend({
+      backend: backendResolved,
       authProfileId: effectiveAuthProfileId,
       authCredential,
     })
   ) {
     const authProfileId = effectiveAuthProfileId;
-    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
-    const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
-      cfg: params.config,
-      store: writableAuthStore,
-      profileId: authProfileId,
-      agentDir,
-    });
-    const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    const resolvedAuthCredential = resolvedAuth?.credential;
-    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
-    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
-    if (resolvedAuth && authCredential) {
-      effectiveAuthProfileId = resolvedAuthProfileId;
-      // Apply resolved strings only to static credentials with secret refs.
-      // OAuth CLI bridges need raw refreshed fields from the reloaded store.
-      if (authCredential.type === "api_key") {
-        authCredential = { ...authCredential, key: resolvedAuth.apiKey };
-      } else if (authCredential.type === "token") {
-        authCredential = { ...authCredential, token: resolvedAuth.apiKey };
+    const selectedProviderId = resolveForwardedCredentialProviderId(authCredential);
+    if (selectedProviderId) {
+      const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
+      const resolvedGoogleCredential = await prepareDeps.resolveGoogleAuthCredential({
+        cfg: params.config,
+        store: writableAuthStore,
+        providerId: selectedProviderId,
+        profileId: authProfileId,
+        agentDir,
+      });
+      if (resolvedGoogleCredential) {
+        effectiveAuthProfileId = resolvedGoogleCredential.profileId;
+        authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
+        authCredential = resolvedGoogleCredential;
       }
     }
   }
@@ -483,18 +513,18 @@ export async function prepareCliRunContext(
   let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
     undefined;
   try {
+    const forwardAuthCredential = shouldForwardAuthCredentialToCliBackend({
+      backend: backendResolved,
+      authProfileId: effectiveAuthProfileId,
+      authCredential,
+    });
     preparedExecution = await backendResolved.prepareExecution?.(
-      (backendResolved.id === "google-gemini-cli"
+      (forwardAuthCredential
         ? {
             ...prepareExecutionContext,
-            // Private bridge for bundled Gemini CLI. This is intentionally not
-            // part of the public Plugin SDK until a credential-forwarding
-            // contract exists.
             authCredential,
           }
-        : prepareExecutionContext) as typeof prepareExecutionContext & {
-        authCredential?: AuthProfileCredential;
-      },
+        : prepareExecutionContext) as typeof prepareExecutionContext,
     );
   } catch (err) {
     try {

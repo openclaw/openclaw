@@ -1212,3 +1212,26 @@ describe("redactSensitiveLines", () => {
     ]);
   });
 });
+
+describe("Google auth redaction", () => {
+  it("redacts Google API keys, OAuth tokens, client secrets, and auth JSON", () => {
+    const input = JSON.stringify({
+      apiKey: "AIzaSyGoogleApiKeySentinel1234567890",
+      accessToken: "ya29.GoogleAccessTokenSentinel1234567890",
+      refreshToken: "1//GoogleRefreshTokenSentinel1234567890",
+      clientSecret: "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34567890",
+      auth: {
+        access_token: "ya29.AuthJsonAccessTokenSentinel1234567890",
+        refresh_token: "1//AuthJsonRefreshTokenSentinel1234567890",
+      },
+    });
+
+    const redacted = redactSensitiveText(input);
+    expect(redacted).not.toContain("AIzaSyGoogleApiKeySentinel1234567890");
+    expect(redacted).not.toContain("ya29.GoogleAccessTokenSentinel1234567890");
+    expect(redacted).not.toContain("1//GoogleRefreshTokenSentinel1234567890");
+    expect(redacted).not.toContain("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34567890");
+    expect(redacted).not.toContain("ya29.AuthJsonAccessTokenSentinel1234567890");
+    expect(redacted).not.toContain("1//AuthJsonRefreshTokenSentinel1234567890");
+  });
+});

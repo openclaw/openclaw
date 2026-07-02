@@ -35,6 +35,7 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-
 import {
   prepareCliRunContext,
   setCliRunnerPrepareTestDeps,
+  shouldForwardAuthCredentialToCliBackend,
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 
@@ -332,12 +333,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+    const resolveGoogleAuthCredential = vi.fn(async () => ({
+      kind: "oauth" as const,
+      providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
+      accessToken: "raw-access-token",
+      refreshToken: "raw-refresh-token",
+      expiresAt: 1_800_000_000_000,
+      projectId: "project-1",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
@@ -365,6 +368,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           pluginId: "google",
           bundleMcp: false,
           authEpochMode: "profile-only",
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
           prepareExecution,
           config: {
             command: "gemini",
@@ -377,7 +385,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
+      resolveGoogleAuthCredential,
     });
 
     try {
@@ -395,16 +403,16 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId,
           authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "raw-access-token",
-            refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
+            kind: "oauth",
+            providerId: "google-gemini-cli",
+            accessToken: "raw-access-token",
+            refreshToken: "raw-refresh-token",
+            expiresAt: 1_800_000_000_000,
           }),
         }),
       );
@@ -421,12 +429,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+    const resolveGoogleAuthCredential = vi.fn(async () => ({
+      kind: "oauth" as const,
+      providerId: "google-gemini-cli" as const,
       profileId: resolvedProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
+      accessToken: "resolved-access-token",
+      refreshToken: "resolved-refresh-token",
+      expiresAt: 1_800_000_000_000,
+      projectId: "project-1",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
@@ -462,6 +472,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           pluginId: "google",
           bundleMcp: false,
           authEpochMode: "profile-only",
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
           prepareExecution,
           config: {
             command: "gemini",
@@ -474,7 +489,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
+      resolveGoogleAuthCredential,
     });
 
     try {
@@ -492,16 +507,16 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId: resolvedProfileId,
           authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "resolved-access-token",
-            refresh: "resolved-refresh-token",
-            expires: 1_800_000_000_000,
+            kind: "oauth",
+            providerId: "google-gemini-cli",
+            accessToken: "resolved-access-token",
+            refreshToken: "resolved-refresh-token",
+            expiresAt: 1_800_000_000_000,
           }),
         }),
       );
@@ -517,12 +532,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+    const resolveGoogleAuthCredential = vi.fn(async () => ({
+      kind: "oauth" as const,
+      providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
+      accessToken: "raw-access-token",
+      refreshToken: "raw-refresh-token",
+      expiresAt: 1_800_000_000_000,
+      projectId: "project-1",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
@@ -550,6 +567,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           pluginId: "google",
           bundleMcp: false,
           authEpochMode: "profile-only",
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
           prepareExecution,
           config: {
             command: "gemini",
@@ -562,7 +584,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
+      resolveGoogleAuthCredential,
     });
 
     try {
@@ -589,7 +611,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         } as OpenClawConfig,
       });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect(resolveGoogleAuthCredential).toHaveBeenCalledWith(
         expect.objectContaining({
           profileId: authProfileId,
           agentDir,
@@ -599,11 +621,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect.objectContaining({
           authProfileId,
           authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "raw-access-token",
-            refresh: "raw-refresh-token",
-            expires: 1_800_000_000_000,
+            kind: "oauth",
+            providerId: "google-gemini-cli",
+            accessToken: "raw-access-token",
+            refreshToken: "raw-refresh-token",
+            expiresAt: 1_800_000_000_000,
           }),
         }),
       );
@@ -619,21 +641,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveApiKeyForProfile = vi.fn(async () => ({
-      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+    const resolveGoogleAuthCredential = vi.fn(async () => ({
+      kind: "oauth" as const,
+      providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
-      profileType: "oauth" as const,
-      provider: "google-gemini-cli",
-      email: "user@example.test",
-      credential: {
-        type: "oauth" as const,
-        provider: "google-gemini-cli",
-        access: "adopted-access-token",
-        refresh: "adopted-refresh-token",
-        expires: 1_900_000_000_000,
-        projectId: "project-1",
-        email: "user@example.test",
-      },
+      accessToken: "adopted-access-token",
+      refreshToken: "adopted-refresh-token",
+      expiresAt: 1_900_000_000_000,
+      projectId: "project-1",
     }));
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
@@ -661,6 +676,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           pluginId: "google",
           bundleMcp: false,
           authEpochMode: "profile-only",
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
           prepareExecution,
           config: {
             command: "gemini",
@@ -673,7 +693,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile,
+      resolveGoogleAuthCredential,
     });
 
     try {
@@ -691,16 +711,16 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId,
           authCredential: expect.objectContaining({
-            type: "oauth",
-            provider: "google-gemini-cli",
-            access: "adopted-access-token",
-            refresh: "adopted-refresh-token",
-            expires: 1_900_000_000_000,
+            kind: "oauth",
+            providerId: "google-gemini-cli",
+            accessToken: "adopted-access-token",
+            refreshToken: "adopted-refresh-token",
+            expiresAt: 1_900_000_000_000,
           }),
         }),
       );
@@ -3244,5 +3264,85 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("shouldForwardAuthCredentialToCliBackend", () => {
+  it("allows OAuth material only when the backend capability allows the provider and kind", () => {
+    expect(
+      shouldForwardAuthCredentialToCliBackend({
+        backend: {
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
+        },
+        authProfileId: "google-gemini-cli:user@example.test",
+        authCredential: {
+          kind: "oauth",
+          providerId: "google-gemini-cli",
+          profileId: "google-gemini-cli:user@example.test",
+          accessToken: "ya29.test-access-token",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks API-key material from the Gemini CLI OAuth bridge", () => {
+    expect(
+      shouldForwardAuthCredentialToCliBackend({
+        backend: {
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
+        },
+        authProfileId: "google:key-1",
+        authCredential: {
+          kind: "api_key",
+          providerId: "google",
+          profileId: "google:key-1",
+          apiKey: "AIza-test-google-api-key-material",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("allows a non-Gemini backend to opt into google-gemini-cli OAuth forwarding", () => {
+    expect(
+      shouldForwardAuthCredentialToCliBackend({
+        backend: {
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google-gemini-cli"],
+            credentialKinds: ["oauth"],
+          },
+        },
+        authProfileId: "google-gemini-cli:user@example.test",
+        authCredential: {
+          kind: "oauth",
+          providerId: "google-gemini-cli",
+          profileId: "google-gemini-cli:user@example.test",
+          accessToken: "ya29.test-access-token",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not forward to a backend without authProfileForwarding capability", () => {
+    expect(
+      shouldForwardAuthCredentialToCliBackend({
+        backend: {},
+        authProfileId: "google-gemini-cli:user@example.test",
+        authCredential: {
+          kind: "oauth",
+          providerId: "google-gemini-cli",
+          profileId: "google-gemini-cli:user@example.test",
+          accessToken: "ya29.test-access-token",
+        },
+      }),
+    ).toBe(false);
   });
 });

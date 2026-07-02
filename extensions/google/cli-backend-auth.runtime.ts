@@ -8,7 +8,6 @@ import {
 } from "./gemini-cli-auth-home.js";
 
 const GEMINI_CLI_PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
-const GOOGLE_PROVIDER_ID = "google";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
 const GEMINI_CLI_GCA_AUTH_ENV = [
@@ -34,29 +33,28 @@ const GEMINI_CLI_PROFILE_AUTH_ENV = [...GEMINI_CLI_API_KEY_AUTH_ENV, "GEMINI_API
 const GEMINI_CLI_PROFILE_SETTINGS_ENV = ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"];
 
 type GeminiAuthProfileCredential = {
-  type: "api_key" | "oauth" | "token";
-  provider: string;
+  kind?: "api_key" | "oauth" | "token";
+  providerId?: string;
+  type?: "api_key" | "oauth" | "token";
+  provider?: string;
   key?: string;
   token?: string;
   access?: string;
+  accessToken?: string;
   refresh?: string;
+  refreshToken?: string;
   expires?: number;
+  expiresAt?: number;
   idToken?: string;
   projectId?: string;
 };
 
 type GeminiOAuthCredential = GeminiAuthProfileCredential & {
-  type: "oauth";
-  provider: typeof GEMINI_CLI_PROVIDER_ID;
-  access: string;
-  refresh: string;
-  expires: number;
-};
-
-type GeminiApiKeyCredential = GeminiAuthProfileCredential & {
-  type: "api_key";
-  provider: typeof GEMINI_CLI_PROVIDER_ID | typeof GOOGLE_PROVIDER_ID;
-  key: string;
+  kind: "oauth";
+  providerId: typeof GEMINI_CLI_PROVIDER_ID;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: number;
 };
 
 type GeminiCliAuthHomeContext = {
@@ -73,12 +71,13 @@ function normalizeString(value: string | undefined): string | undefined {
 }
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
-  if (credential.provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
+  const provider = credential.providerId ?? credential.provider;
+  if (provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
     throw new Error(
       "Gemini CLI execution cannot use a vercel-ai-gateway auth profile. Use the OpenClaw vercel-ai-gateway provider instead.",
     );
   }
-  throw new Error("Gemini CLI execution requires a google-gemini-cli auth profile.");
+  throw new Error("Gemini CLI execution requires a google-gemini-cli OAuth auth profile.");
 }
 
 function throwUnstageableSelectedGeminiProfile(
@@ -94,11 +93,11 @@ function throwUnstageableSelectedGeminiProfile(
       "Gemini CLI auth profile was selected but no credential material was found. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
     );
   }
-  if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
+  if ((credential.providerId ?? credential.provider) !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
   throw new Error(
-    "Gemini CLI execution supports google-gemini-cli OAuth or API-key auth profiles. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+    "Gemini CLI execution supports google-gemini-cli OAuth auth profiles. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
   );
 }
 
@@ -108,64 +107,32 @@ function requireGeminiOAuthCredential(
   if (!credential) {
     return null;
   }
-  if (credential.type !== "oauth") {
+  const kind = credential.kind ?? credential.type;
+  if (kind !== "oauth") {
     return null;
   }
-  if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
+  const providerId = credential.providerId ?? credential.provider;
+  if (providerId !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
 
-  const access = normalizeString(credential.access);
-  const refresh = normalizeString(credential.refresh);
-  if (
-    !access ||
-    !refresh ||
-    typeof credential.expires !== "number" ||
-    !Number.isFinite(credential.expires)
-  ) {
+  const accessToken = normalizeString(credential.accessToken ?? credential.access);
+  const refreshToken = normalizeString(credential.refreshToken ?? credential.refresh);
+  const expiresAt = credential.expiresAt ?? credential.expires;
+  if (!accessToken) {
     throw new Error(
-      "Gemini CLI OAuth profile is missing usable token material. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+      "Gemini CLI OAuth profile is missing usable access token material. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
     );
   }
 
   return {
     ...credential,
-    type: "oauth",
-    provider: GEMINI_CLI_PROVIDER_ID,
-    access,
-    refresh,
-    expires: credential.expires,
-    idToken: normalizeString(credential.idToken),
+    kind: "oauth",
+    providerId: GEMINI_CLI_PROVIDER_ID,
+    accessToken,
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { expiresAt } : {}),
     projectId: normalizeString(credential.projectId),
-  };
-}
-
-function requireGeminiApiKeyCredential(
-  credential: GeminiAuthProfileCredential | undefined,
-): GeminiApiKeyCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "api_key") {
-    return null;
-  }
-  if (
-    credential.provider !== GEMINI_CLI_PROVIDER_ID &&
-    credential.provider !== GOOGLE_PROVIDER_ID
-  ) {
-    throwUnsupportedGeminiCredential(credential);
-  }
-
-  const key = normalizeString(credential.key);
-  if (!key) {
-    throw new Error("Gemini CLI API-key profile is missing usable key material.");
-  }
-
-  return {
-    ...credential,
-    type: "api_key",
-    provider: credential.provider,
-    key,
   };
 }
 
@@ -335,9 +302,9 @@ async function prepareGeminiCliOAuthHome(
   await clearGeminiCliCachedCredentials(geminiDir);
   const idToken = normalizeString(oauth.idToken);
   const oauthCreds: Record<string, string | number> = {
-    access_token: oauth.access,
-    refresh_token: oauth.refresh,
-    expiry_date: oauth.expires,
+    access_token: oauth.accessToken,
+    ...(oauth.refreshToken ? { refresh_token: oauth.refreshToken } : {}),
+    ...(typeof oauth.expiresAt === "number" ? { expiry_date: oauth.expiresAt } : {}),
     token_type: "Bearer",
   };
   if (idToken) {
@@ -358,43 +325,12 @@ async function prepareGeminiCliOAuthHome(
   };
 }
 
-async function prepareGeminiCliApiKeyHome(
-  ctx: GeminiCliAuthHomeContext,
-  credential: GeminiAuthProfileCredential | undefined,
-): Promise<CliBackendPreparedExecution | null> {
-  const apiKey = requireGeminiApiKeyCredential(credential);
-  if (!apiKey) {
-    return null;
-  }
-
-  const { home, geminiDir, systemSettingsPath, cleanup } = await prepareGeminiCliProfileHome(
-    ctx,
-    "gemini-api-key",
-  );
-  await Promise.all([
-    fs.rm(path.join(geminiDir, "oauth_creds.json"), { force: true }),
-    clearGeminiCliCachedCredentials(geminiDir),
-  ]);
-  return {
-    env: {
-      GEMINI_CLI_HOME: home,
-      GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
-      GEMINI_FORCE_FILE_STORAGE: "true",
-      GEMINI_API_KEY: apiKey.key,
-    },
-    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV, ...GEMINI_CLI_PROFILE_SETTINGS_ENV],
-    cleanup,
-  };
-}
-
 export async function prepareGeminiCliAuthHome(
   ctx: GeminiCliAuthHomeContext,
   credential: unknown,
 ): Promise<CliBackendPreparedExecution | null> {
   const authCredential = readGeminiAuthProfileCredential(credential);
-  const prepared =
-    (await prepareGeminiCliOAuthHome(ctx, authCredential)) ??
-    (await prepareGeminiCliApiKeyHome(ctx, authCredential));
+  const prepared = await prepareGeminiCliOAuthHome(ctx, authCredential);
   if (prepared) {
     return prepared;
   }

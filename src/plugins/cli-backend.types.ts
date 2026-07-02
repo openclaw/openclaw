@@ -20,6 +20,14 @@ export type CliBundleMcpMode =
   | "codex-config-overrides"
   | "gemini-system-settings";
 
+export type CliBackendForwardedCredentialKind = "api_key" | "oauth" | "token";
+
+export type CliBackendAuthProfileForwarding = {
+  supported: true;
+  providers: readonly string[];
+  credentialKinds: readonly CliBackendForwardedCredentialKind[];
+};
+
 export type CliBackendPrepareExecutionContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -28,6 +36,11 @@ export type CliBackendPrepareExecutionContext = {
   modelId: string;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
+  /**
+   * Typed credential material forwarded only when authProfileForwarding declares
+   * explicit support for the selected provider and credential kind.
+   */
+  authCredential?: unknown;
 };
 
 export type CliBackendPreparedExecution = {
@@ -172,6 +185,8 @@ export type CliBackendPlugin = {
    * owner for session invalidation when one is present.
    */
   authEpochMode?: CliBackendAuthEpochMode;
+  /** Opt-in boundary for receiving selected auth profile credential material. */
+  authProfileForwarding?: CliBackendAuthProfileForwarding;
   /**
    * Backend-owned execution bridge.
    *
