@@ -4,6 +4,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import {
+  isBillingErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
+  isRateLimitErrorMessage,
+} from "../../agents/pi-embedded-helpers/failover-matches.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -40,21 +45,19 @@ type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
  * is a quota/billing/rate-limit class rejection. These are user-visible failure
  * modes where the originating channel should receive a short notice rather than
  * a silent drop. See https://github.com/openclaw/openclaw/issues/80700.
+ *
+ * Delegates to the shared failover-matches classifiers so this path stays in
+ * lock-step with the rest of the runtime's billing/rate-limit detection instead
+ * of maintaining a narrower local substring list.
  */
 export function isFollowupQuotaBillingFailure(message: string): boolean {
   if (!message) {
     return false;
   }
-  const lower = message.toLowerCase();
   return (
-    lower.includes("billing") ||
-    lower.includes("quota") ||
-    lower.includes("rate limit") ||
-    lower.includes("rate_limit") ||
-    lower.includes("rate-limit") ||
-    lower.includes("extra usage") ||
-    lower.includes("usage limit") ||
-    lower.includes("insufficient_quota")
+    isBillingErrorMessage(message) ||
+    isRateLimitErrorMessage(message) ||
+    isPeriodicUsageLimitErrorMessage(message)
   );
 }
 
@@ -382,10 +385,7 @@ export function createFollowupRunner(params: {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
-        if (
-          isFollowupQuotaBillingFailure(message) &&
-          run.sourceReplyDeliveryMode !== "message_tool_only"
-        ) {
+        if (isFollowupQuotaBillingFailure(message)) {
           try {
             await sendFollowupPayloads(
               [

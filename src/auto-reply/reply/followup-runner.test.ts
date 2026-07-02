@@ -1695,7 +1695,7 @@ describe("createFollowupRunner quota/billing failure notice (#80700)", () => {
     expect(isFollowupQuotaBillingFailure("Third-party apps now draw from your extra usage")).toBe(
       true,
     );
-    expect(isFollowupQuotaBillingFailure("Provider anthropic has billing issue")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("billing error: credit balance is too low")).toBe(true);
     expect(isFollowupQuotaBillingFailure("insufficient_quota: you exceeded your quota")).toBe(true);
     expect(isFollowupQuotaBillingFailure("429 rate limit reached")).toBe(true);
     expect(isFollowupQuotaBillingFailure("rate_limit_exceeded")).toBe(true);
@@ -1779,8 +1779,10 @@ describe("createFollowupRunner quota/billing failure notice (#80700)", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses the notice when sourceReplyDeliveryMode is message_tool_only", async () => {
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("billing block from provider"));
+  it("sends the notice even when sourceReplyDeliveryMode is message_tool_only", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("billing error: credit balance is too low"),
+    );
     const onBlockReply = vi.fn(async () => {});
     const runner = createFollowupRunner({
       opts: { onBlockReply },
@@ -1794,6 +1796,12 @@ describe("createFollowupRunner quota/billing failure notice (#80700)", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<Array<{ text?: string; isError?: boolean }>>
+    )[0];
+    const payload = requireRecord(firstCall?.[0], "notice payload");
+    expect(payload.text as string).toMatch(/billing\/quota\/rate-limit/);
+    expect(payload.isError).toBe(true);
   });
 });
