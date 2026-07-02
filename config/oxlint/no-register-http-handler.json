@@ -1,0 +1,42 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "rules": {
+    "eslint/no-restricted-properties": [
+      "error",
+      {
+        "property": "registerHttpHandler",
+        "message": "Use registerHttpRoute({ path, auth, match, handler }) and registerPluginHttpRoute for dynamic webhook paths."
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "src/**/*.test.ts",
+    "src/**/*.test-utils.ts",
+    "src/**/*.test-harness.ts",
+    "src/**/*.e2e-harness.ts",
+    "src/**/*.tsx",
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "src/**/*.mjs",
+    "src/**/*.cjs",
+    "extensions/**/*.test.ts",
+    "extensions/**/*.test-utils.ts",
+    "extensions/**/*.test-harness.ts",
+    "extensions/**/*.e2e-harness.ts",
+    "extensions/**/*.tsx",
+    "extensions/**/*.js",
+    "extensions/**/*.jsx",
+    "extensions/**/*.mjs",
+    "extensions/**/*.cjs"
+  ]
+}

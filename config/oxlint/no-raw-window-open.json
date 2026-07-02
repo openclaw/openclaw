@@ -1,0 +1,42 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "rules": {
+    "eslint/no-restricted-properties": [
+      "error",
+      {
+        "object": "window",
+        "property": "open",
+        "message": "Use openExternalUrlSafe(...) from ui/src/ui/open-external-url.ts instead."
+      },
+      {
+        "object": "globalThis",
+        "property": "open",
+        "message": "Use openExternalUrlSafe(...) from ui/src/ui/open-external-url.ts instead."
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "ui/src/ui/open-external-url.ts",
+    "ui/src/ui/**/*.browser.test.ts",
+    "ui/src/ui/**/*.node.test.ts",
+    "ui/src/ui/**/*.test.ts",
+    "ui/src/ui/**/*.test-utils.ts",
+    "ui/src/ui/**/*.test-harness.ts",
+    "ui/src/ui/**/*.e2e-harness.ts",
+    "ui/src/ui/**/*.tsx",
+    "ui/src/ui/**/*.js",
+    "ui/src/ui/**/*.jsx",
+    "ui/src/ui/**/*.mjs",
+    "ui/src/ui/**/*.cjs"
+  ]
+}
