@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui
 
-import android.Manifest
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
+import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -62,21 +62,30 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
+    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
     val afterSendOnly =
-      mergedSmsPermissionGrantState(
+      mergedRequiredPermissionGrantState(
         permissions = mapOf(Manifest.permission.SEND_SMS to true),
-        currentSendSmsGranted = false,
-        currentReadSmsGranted = false,
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
       )
     assertFalse(afterSendOnly)
 
     val afterReadOnly =
-      mergedSmsPermissionGrantState(
+      mergedRequiredPermissionGrantState(
         permissions = mapOf(Manifest.permission.READ_SMS to true),
-        currentSendSmsGranted = true,
-        currentReadSmsGranted = false,
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
       )
     assertTrue(afterReadOnly)
+
+    val deniedRead =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to false),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertFalse(deniedRead)
   }
 
   @Test
