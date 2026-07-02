@@ -2123,30 +2123,37 @@ describe("Code Mode", () => {
     }
   });
 
-  it("handles rejected pending promises in waitForPending when timeout wins", async () => {
-    // If the timeout resolves before all pending promises settle, a later
-    // rejection must not cause an unhandledRejection. The fix adds a rejection
-    // handler via .then(() => true, () => false).
-    const unhandledRejections: Array<{ reason: unknown }> = [];
-    const handler = (reason: unknown) => {
-      unhandledRejections.push({ reason });
+  it("records late-rejecting bridge promises as failed settled state instead of unhandledRejection", async () => {
+    // When the timeout wins the race before a bridge promise settles, the
+    // rejection must be recorded in the pending entry's settled state and
+    // not cause an unhandledRejection.
+    const unhandled: Array<unknown> = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
     };
-    process.on("unhandledRejection", handler);
+    process.on("unhandledRejection", onUnhandled);
     try {
       const deadline = 5;
-      const rejecting = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("too late")), deadline + 10);
-      });
-      const result = await testing.waitForPending(
-        [{ id: "1", method: "search", args: [], promise: rejecting }],
-        deadline,
-      );
+      const entry = {
+        id: "1",
+        method: "search" as const,
+        args: [] as unknown[],
+        promise: new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("too late")), deadline + 10);
+        }),
+      };
+      const result = await testing.waitForPending([entry], deadline);
       expect(result).toBe(false);
-      // Allow the rejecting promise to settle so we can check for unhandled rejections.
-      await new Promise((r) => setTimeout(r, deadline + 20));
-      expect(unhandledRejections).toHaveLength(0);
+      expect(entry.settled).toBeUndefined();
+
+      // Let the rejecting promise settle and its catch handler store the state.
+      await new Promise((r) => setTimeout(r, deadline + 30));
+      expect(entry.settled).toBeDefined();
+      expect(entry.settled!.ok).toBe(false);
+      expect(entry.settled!.error).toBe("Error: too late");
+      expect(unhandled).toHaveLength(0);
     } finally {
-      process.off("unhandledRejection", handler);
+      process.off("unhandledRejection", onUnhandled);
     }
   });
 });

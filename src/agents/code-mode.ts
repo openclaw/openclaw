@@ -917,17 +917,25 @@ async function runExec(params: {
 }
 
 async function waitForPending(pending: PendingBridgeState[], timeoutMs: number): Promise<boolean> {
-  const pendingPromises = pending.filter((entry) => !entry.settled).map((entry) => entry.promise);
-  if (pendingPromises.length === 0) {
+  if (pending.every((entry) => entry.settled)) {
     return true;
   }
+  const unsettled = pending.filter((entry) => !entry.settled);
+  // Map each unsettled bridge promise to an always-resolves signal that records
+  // rejections as failed settled state, preventing unhandledRejection.
+  const pendingPromises = unsettled.map((entry) =>
+    entry.promise.then(
+      () => true,
+      (error) => {
+        entry.settled = { id: entry.id, ok: false, error: String(error) };
+        return false;
+      },
+    ),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      Promise.all(pendingPromises).then(
-        () => true,
-        () => false,
-      ),
+      Promise.all(pendingPromises).then(() => true),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs);
       }),
