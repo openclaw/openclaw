@@ -201,11 +201,12 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
     if (!match?.groups) {
       continue;
     }
-    processes.push({
-      pid: Number.parseInt(match.groups.pid, 10),
-      ppid: Number.parseInt(match.groups.ppid, 10),
-      command: match.groups.command,
-    });
+    const pid = Number.parseInt(match.groups.pid, 10);
+    const ppid = Number.parseInt(match.groups.ppid, 10);
+    if (!Number.isFinite(pid) || !Number.isFinite(ppid)) {
+      continue;
+    }
+    processes.push({ pid, ppid, command: match.groups.command });
   }
   return processes;
 }
