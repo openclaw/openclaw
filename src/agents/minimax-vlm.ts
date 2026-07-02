@@ -6,6 +6,7 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { readProviderJsonResponse } from "./provider-http-errors.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -142,7 +143,14 @@ export async function minimaxUnderstandImage(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  let json: Record<string, unknown>;
+  try {
+    json = await readProviderJsonResponse<Record<string, unknown>>(res, "MiniMax VLM");
+  } catch (err) {
+    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`${msg}${trace ? `.${trace}` : ""}`, { cause: err });
+  }
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);

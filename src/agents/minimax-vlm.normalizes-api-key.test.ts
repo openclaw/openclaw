@@ -1,4 +1,6 @@
-// Covers MiniMax VLM auth/header normalization and provider-specific routing.
+// Covers MiniMax VLM auth/header normalization, provider-specific routing,
+// and bounded JSON response enforcement including oversized-response rejection.
+import * as http from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
@@ -204,6 +206,78 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
     expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("rejects oversized VLM response bodies, preserves Trace-Id, and cancels the stream", async () => {
+    let canceled = false;
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Trace-Id": "trace-abc" },
+        }),
+    );
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+      }),
+    ).rejects.toThrow("MiniMax VLM: JSON response exceeds 16777216 bytes. Trace-Id: trace-abc");
+
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects oversized VLM responses from a real HTTP server (behavior proof)", async () => {
+    let socketDestroyed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const chunk = Buffer.alloc(1024 * 1024, 0x41);
+      const writeMore = () => {
+        if (socketDestroyed) return;
+        for (let i = 0; i < 4 && !socketDestroyed; i++) {
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        if (!socketDestroyed) setImmediate(writeMore);
+      };
+      writeMore();
+    });
+    server.on("connection", (s) => {
+      s.on("close", () => {
+        socketDestroyed = true;
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: `http://127.0.0.1:${port}`,
+        }),
+      ).rejects.toThrow("MiniMax VLM: JSON response exceeds");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
   it("bounds large provider error response bodies", async () => {
