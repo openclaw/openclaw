@@ -780,7 +780,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         })
       : [];
 
-    if (!hybrid.enabled) {
+    const keywordSearchAvailable = await this.hasKeywordSearchAvailable();
+    // Hybrid ranking requires a keyword side. When FTS is unavailable, preserve
+    // the current vector-only fallback so vector scores are not downweighted by
+    // empty keyword results.
+    if (!hybrid.enabled || !keywordSearchAvailable) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
