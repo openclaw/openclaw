@@ -350,6 +350,9 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
     return classifyOpenAISdkStreamBodyPrefix(text);
   } finally {
     void reader.cancel().catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch {}
   }
 }
 
