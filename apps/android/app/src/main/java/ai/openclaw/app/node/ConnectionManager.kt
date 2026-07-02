@@ -194,6 +194,7 @@ class ConnectionManager(
         listOf(
           "operator.approvals",
           "operator.read",
+          "operator.talk.secrets",
           "operator.write",
         ),
       caps = emptyList(),

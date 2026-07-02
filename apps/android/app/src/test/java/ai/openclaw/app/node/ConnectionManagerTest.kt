@@ -427,13 +427,14 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptions_requestsLegacySafeOperatorScopes() {
+  fun buildOperatorConnectOptions_requestsNativeClientOperatorScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
       listOf(
         "operator.approvals",
         "operator.read",
+        "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
