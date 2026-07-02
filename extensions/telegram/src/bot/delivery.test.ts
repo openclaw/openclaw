@@ -578,6 +578,31 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
+  it("logs and sends the Telegram forum thread for direct auto-reply delivery", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 6,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello forum" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram sendMessage ok chat=123 message=6 threadId=42 threadScope=forum",
+      ),
+    );
+  });
+
   it("emits internal message:sent when session hook context is available", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
@@ -990,7 +1015,7 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
   });
 
-  it("does not retry DM topic sends without the topic id when the topic is missing", async () => {
+  it("logs DM topic context when the topic is missing", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
@@ -1007,9 +1032,12 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("sendMessage threadId=42 threadScope=dm failed"),
+    );
   });
 
-  it("does not retry forum sends without message_thread_id", async () => {
+  it("logs forum topic context when the topic is missing", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockRejectedValue(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
@@ -1025,6 +1053,9 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("sendMessage threadId=42 threadScope=forum failed"),
+    );
   });
 
   it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
