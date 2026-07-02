@@ -500,6 +500,10 @@ export async function createLocalEmbeddingWorkerProvider(
   };
 }
 
+// Exported for unit testing only — resolves a stale Homebrew Cellar path
+// to the stable opt/bin symlink that survives `brew upgrade`.
+export { resolveHomebrewStablePath };
+
 /** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

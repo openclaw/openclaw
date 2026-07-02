@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
-import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
+import {
+  createLocalEmbeddingWorkerProvider,
+  resolveHomebrewStablePath,
+} from "./embeddings-worker.js";
 import { createLocalEmbeddingProviderInProcess, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 const nodeLlamaMock = vi.hoisted(() => ({
@@ -621,5 +624,44 @@ process.on("message", (message) => {
       reason: "exit",
       exitCode: 134,
     });
+  });
+});
+
+describe("resolveHomebrewStablePath", () => {
+  it("returns the path unchanged for non-Cellar paths", () => {
+    expect(resolveHomebrewStablePath("/usr/local/bin/node")).toBe("/usr/local/bin/node");
+    expect(resolveHomebrewStablePath("C:\\Program Files\\nodejs\\node.exe")).toBe(
+      "C:\\Program Files\\nodejs\\node.exe",
+    );
+    expect(resolveHomebrewStablePath("/opt/homebrew/bin/node")).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("resolves default Cellar formula to opt/node symlink", () => {
+    const result = resolveHomebrewStablePath("/opt/homebrew/Cellar/node/26.3.0/bin/node");
+    // On a non-Homebrew CI runner the opt path won't exist, so the function
+    // returns the input unchanged.  On a real macOS Homebrew system the
+    // stable opt/node/bin/node symlink is returned.
+    expect(
+      result === "/opt/homebrew/Cellar/node/26.3.0/bin/node" ||
+        result === "/opt/homebrew/opt/node/bin/node",
+    ).toBe(true);
+  });
+
+  it("resolves versioned formula (node@22) to opt/node@22 symlink", () => {
+    const result = resolveHomebrewStablePath("/opt/homebrew/Cellar/node@22/22.11.0/bin/node");
+    expect(
+      result === "/opt/homebrew/Cellar/node@22/22.11.0/bin/node" ||
+        result === "/opt/homebrew/opt/node@22/bin/node",
+    ).toBe(true);
+  });
+
+  it("matches Linux Homebrew paths", () => {
+    const result = resolveHomebrewStablePath(
+      "/home/linuxbrew/.linuxbrew/Cellar/node/22.0.0/bin/node",
+    );
+    expect(
+      result === "/home/linuxbrew/.linuxbrew/Cellar/node/22.0.0/bin/node" ||
+        result === "/home/linuxbrew/.linuxbrew/opt/node/bin/node",
+    ).toBe(true);
   });
 });
