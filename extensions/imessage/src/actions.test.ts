@@ -373,6 +373,51 @@ describe("imessage message actions", () => {
     });
   });
 
+  it("defaults the poll reference to the current inbound message id", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollVoteMessage: true },
+      rpcMethods: ["send", "poll.send", "poll.vote"],
+    });
+    runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
+    runtimeMock.sendPollVote.mockResolvedValue({ messageId: "vote-guid", optionText: "Blue" });
+
+    // No explicit pollId/pollGuid/messageId — the poll is the current inbound
+    // message, so the reference defaults from toolContext.currentMessageId.
+    await imessageMessageActions.handleAction?.({
+      action: "poll-vote",
+      cfg: cfg(),
+      params: { chatGuid: "iMessage;+;chat0000", pollOptionIndex: 2 },
+      toolContext: { currentMessageId: 3 },
+    } as never);
+
+    expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith(
+      "3",
+      expect.objectContaining({ requireKnownShortId: true }),
+    );
+    expect(runtimeMock.sendPollVote).toHaveBeenCalledWith(
+      expect.objectContaining({ pollGuid: "poll-full-guid", optionIndex: 2 }),
+    );
+  });
+
+  it("rejects a poll vote with no reference and no current inbound message", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollVoteMessage: true },
+      rpcMethods: ["send", "poll.send", "poll.vote"],
+    });
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "poll-vote",
+        cfg: cfg(),
+        params: { chatGuid: "iMessage;+;chat0000", pollOptionIndex: 2 },
+      } as never),
+    ).rejects.toThrow("requires the poll message id");
+    expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
+  });
+
   it("rejects a poll vote with conflicting selectors", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
