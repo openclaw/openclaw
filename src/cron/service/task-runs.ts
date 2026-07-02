@@ -58,45 +58,109 @@ function resolveCronTaskChildSessionKey(params: {
   });
 }
 
-/** Creates a best-effort detached task ledger row for a cron run. */
-export function tryCreateCronTaskRun(params: {
-  state: CronServiceState;
+type CronTaskRunWarn = (meta: Record<string, unknown>, message: string) => void;
+
+/**
+ * Best-effort detached ledger row for one cron-shaped agent run.
+ *
+ * Shared by scheduled cron jobs and gateway hook dispatches. The registry's
+ * cron-runtime contract requires `sourceId` to be a job id currently marked
+ * via `markCronJobActive`; rows without an active marker are swept to "lost"
+ * by task maintenance after the reconcile grace.
+ */
+export function tryCreateCronRunLedgerRow(params: {
+  warn: CronTaskRunWarn;
   job: CronJob;
+  runId: string;
+  childSessionKey: string | undefined;
+  label: string;
+  progressSummary: string;
   startedAt: number;
 }): string | undefined {
-  const runId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     const task = createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
       ownerKey: "",
       scopeKind: "system",
-      childSessionKey: resolveCronTaskChildSessionKey(params),
+      childSessionKey: params.childSessionKey,
       agentId: params.job.agentId,
-      runId,
-      label: params.job.name,
+      runId: params.runId,
+      label: params.label,
       task: params.job.name || params.job.id,
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
-      progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
+      progressSummary: params.progressSummary,
     });
     if (!task) {
-      params.state.deps.log.warn(
-        { jobId: params.job.id },
-        "cron: task ledger record was not persisted",
-      );
+      params.warn({ jobId: params.job.id }, "cron: task ledger record was not persisted");
       return undefined;
     }
-    return runId;
+    return params.runId;
   } catch (error) {
-    params.state.deps.log.warn(
-      { jobId: params.job.id, error },
-      "cron: failed to create task ledger record",
-    );
+    params.warn({ jobId: params.job.id, error }, "cron: failed to create task ledger record");
     return undefined;
   }
+}
+
+/** Completes or fails a cron-shaped detached ledger row when one exists. */
+export function tryFinishCronRunLedgerRow(params: {
+  warn: CronTaskRunWarn;
+  taskRunId: string | undefined;
+  status: CronRunStatus;
+  failStatus?: "failed" | "timed_out" | "cancelled";
+  error?: string;
+  summary?: string;
+  endedAt: number;
+}): void {
+  if (!params.taskRunId) {
+    return;
+  }
+  try {
+    if (params.status === "ok" || params.status === "skipped") {
+      completeTaskRunByRunId({
+        runId: params.taskRunId,
+        runtime: "cron",
+        endedAt: params.endedAt,
+        lastEventAt: params.endedAt,
+        terminalSummary: params.summary ?? undefined,
+      });
+      return;
+    }
+    failTaskRunByRunId({
+      runId: params.taskRunId,
+      runtime: "cron",
+      status: params.failStatus ?? "failed",
+      endedAt: params.endedAt,
+      lastEventAt: params.endedAt,
+      error: params.error,
+      terminalSummary: params.summary ?? undefined,
+    });
+  } catch (error) {
+    params.warn(
+      { runId: params.taskRunId, jobStatus: params.status, error },
+      "cron: failed to update task ledger record",
+    );
+  }
+}
+
+/** Creates a best-effort detached task ledger row for a cron run. */
+export function tryCreateCronTaskRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  startedAt: number;
+}): string | undefined {
+  return tryCreateCronRunLedgerRow({
+    warn: (meta, message) => params.state.deps.log.warn(meta, message),
+    job: params.job,
+    runId: createCronExecutionId(params.job.id, params.startedAt),
+    childSessionKey: resolveCronTaskChildSessionKey(params),
+    label: params.job.name,
+    progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
+    startedAt: params.startedAt,
+  });
 }
 
 /** Completes or fails the detached task ledger row for a cron run when one exists. */
@@ -110,34 +174,15 @@ export function tryFinishCronTaskRun(
     summary?: string;
   },
 ): void {
-  if (!result.taskRunId) {
-    return;
-  }
-  try {
-    if (result.status === "ok" || result.status === "skipped") {
-      completeTaskRunByRunId({
-        runId: result.taskRunId,
-        runtime: "cron",
-        endedAt: result.endedAt,
-        lastEventAt: result.endedAt,
-        terminalSummary: result.summary ?? undefined,
-      });
-      return;
-    }
-    failTaskRunByRunId({
-      runId: result.taskRunId,
-      runtime: "cron",
-      status:
-        normalizeCronRunErrorText(result.error) === timeoutErrorMessage() ? "timed_out" : "failed",
-      endedAt: result.endedAt,
-      lastEventAt: result.endedAt,
-      error: result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined,
-      terminalSummary: result.summary ?? undefined,
-    });
-  } catch (error) {
-    state.deps.log.warn(
-      { runId: result.taskRunId, jobStatus: result.status, error },
-      "cron: failed to update task ledger record",
-    );
-  }
+  const errorText = result.status === "error" ? normalizeCronRunErrorText(result.error) : undefined;
+  tryFinishCronRunLedgerRow({
+    warn: (meta, message) => state.deps.log.warn(meta, message),
+    taskRunId: result.taskRunId,
+    status: result.status,
+    failStatus:
+      normalizeCronRunErrorText(result.error) === timeoutErrorMessage() ? "timed_out" : "failed",
+    error: errorText,
+    summary: result.summary,
+    endedAt: result.endedAt,
+  });
 }

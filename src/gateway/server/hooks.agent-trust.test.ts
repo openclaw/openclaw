@@ -33,6 +33,18 @@ vi.mock("../../config/sessions.js", () => ({
 vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
+// Keep the trust tests hermetic: ledger writes are covered by the
+// hooks.agent-dispatch-watchdog suite.
+vi.mock("../../tasks/detached-task-runtime.js", () => ({
+  createRunningTaskRun: vi.fn(() => ({ runId: "task" })),
+  completeTaskRunByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+}));
+// The timeout-cleanup helper statically imports the embedded agent runtime;
+// mock it so trust tests stay import-light.
+vi.mock("../timed-out-agent-run-cleanup.js", () => ({
+  cleanupTimedOutIsolatedAgentRun: vi.fn(async () => {}),
+}));
 
 let capturedDispatchAgentHook: ((...args: unknown[]) => unknown) | undefined;
 
