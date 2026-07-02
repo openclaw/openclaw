@@ -1,4 +1,5 @@
 import Contacts
+import CoreLocation
 import EventKit
 import SwiftUI
 import UIKit
@@ -7,11 +8,20 @@ struct PrivacyAccessSectionView: View {
     @State private var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     @State private var remindersStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
+    @State private var locationStatus: CLAuthorizationStatus = CLLocationManager().authorizationStatus
 
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         DisclosureGroup("Privacy & Access") {
+            self.permissionRow(
+                title: "Location",
+                icon: "location",
+                status: self.locationStatusText,
+                detail: "Share location with gateway tools and automations.",
+                actionTitle: self.locationActionTitle,
+                action: self.handleLocationAction)
+
             self.permissionRow(
                 title: "Contacts",
                 icon: "person.crop.circle",
@@ -78,13 +88,43 @@ struct PrivacyAccessSectionView: View {
         .padding(.vertical, 2)
     }
 
+    private var locationStatusText: String {
+        switch self.locationStatus {
+        case .authorizedAlways:
+            "Always"
+        case .authorizedWhenInUse:
+            "While Using"
+        case .notDetermined:
+            "Not Set"
+        case .denied, .restricted:
+            "Not Allowed"
+        @unknown default:
+            "Unknown"
+        }
+    }
+
+    private var locationActionTitle: String? {
+        switch self.locationStatus {
+        case .authorizedAlways:
+            nil
+        case .authorizedWhenInUse:
+            "Upgrade to Always"
+        case .notDetermined, .denied, .restricted:
+            "Open Settings"
+        @unknown default:
+            nil
+        }
+    }
+
+    private func handleLocationAction() {
+        self.openSettings()
+    }
+
     private func statusTone(for status: String) -> OpenClawStatusTone {
         switch status {
-        case "Allowed":
+        case "Allowed", "Always":
             .ok
-        case "Not Set":
-            .warn
-        case "Add-Only":
+        case "Not Set", "Add-Only", "While Using":
             .warn
         default:
             .danger
@@ -280,6 +320,7 @@ struct PrivacyAccessSectionView: View {
         self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
         self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        self.locationStatus = CLLocationManager().authorizationStatus
     }
 
     private func requestCalendarWriteOnly() async -> Bool {

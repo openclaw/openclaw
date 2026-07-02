@@ -86,6 +86,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.significantLocationCallback = onUpdate
         guard !self.isMonitoringSignificantChanges else { return }
         self.isMonitoringSignificantChanges = true
+        // Required when UIBackgroundModes includes "location" so the
+        // system delivers updates after the app is suspended.
+        self.manager.allowsBackgroundLocationUpdates = true
         self.manager.startMonitoringSignificantLocationChanges()
     }
 
