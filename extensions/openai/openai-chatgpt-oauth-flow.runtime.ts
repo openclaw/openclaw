@@ -32,7 +32,9 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
 const DEFAULT_CALLBACK_HOST = "localhost";
-const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+function isLoopbackCallbackHost(host: string): boolean {
+  return host === "localhost" || host === "::1" || host.startsWith("127.");
+}
 const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
@@ -75,8 +77,10 @@ function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
 
 function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
   const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
-  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
-    throw new Error("OpenAI Codex OAuth callback host must be localhost, 127.0.0.1, or ::1");
+  if (!isLoopbackCallbackHost(host)) {
+    throw new Error(
+      "OpenAI Codex OAuth callback host must be a loopback address (localhost, ::1, or 127.x.x.x)",
+    );
   }
   return host;
 }
