@@ -471,6 +471,37 @@ struct TalkModeManagerTests {
         }
     }
 
+    @Test func `open AI selection keeps its Azure config on gateway relay`() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "providers": [
+                        "google": ["model": "gemini-live"],
+                        "OpenAI": ["azureDeployment": "realtime-prod"],
+                    ],
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+        let routing = TalkModeRoutingResolver.resolve(
+            parsed: parsed,
+            providerSelection: .openAIRealtime,
+            defaultProvider: "elevenlabs",
+            defaultRealtimeModelId: "gpt-realtime-2")
+
+        #expect(parsed.realtimeProvider == "google")
+        #expect(routing.route == .realtimeRelay)
+    }
+
     @Test func `restarts an enabled continuous realtime session after provider close`() {
         #expect(TalkModeManager._test_shouldRestartRealtimeSession(
             isEnabled: true,

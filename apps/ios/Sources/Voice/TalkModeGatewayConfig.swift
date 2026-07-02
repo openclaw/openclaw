@@ -284,7 +284,7 @@ enum TalkModeRoutingResolver {
             realtimeModelId = defaultRealtimeModelId
             // Provider selection can replace provider details, but an explicit Gateway-owned
             // realtime route must remain on the Gateway (for example, Azure-backed OpenAI).
-            route = parsed.requiresGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
+            route = parsed.openAIRequiresGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
         }
 
         return TalkModeResolvedRouting(
@@ -343,6 +343,7 @@ struct TalkModeGatewayConfigState {
     let missingResolvedPayload: Bool
     let executionMode: TalkModeExecutionMode
     let requiresGatewayRealtimeTransport: Bool
+    let openAIRequiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
     let configuredModelId: String?
@@ -406,6 +407,12 @@ enum TalkModeGatewayConfigParser {
         let requiresGatewayRealtimeTransport = realtimeTransport == "gateway-relay"
             || realtimeTransport == "provider-websocket"
             || Self.usesAzureOpenAI(provider: realtimeProvider, config: realtimeProviderConfig)
+        let openAIProviderConfig = Self.realtimeProviderConfig(
+            providers: realtimeProviders,
+            provider: "openai")
+        let openAIRequiresGatewayRealtimeTransport = realtimeTransport == "gateway-relay"
+            || realtimeTransport == "provider-websocket"
+            || Self.usesAzureOpenAI(provider: "openai", config: openAIProviderConfig)
         let executionMode = Self.resolvedExecutionMode(
             realtime,
             requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport)
@@ -422,6 +429,7 @@ enum TalkModeGatewayConfigParser {
             missingResolvedPayload: talk != nil && selection == nil,
             executionMode: executionMode,
             requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
+            openAIRequiresGatewayRealtimeTransport: openAIRequiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
             configuredModelId: model,
@@ -507,7 +515,13 @@ enum TalkModeGatewayConfigParser {
     {
         guard let providers else { return nil }
         if let provider {
-            return providers[provider]?.dictionaryValue
+            if let exact = providers[provider]?.dictionaryValue {
+                return exact
+            }
+            return providers.first { key, _ in
+                key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(provider) == .orderedSame
+            }?.value.dictionaryValue
         }
         if providers.count == 1 {
             return providers.values.first?.dictionaryValue
