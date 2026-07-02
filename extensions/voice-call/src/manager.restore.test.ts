@@ -13,7 +13,12 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
+import {
+  flushPendingCallRecordWritesForTest,
+  getCallByProviderCallIdFromStore,
+  getCallFromStore,
+  loadActiveCallsFromStore,
+} from "./manager/store.js";
 import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
@@ -372,5 +377,199 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
+  });
+});
+
+describe("CallManager store fallback (#96586)", () => {
+  beforeEach(() => {
+    installStateRuntime();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
+    clearVoiceCallStateRuntime();
+  });
+
+  it("keeps getCall active-only: completed/evicted calls are not found via manager", async () => {
+    const storePath = createTestStorePath();
+    const callId = "call-completed-1";
+    const completedCall = makePersistedCall({
+      callId,
+      state: "completed",
+      to: "+15550000001",
+      endedAt: Date.now() - 60_000,
+      endReason: "completed",
+    });
+    writeCallsToStore(storePath, [completedCall]);
+
+    const provider = new FakeProvider();
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    // Completed calls should not be reloaded as active
+    expect(manager.getActiveCalls()).toHaveLength(0);
+
+    // getCall is active-only — completed calls are not found (#96586).
+    expect(manager.getCall(callId)).toBeUndefined();
+
+    // Status read paths use the standalone store functions instead.
+    const call = getCallFromStore(storePath, callId);
+    expect(call).toBeDefined();
+    expect(call?.callId).toBe(callId);
+    expect(call?.state).toBe("completed");
+  });
+
+  it("keeps getCallByProviderCallId active-only: completed calls not found via manager", async () => {
+    const storePath = createTestStorePath();
+    const providerCallId = "CA-provider-123";
+    const completedCall = makePersistedCall({
+      callId: "call-completed-2",
+      state: "completed",
+      to: "+15550000002",
+      providerCallId,
+      endedAt: Date.now() - 60_000,
+      endReason: "completed",
+    });
+    writeCallsToStore(storePath, [completedCall]);
+
+    const provider = new FakeProvider();
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    // getCallByProviderCallId is active-only.
+    expect(manager.getCallByProviderCallId(providerCallId)).toBeUndefined();
+
+    // Status read paths use the standalone store function instead (#96586).
+    const call = getCallByProviderCallIdFromStore(storePath, providerCallId);
+    expect(call).toBeDefined();
+    expect(call?.providerCallId).toBe(providerCallId);
+  });
+
+  it("returns undefined for a call that is not in activeCalls or store", async () => {
+    const storePath = createTestStorePath();
+    const provider = new FakeProvider();
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getCall("nonexistent-call-id")).toBeUndefined();
+    expect(manager.getCallByProviderCallId("nonexistent-provider-id")).toBeUndefined();
+  });
+
+  it("getCallFromStore returns a completed call by callId", () => {
+    const storePath = createTestStorePath();
+    const callId = "call-direct-lookup";
+    const completedCall = makePersistedCall({
+      callId,
+      state: "completed",
+      to: "+15550000003",
+      endedAt: Date.now() - 60_000,
+      endReason: "completed",
+    });
+    writeCallsToStore(storePath, [completedCall]);
+
+    const call = getCallFromStore(storePath, callId);
+    expect(call).toBeDefined();
+    expect(call?.callId).toBe(callId);
+  });
+
+  it("getCallByProviderCallIdFromStore returns a completed call by providerCallId", () => {
+    const storePath = createTestStorePath();
+    const providerCallId = "CA-direct-provider";
+    const completedCall = makePersistedCall({
+      callId: "call-direct-lookup-2",
+      state: "completed",
+      to: "+15550000004",
+      providerCallId,
+      endedAt: Date.now() - 60_000,
+      endReason: "completed",
+    });
+    writeCallsToStore(storePath, [completedCall]);
+
+    const call = getCallByProviderCallIdFromStore(storePath, providerCallId);
+    expect(call).toBeDefined();
+    expect(call?.providerCallId).toBe(providerCallId);
+  });
+
+  it("getCallFromStore returns the latest snapshot when multiple records exist for the same callId", () => {
+    const storePath = createTestStorePath();
+    const callId = "call-multi-snapshot";
+
+    // Persist an older snapshot (answered state).
+    writeCallsToStore(storePath, [
+      makePersistedCall({
+        callId,
+        state: "answered",
+        to: "+15550000005",
+        startedAt: Date.now() - 120_000,
+        answeredAt: Date.now() - 115_000,
+      }),
+    ]);
+    // Persist a newer snapshot (completed state) for the same callId.
+    writeCallsToStore(storePath, [
+      makePersistedCall({
+        callId,
+        state: "completed",
+        to: "+15550000005",
+        startedAt: Date.now() - 120_000,
+        answeredAt: Date.now() - 115_000,
+        endedAt: Date.now() - 60_000,
+        endReason: "completed",
+      }),
+    ]);
+
+    const call = getCallFromStore(storePath, callId);
+    expect(call).toBeDefined();
+    expect(call?.callId).toBe(callId);
+    // Must return the latest snapshot (completed), not the oldest (answered).
+    expect(call?.state).toBe("completed");
+    expect(call?.endReason).toBe("completed");
+  });
+
+  it("getCallByProviderCallIdFromStore returns the latest snapshot when multiple records exist for the same providerCallId", () => {
+    const storePath = createTestStorePath();
+    const providerCallId = "CA-multi-snapshot";
+
+    // Persist an older snapshot.
+    writeCallsToStore(storePath, [
+      makePersistedCall({
+        callId: "call-multi-A",
+        providerCallId,
+        state: "answered",
+        to: "+15550000006",
+      }),
+    ]);
+    // Persist a newer snapshot for the same providerCallId.
+    writeCallsToStore(storePath, [
+      makePersistedCall({
+        callId: "call-multi-B",
+        providerCallId,
+        state: "completed",
+        to: "+15550000006",
+        endedAt: Date.now() - 30_000,
+        endReason: "completed",
+      }),
+    ]);
+
+    const call = getCallByProviderCallIdFromStore(storePath, providerCallId);
+    expect(call).toBeDefined();
+    expect(call?.providerCallId).toBe(providerCallId);
+    // Must return the latest snapshot, not the oldest.
+    expect(call?.state).toBe("completed");
   });
 });

@@ -114,6 +114,11 @@ export class CallManager {
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
+  /** Read-only store path for status lookups that need persistence fallback. */
+  get callStorePath(): string {
+    return this.storePath;
+  }
+
   /**
    * Initialize the call manager with a provider.
    * Verifies persisted calls with the provider and restarts timers.
@@ -431,7 +436,10 @@ export class CallManager {
   }
 
   /**
-   * Get an active call by ID.
+   * Get an active call by ID. This is an active-only lookup for live
+   * webhook, realtime, and auto-response paths. Use the standalone
+   * {@link getCallFromStore} for read-only status queries that need
+   * to reach completed/evicted calls (#96586).
    */
   getCall(callId: CallId): CallRecord | undefined {
     return this.activeCalls.get(callId);
@@ -439,6 +447,8 @@ export class CallManager {
 
   /**
    * Get an active call by provider call ID (e.g., Twilio CallSid).
+   * Active-only; use {@link getCallByProviderCallIdFromStore} for
+   * read-only status lookups.
    */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
     return getCallByProviderCallIdFromMaps({
