@@ -400,6 +400,58 @@ describe("runCapability auto audio entries", () => {
     expect(seenPrompt).toBe("Focus on names");
   });
 
+  it("suppresses the default English audio prompt when a non-English language is configured", async () => {
+    let seenLanguage: string | undefined;
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenLanguage = req.language;
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              language: "ru",
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(seenLanguage).toBe("ru");
+    // Groq Whisper treats `prompt` as a biasing hint; the English default
+    // can translate short non-English clips to English (#98970).
+    expect(seenPrompt).toBe("");
+  });
+
+  it("keeps the default English audio prompt when no language is configured", async () => {
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(seenPrompt).toBe("Transcribe the audio.");
+  });
+
   it("uses mistral when only mistral key is configured", async () => {
     const isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-agent-"));
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;

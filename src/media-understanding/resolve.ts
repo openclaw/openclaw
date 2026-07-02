@@ -50,12 +50,44 @@ export function resolvePrompt(
   capability: MediaUnderstandingCapability,
   prompt?: string,
   maxChars?: number,
+  language?: string,
 ): string {
-  const base = prompt?.trim() || DEFAULT_PROMPT[capability];
-  if (!maxChars || capability === "audio") {
+  // Audio providers (e.g. Groq Whisper) treat `prompt` as a biasing hint and
+  // may translate short non-English clips to English when the default English
+  // "Transcribe the audio." prompt is sent alongside a non-English `language`
+  // (#98970). When an explicit prompt is absent and a non-English language is
+  // configured, send no prompt so the provider honors the language hint.
+  const explicitPrompt = prompt?.trim();
+  if (capability === "audio") {
+    if (explicitPrompt) {
+      return explicitPrompt;
+    }
+    if (isNonEnglishLanguage(language)) {
+      return "";
+    }
+    return DEFAULT_PROMPT[capability];
+  }
+  const base = explicitPrompt || DEFAULT_PROMPT[capability];
+  if (!maxChars) {
     return base;
   }
   return `${base} Respond in at most ${maxChars} characters.`;
+}
+
+/** True when a transcription language hint is set and is not English. */
+function isNonEnglishLanguage(language: string | undefined): boolean {
+  const normalized = language?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  // BCP-47 codes (`ru`, `zh-CN`, `en`) and the bare word `english`/`en`.
+  if (normalized === "en" || normalized === "eng" || normalized === "english") {
+    return false;
+  }
+  if (normalized.startsWith("en-") || normalized.startsWith("en_")) {
+    return false;
+  }
+  return true;
 }
 
 /** Resolves the effective max response characters for a model entry and capability. */

@@ -2,7 +2,12 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveMediaRuntimeTimeoutMs, resolveModelEntries, resolveTimeoutMs } from "./resolve.js";
+import {
+  resolveMediaRuntimeTimeoutMs,
+  resolveModelEntries,
+  resolvePrompt,
+  resolveTimeoutMs,
+} from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
 const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
@@ -82,5 +87,41 @@ describe("resolveModelEntries", () => {
       providerRegistry,
     });
     expect(entries).toHaveLength(0);
+  });
+});
+
+describe("resolvePrompt", () => {
+  it("uses the default audio prompt when no prompt and no language are configured", () => {
+    expect(resolvePrompt("audio")).toBe("Transcribe the audio.");
+  });
+
+  it("uses an explicit audio prompt even when a non-English language is set", () => {
+    expect(resolvePrompt("audio", "Transcribe in Russian.", undefined, "ru")).toBe(
+      "Transcribe in Russian.",
+    );
+  });
+
+  it("suppresses the default audio prompt for a non-English language hint", () => {
+    // Groq Whisper treats `prompt` as a biasing hint; the English default
+    // can make it translate short non-English clips to English (#98970).
+    expect(resolvePrompt("audio", undefined, undefined, "ru")).toBe("");
+  });
+
+  it("keeps the default audio prompt for an English language hint", () => {
+    expect(resolvePrompt("audio", undefined, undefined, "en")).toBe("Transcribe the audio.");
+  });
+
+  it("keeps the default audio prompt for an English region tag (en-US)", () => {
+    expect(resolvePrompt("audio", undefined, undefined, "en-US")).toBe("Transcribe the audio.");
+  });
+
+  it("suppresses the default audio prompt for a region-qualified non-English hint (zh-CN)", () => {
+    expect(resolvePrompt("audio", undefined, undefined, "zh-CN")).toBe("");
+  });
+
+  it("appends length guidance for non-audio capabilities", () => {
+    expect(resolvePrompt("image", undefined, 500)).toBe(
+      "Describe the image. Respond in at most 500 characters.",
+    );
   });
 });
