@@ -21,6 +21,7 @@ import {
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  sortSessionRowsByUpdatedAtDesc,
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
@@ -532,20 +533,18 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
     normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
-  return (state.sessionsResult?.sessions ?? [])
-    .filter(
-      (row) =>
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 5);
+  const filtered = (state.sessionsResult?.sessions ?? []).filter(
+    (row) =>
+      !row.archived &&
+      row.kind !== "global" &&
+      row.kind !== "unknown" &&
+      row.kind !== "cron" &&
+      !isCronSessionKey(row.key) &&
+      !isSubagentSessionKey(row.key) &&
+      !row.spawnedBy &&
+      (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
+  );
+  return sortSessionRowsByUpdatedAtDesc(filtered).slice(0, 5);
 }
 
 function renderSidebarSessions(state: AppViewState) {
