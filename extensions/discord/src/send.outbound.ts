@@ -1,7 +1,11 @@
 // Discord plugin module implements send.outbound behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -45,6 +49,8 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToIdSource?: "explicit" | "implicit";
+  replyToMode?: ReplyToMode;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -62,6 +68,18 @@ const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
+function resolveDiscordReplyToPolicy(opts: {
+  replyToIdSource?: "explicit" | "implicit";
+  replyToMode?: ReplyToMode;
+}) {
+  return opts.replyToIdSource || opts.replyToMode
+    ? {
+        ...(opts.replyToIdSource ? { replyToIdSource: opts.replyToIdSource } : {}),
+        ...(opts.replyToMode ? { replyToMode: opts.replyToMode } : {}),
+      }
+    : undefined;
+}
+
 async function sendDiscordThreadTextChunks(params: {
   rest: RequestClient;
   threadId: string;
@@ -78,6 +96,7 @@ async function sendDiscordThreadTextChunks(params: {
       params.rest,
       params.threadId,
       chunk,
+      undefined,
       undefined,
       params.request,
       params.maxLinesPerMessage,
@@ -260,6 +279,7 @@ export async function sendMessageDiscord(
           opts.mediaReadFile,
           mediaMaxBytes,
           undefined,
+          undefined,
           request,
           maxLinesPerMessage,
           undefined,
@@ -319,6 +339,7 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult;
+  const replyToPolicy = resolveDiscordReplyToPolicy(opts);
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -332,6 +353,7 @@ export async function sendMessageDiscord(
         opts.mediaReadFile,
         mediaMaxBytes,
         opts.replyTo,
+        replyToPolicy,
         request,
         maxLinesPerMessage,
         opts.components,
@@ -347,6 +369,7 @@ export async function sendMessageDiscord(
         channelId,
         textWithMentions,
         opts.replyTo,
+        replyToPolicy,
         request,
         maxLinesPerMessage,
         opts.components,

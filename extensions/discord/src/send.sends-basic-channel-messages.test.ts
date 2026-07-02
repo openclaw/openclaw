@@ -165,7 +165,12 @@ describe("sendMessageDiscord", () => {
     });
   }
 
-  async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
+  async function sendChunkedReplyAndCollectBodies(params: {
+    text: string;
+    mediaUrl?: string;
+    replyToIdSource?: "explicit" | "implicit";
+    replyToMode?: "off" | "first" | "all" | "batched";
+  }) {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
     await sendMessageDiscord("channel:789", params.text, {
@@ -173,6 +178,8 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
       replyTo: "orig-123",
+      ...(params.replyToIdSource ? { replyToIdSource: params.replyToIdSource } : {}),
+      ...(params.replyToMode ? { replyToMode: params.replyToMode } : {}),
       ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     });
     expect(postMock).toHaveBeenCalledTimes(2);
@@ -677,18 +684,50 @@ describe("sendMessageDiscord", () => {
     });
   });
 
-  it("preserves reply reference across all text chunks", async () => {
+  it("uses reply reference only on the first text chunk", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2001),
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+    expectReplyReference(firstBody, "orig-123");
+    expect(secondBody?.message_reference).toBeUndefined();
+  });
+
+  it("does not repeat reply reference on follow-up text chunks after media caption split", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2500),
+      mediaUrl: "file:///tmp/photo.jpg",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+    expectReplyReference(firstBody, "orig-123");
+    expect(secondBody?.message_reference).toBeUndefined();
+  });
+
+  it("preserves reply reference across text chunks for all-mode replies", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2001),
+      replyToIdSource: "implicit",
+      replyToMode: "all",
     });
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");
   });
 
-  it("preserves reply reference for follow-up text chunks after media caption split", async () => {
+  it("preserves explicit reply references across first-mode text chunks", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
-      text: "a".repeat(2500),
-      mediaUrl: "file:///tmp/photo.jpg",
+      text: "a".repeat(2001),
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+    });
+    expectReplyReference(firstBody, "orig-123");
+    expectReplyReference(secondBody, "orig-123");
+  });
+
+  it("preserves direct reply references across text chunks", async () => {
+    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+      text: "a".repeat(2001),
     });
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");

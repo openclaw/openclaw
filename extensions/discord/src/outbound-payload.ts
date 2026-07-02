@@ -41,6 +41,8 @@ function resolveDiscordDeliveryOptions(
 ) {
   return {
     replyTo: sendContext.resolveReplyTo(),
+    ...(ctx.replyToIdSource ? { replyToIdSource: ctx.replyToIdSource } : {}),
+    ...(ctx.replyToMode ? { replyToMode: ctx.replyToMode } : {}),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -71,6 +73,10 @@ function resolveDiscordMediaDeliveryOptions(
   };
 }
 
+function resolveCapturedDiscordReplyOptions(replyTo: string | undefined) {
+  return replyTo ? { replyTo, replyToIdSource: "explicit" as const } : { replyTo };
+}
+
 export async function sendDiscordOutboundPayload(params: {
   ctx: DiscordOutboundPayloadContext;
   fallbackAdapter: ChannelOutboundAdapter;
@@ -91,7 +97,7 @@ export async function sendDiscordOutboundPayload(params: {
       async () =>
         await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
           ...resolveDiscordDeliveryOptions(ctx, sendContext),
-          replyTo: voiceReplyTo,
+          ...resolveCapturedDiscordReplyOptions(voiceReplyTo),
         }),
     );
     if (payload.text?.trim()) {
@@ -100,7 +106,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-            replyTo: voiceReplyTo,
+            ...resolveCapturedDiscordReplyOptions(voiceReplyTo),
           }),
       );
     }
@@ -110,7 +116,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, "", {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-            replyTo: voiceReplyTo,
+            ...resolveCapturedDiscordReplyOptions(voiceReplyTo),
           }),
       );
     }

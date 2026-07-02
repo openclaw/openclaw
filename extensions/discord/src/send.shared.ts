@@ -2,7 +2,7 @@
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -14,6 +14,7 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -37,6 +38,10 @@ const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
 
 type DiscordRequest = RetryRunner;
+type DiscordReplyToPolicy = {
+  replyToMode?: ReplyToMode;
+  replyToIdSource?: "explicit" | "implicit";
+};
 
 export {
   buildDiscordMessagePayload,
@@ -294,11 +299,31 @@ export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
   return new Blob([arrayBuffer]);
 }
 
+function isSingleUseImplicitReplyTo(policy?: DiscordReplyToPolicy): boolean {
+  return (
+    policy?.replyToIdSource === "implicit" &&
+    policy.replyToMode !== undefined &&
+    isSingleUseReplyToMode(policy.replyToMode)
+  );
+}
+
+function resolveChunkReplyTo(
+  replyTo: string | undefined,
+  isFirst: boolean,
+  policy?: DiscordReplyToPolicy,
+): string | undefined {
+  if (!replyTo) {
+    return undefined;
+  }
+  return isFirst || !isSingleUseImplicitReplyTo(policy) ? replyTo : undefined;
+}
+
 async function sendDiscordText(
   rest: RequestClient,
   channelId: string,
   text: string,
   replyTo: string | undefined,
+  replyToPolicy: DiscordReplyToPolicy | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   components?: DiscordSendComponents,
@@ -328,7 +353,7 @@ async function sendDiscordText(
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+      replyTo: resolveChunkReplyTo(replyTo, isFirst, replyToPolicy),
     });
     return (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
@@ -364,6 +389,7 @@ async function sendDiscordMedia(
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
+  replyToPolicy: DiscordReplyToPolicy | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   components?: DiscordSendComponents,
@@ -416,6 +442,7 @@ async function sendDiscordMedia(
     "media",
   )) as { id: string; channel_id: string };
   const platformMessageIds = res.id ? [res.id] : [];
+  const followupReplyTo = isSingleUseImplicitReplyTo(replyToPolicy) ? undefined : replyTo;
   for (const chunk of chunks.slice(1)) {
     if (!chunk.trim()) {
       continue;
@@ -424,7 +451,8 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      followupReplyTo,
+      replyToPolicy,
       request,
       maxLinesPerMessage,
       undefined,

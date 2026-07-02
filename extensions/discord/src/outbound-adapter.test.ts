@@ -384,6 +384,11 @@ describe("discordOutbound", () => {
         (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
       ),
     ).toEqual(["reply-1", "reply-1"]);
+    expect(
+      hoisted.sendMessageDiscordMock.mock.calls.map(
+        (call) => (call[2] as { replyToIdSource?: unknown } | undefined)?.replyToIdSource,
+      ),
+    ).toEqual(["explicit", "explicit"]);
   });
 
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
