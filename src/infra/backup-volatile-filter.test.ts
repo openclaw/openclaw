@@ -118,4 +118,75 @@ describe("isVolatileBackupPath", () => {
       ),
     ).toBe(true);
   });
+
+  // New rules added for #98865
+  describe("agent runtime volatile directories", () => {
+    it.each([
+      [`${stateDir}/agents/main/agent/cache/model-weights.bin`, true],
+      [`${stateDir}/agents/main/agent/tmp/pending.json`, true],
+      [`${stateDir}/agents/main/agent/.tmp/lock`, true],
+      [`${stateDir}/agents/main/agent/shell_snapshots/snapshot.json`, true],
+      // Not volatile: sessions dir under agent (already covered by transcript rule)
+      // Not volatile: agent root level file
+      [`${stateDir}/agents/main/agent/config.json`, false],
+      [`${stateDir}/agents/main/agent/README.md`, false],
+      // Not volatile: non-agent path segment
+      [`${stateDir}/agents/main/sessions/transcript.jsonl`, true], // already volatile via transcript rule
+    ])("classifies agent runtime path %s as volatile=%s", (p, expected) => {
+      expect(isVolatileBackupPath(p, plan)).toBe(expected);
+    });
+  });
+
+  describe("archived paths", () => {
+    it.each([
+      [`${stateDir}/archived/old-backup.tar.gz`, true],
+      [`${stateDir}/archived/2026-06/config.json`, true],
+      [`${stateDir}/archived/deeply/nested/file.log`, true],
+      // Not volatile: similar name but not under archived/
+      [`${stateDir}/archived-config.json`, false],
+    ])("classifies archived path %s as volatile=%s", (p, expected) => {
+      expect(isVolatileBackupPath(p, expected ? plan : plan)).toBe(expected);
+    });
+
+    it("uses expected value for non-archived path", () => {
+      expect(isVolatileBackupPath(`${stateDir}/archived-config.json`, plan)).toBe(false);
+    });
+  });
+
+  describe("browser cache paths", () => {
+    it.each([
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Cache/data.bin`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Code Cache/index`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/GPUCache/data`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Service Worker/script.js`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/DawnCache/data`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/blob_storage/data`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/IndexedDB/data`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Local Storage/data`, true],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Session Storage/data`, true],
+      // Not volatile: durable browser profile files
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Preferences`, false],
+      [`${stateDir}/browser/chrome-profile/user-data/Default/Cookies`, false],
+      // Not volatile: outside browser root
+      [`${stateDir}/not-browser/Cache/file`, false],
+    ])("classifies browser path %s as volatile=%s", (p, expected) => {
+      expect(isVolatileBackupPath(p, plan)).toBe(expected);
+    });
+  });
+
+  describe("additional transient extensions", () => {
+    it.each([
+      [`${stateDir}/data/process.lock`, true],
+      [`${stateDir}/downloads/file.partial`, true],
+      [`${stateDir}/db/data.wal`, true],
+      [`${stateDir}/db/data.shm`, true],
+      [`${stateDir}/db/data.journal`, true],
+      // Old extensions still work
+      [`${stateDir}/ipc/gateway.sock`, true],
+      [`${stateDir}/gateway.pid`, true],
+      [`${stateDir}/tmp/pending.tmp`, true],
+    ])("classifies transient extension %s as volatile=%s", (p, expected) => {
+      expect(isVolatileBackupPath(p, plan)).toBe(expected);
+    });
+  });
 });

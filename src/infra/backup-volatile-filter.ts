@@ -12,7 +12,32 @@ import path from "node:path";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const STATE_TRANSIENT_EXTENSIONS = new Set([
+  ".sock",
+  ".pid",
+  ".tmp",
+  ".lock",
+  ".partial",
+  ".wal",
+  ".shm",
+  ".journal",
+]);
+
+/** Directories under an agent's runtime root that hold disposable state. */
+const AGENT_RUNTIME_VOLATILE_DIRS = new Set(["cache", "tmp", ".tmp", "shell_snapshots"]);
+
+/** Browser user-data subdirectories that only contain disposable caches. */
+const BROWSER_CACHE_DIRS = new Set([
+  "Cache",
+  "Code Cache",
+  "DawnCache",
+  "GPUCache",
+  "Service Worker",
+  "blob_storage",
+  "IndexedDB",
+  "Local Storage",
+  "Session Storage",
+]);
 
 function normalizePosix(input: string): string {
   if (!input) {
@@ -38,6 +63,32 @@ function hasExtension(filePosix: string, extensions: readonly string[]): boolean
 
 function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): boolean {
   return extensions.has(path.posix.extname(filePosix).toLowerCase());
+}
+
+function isAgentRuntimeVolatilePath(filePosix: string, stateDirPosix: string): boolean {
+  const agentsRoot = path.posix.join(stateDirPosix, "agents");
+  if (!isUnder(filePosix, agentsRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(agentsRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  // Path pattern: agents/<agentId>/agent/<volatileDir>/**
+  if (parts.length < 3 || parts[1] !== "agent") {
+    return false;
+  }
+  // The third segment should be one of the known volatile dirs
+  return AGENT_RUNTIME_VOLATILE_DIRS.has(parts[2]);
+}
+
+function isBrowserCachePath(filePosix: string, stateDirPosix: string): boolean {
+  const browserRoot = path.posix.join(stateDirPosix, "browser");
+  if (!isUnder(filePosix, browserRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(browserRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  // Look for any segment that matches a known browser cache directory name
+  return parts.some((part) => BROWSER_CACHE_DIRS.has(part));
 }
 
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
@@ -72,10 +123,13 @@ type VolatileFilterPlan = {
  * Rules:
  *   - `{stateDir}/sessions/**`/`*.{jsonl,log}` (legacy)
  *   - `{stateDir}/agents/<agentId>/sessions/**`/`*.{jsonl,log}`
+ *   - `{stateDir}/agents/<agentId>/agent/{cache,tmp,.tmp,shell_snapshots}/**`
  *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
- *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
+ *   - `{stateDir}/archived/**`
+ *   - `{stateDir}/browser/**`/{Cache,Code Cache,GPUCache,...}
+ *   - `{stateDir}/**`/`*.{sock,pid,tmp,lock,partial,wal,shm,journal}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
@@ -120,6 +174,22 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         ) {
           return true;
         }
+      }
+
+      // Agent runtime volatile directories (cache, tmp, shell_snapshots, etc.)
+      if (isAgentRuntimeVolatilePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      // Retired archive paths
+      const archivedRoot = path.posix.join(stateDirPosix, "archived");
+      if (isUnder(filePosix, archivedRoot)) {
+        return true;
+      }
+
+      // Browser cache directories
+      if (isBrowserCachePath(filePosix, stateDirPosix)) {
+        return true;
       }
 
       if (
