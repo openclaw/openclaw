@@ -120,10 +120,21 @@ export const RemindSchema = {
  *
  * @returns Milliseconds or null if unparseable.
  */
+/** Upper bound for plain-number minutes to prevent overflow. One year in minutes. */
+const MAX_PLAIN_MINUTES = 525_600;
+
 export function parseRelativeTime(timeStr: string): number | null {
   const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
-    return Number.parseInt(s, 10) * 60_000;
+    const minutes = Number.parseInt(s, 10);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > MAX_PLAIN_MINUTES) {
+      return null;
+    }
+    const ms = minutes * 60_000;
+    if (!Number.isSafeInteger(ms)) {
+      return null;
+    }
+    return ms;
   }
 
   let totalMs = 0;

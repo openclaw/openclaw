@@ -54,6 +54,23 @@ describe("engine/tools/remind-logic", () => {
     it("is case insensitive", () => {
       expect(parseRelativeTime("5M")).toBe(5 * 60_000);
     });
+
+    it("accepts plain-number minutes at the upper bound (525600 = 1 year)", () => {
+      expect(parseRelativeTime("525600")).toBe(525_600 * 60_000);
+    });
+
+    it("rejects 0 minutes as too small", () => {
+      expect(parseRelativeTime("0")).toBeNull();
+    });
+
+    it("rejects plain-number minutes above one year", () => {
+      expect(parseRelativeTime("525601")).toBeNull();
+    });
+
+    it("rejects plain-number minutes that would overflow safe integer", () => {
+      // 150119902580 minutes * 60000 > Number.MAX_SAFE_INTEGER
+      expect(parseRelativeTime("150119902580")).toBeNull();
+    });
   });
 
   describe("isCronExpression", () => {
