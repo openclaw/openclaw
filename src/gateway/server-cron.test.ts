@@ -9,9 +9,7 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
-  onExecutionStarted?: (execution: { jobId: string; sessionKey?: string }) => void;
-  onExecutionPhase?: (execution: { jobId: string; sessionKey?: string }) => void;
-}) => Promise<{ status: "ok"; summary: string; sessionKey?: string }>;
+}) => Promise<{ status: "ok"; summary: string }>;
 
 const {
   enqueueSystemEventMock,
@@ -1456,17 +1454,12 @@ describe("buildGatewayCronService", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
-      const runSessionKey = `agent:main:cron:${job.id}:run:run-1`;
-      runCronIsolatedAgentTurnMock.mockImplementationOnce(async ({ onExecutionStarted }) => {
-        onExecutionStarted?.({ jobId: job.id, sessionKey: runSessionKey });
-        return { status: "ok", summary: "ok", sessionKey: runSessionKey };
-      });
 
       await state.cron.run(job.id, "force");
 
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys([runSessionKey]);
+      expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
     }
