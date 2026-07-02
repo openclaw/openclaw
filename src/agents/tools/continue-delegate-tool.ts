@@ -13,7 +13,10 @@ import {
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
-import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
+import {
+  formatActiveContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -180,7 +183,9 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       }
       if (fanoutMode && (targetSessionKey || (targetSessionKeys && targetSessionKeys.length > 0))) {
         throw new ToolInputError(
-          "fanoutMode cannot be combined with targetSessionKey or targetSessionKeys.",
+          "fanoutMode cannot be combined with targetSessionKey or targetSessionKeys. " +
+            "For a targeted return, use targetSessionKey or targetSessionKeys and omit fanoutMode. " +
+            "For tree/all fanout, use fanoutMode and omit explicit target keys.",
         );
       }
       const targetingFields = {
@@ -188,7 +193,10 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
-      const traceparent = formatActiveContinuationTraceparent();
+      const requestedTraceparent = readStringParam(params, "traceparent");
+      const traceparent =
+        resolveContinuationTraceparent(requestedTraceparent) ??
+        formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));

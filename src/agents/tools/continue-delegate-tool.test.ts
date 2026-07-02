@@ -310,6 +310,33 @@ describe("continue_delegate tool", () => {
     ]);
   });
 
+  it("accepts targeted silent-wake returns without fanoutMode", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "targeted return",
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+    });
+    expect(result).not.toHaveProperty("fanoutMode");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "targeted return",
+        mode: "silent-wake",
+        targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      }),
+    ]);
+  });
+
   it("persists multi-recipient target metadata from snake_case input", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
@@ -366,6 +393,31 @@ describe("continue_delegate tool", () => {
     ]);
   });
 
+  it("accepts tree fanout without explicit target keys", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "fan out to ancestors",
+      mode: "silent-wake",
+      fanoutMode: "tree",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+      fanoutMode: "tree",
+    });
+    expect(result).not.toHaveProperty("targetSessionKey");
+    expect(result).not.toHaveProperty("targetSessionKeys");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "fan out to ancestors",
+        mode: "silent-wake",
+        fanoutMode: "tree",
+      }),
+    ]);
+  });
+
   it("auto-picks the active runtime trace context when traceparent is omitted", async () => {
     const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
 
@@ -382,6 +434,28 @@ describe("continue_delegate tool", () => {
     expect(consumePendingDelegates("test-session")).toEqual([
       expect.objectContaining({
         task: "continue active traced chain",
+        traceparent: ACTIVE_TRACEPARENT,
+      }),
+    ]);
+  });
+
+  it("falls back to the active runtime trace context when a hidden traceparent is invalid", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      executeTool(tool, 0, {
+        task: "ignore malformed hidden traceparent",
+        traceparent: "not-a-traceparent",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+    });
+    expect(result).not.toHaveProperty("traceparent");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "ignore malformed hidden traceparent",
         traceparent: ACTIVE_TRACEPARENT,
       }),
     ]);
@@ -420,7 +494,9 @@ describe("continue_delegate tool", () => {
         targetSessionKey: "agent:main:root",
         fanoutMode: "tree",
       }),
-    ).rejects.toThrow("fanoutMode cannot be combined with targetSessionKey or targetSessionKeys");
+    ).rejects.toThrow(
+      "For a targeted return, use targetSessionKey or targetSessionKeys and omit fanoutMode.",
+    );
   });
 
   it("stages post-compaction delegates as silent-wake delegates", async () => {
