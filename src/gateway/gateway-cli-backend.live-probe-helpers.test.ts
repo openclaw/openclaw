@@ -143,7 +143,7 @@ describe("gateway CLI backend live probe helpers", () => {
         verifyCliCronMcpLoopbackPreflight(
           preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
         ),
-      ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+      ).rejects.toThrow("mcp loopback: text response exceeds 64 bytes");
     } finally {
       server.close();
     }
