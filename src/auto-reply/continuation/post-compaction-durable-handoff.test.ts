@@ -61,11 +61,10 @@ describe("post-compaction durable handoff (#1144)", () => {
   it("finalize after handoff terminalizes the row so recovery cannot replay it", () => {
     stage("evacuate context");
     const released = consumeStagedPostCompactionDelegates(sessionKey);
-    const claimHorizon = Date.now();
     expect(released).toHaveLength(1);
 
-    // Durable handoff succeeded: finalize the claimed row.
-    const finalized = finalizeStagedPostCompactionDelegates(sessionKey, claimHorizon);
+    // Durable handoff succeeded: finalize exactly the claimed row.
+    const finalized = finalizeStagedPostCompactionDelegates(released.map((d) => d.flowId));
     expect(finalized).toBe(1);
 
     // No running rows remain, so recovery is a no-op and nothing re-queues.
@@ -74,27 +73,23 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(consumeStagedPostCompactionDelegates(sessionKey)).toHaveLength(0);
   });
 
-  it("finalize horizon does not terminalize a row claimed by a later consume", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+  it("finalizes only the rows this caller claimed, leaving others recoverable", () => {
     stage("first");
     const firstRelease = consumeStagedPostCompactionDelegates(sessionKey);
     expect(firstRelease).toHaveLength(1);
-    const horizon = Date.now();
 
-    // A second delegate is staged and claimed strictly AFTER the horizon
-    // (simulating a concurrent later consume whose rows must survive the
-    // earlier caller's finalize).
-    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+    // A second delegate is staged and claimed by an independent/other consume;
+    // its row must survive the first caller's finalize (a crash-orphaned or
+    // concurrently-claimed row must never be terminalized out from under it).
     stage("second");
     const secondRelease = consumeStagedPostCompactionDelegates(sessionKey);
     expect(secondRelease).toHaveLength(1);
 
-    // Finalizing bounded to `horizon` must finish only the first row.
-    const finalized = finalizeStagedPostCompactionDelegates(sessionKey, horizon);
+    // Finalizing only the first caller's flow ids finishes only the first row.
+    const finalized = finalizeStagedPostCompactionDelegates(firstRelease.map((d) => d.flowId));
     expect(finalized).toBe(1);
 
-    // The second (later-claimed) row is still recoverable.
+    // The second (independently-claimed) row is untouched and still recoverable.
     expect(recoverStagedPostCompactionDelegates()).toBeGreaterThanOrEqual(1);
     const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
     expect(rereleased.map((d) => d.task)).toContain("second");
@@ -107,13 +102,12 @@ describe("post-compaction durable handoff (#1144)", () => {
     // `finished` row (#1144 autoreview follow-up).
     stage("evacuate context");
     const released = consumeStagedPostCompactionDelegates(sessionKey);
-    const claimHorizon = Date.now();
     expect(released).toHaveLength(1);
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
 
     // Re-stage a fresh queued row (durable) BEFORE finalizing the claimed row.
     stagePostCompactionDelegate(sessionKey, released[0]);
-    const finalized = finalizeStagedPostCompactionDelegates(sessionKey, claimHorizon);
+    const finalized = finalizeStagedPostCompactionDelegates(released.map((d) => d.flowId));
     expect(finalized).toBe(1);
 
     // The re-staged queued row survives; the old claimed row is terminal, so

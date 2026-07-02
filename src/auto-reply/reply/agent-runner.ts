@@ -3196,10 +3196,10 @@ export async function runReplyAgent(replyParams: {
     // consume and silently discard it (C1).
     if (continuationFeatureEnabled && sessionKey) {
       const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey);
-      // consumeStagedPostCompactionDelegates now claims the TaskFlow rows to
-      // `running`; bound the finalize below to rows claimed at/before this
-      // instant so a concurrent later consume is untouched (#1144).
-      const stagedClaimHorizon = Date.now();
+      // consumeStagedPostCompactionDelegates claims the TaskFlow rows to
+      // `running`; capture their handles so the finalize below finishes ONLY
+      // these rows, never other running rows for the session (#1144).
+      const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
       if (stagedCompactionDelegates.length > 0) {
         try {
           await persistPendingPostCompactionDelegates({
@@ -3226,7 +3226,7 @@ export async function runReplyAgent(replyParams: {
         // on failure). Finish the claimed rows so they are not re-consumed; a
         // crash before here leaves them recoverable via
         // recoverStagedPostCompactionDelegates.
-        finalizeStagedPostCompactionDelegates(sessionKey, stagedClaimHorizon);
+        finalizeStagedPostCompactionDelegates(claimedFlowIds);
       }
     }
 

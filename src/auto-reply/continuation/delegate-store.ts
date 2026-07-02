@@ -212,12 +212,6 @@ function listQueuedPostCompactionFlows(sessionKey: string): TaskFlowRecord[] {
     .toSorted((a, b) => a.createdAt - b.createdAt);
 }
 
-function listRunningPostCompactionFlows(sessionKey: string): TaskFlowRecord[] {
-  return listTaskFlowsForOwnerKey(sessionKey)
-    .filter((flow) => isPostCompactionDelegateFlow(flow) && flow.status === "running")
-    .toSorted((a, b) => a.createdAt - b.createdAt);
-}
-
 function decodeDelegateState(flow: TaskFlowRecord): PendingDelegateState | undefined {
   const parsed = PendingDelegateStateSchema.safeParse(flow.stateJson);
   return parsed.success ? parsed.data : undefined;
@@ -744,20 +738,23 @@ export function consumeStagedPostCompactionDelegates(
 }
 
 /**
- * Finalize (finish) staged post-compaction rows a caller claimed via
- * {@link consumeStagedPostCompactionDelegates} once the durable handoff
- * succeeded. Finishes only `running` post-compaction rows updated at or before
- * `claimedAtOrBefore` (the caller's post-consume timestamp) so a concurrent
- * later consume's freshly-claimed rows are never finished out from under it.
- * Returns the number of rows finalized.
+ * Finalize (finish) the specific post-compaction rows a caller claimed via
+ * {@link consumeStagedPostCompactionDelegates}, once their durable handoff
+ * succeeded. Finalizes ONLY the passed flow ids and only while they are still
+ * `running` — so a row claimed by another path, or left `running` by a crash
+ * (awaiting {@link recoverStagedPostCompactionDelegates}), is never terminalized
+ * out from under its owner (#1144). Returns the number of rows finalized.
  */
 export function finalizeStagedPostCompactionDelegates(
-  sessionKey: string,
-  claimedAtOrBefore?: number,
+  flowIds: readonly (string | undefined)[],
 ): number {
   let finalized = 0;
-  for (const flow of listRunningPostCompactionFlows(sessionKey)) {
-    if (claimedAtOrBefore !== undefined && flow.updatedAt > claimedAtOrBefore) {
+  for (const flowId of flowIds) {
+    if (!flowId) {
+      continue;
+    }
+    const flow = getTaskFlowById(flowId);
+    if (!flow || !isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
       continue;
     }
     const state = decodeDelegateState(flow);

@@ -2244,10 +2244,17 @@ export async function discoverAllSessions(params?: {
       continue;
     }
 
+    // Non-replacement path: the existing entry wins its sessionFile, but still
+    // keep the newest activity timestamp so a newer twin scanned after the
+    // primary (any directory iteration order) never regresses the session's
+    // mtime (#1144).
+    if (file.mtimeMs > existing.mtime) {
+      existing.mtime = file.mtimeMs;
+    }
     if (!existing.firstUserMessage && firstUserMessage) {
       existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
+    discovered.set(sessionId, existing);
   }
 
   // Sort by mtime descending (most recent first)

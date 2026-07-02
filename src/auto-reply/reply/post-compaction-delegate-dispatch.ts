@@ -61,7 +61,7 @@ export type PostCompactionDelegateDeliveryDeps = {
 
 export type PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates(sessionKey: string): SessionPostCompactionDelegate[];
-  finalizeStagedPostCompactionDelegates(sessionKey: string, claimedAtOrBefore?: number): number;
+  finalizeStagedPostCompactionDelegates(flowIds: readonly (string | undefined)[]): number;
   drainPostCompactionDelegateDeliveries(params: {
     entryIds?: readonly string[];
     log: SessionDeliveryRecoveryLogger;
@@ -644,11 +644,11 @@ export async function dispatchPostCompactionDelegates(
   deps: PostCompactionDelegateDispatchDeps = defaultPostCompactionDelegateDispatchDeps,
 ): Promise<DispatchPostCompactionDelegatesResult> {
   const stagedCompactionDelegates = deps.consumeStagedPostCompactionDelegates(params.sessionKey);
-  // Capture the claim horizon immediately: consumeStagedPostCompactionDelegates
-  // now claims TaskFlow rows to `running` (not `finished`), so we finalize them
-  // only AFTER the durable handoff below. Bounding finalize to rows claimed at
-  // or before this instant keeps a concurrent later consume's rows untouched.
-  const stagedClaimHorizon = deps.now();
+  // Capture the claim handles immediately: consumeStagedPostCompactionDelegates
+  // now claims TaskFlow rows to `running` (not `finished`), and we finalize ONLY
+  // these specific rows after the durable handoff below — never other running
+  // rows for the session (e.g. crash-orphaned ones awaiting recovery) (#1144).
+  const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
   let persistedCompactionDelegates: SessionPostCompactionDelegate[] = [];
   try {
     persistedCompactionDelegates = await takePendingPostCompactionDelegates({
@@ -794,9 +794,10 @@ export async function dispatchPostCompactionDelegates(
   // failed, the delegates survive ONLY in the volatile preserve list until the
   // caller's finally re-stages them; finalizing here would drop them on a crash
   // in that window (#1144). Leaving the rows `running` lets startup recovery
-  // (recoverStagedPostCompactionDelegates) re-queue them instead.
+  // (recoverStagedPostCompactionDelegates) re-queue them instead. Finalize only
+  // the rows THIS dispatch claimed, never other running rows for the session.
   if (params.postCompactionDelegatesToPreserve.length === 0) {
-    deps.finalizeStagedPostCompactionDelegates(params.sessionKey, stagedClaimHorizon);
+    deps.finalizeStagedPostCompactionDelegates(claimedFlowIds);
   }
 
   const lifecycleEvent = buildPostCompactionLifecycleEvent({

@@ -92,6 +92,11 @@ export function consumeStagedPostCompactionDelegates(
     if (d.model) {
       delegate.model = d.model;
     }
+    if (d.flowId) {
+      // Runtime-only claim handle so callers can finalize exactly this row after
+      // a durable handoff (#1144). Stripped by normalizePostCompactionDelegate.
+      delegate.flowId = d.flowId;
+    }
     return delegate;
   });
 }
