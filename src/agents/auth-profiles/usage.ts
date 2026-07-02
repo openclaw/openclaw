@@ -13,8 +13,12 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import {
+  parseRateLimitResetTimestamp,
+  isPeriodicQuotaError,
+} from "../embedded-agent-helpers/rate-limit-reset-parser.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -595,6 +599,7 @@ function computeNextProfileUsageStats(params: {
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
   modelId?: string;
+  rawError?: string;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
   const windowExpired =
@@ -643,7 +648,15 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    // If the provider included an explicit reset timestamp in the error
+    // message (e.g. "Your limit will reset at 2026-07-02 17:39:49"), use
+    // that instead of exponential backoff. This avoids wasteful retry
+    // cycles when a weekly/monthly quota is exhausted. (#97764)
+    const parsedResetMs = parseRateLimitResetTimestamp(params.rawError, params.now);
+    const backoffMs =
+      parsedResetMs !== null && parsedResetMs > calculateAuthProfileCooldownMs(nextErrorCount)
+        ? parsedResetMs
+        : calculateAuthProfileCooldownMs(nextErrorCount);
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
@@ -709,8 +722,9 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  rawError?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId, modelId } = params;
+  const { store, profileId, reason, agentDir, cfg, runId, modelId, rawError } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;
@@ -745,6 +759,7 @@ export async function markAuthProfileFailure(params: {
         reason,
         cfgResolved,
         modelId,
+        rawError,
       });
       nextStats =
         whamResult && shouldProbeWhamForFailure(profileValue.provider, reason)
@@ -802,6 +817,7 @@ export async function markAuthProfileFailure(params: {
     reason,
     cfgResolved,
     modelId,
+    rawError,
   });
   nextStats =
     whamResult && shouldProbeWhamForFailure(store.profiles[profileId]?.provider, reason)
