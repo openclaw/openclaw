@@ -321,15 +321,9 @@ function buildFeishuPayloadCard(params: {
   });
 }
 
-/**
- * Check whether any presentation block contains a visible command action
- * that would be rendered as copyable text in the fallback output.
- *
- * Must match the same conditions used by the shared
- * {@link renderMessagePresentationFallbackText} so that Feishu comment-thread
- * guidance is only shown when a copyable command is actually rendered.
- */
-function hasRenderedCommandAction(
+// Keep this aligned with the shared fallback renderer: guidance is valid only
+// when the fallback text exposes a command the user can copy.
+function hasVisibleFallbackCommand(
   blocks: readonly MessagePresentationBlock[] | undefined,
 ): boolean {
   return (
@@ -364,11 +358,8 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
-  // Preserve a rendered-command marker in channelData so the downstream
-  // comment-target branch in sendPayload can detect that a command was
-  // rendered even after core renderPresentationForDelivery strips the
-  // presentation field before calling sendPayload.
-  const hasCmd = hasRenderedCommandAction(presentation?.blocks);
+  // Core consumes presentation before sendPayload; carry the fallback fact.
+  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   return {
     ...payload,
     text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
@@ -377,7 +368,7 @@ function renderFeishuPresentationPayload({
       feishu: {
         ...existingFeishuData,
         card,
-        ...(hasCmd ? { hasRenderedCommandAction: true } : {}),
+        ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
       },
     },
   };
@@ -549,18 +540,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text: ctx.payload.text,
         presentation: normalizedPresentation,
       });
-      // Use isRecord to narrow channelData.feishu before reading the marker,
-      // matching the same pattern used in renderFeishuPresentationPayload.
-      const feishuMarker = isRecord(ctx.payload.channelData?.feishu)
-        ? ctx.payload.channelData.feishu.hasRenderedCommandAction
-        : undefined;
-      const hasCmd =
-        hasRenderedCommandAction(normalizedPresentation?.blocks) ||
-        // When core delivery strips presentation via renderPresentationForDelivery
-        // before calling sendPayload, the blocks check above returns false.  Fall
-        // back to the marker set by renderFeishuPresentationPayload.
-        Boolean(feishuMarker);
-      const text = hasCmd
+      // Direct delivery retains blocks; core-rendered delivery carries the fact.
+      const fallbackHasCommand =
+        hasVisibleFallbackCommand(normalizedPresentation?.blocks) ||
+        (isRecord(ctx.payload.channelData?.feishu) &&
+          ctx.payload.channelData.feishu.fallbackHasCommand === true);
+      const text = fallbackHasCommand
         ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
         : presentationFallbackText;
 

@@ -923,13 +923,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
   });
 
   it("adds command guidance when presentation is stripped but channelData carries the rendered-command marker", async () => {
-    // Simulates the core delivery path: renderPresentationForDelivery strips
-    // the presentation field, but renderFeishuPresentationPayload sets
-    // hasRenderedCommandAction in channelData.feishu so the comment-target
-    // branch in sendPayload can still detect that a command was rendered.
-    // The payload includes a minimal card in channelData.feishu.card so
-    // buildFeishuPayloadCard does not return undefined and skip the
-    // comment-target handler entirely.
+    // Core strips presentation before sendPayload; channelData retains the fact.
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "comment:docx:doxcn123:7623358762119646411",
@@ -940,7 +934,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
         channelData: {
           feishu: {
             card: { body: { elements: [{ tag: "hr" }] } },
-            hasRenderedCommandAction: true,
+            fallbackHasCommand: true,
           },
         },
       },
@@ -950,6 +944,27 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(commentThreadParams()?.content).toBe(
       "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
     );
+    expectFeishuResult(result, "reply_msg");
+  });
+
+  it("ignores non-boolean fallback command markers", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this",
+        channelData: {
+          feishu: {
+            card: { body: { elements: [{ tag: "hr" }] } },
+            fallbackHasCommand: "true",
+          },
+        },
+      },
+    });
+
+    expect(commentThreadParams()?.content).toBe("Review this");
     expectFeishuResult(result, "reply_msg");
   });
 });
