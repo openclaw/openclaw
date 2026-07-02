@@ -16,6 +16,8 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
 ]);
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
+const OMIT_XAI_TOOL = Symbol("omit-xai-tool");
+
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
@@ -23,22 +25,37 @@ function resolveXaiFastModelId(modelId: unknown): string | undefined {
   return XAI_FAST_MODEL_IDS.get(modelId.trim());
 }
 
-function stripUnsupportedStrictFlag(tool: unknown): unknown {
+function stripUnsupportedStrictFlag(tool: unknown) {
   if (!tool || typeof tool !== "object") {
     return tool;
   }
   const toolObj = tool as Record<string, unknown>;
-  const fn = toolObj.function;
+  let fn: unknown;
+  try {
+    fn = toolObj.function;
+  } catch {
+    return OMIT_XAI_TOOL;
+  }
   if (!fn || typeof fn !== "object") {
     return tool;
   }
   const fnObj = fn as Record<string, unknown>;
-  if (typeof fnObj.strict !== "boolean") {
+  let strict: unknown;
+  try {
+    strict = fnObj.strict;
+  } catch {
+    return OMIT_XAI_TOOL;
+  }
+  if (typeof strict !== "boolean") {
     return tool;
   }
-  const nextFunction = { ...fnObj };
-  delete nextFunction.strict;
-  return { ...toolObj, function: nextFunction };
+  try {
+    const nextFunction = { ...fnObj };
+    delete nextFunction.strict;
+    return { ...toolObj, function: nextFunction };
+  } catch {
+    return OMIT_XAI_TOOL;
+  }
 }
 
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
@@ -239,7 +256,14 @@ export function createXaiToolPayloadCompatibilityWrapper(
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           if (Array.isArray(payloadObj.tools)) {
-            payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
+            const tools: unknown[] = [];
+            for (const tool of payloadObj.tools) {
+              const projectedTool = stripUnsupportedStrictFlag(tool);
+              if (projectedTool !== OMIT_XAI_TOOL) {
+                tools.push(projectedTool);
+              }
+            }
+            payloadObj.tools = tools;
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
