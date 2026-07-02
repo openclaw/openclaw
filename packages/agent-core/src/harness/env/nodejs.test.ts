@@ -237,3 +237,45 @@ describe("NodeExecutionEnv exec stream errors", () => {
     }
   });
 });
+
+describe("NodeExecutionEnv exec output bounding", () => {
+  const env = new NodeExecutionEnv({ cwd: process.cwd() });
+
+  it("returns full output when under the cap", async () => {
+    const result = await env.exec('printf "hello"', { maxOutputBytes: 1024 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.stdout).toBe("hello");
+    expect(result.value.stdout).not.toContain("[output truncated]");
+  });
+
+  it("truncates stdout when output exceeds maxOutputBytes", async () => {
+    // Produce ~10 KB of output with a 1 KB cap
+    const result = await env.exec("node -e 'process.stdout.write(\"x\".repeat(10_000))'", {
+      maxOutputBytes: 1024,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.stdout.length).toBeLessThanOrEqual(1200);
+    expect(result.value.stdout).toContain("[output truncated]");
+  });
+
+  it("truncates stderr when output exceeds maxOutputBytes", async () => {
+    const result = await env.exec("node -e 'process.stderr.write(\"y\".repeat(10_000))'", {
+      maxOutputBytes: 1024,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.stderr).toContain("[output truncated]");
+  });
+
+  it("does not truncate when maxOutputBytes is high enough", async () => {
+    const result = await env.exec("node -e 'process.stdout.write(\"z\".repeat(500))'", {
+      maxOutputBytes: 64 * 1024,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.stdout).toBe("z".repeat(500));
+    expect(result.value.stdout).not.toContain("[output truncated]");
+  });
+});

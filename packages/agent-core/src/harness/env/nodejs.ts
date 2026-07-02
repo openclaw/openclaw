@@ -31,6 +31,7 @@ import {
 import { killProcessTree } from "./kill-tree.js";
 
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
@@ -288,6 +289,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       env?: Record<string, string>;
       timeout?: number;
       abortSignal?: AbortSignal;
+      maxOutputBytes?: number;
       onStdout?: (chunk: string) => void;
       onStderr?: (chunk: string) => void;
     },
@@ -302,9 +304,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
       return shellConfig;
     }
 
+    const maxOutputBytes = options?.maxOutputBytes ?? MAX_EXEC_OUTPUT_BYTES;
+
     return await new Promise((resolvePromise) => {
       let stdout = "";
       let stderr = "";
+      let totalStdoutBytes = 0;
+      let totalStderrBytes = 0;
+      let outputTruncated = false;
       let settled = false;
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
@@ -369,6 +376,19 @@ export class NodeExecutionEnv implements ExecutionEnv {
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
+        if (outputTruncated) return;
+        const chunkBytes = Buffer.byteLength(chunk, "utf8");
+        if (totalStdoutBytes + chunkBytes > maxOutputBytes) {
+          const remaining = maxOutputBytes - totalStdoutBytes;
+          if (remaining > 0) {
+            stdout += chunk.slice(0, Math.max(0, remaining));
+          }
+          stdout += "\n[output truncated]";
+          outputTruncated = true;
+          onAbort();
+          return;
+        }
+        totalStdoutBytes += chunkBytes;
         stdout += chunk;
         try {
           options?.onStdout?.(chunk);
@@ -379,6 +399,19 @@ export class NodeExecutionEnv implements ExecutionEnv {
         }
       });
       child.stderr?.on("data", (chunk: string) => {
+        if (outputTruncated) return;
+        const chunkBytes = Buffer.byteLength(chunk, "utf8");
+        if (totalStderrBytes + chunkBytes > maxOutputBytes) {
+          const remaining = maxOutputBytes - totalStderrBytes;
+          if (remaining > 0) {
+            stderr += chunk.slice(0, Math.max(0, remaining));
+          }
+          stderr += "\n[output truncated]";
+          outputTruncated = true;
+          onAbort();
+          return;
+        }
+        totalStderrBytes += chunkBytes;
         stderr += chunk;
         try {
           options?.onStderr?.(chunk);
