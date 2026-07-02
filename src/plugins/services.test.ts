@@ -420,4 +420,19 @@ describe("startPluginServices", () => {
 
     expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
+
+  it("exposes a read-only modelUsage stream to every plugin service", async () => {
+    // A non-exporter, untrusted (workspace-origin) plugin gets no internalDiagnostics
+    // grant, yet still receives the public read-only model.usage cost stream — so
+    // cost-accounting plugins like tokenomics work without the exporter-only grant.
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const service = createTrackingService("tokenomics", { contexts });
+    await startPluginServices({
+      registry: createRegistry([service], "tokenomics", "workspace"),
+      config: createServiceConfig(),
+    });
+
+    expect(contexts[0]?.internalDiagnostics).toBeUndefined();
+    expect(contexts[0]?.modelUsage?.onEvent).toBeTypeOf("function");
+  });
 });

@@ -33,6 +33,7 @@ import type {
   DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticUsageEvent,
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
@@ -2354,6 +2355,15 @@ export type OpenClawPluginServiceContext = {
         privateData: DiagnosticEventPrivateData,
       ) => void,
     ) => () => void;
+  };
+  // Read-only stream of public `model.usage` cost/usage events (provider, model,
+  // token counts, costUsd, durationMs — no prompt/response content, no `emit`).
+  // Available to every plugin service so cost-accounting plugins (e.g. tokenomics)
+  // work without the exporter-only `internalDiagnostics` grant above, which also
+  // exposes private data + arbitrary emit and stays restricted to trusted bundled
+  // diagnostics exporters.
+  modelUsage?: {
+    onEvent: (listener: (event: DiagnosticUsageEvent) => void) => () => void;
   };
 };
 

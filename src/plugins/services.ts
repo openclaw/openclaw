@@ -57,6 +57,19 @@ function createServiceContext(params: {
           },
         }
       : {}),
+    // Public, read-only cost/usage stream for every plugin service. Wraps the
+    // internal diagnostic subscription but forwards only `model.usage` events and
+    // drops metadata + privateData, so cost-accounting plugins (e.g. tokenomics)
+    // work without the exporter-only `internalDiagnostics` grant above — no
+    // bundled-only backdoor, no prompt/response content, no `emit`.
+    modelUsage: {
+      onEvent: (listener) =>
+        onTrustedInternalDiagnosticEvent((event) => {
+          if (event.type === "model.usage") {
+            listener(event);
+          }
+        }),
+    },
   };
 }
 
