@@ -457,7 +457,7 @@ struct TalkProState: Equatable {
         case .waiting:
             OpenClawBrand.warn.opacity(0.72)
         default:
-            Color(uiColor: .systemBlue)
+            OpenClawBrand.accent
         }
     }
 
