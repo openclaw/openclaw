@@ -1,0 +1,129 @@
+name: CI Fix Codex
+
+# Separated from ci-fix-agent.yml to avoid checking out untrusted PR code
+# in the privileged workflow_run context (CodeQL actions/dangerous-triggers).
+# This workflow is only triggered via workflow_dispatch by ci-fix-agent after
+# triage, so it does not inherit the workflow_run privilege escalation risk.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to fix"
+        required: true
+        type: number
+      head_ref:
+        description: "PR head branch name"
+        required: true
+        type: string
+      failed_checks_json:
+        description: "JSON array of failed checks with log excerpts"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ci-fix-codex-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fix:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.head_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+        continue-on-error: true
+
+      - name: Write failed checks file
+        env:
+          FAILED_CHECKS_JSON: ${{ inputs.failed_checks_json }}
+        run: |
+          echo "$FAILED_CHECKS_JSON" > "$RUNNER_TEMP/failed-checks.json"
+
+      - name: Ensure CI fix agent key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex CI fix agent
+        uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02
+        env:
+          CI_FIX_FAILED_CHECKS: ${{ runner.temp }}/failed-checks.json
+          CI_FIX_PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/ci-fix-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce fix-only patch
+        id: patch
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "Codex made no changes; skipping commit."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push fix
+        if: steps.patch.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ inputs.head_ref }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "openclaw-ci-fix-agent[bot]"
+          git config user.email "openclaw-ci-fix-agent[bot]@users.noreply.github.com"
+          git add -A
+          git commit --no-verify -m "ci: auto-fix failing check(s) on PR #${PR_NUMBER}"
+
+          for attempt in 1 2 3 4 5; do
+            if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_REF}"; then
+              echo "Pushed CI fix to ${HEAD_REF}."
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push CI fix after retries." >&2
+          exit 1
