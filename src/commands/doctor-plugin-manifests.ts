@@ -6,7 +6,12 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { z } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { HealthFinding } from "../flows/health-checks.js";
+import type {
+  HealthFinding,
+  HealthRepairDiff,
+  HealthRepairEffect,
+  HealthRepairResult,
+} from "../flows/health-checks.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -169,6 +174,136 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   };
 }
 
+function migrationToManifestJson(migration: LegacyManifestContractMigration): string {
+  return `${JSON.stringify(migration.nextRaw, null, 2)}\n`;
+}
+
+function legacyPluginManifestMigrationToRepairEffect(
+  migration: LegacyManifestContractMigration,
+  dryRun: boolean,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: dryRun
+      ? "would-rewrite-legacy-plugin-manifest-contracts"
+      : "rewrite-legacy-plugin-manifest-contracts",
+    target: migration.manifestPath,
+    dryRunSafe: false,
+  };
+}
+
+function legacyPluginManifestMigrationToRepairDiff(
+  migration: LegacyManifestContractMigration,
+  before: string,
+): HealthRepairDiff {
+  return {
+    kind: "file",
+    path: migration.manifestPath,
+    before,
+    after: migrationToManifestJson(migration),
+  };
+}
+
+/** Repairs or previews selected legacy plugin manifest contract migrations. */
+export async function repairLegacyPluginManifestContractFindings(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
+  findings: readonly HealthFinding[];
+  dryRun?: boolean;
+  diff?: boolean;
+  deps?: {
+    readFileSync?: typeof fs.readFileSync;
+    writeFileSync?: typeof fs.writeFileSync;
+  };
+}): Promise<HealthRepairResult> {
+  const selectedPaths = new Set(
+    params.findings
+      .filter(
+        (finding) =>
+          finding.checkId === LEGACY_PLUGIN_MANIFESTS_CHECK_ID &&
+          finding.requirement === "contracts-capability-keys" &&
+          typeof finding.path === "string",
+      )
+      .map((finding) => finding.path as string),
+  );
+  if (selectedPaths.size === 0) {
+    return {
+      status: "skipped",
+      reason: "no repairable legacy plugin manifest findings were present",
+      changes: [],
+    };
+  }
+
+  const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  }).filter((migration) => selectedPaths.has(migration.manifestPath));
+  if (migrations.length === 0) {
+    return {
+      status: "skipped",
+      reason: "selected legacy plugin manifests no longer need repair",
+      changes: [],
+    };
+  }
+
+  const readFile = params.deps?.readFileSync ?? fs.readFileSync;
+  const writeFile = params.deps?.writeFileSync ?? fs.writeFileSync;
+  const changes: string[] = [];
+  const diffs: HealthRepairDiff[] = [];
+  const effects: HealthRepairEffect[] = [];
+  const warnings: string[] = [];
+
+  for (const migration of migrations) {
+    let before: string | undefined;
+    if (params.diff === true) {
+      try {
+        before = readFile(migration.manifestPath, "utf-8").toString();
+        diffs.push(legacyPluginManifestMigrationToRepairDiff(migration, before));
+      } catch (error) {
+        warnings.push(
+          `Could not read legacy plugin manifest at ${migration.manifestPath}: ${String(error)}`,
+        );
+      }
+    }
+
+    if (params.dryRun !== true) {
+      try {
+        writeFile(migration.manifestPath, migrationToManifestJson(migration), "utf-8");
+      } catch (error) {
+        warnings.push(
+          `Failed to rewrite legacy plugin manifest at ${migration.manifestPath}: ${String(error)}`,
+        );
+        continue;
+      }
+    }
+
+    changes.push(...migration.changeLines);
+    effects.push(legacyPluginManifestMigrationToRepairEffect(migration, params.dryRun === true));
+  }
+
+  if (changes.length === 0 && warnings.length > 0) {
+    return {
+      status: "failed",
+      reason: "could not rewrite selected legacy plugin manifests",
+      changes,
+      warnings,
+      diffs,
+      effects,
+    };
+  }
+
+  return {
+    changes,
+    warnings,
+    diffs,
+    effects,
+  };
+}
+
 /** Prompts and rewrites legacy plugin manifest contract fields when doctor repair is enabled. */
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   config?: OpenClawConfig;
@@ -211,11 +346,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   const applied: string[] = [];
   for (const migration of migrations) {
     try {
-      fs.writeFileSync(
-        migration.manifestPath,
-        `${JSON.stringify(migration.nextRaw, null, 2)}\n`,
-        "utf-8",
-      );
+      fs.writeFileSync(migration.manifestPath, migrationToManifestJson(migration), "utf-8");
       applied.push(...migration.changeLines);
     } catch (error) {
       params.runtime.error(

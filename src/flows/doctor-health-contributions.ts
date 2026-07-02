@@ -1353,6 +1353,17 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             env: process.env,
           }).map(legacyPluginManifestContractMigrationToHealthFinding);
         },
+        async repair(ctx, findings) {
+          const { repairLegacyPluginManifestContractFindings } =
+            await import("../commands/doctor-plugin-manifests.js");
+          return await repairLegacyPluginManifestContractFindings({
+            config: ctx.cfg,
+            env: process.env,
+            findings,
+            dryRun: ctx.dryRun,
+            diff: ctx.diff,
+          });
+        },
       },
       run: runLegacyPluginManifestHealth,
     }),
