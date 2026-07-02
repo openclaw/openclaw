@@ -502,9 +502,70 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun nodeApprovalCheckingOnlyTracksActiveRefresh() {
-    assertTrue(nodeApprovalCheckingInProgress(checkRequested = true, nodesDevicesRefreshing = true))
-    assertFalse(nodeApprovalCheckingInProgress(checkRequested = true, nodesDevicesRefreshing = false))
-    assertFalse(nodeApprovalCheckingInProgress(checkRequested = false, nodesDevicesRefreshing = true))
+    assertTrue(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertTrue(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckingInProgress(
+        checkRequested = false,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalCheckContinuesOnlyAfterRequestedRefreshCompletesReady() {
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+        ready = false,
+      ),
+    )
+    assertTrue(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+        ready = true,
+      ),
+    )
   }
 
   @Test
