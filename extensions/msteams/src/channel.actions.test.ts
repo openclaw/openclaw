@@ -743,6 +743,29 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("blocks gateway-supplied paired current-DM read targets without Teams allowFrom", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "pairing",
+            },
+          },
+        },
+        params: {
+          messageId: "msg-1",
+        },
+        toolContext: {
+          currentChannelId: "user:cached-aad",
+        },
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
   it("blocks implicit current-DM read targets outside the Teams DM allowlist", async () => {
     await expect(
       runAction({

@@ -35,6 +35,7 @@ import {
 } from "./matrix/actions.js";
 import { withResolvedActionClient } from "./matrix/actions/client.js";
 import type { MatrixActionClientOpts } from "./matrix/actions/types.js";
+import { inspectMatrixDirectRooms } from "./matrix/direct-management.js";
 import { resolveMatrixAllowListMatch } from "./matrix/monitor/allowlist.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import { reactMatrixMessage, resolveMatrixRoomId } from "./matrix/send.js";
@@ -127,11 +128,33 @@ function isMatrixDirectUserAllowlisted(params: {
   }).allowed;
 }
 
-function isCurrentMatrixDirectReadAllowed(params: {
+async function hasVerifiedMatrixCurrentDirectRoom(params: {
+  clientOpts: MatrixActionClientOpts;
+  directUserId: string;
+  roomId: string;
+}): Promise<boolean> {
+  try {
+    const inspection = await withResolvedActionClient(params.clientOpts, async (client) =>
+      inspectMatrixDirectRooms({
+        client,
+        remoteUserId: params.directUserId,
+      }),
+    );
+    return (
+      inspection.mappedRooms.some((room) => room.strict && room.roomId === params.roomId) ||
+      inspection.discoveredStrictRoomIds.includes(params.roomId)
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function isCurrentMatrixDirectReadAllowed(params: {
   accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  clientOpts: MatrixActionClientOpts;
   roomId: string;
   toolContext?: MatrixToolActionContext;
-}): boolean {
+}): Promise<boolean> {
   const dmPolicy = params.accountConfig.dm?.policy ?? "pairing";
   if (dmPolicy === "disabled") {
     return false;
@@ -140,6 +163,14 @@ function isCurrentMatrixDirectReadAllowed(params: {
   const requestedRoomId = normalizeMatrixReadRoomId(params.roomId);
   const directUserId = params.toolContext?.currentDirectUserId;
   if (!contextRoomId || !requestedRoomId || contextRoomId !== requestedRoomId || !directUserId) {
+    return false;
+  }
+  const verifiedDirectRoom = await hasVerifiedMatrixCurrentDirectRoom({
+    clientOpts: params.clientOpts,
+    directUserId,
+    roomId: requestedRoomId,
+  });
+  if (!verifiedDirectRoom) {
     return false;
   }
   if (dmPolicy === "open" || dmPolicy === "pairing") {
@@ -228,11 +259,12 @@ async function assertMatrixReadTargetAllowed(params: {
   }
   if (
     roomId &&
-    isCurrentMatrixDirectReadAllowed({
+    (await isCurrentMatrixDirectReadAllowed({
       accountConfig: params.accountConfig,
+      clientOpts: params.clientOpts,
       roomId,
       toolContext: params.toolContext,
-    })
+    }))
   ) {
     return;
   }

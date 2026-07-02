@@ -215,6 +215,22 @@ function hasExplicitActionTarget(params: Record<string, unknown>): boolean {
   );
 }
 
+function isTrustedImplicitMSTeamsCurrentTarget(ctx: {
+  params: Record<string, unknown>;
+  toolContext?: { currentChannelId?: string | null; currentGraphChannelId?: string | null } | null;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  return (
+    ctx.gatewayClientScopes === undefined &&
+    !hasExplicitActionTarget(ctx.params) &&
+    Boolean(
+      normalizeOptionalString(
+        ctx.toolContext?.currentGraphChannelId ?? ctx.toolContext?.currentChannelId,
+      ),
+    )
+  );
+}
+
 function normalizeActionConversationTarget(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   if (!normalized) {
@@ -1034,7 +1050,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: target.to,
                   enforce: true,
-                  targetTrusted: !hasExplicitActionTarget(ctx.params),
+                  targetTrusted: isTrustedImplicitMSTeamsCurrentTarget(ctx),
                 });
                 const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const message = await getMessageMSTeams({
@@ -1097,7 +1113,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: to,
                   enforce: true,
-                  targetTrusted: !hasExplicitActionTarget(ctx.params),
+                  targetTrusted: isTrustedImplicitMSTeamsCurrentTarget(ctx),
                 });
                 const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
@@ -1172,7 +1188,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: target.to,
                   enforce: true,
-                  targetTrusted: !hasExplicitActionTarget(ctx.params),
+                  targetTrusted: isTrustedImplicitMSTeamsCurrentTarget(ctx),
                 });
                 const { listReactionsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listReactionsMSTeams({
@@ -1197,7 +1213,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: to,
                   enforce: true,
-                  targetTrusted: !hasExplicitActionTarget(ctx.params),
+                  targetTrusted: isTrustedImplicitMSTeamsCurrentTarget(ctx),
                 });
                 const query = resolveActionQuery(ctx.params);
                 if (!query) {
@@ -1228,7 +1244,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               cfg: ctx.cfg,
               target: ctx.toolContext?.currentGraphChannelId ?? ctx.toolContext?.currentChannelId,
               enforce: true,
-              targetTrusted: true,
+              targetTrusted: isTrustedImplicitMSTeamsCurrentTarget(ctx),
             });
             const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
             const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });

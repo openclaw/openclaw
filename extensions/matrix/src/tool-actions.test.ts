@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   getMatrixRoomInfo: vi.fn(),
   applyMatrixProfileUpdate: vi.fn(),
   resolveMatrixRoomId: vi.fn(),
+  inspectMatrixDirectRooms: vi.fn(),
+  withResolvedActionClient: vi.fn(),
 }));
 
 vi.mock("./matrix/actions.js", () => {
@@ -34,6 +36,18 @@ vi.mock("./matrix/send.js", () => {
   return {
     reactMatrixMessage: mocks.reactMatrixMessage,
     resolveMatrixRoomId: mocks.resolveMatrixRoomId,
+  };
+});
+
+vi.mock("./matrix/actions/client.js", () => {
+  return {
+    withResolvedActionClient: mocks.withResolvedActionClient,
+  };
+});
+
+vi.mock("./matrix/direct-management.js", () => {
+  return {
+    inspectMatrixDirectRooms: mocks.inspectMatrixDirectRooms,
   };
 });
 
@@ -74,6 +88,25 @@ describe("handleMatrixAction pollVote", () => {
         return raw;
       },
     );
+    mocks.withResolvedActionClient.mockImplementation(async (opts: { client?: unknown }, run) => {
+      return await run(opts.client ?? {});
+    });
+    mocks.inspectMatrixDirectRooms.mockResolvedValue({
+      selfUserId: "@bot:example.org",
+      remoteUserId: "@alice:example.org",
+      mappedRoomIds: ["!dm:example"],
+      mappedRooms: [
+        {
+          roomId: "!dm:example",
+          joinedMembers: ["@bot:example.org", "@alice:example.org"],
+          strict: true,
+          explicit: true,
+          source: "account-data",
+        },
+      ],
+      discoveredStrictRoomIds: [],
+      activeRoomId: "!dm:example",
+    });
     mocks.applyMatrixProfileUpdate.mockResolvedValue({
       accountId: "ops",
       displayName: "Ops Bot",
@@ -364,7 +397,7 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
-  it("allows paired current Matrix DM reads without duplicating dm.allowFrom", async () => {
+  it("allows paired current Matrix DM reads only after verifying the room is bound to the peer", async () => {
     const cfg = {
       channels: {
         matrix: {
@@ -390,6 +423,10 @@ describe("handleMatrixAction pollVote", () => {
       ),
     ).resolves.toMatchObject({ details: { ok: true } });
 
+    expect(mocks.inspectMatrixDirectRooms).toHaveBeenCalledWith({
+      client: {},
+      remoteUserId: "@alice:example.org",
+    });
     expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
       cfg,
       limit: undefined,
@@ -414,6 +451,51 @@ describe("handleMatrixAction pollVote", () => {
         {
           action: "readMessages",
           roomId: "!other:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("blocks paired Matrix DM reads when provider state does not bind the room to the peer", async () => {
+    mocks.inspectMatrixDirectRooms.mockResolvedValueOnce({
+      selfUserId: "@bot:example.org",
+      remoteUserId: "@alice:example.org",
+      mappedRoomIds: ["!other-dm:example"],
+      mappedRooms: [
+        {
+          roomId: "!other-dm:example",
+          joinedMembers: ["@bot:example.org", "@alice:example.org"],
+          strict: true,
+          explicit: true,
+          source: "account-data",
+        },
+      ],
+      discoveredStrictRoomIds: [],
+      activeRoomId: "!other-dm:example",
+    });
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "pairing" },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
         },
         cfg,
         {
