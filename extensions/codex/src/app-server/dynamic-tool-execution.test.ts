@@ -5,6 +5,7 @@ import {
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
+  CODEX_DYNAMIC_TOOL_SECONDS_GRACE_MS,
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -40,7 +41,7 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(timeoutMs);
   });
 
-  it("uses per-call timeoutSeconds when timeoutMs is absent", () => {
+  it("uses per-call timeoutSeconds plus grace when timeoutMs is absent", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -53,7 +54,7 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(12_000);
+    ).toBe(12_000 + CODEX_DYNAMIC_TOOL_SECONDS_GRACE_MS);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -76,6 +77,21 @@ describe("dynamic tool execution helpers", () => {
           namespace: null,
           tool: "sessions_send",
           arguments: { timeoutSeconds: 0 },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    // Fractional sub-second budgets must fall back to the default instead of
+    // flooring to a 0ms value the clamp would turn into an instant 1ms kill.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-fractional-timeout-seconds",
+          namespace: null,
+          tool: "sessions_send",
+          arguments: { timeoutSeconds: 0.5 },
         },
         config: undefined,
       }),

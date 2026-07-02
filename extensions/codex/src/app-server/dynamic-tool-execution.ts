@@ -10,7 +10,11 @@ import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   isJsonObject,
@@ -28,6 +32,10 @@ const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
+// Per-call timeoutSeconds is the tool's inner wait budget (e.g. sessions_send
+// waits that long after gateway pre-work); without headroom the watchdog fires
+// first and replaces the tool's graceful timeout result with a hard kill.
+export const CODEX_DYNAMIC_TOOL_SECONDS_GRACE_MS = 30_000;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -439,14 +447,19 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   );
 }
 
-function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
+export function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  // Tool schemas expose seconds-form budgets to models; mirror that as the
-  // outer app-server watchdog when no millisecond override is supplied.
+  // timeoutMs stays an exact watchdog override. timeoutSeconds is the seconds
+  // budget tool schemas expose to models; grace lets the tool's own timer
+  // (same seconds value) win the race and return its structured result.
   return (
-    readPositiveFiniteTimeoutMs(value.timeoutMs) ?? readTimeoutSecondsAsMs(value.timeoutSeconds)
+    readPositiveFiniteTimeoutMs(value.timeoutMs) ??
+    addTimerTimeoutGraceMs(
+      readTimeoutSecondsAsMs(value.timeoutSeconds),
+      CODEX_DYNAMIC_TOOL_SECONDS_GRACE_MS,
+    )
   );
 }
 
@@ -479,12 +492,13 @@ function readConfiguredDynamicToolTimeoutMs(
   return undefined;
 }
 
-function readTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readPositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
+export function readTimeoutSecondsAsMs(value: unknown): number | undefined {
+  // floorSeconds matches sessions_send's own conversion, so watchdog and tool
+  // agree on what counts as a usable budget (fractional sub-second is not one).
+  return finiteSecondsToTimerSafeMilliseconds(value, { floorSeconds: true });
 }
 
-function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
+export function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
