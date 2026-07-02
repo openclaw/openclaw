@@ -72,6 +72,7 @@ export type MemoryDreamingExecutionConfig = {
   thinking: MemoryDreamingThinking;
   budget: MemoryDreamingBudget;
   model?: string;
+  language?: string;
   maxOutputTokens?: number;
   temperature?: number;
   timeoutMs?: number;
@@ -132,6 +133,7 @@ export type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
   execution: {
@@ -311,12 +313,14 @@ function resolveExecutionConfig(
       ? Math.min(2, temperatureRaw)
       : undefined;
   const model = normalizeTrimmedString(record?.model) ?? fallback.model;
+  const language = normalizeTrimmedString(record?.language) ?? fallback.language;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
     thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
     budget: normalizeBudget(record?.budget) ?? fallback.budget,
     ...(model ? { model } : {}),
+    ...(language ? { language } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
@@ -378,12 +382,14 @@ export function resolveMemoryDreamingConfig(params: {
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
   const topLevelModel = normalizeTrimmedString(dreaming?.model);
+  const topLevelLanguage = normalizeTrimmedString(dreaming?.language);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
     thinking: DEFAULT_MEMORY_DREAMING_THINKING,
     budget: DEFAULT_MEMORY_DREAMING_BUDGET,
     ...(topLevelModel ? { model: topLevelModel } : {}),
+    ...(topLevelLanguage ? { language: topLevelLanguage } : {}),
   });
 
   const light = asNullableRecord(phases?.light);
@@ -397,6 +403,7 @@ export function resolveMemoryDreamingConfig(params: {
     enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
     frequency,
     ...(timezone ? { timezone } : {}),
+    ...(topLevelLanguage ? { language: topLevelLanguage } : {}),
     verboseLogging: normalizeBoolean(
       dreaming?.verboseLogging,
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
@@ -531,6 +538,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -539,6 +547,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
     ...resolved.phases.deep,
     enabled: resolved.enabled && resolved.phases.deep.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
@@ -549,6 +558,7 @@ export function resolveMemoryLightDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryLightDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -557,6 +567,7 @@ export function resolveMemoryLightDreamingConfig(params: {
     ...resolved.phases.light,
     enabled: resolved.enabled && resolved.phases.light.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
@@ -567,6 +578,7 @@ export function resolveMemoryRemDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryRemDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -575,6 +587,7 @@ export function resolveMemoryRemDreamingConfig(params: {
     ...resolved.phases.rem,
     enabled: resolved.enabled && resolved.phases.rem.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };

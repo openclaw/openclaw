@@ -1754,6 +1754,7 @@ async function runLightDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1764,6 +1765,7 @@ async function runLightDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1869,6 +1871,7 @@ async function runRemDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1879,6 +1882,7 @@ async function runRemDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
