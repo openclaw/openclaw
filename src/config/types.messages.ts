@@ -130,8 +130,11 @@ export type MessagesConfig = {
    *
    * When true, a single recovery retry is enqueued asking the model to deliver
    * the reply via message(action=send). The retry replays the private final
-   * text into a synthetic prompt with user-message persistence suppressed, so
-   * the private text never leaks into durable session context.
+   * text into a synthetic prompt whose user-message persistence is suppressed,
+   * so the synthetic prompt itself is never written to durable session context.
+   * A successful retry still delivers via message(action=send) and follows
+   * normal message-tool transcript persistence: the delivered reply text and
+   * its tool-call args are recorded like any other message send.
    */
   strandedReplyRecovery?: boolean;
   /**
