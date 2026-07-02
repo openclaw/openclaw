@@ -769,4 +769,67 @@ describe("Feishu inbound debounce regressions", () => {
 
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("monitorSingleAccount channelRuntime guard", () => {
+    it("falls back to local runtime when channelRuntime is partial (no inbound)", async () => {
+      setFeishuRuntime(createFeishuMonitorRuntime());
+      const register = vi.fn();
+      createEventDispatcherMock.mockReturnValue({ register });
+
+      await expect(
+        monitorSingleAccount({
+          cfg: buildDebounceConfig(),
+          account: buildDebounceAccount(),
+          runtime: createNonExitingRuntimeEnv(),
+          channelRuntime: { runtimeContexts: {} } as unknown as PluginRuntime["channel"],
+          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(register).toHaveBeenCalled();
+    });
+
+    it("uses provided channelRuntime when it has inbound", async () => {
+      setFeishuRuntime(createFeishuMonitorRuntime());
+      const register = vi.fn();
+      createEventDispatcherMock.mockReturnValue({ register });
+
+      await expect(
+        monitorSingleAccount({
+          cfg: buildDebounceConfig(),
+          account: buildDebounceAccount(),
+          runtime: createNonExitingRuntimeEnv(),
+          channelRuntime: {
+            runtimeContexts: {} as never,
+            inbound: { run: vi.fn() },
+            debounce: {
+              resolveInboundDebounceMs: vi.fn().mockReturnValue(2000),
+              createInboundDebouncer: vi.fn(),
+            },
+          } as unknown as PluginRuntime["channel"],
+          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(register).toHaveBeenCalled();
+    });
+
+    it("falls back to local runtime when channelRuntime is undefined", async () => {
+      setFeishuRuntime(createFeishuMonitorRuntime());
+      const register = vi.fn();
+      createEventDispatcherMock.mockReturnValue({ register });
+
+      await expect(
+        monitorSingleAccount({
+          cfg: buildDebounceConfig(),
+          account: buildDebounceAccount(),
+          runtime: createNonExitingRuntimeEnv(),
+          channelRuntime: undefined,
+          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(register).toHaveBeenCalled();
+    });
+  });
 });

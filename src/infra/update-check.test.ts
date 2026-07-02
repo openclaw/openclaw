@@ -196,13 +196,16 @@ describe("resolveNpmChannelTag", () => {
 
   it("uses the public registry when no npm command is available", async () => {
     const fetch = vi.fn(async () => {
-      return {
-        ok: true,
-        json: async () => ({
+      return new Response(
+        JSON.stringify({
           version: "2026.6.8",
           engines: { node: ">=22.19.0" },
         }),
-      } as Response;
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetch);
 
@@ -235,6 +238,77 @@ describe("resolveNpmChannelTag", () => {
       error: "HTTP 503",
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns error on oversized public registry response exceeding 16 MiB", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const fetch = vi.fn(async () => {
+      const oversizedBody = new Uint8Array(16 * ONE_MIB + 1).fill(0x41);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(oversizedBody);
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+    expect(result.version).toBeNull();
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toContain("JSON response exceeds");
+    expect(result.error).toContain("16777216");
+  });
+
+  it("parses a valid public registry response just under 16 MiB", async () => {
+    const targetSize = 16 * 1024 * 1024 - 1024; // just under 16 MiB
+    const innerLen = targetSize - 14; // '{"version":"'.length(12) + '"}"'.length(2)
+    const body = `{"version":"${"0".repeat(innerLen)}"}`;
+
+    const fetch = vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+    // The version field is a giant string — it exists, confirming parse succeeded
+    expect(result.version).toContain("0");
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("returns error on malformed JSON from registry", async () => {
+    const fetch = vi.fn(async () => {
+      return new Response("not-json-at-all{{{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+    expect(result.version).toBeNull();
+    expect(result.error).toContain("malformed JSON");
+  });
+
+  it("returns error on non-200 status from registry", async () => {
+    const fetch = vi.fn(async () => {
+      return new Response(null, {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+    expect(result.version).toBeNull();
+    expect(result.error).toBe("HTTP 404");
   });
 
   it("falls back to latest when beta is older", async () => {

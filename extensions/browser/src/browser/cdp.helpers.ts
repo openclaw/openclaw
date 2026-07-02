@@ -113,6 +113,14 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function decodeUrlUserInfo(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function rawCdpMessageToString(data: WebSocket.RawData): string {
   if (typeof data === "string") {
     return data;
@@ -141,7 +149,9 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
       return mergedHeaders;
     }
     if (parsed.username || parsed.password) {
-      const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
+      const username = decodeUrlUserInfo(parsed.username);
+      const password = decodeUrlUserInfo(parsed.password);
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
       return { ...mergedHeaders, Authorization: `Basic ${auth}` };
     }
   } catch {

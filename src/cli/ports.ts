@@ -148,7 +148,8 @@ export function parseLsofOutput(output: string): PortProcess[] {
       if (current.pid) {
         results.push(current as PortProcess);
       }
-      current = { pid: Number.parseInt(line.slice(1), 10) };
+      const rawPid = Number.parseInt(line.slice(1), 10);
+      current = Number.isFinite(rawPid) && rawPid > 0 ? { pid: rawPid } : {};
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }

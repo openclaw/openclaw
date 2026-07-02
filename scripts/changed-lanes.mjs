@@ -37,7 +37,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/ios/CHANGELOG.md",
   "apps/ios/Config/Version.xcconfig",
   "apps/ios/fastlane/metadata/en-US/release_notes.txt",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",

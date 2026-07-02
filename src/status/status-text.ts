@@ -1,5 +1,6 @@
 // Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -10,10 +11,9 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -49,6 +49,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
@@ -61,6 +65,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
 function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
@@ -226,15 +231,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
-function shouldUseCodexSyntheticUsage(params: {
-  provider?: string;
-  effectiveHarness?: string;
-}): boolean {
-  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  return harness === "codex" && (provider === "openai" || provider === "codex");
-}
-
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
@@ -293,6 +289,15 @@ function resolveStatusRuntimeProvider(params: {
     return "claude-cli";
   }
   return params.provider;
+}
+
+function resolveStatusCodexCliCredentialsHome(params: {
+  agentDir: string;
+  effectiveHarness?: string;
+}): string | undefined {
+  return normalizeOptionalLowercaseString(params.effectiveHarness) === "codex"
+    ? path.join(params.agentDir, CODEX_APP_SERVER_HOME_DIRNAME)
+    : undefined;
 }
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
@@ -376,6 +381,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
+  const codexCliCredentialsHome = resolveStatusCodexCliCredentialsHome({
+    agentDir: statusAgentDir,
+    effectiveHarness,
+  });
   const selectedStatusProvider = resolveStatusRuntimeProvider({
     provider: selectedLookupProvider,
     effectiveHarness,
@@ -404,6 +413,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         sessionEntry,
         agentDir: statusAgentDir,
         workspaceDir: statusWorkspaceDir,
+        codexCliCredentialsHome,
         includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
@@ -416,6 +426,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           sessionEntry,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
+          codexCliCredentialsHome,
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
@@ -453,11 +464,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const usageProvider = activeRuntimeIsAuthoritative ? activeProvider : selectedLookupProvider;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
-    shouldUseCodexSyntheticUsage({
+    selectedUsageCredentialType !== "api_key" &&
+    shouldUseCodexSyntheticUsageForRuntime({
       provider: usageStatusProvider,
       effectiveHarness,
-    }) &&
-    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+    });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
@@ -491,14 +502,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           workspaceDir: statusWorkspaceDir,
           config: cfg,
           auth: useCodexSyntheticUsage
-            ? [
-                {
-                  provider: "openai",
-                  token: CODEX_APP_SERVER_AUTH_MARKER,
-                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
-                  hookProvider: "codex",
-                },
-              ]
+            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
             : undefined,
         }),
         new Promise<never>((_, reject) => {
@@ -597,6 +601,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionEntry,
   });
   const { buildStatusMessage } = await loadStatusMessageRuntime();
+  await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);

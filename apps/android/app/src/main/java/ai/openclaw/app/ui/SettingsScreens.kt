@@ -1007,6 +1007,8 @@ private fun gatewayStatusLabel(
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pair") -> "Pairing needed"
     status.contains("auth") -> "Authentication needed"
+    status.contains("fingerprint verification timed out") -> "TLS timed out"
+    status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
     status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> "Cannot reach gateway"
     status.isBlank() -> "Not connected"

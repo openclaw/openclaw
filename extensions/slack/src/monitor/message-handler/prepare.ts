@@ -1225,7 +1225,7 @@ export async function prepareSlackMessage(params: {
   const {
     threadStarterBody,
     threadHistoryBody,
-    threadSessionPreviousTimestamp,
+    shouldSeedInitialThreadContext,
     threadLabel,
     threadStarterMedia,
   } = await resolveSlackThreadContextData({
@@ -1271,6 +1271,7 @@ export async function prepareSlackMessage(params: {
       id: senderId,
       name: senderName,
       displayLabel: senderName,
+      isBot: isBotMessage || undefined,
     },
     conversation: {
       kind: chatType,
@@ -1320,7 +1321,7 @@ export async function prepareSlackMessage(params: {
       thread: {
         // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
         starterBody:
-          !directThreadRoutedToDmSession && !threadSessionPreviousTimestamp
+          !directThreadRoutedToDmSession && shouldSeedInitialThreadContext
             ? threadStarterBody
             : undefined,
         historyBody: supplementalThreadHistoryBody,
@@ -1340,7 +1341,7 @@ export async function prepareSlackMessage(params: {
         isThreadReply &&
         threadTs &&
         !directThreadRoutedToDmSession &&
-        !threadSessionPreviousTimestamp
+        shouldSeedInitialThreadContext
           ? true
           : undefined,
       ...buildSlackMentionContextPayload({

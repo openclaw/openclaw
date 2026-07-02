@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Connexion à la passerelle</string>
+    <string name="connect_gateway">Connecter la passerelle</string>
+    <string name="disconnect">Déconnecter</string>
+    <string name="trust_this_gateway">Faire confiance à cette passerelle ?</string>
+    <string name="trust_and_continue">Faire confiance et continuer</string>
+    <string name="cancel">Annuler</string>
+    <string name="endpoint">Point de terminaison</string>
+    <string name="status">État</string>
+    <string name="connected_gateway_ready">Votre passerelle est active et prête.</string>
+    <string name="connect_gateway_get_started">Connectez-vous à votre passerelle pour commencer.</string>
+    <string name="copy_report_for_claw">Copier le rapport pour Claw</string>
+    <string name="advanced_controls">Contrôles avancés</string>
+    <string name="connection_method">Méthode de connexion</string>
+    <string name="setup_code">Code de configuration</string>
+    <string name="manual">Manuel</string>
+    <string name="paste_setup_code">Coller le code de configuration</string>
+    <string name="host">Hôte</string>
+    <string name="use_tls">Utiliser TLS</string>
+    <string name="token_optional">Jeton (facultatif)</string>
+    <string name="password">Mot de passe</string>
+    <string name="run_onboarding_again">Relancer l’intégration</string>
+    <string name="resolved_endpoint">Point de terminaison résolu</string>
+    <string name="gateway_setup">Configuration de la passerelle</string>
+    <string name="connect_to_gateway">Connectez-vous à votre Gateway</string>
+    <string name="scan_setup_code">Scanner le code de configuration</string>
+    <string name="use_gateway_qr">Utilisez le QR de votre Gateway ou le code de configuration</string>
+    <string name="nearby_gateway">Passerelle à proximité</string>
+    <string name="enter_gateway_url">Saisir l’URL de la passerelle</string>
+    <string name="connect_manual_url">Se connecter avec une URL manuelle</string>
+    <string name="permissions">Autorisations</string>
+    <string name="done">Terminé</string>
+    <string name="gateway_trust_first_seen">Vérifiez l’empreinte du certificat avant d’accorder votre confiance à cette passerelle.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Le certificat de la passerelle a changé. Continuez uniquement si vous vous attendiez à ce changement.\n\nAncien SHA-256 :\n%1$s\n\nNouveau SHA-256 :\n%2$s</string>
+    <string name="gateway_recovery">Récupération de la passerelle</string>
+</resources>

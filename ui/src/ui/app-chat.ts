@@ -137,6 +137,8 @@ export type ChatHost = ChatInputHistoryState & {
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
+  /** Selected message to reply to (right-click / keyboard shortcut). */
+  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -1872,11 +1874,14 @@ export async function handleSendChat(
     }
   }
 
+  const replyTarget = host.chatReplyTarget;
+  const effectiveMessage = replyTarget ? prependReplyQuote(message, replyTarget) : message;
+
   const refreshSessions = shouldInterpretChatCommands && isChatResetCommand(message);
   const submitKey = chatSubmitKey(
     host,
     "message",
-    message,
+    effectiveMessage,
     attachmentsToSend,
     skillWorkshopRevision,
   );
@@ -1896,7 +1901,7 @@ export async function handleSendChat(
     const waitingForModel = modelSwitchReady !== true;
     const queued = enqueuePendingSendMessage(
       host,
-      message,
+      effectiveMessage,
       hasAttachments ? attachmentsToSend : undefined,
       refreshSessions,
       submittedAtMs,
@@ -1906,7 +1911,6 @@ export async function handleSendChat(
     if (!queued) {
       return;
     }
-
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {
       if (host.sessionKey === submittedSessionKey) {
         cancelPendingSendBeforeRequest(host, queued, {
@@ -1943,7 +1947,7 @@ export async function handleSendChat(
       return;
     }
 
-    await sendChatMessageNow(host, message, {
+    const accepted = await sendChatMessageNow(host, effectiveMessage, {
       queueItemId: queued.id,
       previousDraft: cleared.previousDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
@@ -1953,11 +1957,39 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
     });
+    if (
+      accepted &&
+      replyTarget &&
+      host.chatReplyTarget?.messageId === replyTarget.messageId &&
+      host.sessionKey === submittedSessionKey
+    ) {
+      host.chatReplyTarget = null;
+    }
   });
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
   return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+}
+
+function prependReplyQuote(
+  message: string,
+  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
+): string {
+  const label = escapeMarkdownInline(replyTarget.senderLabel ?? "User");
+  const text = replyTarget.text.trim();
+  if (!text.includes("\n")) {
+    return `> **${label}:** ${text}\n\n${message}`;
+  }
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `> **${label}:**\n${quoted}\n\n${message}`;
+}
+
+function escapeMarkdownInline(value: string): string {
+  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
 }
 
 // ── Slash Command Dispatch ──
@@ -2068,6 +2100,7 @@ async function clearChatHistory(host: ChatHost) {
     host.chatMessages = [];
     clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
+    host.chatReplyTarget = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,
       sessionStatus: "killed",

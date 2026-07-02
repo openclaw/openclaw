@@ -470,6 +470,20 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
 
+CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
+  feed_url TEXT NOT NULL PRIMARY KEY,
+  body TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checksum TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
+  ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,

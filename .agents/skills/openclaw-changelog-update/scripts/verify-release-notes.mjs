@@ -209,7 +209,7 @@ function sectionFor(changelog, version) {
 function referencesIn(text) {
   const references = [];
   for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
   )) {
     const qualifiedRepository = match.groups?.owner
       ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
