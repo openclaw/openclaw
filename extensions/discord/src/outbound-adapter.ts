@@ -6,6 +6,7 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -104,6 +105,17 @@ async function maybeSendDiscordWebhookText(params: {
   return result;
 }
 
+function shouldReplyToFirstDiscordChunkOnly(params: {
+  replyToIdSource?: "explicit" | "implicit";
+  replyToMode?: "off" | "first" | "all" | "batched";
+}): boolean {
+  return (
+    params.replyToIdSource === "implicit" &&
+    params.replyToMode !== undefined &&
+    isSingleUseReplyToMode(params.replyToMode)
+  );
+}
+
 export const discordOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit, ctx) =>
@@ -174,6 +186,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       identity,
       silent,
@@ -202,6 +216,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
           await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
             verbose: false,
             replyTo: replyToId ?? undefined,
+            replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
+              replyToIdSource,
+              replyToMode,
+            }),
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
@@ -221,6 +239,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       silent,
       formatting,
@@ -254,6 +274,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
             await send(target, text, {
               verbose: false,
               replyTo: replyToId ?? undefined,
+              replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
+                replyToIdSource,
+                replyToMode,
+              }),
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
               cfg,
@@ -288,6 +312,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots,
             mediaReadFile,
             replyTo: replyToId ?? undefined,
+            replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
+              replyToIdSource,
+              replyToMode,
+            }),
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,

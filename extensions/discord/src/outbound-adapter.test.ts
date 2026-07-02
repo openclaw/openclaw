@@ -466,6 +466,24 @@ describe("discordOutbound", () => {
     expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
   });
 
+  it("marks implicit first-mode media sends for first-chunk native replies only", async () => {
+    await discordOutbound.sendMedia?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "caption\nfollow-up",
+      mediaUrl: "https://example.com/photo.png",
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(true);
+  });
+
   it("touches bound thread activity after shared outbound delivery succeeds", async () => {
     const touchThread = vi.fn();
     hoisted.getThreadBindingManagerMock.mockReturnValue({
@@ -858,6 +876,40 @@ describe("discordOutbound", () => {
         (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
       ),
     ).toEqual(["reply-1", undefined]);
+  });
+
+  it("marks implicit first-mode text sends for first-chunk native replies only", async () => {
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "line one\nline two",
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(true);
+  });
+
+  it("keeps explicit first-mode text replies reusable inside Discord chunks", async () => {
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "line one\nline two",
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(false);
   });
 
   it("leaves non-approval mentions unchanged", async () => {

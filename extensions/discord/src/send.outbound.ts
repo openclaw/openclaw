@@ -45,6 +45,7 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToFirstChunkOnly?: boolean;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -340,6 +341,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToFirstChunkOnly,
       );
     } else {
       result = await sendDiscordText(
@@ -355,6 +357,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToFirstChunkOnly,
       );
     }
   } catch (err) {

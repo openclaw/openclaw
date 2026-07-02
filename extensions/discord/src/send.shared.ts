@@ -307,6 +307,7 @@ async function sendDiscordText(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToFirstChunkOnly?: boolean,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -328,7 +329,7 @@ async function sendDiscordText(
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+      replyTo: replyToFirstChunkOnly && !isFirst ? undefined : replyTo,
     });
     return (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
@@ -372,6 +373,7 @@ async function sendDiscordMedia(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToFirstChunkOnly?: boolean,
 ) {
   const media = await loadWebMedia(
     mediaUrl,
@@ -424,7 +426,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      replyToFirstChunkOnly ? undefined : replyTo,
       request,
       maxLinesPerMessage,
       undefined,
@@ -433,6 +435,7 @@ async function sendDiscordMedia(
       silent,
       suppressEmbeds,
       maxChars,
+      replyToFirstChunkOnly,
     );
     for (const id of followup.platformMessageIds) {
       if (id) {
