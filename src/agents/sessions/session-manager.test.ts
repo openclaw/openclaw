@@ -2529,7 +2529,7 @@ describe("parseSessionEntries", () => {
     expect(entries).toHaveLength(2);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("parseSessionEntries: skipped 1 malformed JSONL line"),
+      expect.stringContaining("parseJsonlEntries: skipped 1 malformed JSONL line"),
     );
   });
 
@@ -2547,7 +2547,7 @@ describe("parseSessionEntries", () => {
     expect(entries).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("parseSessionEntries: skipped 3 malformed JSONL line"),
+      expect.stringContaining("parseJsonlEntries: skipped 3 malformed JSONL line"),
     );
   });
 
