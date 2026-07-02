@@ -39,6 +39,8 @@ type ProviderTransportStreamContext = {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 function createProviderOwnedGoogleTransportStreamFn(
@@ -58,6 +60,8 @@ function createProviderOwnedGoogleTransportStreamFn(
         provider: model.provider,
         modelId: model.id,
         model,
+        sessionId: ctx?.sessionId,
+        sessionKey: ctx?.sessionKey,
       },
     }) ??
     resolveProviderStreamFn({
@@ -72,6 +76,8 @@ function createProviderOwnedGoogleTransportStreamFn(
         provider: model.provider,
         modelId: model.id,
         model,
+        sessionId: ctx?.sessionId,
+        sessionKey: ctx?.sessionKey,
       },
     }) ??
     undefined

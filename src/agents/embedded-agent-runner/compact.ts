@@ -311,12 +311,16 @@ function resolveCompactionProviderStream(params: {
   config?: OpenClawConfig;
   agentDir: string;
   effectiveWorkspace: string;
+  sessionId?: string;
+  sessionKey?: string;
 }) {
   return registerProviderStreamForModel({
     model: params.effectiveModel,
     cfg: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.effectiveWorkspace,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
   });
 }
 
@@ -1324,6 +1328,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
         config: params.config,
         agentDir,
         effectiveWorkspace,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       });
       while (true) {
         // Rebuild the compaction session on retry so provider wrappers, payload
