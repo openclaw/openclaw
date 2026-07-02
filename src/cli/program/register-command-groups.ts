@@ -44,6 +44,15 @@ export function removeCommandGroupNames(program: Command, entry: CommandGroupEnt
   }
 }
 
+function syncCommandGroupPlaceholderDescriptions(program: Command, entry: CommandGroupEntry) {
+  for (const placeholder of entry.placeholders) {
+    const command = program.commands.find((candidate) => candidate.name() === placeholder.name);
+    if (command) {
+      command.description(placeholder.description);
+    }
+  }
+}
+
 /** Eagerly register one lazy command group by command name. */
 export async function registerCommandGroupByName(
   program: Command,
@@ -56,6 +65,7 @@ export async function registerCommandGroupByName(
   }
   removeCommandGroupNames(program, entry);
   await entry.register(program);
+  syncCommandGroupPlaceholderDescriptions(program, entry);
   return true;
 }
 
@@ -73,6 +83,7 @@ export function registerLazyCommandGroup(
     removeNames: uniqueStrings(getCommandGroupNames(entry)),
     register: async () => {
       await entry.register(program);
+      syncCommandGroupPlaceholderDescriptions(program, entry);
     },
   });
 }
@@ -89,7 +100,12 @@ export function registerCommandGroups(
 ) {
   if (params.eager) {
     for (const entry of entries) {
-      void entry.register(program);
+      const registration = entry.register(program);
+      if (registration && typeof (registration as PromiseLike<unknown>).then === "function") {
+        void registration.then(() => syncCommandGroupPlaceholderDescriptions(program, entry));
+        continue;
+      }
+      syncCommandGroupPlaceholderDescriptions(program, entry);
     }
     return;
   }

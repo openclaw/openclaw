@@ -206,6 +206,16 @@ describe("registerSubCliCommands", () => {
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles registered sub-CLI descriptions back to the descriptor catalog", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
+
+    await registerSubCliByName(program, "acp");
+
+    expect(program.commands.find((command) => command.name() === "acp")?.description()).toBe(
+      "Run an ACP bridge backed by the Gateway",
+    );
+  });
+
   it("registers only the gateway run surface for gateway startup", async () => {
     const argv = ["node", "openclaw", "gateway", "--force"];
     process.argv = argv;

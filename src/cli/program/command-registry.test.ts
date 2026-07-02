@@ -114,6 +114,16 @@ describe("command-registry", () => {
     expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
   });
 
+  it("reconciles registered root command descriptions back to the descriptor catalog", async () => {
+    const program = createProgram();
+
+    expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
+
+    expect(program.commands.find((command) => command.name() === "doctor")?.description()).toBe(
+      "Health checks + quick fixes for the gateway and channels",
+    );
+  });
+
   it("registerCoreCliByName returns false for unknown commands", async () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
