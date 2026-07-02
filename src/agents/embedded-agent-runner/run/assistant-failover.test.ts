@@ -1,5 +1,11 @@
 // Coverage for assistant failover decisions and auth-profile rotation.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
 import { handleAssistantFailover } from "./assistant-failover.js";
@@ -64,6 +70,11 @@ function expectThrownFailoverError(outcome: Outcome): FailoverError {
 }
 
 describe("handleAssistantFailover", () => {
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+    vi.restoreAllMocks();
+  });
+
   describe("rotate_profile branch", () => {
     it("rotates before waiting on auth profile failure marking", async () => {
       // Rotation is latency-sensitive; profile failure marking can persist in
@@ -107,6 +118,42 @@ describe("handleAssistantFailover", () => {
       await markSettled;
       await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
       expect(events).toEqual(["advance", "mark-start", "mark-finish"]);
+    });
+
+    it("emits hashed auth_profile.fallback diagnostics when profile rotation succeeds", async () => {
+      const events: DiagnosticEventPayload[] = [];
+      const stop = onTrustedInternalDiagnosticEvent((event) => {
+        events.push(event);
+      });
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "auth" },
+          failoverReason: "auth",
+          assistantProfileFailureReason: "auth",
+          lastProfileId: "openai:primary-secret-profile",
+          billingFailure: false,
+          authFailure: true,
+          advanceAuthProfile: vi.fn(async () => true),
+          getLastProfileId: () => "openai:fallback-secret-profile",
+        }),
+      );
+
+      await waitForDiagnosticEventsDrained();
+      stop();
+
+      expect(outcome.action).toBe("retry");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "auth_profile.fallback",
+        provider: "Anthropic",
+        model: "claude-haiku-4-5-20251001",
+        reason: "auth",
+      });
+      expect(events[0]).toHaveProperty("fromProfileIdHash");
+      expect(events[0]).toHaveProperty("toProfileIdHash");
+      expect(JSON.stringify(events[0])).not.toContain("primary-secret-profile");
+      expect(JSON.stringify(events[0])).not.toContain("fallback-secret-profile");
     });
 
     it("retries the same model before spending a rate-limit profile rotation", async () => {

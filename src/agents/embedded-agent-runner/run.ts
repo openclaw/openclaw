@@ -3494,6 +3494,7 @@ async function runEmbeddedAgentInternal(
             maybeRetrySameModelRateLimit,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
+            getLastProfileId: () => lastProfileId,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {

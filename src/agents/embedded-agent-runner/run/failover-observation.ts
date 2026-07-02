@@ -2,6 +2,7 @@
  * Logs redacted failover decisions for embedded-agent attempts.
  */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import { emitFailoverEvent } from "../../../infra/diagnostic-events.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { sanitizeForConsole } from "../../console-sanitize.js";
 import {
@@ -104,5 +105,15 @@ export function createFailoverDecisionLogger(
         `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
         `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });
+    if (decision === "fallback_model") {
+      emitFailoverEvent({
+        fromProvider: normalizedBase.sourceProvider ?? normalizedBase.provider,
+        fromModel: normalizedBase.sourceModel ?? normalizedBase.model,
+        toProvider: normalizedBase.provider,
+        toModel: normalizedBase.model,
+        reason: normalizedBase.failoverReason ?? "unknown",
+        suspended: false,
+      });
+    }
   };
 }

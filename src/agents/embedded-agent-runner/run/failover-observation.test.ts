@@ -1,6 +1,12 @@
 // Failover observation tests pin the warning payloads emitted when embedded
 // runs decide whether to retry, rotate profiles, fall back, or surface errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
 import { log } from "../logger.js";
 import {
   createFailoverDecisionLogger,
@@ -86,6 +92,7 @@ describe("normalizeFailoverDecisionObservationBase", () => {
 
 describe("createFailoverDecisionLogger", () => {
   afterEach(() => {
+    resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
   });
 
@@ -118,6 +125,52 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.model).toBe("gpt-5.4");
     expect(observation.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
     expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
+  });
+
+  it("emits a trusted model.failover diagnostic only for fallback decisions", async () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:failover",
+      rawError: "timeout",
+      failoverReason: "timeout",
+      profileFailureReason: "timeout",
+      provider: "openai",
+      model: "gpt-5.4",
+      sourceProvider: "github-copilot",
+      sourceModel: "gpt-5.4-mini",
+      profileId: "openai:p1",
+      fallbackConfigured: true,
+      timedOut: true,
+      aborted: false,
+    });
+
+    logDecision("surface_error");
+    await waitForDiagnosticEventsDrained();
+    expect(events).toEqual([]);
+
+    logDecision("fallback_model", { status: 408 });
+    await waitForDiagnosticEventsDrained();
+    stop();
+
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "model.failover",
+      fromProvider: "github-copilot",
+      fromModel: "gpt-5.4-mini",
+      toProvider: "openai",
+      toModel: "gpt-5.4",
+      reason: "timeout",
+      suspended: false,
+    });
+    expect(events[0]).not.toHaveProperty("sessionId");
+    expect(events[0]).not.toHaveProperty("sessionKey");
+    expect(events[0]).not.toHaveProperty("lane");
   });
 
   it("omits to model refs when the source matches the selected target", () => {

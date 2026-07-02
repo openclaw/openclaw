@@ -62,6 +62,15 @@ export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
   suspended?: boolean;
 };
 
+export type DiagnosticAuthProfileFallbackEvent = DiagnosticBaseEvent & {
+  type: "auth_profile.fallback";
+  provider?: string;
+  model?: string;
+  fromProfileIdHash?: string;
+  toProfileIdHash?: string;
+  reason: string;
+};
+
 export type DiagnosticSecurityEventActor = {
   kind: "operator" | "node" | "agent" | "plugin" | "channel_sender" | "system";
   idHash?: string;
@@ -743,6 +752,8 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
+  | DiagnosticFailoverEvent
+  | DiagnosticAuthProfileFallbackEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
@@ -1267,6 +1278,16 @@ export function emitTrustedSecurityEvent(event: DiagnosticSecurityEventInput) {
 export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "ts" | "type">) {
   emitTrustedDiagnosticEvent({
     type: "model.failover",
+    ...event,
+  });
+}
+
+/** Emits a trusted auth-profile fallback diagnostic event. */
+export function emitAuthProfileFallbackEvent(
+  event: Omit<DiagnosticAuthProfileFallbackEvent, "seq" | "ts" | "type">,
+) {
+  emitTrustedDiagnosticEvent({
+    type: "auth_profile.fallback",
     ...event,
   });
 }

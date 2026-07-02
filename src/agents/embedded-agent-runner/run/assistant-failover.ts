@@ -3,6 +3,8 @@
  */
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { emitAuthProfileFallbackEvent } from "../../../infra/diagnostic-events.js";
+import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
@@ -168,6 +170,7 @@ export async function handleAssistantFailover(params: {
   maybeRetrySameModelRateLimit: (retry?: ShortWindowRateLimitRetry) => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
+  getLastProfileId?: () => string | undefined;
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
@@ -280,6 +283,14 @@ export async function handleAssistantFailover(params: {
       // Marking the failed profile is non-blocking after rotation succeeds; the
       // retry can proceed with the next profile while the failure record settles.
       void markFailedProfilePromise;
+      const nextProfileId = params.getLastProfileId?.();
+      emitAuthProfileFallbackEvent({
+        provider: params.provider,
+        model: params.modelId,
+        fromProfileIdHash: failedProfileId ? redactIdentifier(failedProfileId) : undefined,
+        toProfileIdHash: nextProfileId ? redactIdentifier(nextProfileId) : undefined,
+        reason: failureReason ?? params.failoverReason ?? "unknown",
+      });
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
       return {
