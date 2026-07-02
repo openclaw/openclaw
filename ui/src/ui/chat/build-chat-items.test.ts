@@ -169,6 +169,34 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps a matching relay copy when its preferred native duplicate does not match search", () => {
+    const groups = messageGroups({
+      searchOpen: true,
+      searchQuery: "Parzival",
+      messages: [
+        {
+          id: "reply-search-1",
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival There it is." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "reply-search-1",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBe("Parzival");
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Parzival There it is." },
+    ]);
+  });
+
   it("deduplicates relay-labeled assistant copies by event messageId", () => {
     const groups = messageGroups({
       messages: [
@@ -669,6 +697,25 @@ describe("buildChatItems", () => {
     expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 
+  it("does not count empty terminal turn boundaries against the render window", () => {
+    const groups = messageGroups({
+      historyRenderLimit: 30,
+      messages: [
+        { role: "assistant", content: "still visible", stopReason: "stop", timestamp: 0 },
+        ...Array.from({ length: 30 }, (_, index) => ({
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          timestamp: index + 1,
+        })),
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toBe("still visible");
+  });
+
   it("budgets rendered history by tool-result content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildChatItems(
@@ -1007,6 +1054,52 @@ describe("buildChatItems", () => {
     expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
   });
 
+  it("keeps a canvas-lifted assistant message hidden when it does not match search", () => {
+    const groups = messageGroups({
+      searchOpen: true,
+      searchQuery: "matching",
+      showToolCalls: false,
+      messages: [
+        {
+          id: "assistant-hidden-canvas",
+          role: "assistant",
+          content: [{ type: "text", text: "Unrelated reply." }],
+          timestamp: 1_000,
+        },
+        {
+          id: "assistant-matching-search",
+          role: "assistant",
+          content: [{ type: "text", text: "Matching reply." }],
+          timestamp: 2_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-canvas-for-hidden-reply",
+          role: "tool",
+          toolCallId: "call-canvas-hidden",
+          toolName: "canvas_render",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_hidden_search",
+              url: "/__openclaw__/canvas/documents/cv_hidden_search/index.html",
+            },
+            presentation: { target: "assistant_message" },
+          }),
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Matching reply." },
+    ]);
+  });
+
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
     const groups = messageGroups({
       messages: [
@@ -1212,7 +1305,7 @@ describe("tool turn outcome annotation (#89683)", () => {
     return { role: "user", content: text, timestamp };
   }
   function assistantReply(text: string, timestamp: number) {
-    return { role: "assistant", content: [{ type: "text", text }], timestamp };
+    return { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp };
   }
   function toolGroups(messages: unknown[]): MessageGroup[] {
     return messageGroups({ messages }).filter((group) => group.role === "tool");
@@ -1252,5 +1345,197 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("keeps empty continuing assistant groups inside the same successful turn", () => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-success" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "toolUse",
+        timestamp: 2,
+        __openclaw: { runId: "run-success" },
+      },
+      { ...failedTool(3), __openclaw: { runId: "run-success" } },
+      { ...assistantReply("done", 4), __openclaw: { runId: "run-success" } },
+    ]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].messages).toHaveLength(2);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it.each(["toolUse", "tool_use", "pause_turn"])(
+    "keeps narrated %s continuations inside a failed turn",
+    (stopReason) => {
+      const tools = toolGroups([
+        { ...failedTool(1), __openclaw: { runId: "run-failure" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Trying another step." }],
+          stopReason,
+          timestamp: 2,
+          __openclaw: { runId: "run-failure" },
+        },
+        { ...failedTool(3), __openclaw: { runId: "run-failure" } },
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          timestamp: 4,
+          __openclaw: { runId: "run-failure" },
+        },
+      ]);
+      expect(tools.map((group) => group.turnSucceeded)).toEqual([false, false]);
+    },
+  );
+
+  it("scopes explicit terminal outcomes to adjacent tool runs", () => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-active" } },
+      { ...failedTool(2), __openclaw: { runId: "run-background" } },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        timestamp: 3,
+        __openclaw: { runId: "run-background" },
+      },
+      { ...assistantReply("Active run recovered.", 4), __openclaw: { runId: "run-active" } },
+    ]);
+    expect(tools).toHaveLength(2);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("uses the matching run's terminal when another run completes in between", () => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-background" } },
+      { ...assistantReply("Active run recovered.", 2), __openclaw: { runId: "run-active" } },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        timestamp: 3,
+        __openclaw: { runId: "run-background" },
+      },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("keeps identical terminal replies from adjacent runs for outcome matching", () => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-a" } },
+      { ...failedTool(2), __openclaw: { runId: "run-b" } },
+      { ...assistantReply("Done", 3), __openclaw: { runId: "run-a" } },
+      { ...assistantReply("Done", 4), __openclaw: { runId: "run-b" } },
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, true]);
+  });
+
+  it("prefers a matching terminal over an unkeyed stream fallback", () => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-1" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial stream fallback." }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        timestamp: 3,
+        __openclaw: { runId: "run-1" },
+      },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("does not apply a keyed success outcome to an unkeyed legacy tool", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      { ...assistantReply("Another run succeeded.", 2), __openclaw: { runId: "run-2" } },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it.each([
+    { name: "silent stop", stopReason: "stop", text: "" },
+    { name: "truncated reply", stopReason: "length", text: "" },
+    { name: "imported end turn", stopReason: "end_turn", text: "" },
+    { name: "imported max tokens", stopReason: "max_tokens", text: "" },
+    { name: "imported stop sequence", stopReason: "stop_sequence", text: "" },
+    {
+      name: "imported refusal with partial output",
+      stopReason: "refusal",
+      text: "Partial output before refusal.",
+    },
+    {
+      name: "imported sensitive response with partial output",
+      stopReason: "sensitive",
+      text: "Partial output before safety filtering.",
+    },
+    {
+      name: "imported context window exhaustion",
+      stopReason: "model_context_window_exceeded",
+      text: "",
+    },
+    {
+      name: "projected error fallback",
+      stopReason: "error",
+      text: "The agent run failed before producing a reply.",
+    },
+    { name: "aborted reply", stopReason: "aborted", text: "" },
+  ])("scopes adjacent autonomous turns at a terminal $name (#97849)", ({ stopReason, text }) => {
+    const tools = toolGroups([
+      { ...failedTool(1), __openclaw: { runId: "run-failed" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason,
+        timestamp: 2,
+        __openclaw: { runId: "run-failed" },
+      },
+      { ...failedTool(3), __openclaw: { runId: "run-success" } },
+      { ...assistantReply("done", 4), __openclaw: { runId: "run-success" } },
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it.each([
+    {
+      name: "terminal assistant",
+      boundary: { role: "assistant", content: [], stopReason: "error", timestamp: 2 },
+      expected: false,
+    },
+    {
+      name: "successful assistant",
+      boundary: assistantReply("recovered without the query term", 2),
+      expected: true,
+    },
+    {
+      name: "user",
+      boundary: userMsg("unrelated next request", 2),
+      expected: false,
+    },
+  ])("preserves a nonmatching $name boundary while filtering search results", (testCase) => {
+    const tools = toolGroups([
+      failedTool(1),
+      testCase.boundary,
+      assistantReply("failed later autonomous turn", 3),
+    ]);
+    const searchedTools = messageGroups({
+      messages: [
+        failedTool(1),
+        testCase.boundary,
+        assistantReply("failed later autonomous turn", 3),
+      ],
+      searchOpen: true,
+      searchQuery: "failed",
+    }).filter((group) => group.role === "tool");
+
+    expect(tools).toHaveLength(1);
+    expect(searchedTools).toHaveLength(1);
+    expect(searchedTools[0].turnSucceeded).toBe(testCase.expected);
   });
 });

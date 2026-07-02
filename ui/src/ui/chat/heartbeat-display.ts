@@ -4,6 +4,35 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
+export type AssistantStopReasonDisplayKind = "continuation" | "failure" | "terminal";
+
+// Imported CLI history preserves provider-native stop reasons, while live
+// OpenClaw runs use canonical values. Keep display boundary semantics aligned.
+export function classifyAssistantStopReasonForDisplay(
+  stopReason: unknown,
+): AssistantStopReasonDisplayKind | undefined {
+  switch (stopReason) {
+    case "toolUse":
+    case "tool_use":
+    case "pause_turn":
+      return "continuation";
+    case "error":
+    case "aborted":
+    case "refusal":
+    case "sensitive":
+      return "failure";
+    case "stop":
+    case "length":
+    case "end_turn":
+    case "max_tokens":
+    case "stop_sequence":
+    case "model_context_window_exceeded":
+      return "terminal";
+    default:
+      return undefined;
+  }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -109,6 +138,10 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
     typeof entry.content === "string" || Array.isArray(entry.content) ? entry.content : entry.text;
   const { text, hasVisibleNonTextContent } = resolveDisplayContent(content);
   if (hasVisibleNonTextContent) {
+    return false;
+  }
+  const stopReasonKind = classifyAssistantStopReasonForDisplay(entry.stopReason);
+  if (!text.trim() && stopReasonKind && stopReasonKind !== "continuation") {
     return false;
   }
   return stripHeartbeatTokenForDisplay(text).shouldSkip;

@@ -2,6 +2,7 @@
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 import {
+  classifyAssistantStopReasonForDisplay,
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
@@ -92,6 +93,13 @@ function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   } catch {
     return null;
   }
+}
+
+function messageRunId(message: unknown): string | null {
+  const record = asRecord(message);
+  const openclaw = asRecord(record?.["__openclaw"]);
+  const runId = openclaw?.runId ?? record?.runId;
+  return typeof runId === "string" && runId.trim() ? runId : null;
 }
 
 function extractChatMessagePreview(toolMessage: unknown): {
@@ -204,11 +212,15 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         : null;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
+    const runId = messageRunId(item.message);
+    const previousRunId = currentGroup ? messageRunId(currentGroup.messages.at(-1)?.message) : null;
+    const shouldSplitToolRuns = role.toLowerCase() === "tool" && runId !== previousRunId;
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
+      (shouldSplitBySender && currentGroup.senderLabel !== senderLabel) ||
+      shouldSplitToolRuns
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -343,9 +355,22 @@ function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage:
   );
 }
 
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  // A real reply is assistant text; a tool-only assistant group does not count.
-  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+function assistantMessageTurnSucceeded(message: unknown): boolean | undefined {
+  const record = asRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  const stopReasonKind = classifyAssistantStopReasonForDisplay(record.stopReason);
+  if (stopReasonKind === "failure") {
+    return false;
+  }
+  if (stopReasonKind === "continuation") {
+    return undefined;
+  }
+  if (extractTextCached(message)?.trim()) {
+    return true;
+  }
+  return stopReasonKind === "terminal" ? false : undefined;
 }
 
 // Stamp each tool group with whether its turn ended in a successful assistant
@@ -353,12 +378,15 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
 // failure (e.g. a no-match search) must not render as a primary error banner
 // once a clean reply exists. Backward pass: a user group ends the turn
 // downstream; an assistant reply marks success for earlier tool groups in the
-// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
-// preserving the existing error banner.
+// same turn. Persisted run IDs isolate adjacent autonomous turns. Legacy
+// unkeyed history retains its chronological behavior without borrowing keyed
+// outcomes from newer messages.
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
+  hiddenMessages: ReadonlySet<unknown>,
 ): Array<ChatItem | MessageGroup> {
-  let sawAssistantReply = false;
+  const runOutcomes = new Map<string, boolean>();
+  let unkeyedTurnSucceeded = false;
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];
     if (item.kind !== "group") {
@@ -366,13 +394,38 @@ function annotateToolTurnOutcome(
     }
     const role = item.role.toLowerCase();
     if (role === "user") {
-      sawAssistantReply = false;
+      unkeyedTurnSucceeded = false;
     } else if (role === "assistant") {
-      if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
+      for (let j = item.messages.length - 1; j >= 0; j -= 1) {
+        const message = item.messages[j].message;
+        const runId = messageRunId(message);
+        const succeeded = assistantMessageTurnSucceeded(message);
+        if (succeeded === undefined) {
+          continue;
+        }
+        if (runId) {
+          // Reverse traversal sees the run's terminal display outcome first.
+          if (!runOutcomes.has(runId)) {
+            runOutcomes.set(runId, succeeded);
+          }
+        } else {
+          unkeyedTurnSucceeded = succeeded;
+        }
       }
     } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
+      const toolRunId = messageRunId(item.messages[0]?.message);
+      item.turnSucceeded = toolRunId ? (runOutcomes.get(toolRunId) ?? false) : unkeyedTurnSucceeded;
+    }
+    const visibleMessages = item.messages.filter(
+      ({ message }) => !hiddenMessages.has(message) && hasRenderableNormalizedMessage(message),
+    );
+    if (visibleMessages.length === 0) {
+      items.splice(i, 1);
+    } else if (visibleMessages.length !== item.messages.length) {
+      item.messages = visibleMessages;
+      item.key = `group:${item.role}:${visibleMessages[0].key}`;
+      item.timestamp =
+        safeNormalizeMessage(visibleMessages[0].message)?.timestamp ?? item.timestamp;
     }
   }
   return items;
@@ -406,10 +459,16 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   }
   const senderLabel =
     role === "user" || role === "assistant" ? (normalized.senderLabel ?? "").trim() : "";
-  return `${role}:${senderLabel}:${text}`;
+  // Identical terminal text from adjacent runs is not a display duplicate:
+  // both outcomes must survive so tool cards resolve against their own run.
+  const runId = messageRunId(message) ?? "";
+  return `${role}:${senderLabel}:${runId}:${text}`;
 }
 
-function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
+function collapseSequentialDuplicateMessages(
+  items: ChatItem[],
+  hiddenMessages: ReadonlySet<unknown>,
+): ChatItem[] {
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
   let previousSourceKey: string | null = null;
@@ -424,15 +483,22 @@ function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
     const signature = collapseDuplicateDisplaySignature(item.message);
     const sourceKey = collapseDuplicateSourceKey(item.message);
     const previous = collapsed[collapsed.length - 1];
+    const previousIsHidden = previous?.kind === "message" && hiddenMessages.has(previous.message);
+    const itemIsHidden = hiddenMessages.has(item.message);
     if (
       sourceKey &&
       previousSourceKey === sourceKey &&
       previous?.kind === "message" &&
       isSameSourceRelayNativeDuplicate(previous.message, item.message)
     ) {
-      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
+      if (
+        previousIsHidden !== itemIsHidden
+          ? previousIsHidden
+          : !prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)
+      ) {
         collapsed[collapsed.length - 1] = item;
         previousSignature = signature;
+        previousSourceKey = sourceKey;
       }
       continue;
     }
@@ -442,6 +508,12 @@ function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
       previous?.kind === "message" &&
       !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
     ) {
+      if (previousIsHidden && !itemIsHidden) {
+        collapsed[collapsed.length - 1] = item;
+        previousSignature = signature;
+        previousSourceKey = sourceKey;
+        continue;
+      }
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
       continue;
     }
@@ -640,10 +712,16 @@ function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean 
   return safeNormalizeMessage(message)?.role.toLowerCase() === "toolresult";
 }
 
+function isVisibleHistoryMessage(message: unknown, showToolCalls: boolean): boolean {
+  const isEmptyTerminalBoundary =
+    assistantMessageTurnSucceeded(message) === false && !hasRenderableNormalizedMessage(message);
+  return !isHiddenToolMessage(message, showToolCalls) && !isEmptyTerminalBoundary;
+}
+
 function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean): number {
   let count = 0;
   for (const message of messages) {
-    if (!isHiddenToolMessage(message, showToolCalls)) {
+    if (isVisibleHistoryMessage(message, showToolCalls)) {
       count += 1;
     }
   }
@@ -667,7 +745,10 @@ function resolveHistoryStartIndex(
   let startIndex = messages.length;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (isHiddenToolMessage(message, showToolCalls)) {
+    if (!isVisibleHistoryMessage(message, showToolCalls)) {
+      if (startIndex < messages.length) {
+        startIndex = index;
+      }
       continue;
     }
     if (visibleCount >= renderLimit) {
@@ -686,7 +767,8 @@ function resolveHistoryStartIndex(
 }
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
-  let items: ChatItem[] = [];
+  const items: ChatItem[] = [];
+  const hiddenMessages = new Set<unknown>();
   const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
@@ -750,9 +832,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
+    const key = messageKey(msg, i);
     const searchQuery = props.searchQuery ?? "";
     if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
-      continue;
+      hiddenMessages.add(msg);
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
       continue;
@@ -760,7 +843,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
+      key,
       message: msg,
     });
   }
@@ -773,17 +856,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (!message) {
       continue;
     }
+    const key = `pending-send:${queued.id}`;
     const searchQuery = props.searchQuery ?? "";
     if (
       props.searchOpen &&
       searchQuery.trim() &&
       !messageMatchesSearchQuery(message, searchQuery)
     ) {
-      continue;
+      hiddenMessages.add(message);
     }
     items.push({
       kind: "message",
-      key: `pending-send:${queued.id}`,
+      key,
       message,
     });
   }
@@ -796,18 +880,19 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (!item || item.kind !== "message") {
       continue;
     }
+    const liftedMessage = appendCanvasBlockToAssistantMessage(
+      item.message as Record<string, unknown>,
+      liftedCanvasSource.preview,
+      liftedCanvasSource.text,
+    );
+    if (hiddenMessages.has(item.message)) {
+      hiddenMessages.add(liftedMessage);
+    }
     items[assistantIndex] = {
       ...item,
-      message: appendCanvasBlockToAssistantMessage(
-        item.message as Record<string, unknown>,
-        liftedCanvasSource.preview,
-        liftedCanvasSource.text,
-      ),
+      message: liftedMessage,
     };
   }
-  items = items.filter(
-    (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
-  );
   const segments = props.streamSegments ?? [];
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
@@ -892,7 +977,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
 
   return annotateToolTurnOutcome(
-    groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items))),
+    groupMessages(
+      collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items), hiddenMessages),
+    ),
+    hiddenMessages,
   );
 }
 
