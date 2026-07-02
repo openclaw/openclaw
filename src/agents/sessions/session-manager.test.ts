@@ -2585,7 +2585,7 @@ describe("parseSessionEntries", () => {
     expect(warnSpy).toHaveBeenCalled();
     expect(
       warnSpy.mock.calls.some((call) =>
-        (call[0] as string).includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
+        call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
       ),
     ).toBe(true);
   });
