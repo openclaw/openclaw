@@ -60,7 +60,14 @@ describe("fal image-generation provider", () => {
     );
     expect(nanoResolutions).toEqual([]);
     expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
-    expect(edit.maxInputImages).toBe(14);
+    expect(edit.maxInputImages).toBe(1);
+    expect(edit.maxInputImagesByModel?.["google/nano-banana-2-lite"]).toBe(14);
+    expect(edit.maxInputImagesByModel?.["xai/grok-imagine-image"]).toBe(3);
+    expect(edit.maxInputImagesByModel?.["xai/grok-imagine-image/quality"]).toBe(3);
+    expect(edit.maxInputImagesByModel?.["openai/gpt-image-2/edit"]).toBe(10);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality"]).toEqual(
+      grokResolutions,
+    );
   });
 
   it("generates image buffers from the fal sync API", async () => {

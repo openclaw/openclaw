@@ -413,6 +413,60 @@ describe("image-generation runtime", () => {
     expect(seenResolutions).toEqual([undefined]);
   });
 
+  it("skips candidates whose model-specific reference limit is too low", async () => {
+    const attemptedModels: string[] = [];
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {},
+          edit: {
+            enabled: true,
+            maxInputImages: 1,
+            maxInputImagesByModel: {
+              "xai/grok-imagine-image": 3,
+              "google/nano-banana-2-lite": 14,
+            },
+          },
+        },
+        async generateImage(req) {
+          attemptedModels.push(req.model);
+          return {
+            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "fal/xai/grok-imagine-image",
+              fallbacks: ["fal/google/nano-banana-2-lite"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "combine references",
+      inputImages: Array.from({ length: 14 }, () => ({
+        buffer: Buffer.from("reference"),
+        mimeType: "image/png",
+      })),
+    });
+
+    expect(result.model).toBe("google/nano-banana-2-lite");
+    expect(attemptedModels).toEqual(["google/nano-banana-2-lite"]);
+    expect(result.attempts).toEqual([
+      {
+        provider: "fal",
+        model: "xai/grok-imagine-image",
+        error: "fal/xai/grok-imagine-image supports at most 3 reference images, 14 requested",
+      },
+    ]);
+  });
+
   it("drops unsupported provider geometry overrides and reports them", async () => {
     let seenRequest:
       | {

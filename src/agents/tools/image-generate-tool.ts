@@ -3,9 +3,12 @@
  *
  * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { Type } from "typebox";
+import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
@@ -26,6 +29,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
@@ -468,6 +472,29 @@ function resolveSelectedImageGenerationModelId(params: {
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
 }
 
+function resolveReachableImageGenerationMaxInputImages(params: {
+  providers: ImageGenerationProvider[];
+  candidates: readonly { provider: string; model: string }[];
+}): number | undefined {
+  const limits = params.candidates.flatMap((candidate) => {
+    const provider = findCapabilityProviderById({
+      providers: params.providers,
+      providerId: candidate.provider,
+      normalizeProviderId,
+    });
+    if (!provider?.capabilities.edit.enabled) {
+      return [];
+    }
+    return [
+      resolveImageGenerationMaxInputImages({
+        provider,
+        model: candidate.model,
+      }) ?? DEFAULT_MAX_INPUT_IMAGES,
+    ];
+  });
+  return limits.length > 0 ? Math.max(...limits) : undefined;
+}
+
 function modelDisablesImageResolution(
   provider: ImageGenerationProvider | undefined,
   modelId?: string,
@@ -518,6 +545,7 @@ function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
   count: number;
   inputImageCount: number;
+  maxInputImages?: number;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
@@ -540,7 +568,10 @@ function validateImageGenerationCapabilities(params: {
     if (!provider.capabilities.edit.enabled) {
       throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
     }
-    const maxInputImages = provider.capabilities.edit.maxInputImages ?? DEFAULT_MAX_INPUT_IMAGES;
+    const maxInputImages =
+      params.maxInputImages ??
+      provider.capabilities.edit.maxInputImages ??
+      DEFAULT_MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
@@ -970,6 +1001,19 @@ export function createImageGenerateTool(options?: {
         explicitModelRef,
         primaryModelRef,
       });
+      const imageGenerationCandidates = resolveCapabilityModelCandidates({
+        cfg: effectiveCfg,
+        modelConfig: effectiveCfg.agents?.defaults?.imageGenerationModel,
+        modelOverride: model,
+        parseModelRef: parseImageGenerationModelRef,
+        agentDir: options?.agentDir,
+        listProviders: () => imageGenerationProviders,
+        autoProviderFallback: explicitModelConfig ? false : undefined,
+      });
+      const maxInputImages = resolveReachableImageGenerationMaxInputImages({
+        providers: imageGenerationProviders,
+        candidates: imageGenerationCandidates,
+      });
       const count = resolveRequestedCount(params);
       const requestKey = buildMediaGenerationRequestKey({
         tool: "image_generate",
@@ -1003,6 +1047,7 @@ export function createImageGenerateTool(options?: {
         provider: selectedProvider,
         count,
         inputImageCount: imageInputs.length,
+        maxInputImages,
         size,
         aspectRatio,
         resolution: explicitResolution,
@@ -1037,6 +1082,7 @@ export function createImageGenerateTool(options?: {
         provider: selectedProvider,
         count,
         inputImageCount: inputImages.length,
+        maxInputImages,
         size,
         aspectRatio,
         resolution,

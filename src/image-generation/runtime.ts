@@ -13,6 +13,7 @@ import {
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
@@ -95,6 +96,23 @@ export async function generateImage(
       logger.warn(
         `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${error}`,
       );
+      continue;
+    }
+
+    const inputImageCount = params.inputImages?.length ?? 0;
+    const maxInputImages = resolveImageGenerationMaxInputImages({
+      provider,
+      model: candidate.model,
+    });
+    if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
+      const error = `${candidate.provider}/${candidate.model} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+      });
+      lastError = new Error(error);
+      logger.warn(`image-generation candidate skipped: ${error}`);
       continue;
     }
 

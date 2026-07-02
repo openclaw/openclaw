@@ -260,6 +260,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
 function createFalEditProvider(params?: {
   defaultModel?: string;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
   omitMaxInputImages?: boolean;
   models?: string[];
   supportsAspectRatio?: boolean;
@@ -280,6 +281,9 @@ function createFalEditProvider(params?: {
       edit: {
         enabled: true,
         ...(!params?.omitMaxInputImages ? { maxInputImages: params?.maxInputImages ?? 1 } : {}),
+        ...(params?.maxInputImagesByModel
+          ? { maxInputImagesByModel: params.maxInputImagesByModel }
+          : {}),
         supportsSize: true,
         supportsAspectRatio: params?.supportsAspectRatio ?? false,
         supportsResolution: true,
@@ -1559,15 +1563,32 @@ describe("createImageGenerateTool", () => {
   );
 
   it.each([
-    { model: "fal-ai/nano-banana-2", disablesResolution: false },
-    { model: "google/nano-banana-2-lite", disablesResolution: true },
-  ])("accepts $model edits with up to 14 reference images", async (testCase) => {
-    const { model } = testCase;
+    {
+      model: "fal-ai/nano-banana-2",
+      primaryRef: "fal/fal-ai/nano-banana-2",
+      maxInputImages: 14,
+      disablesResolution: false,
+    },
+    {
+      model: "google/nano-banana-2-lite",
+      primaryRef: "fal/google/nano-banana-2-lite",
+      maxInputImages: 14,
+      disablesResolution: true,
+    },
+    {
+      model: "openai/gpt-image-2/edit",
+      primaryRef: "FAL/openai/gpt-image-2/edit",
+      maxInputImages: 10,
+      disablesResolution: false,
+    },
+  ])("accepts $model edits up to its reference limit", async (testCase) => {
+    const { model, primaryRef, maxInputImages } = testCase;
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createFalEditProvider({
         defaultModel: model,
         models: [model],
-        maxInputImages: 14,
+        maxInputImages: 1,
+        maxInputImagesByModel: { [model]: maxInputImages },
         ...(testCase.disablesResolution ? { resolutionsByModel: { [model]: [] } } : {}),
       }),
     ]);
@@ -1594,15 +1615,18 @@ describe("createImageGenerateTool", () => {
       contentType: "image/png",
     });
 
-    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+    const tool = createToolWithPrimaryImageModel(primaryRef, {
       workspaceDir: process.cwd(),
     });
-    await tool.execute("call-nano-14-references", {
+    await tool.execute("call-model-reference-limit", {
       prompt: "combine references",
-      images: Array.from({ length: 14 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+      images: Array.from(
+        { length: maxInputImages },
+        (_, index) => `./fixtures/ref-${index + 1}.png`,
+      ),
     });
 
-    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(14);
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(maxInputImages);
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
@@ -1623,6 +1647,81 @@ describe("createImageGenerateTool", () => {
     ).rejects.toThrow("fal edit supports at most 10 reference images");
     expect(loadWebMedia).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects model-specific reference limits before loading inputs", async () => {
+    const model = "xai/grok-imagine-image";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 1,
+        maxInputImagesByModel: { [model]: 3 },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-grok-too-many-references", {
+        prompt: "combine references",
+        images: Array.from({ length: 4 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+      }),
+    ).rejects.toThrow("fal edit supports at most 3 reference images");
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("accepts the highest reference limit across configured fallbacks", async () => {
+    const primaryModel = "xai/grok-imagine-image";
+    const fallbackModel = "google/nano-banana-2-lite";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: primaryModel,
+        models: [primaryModel, fallbackModel],
+        maxInputImages: 1,
+        maxInputImagesByModel: {
+          [primaryModel]: 3,
+          [fallbackModel]: 14,
+        },
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: fallbackModel,
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("reference"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 1024,
+      height: 1024,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 6,
+      contentType: "image/png",
+    });
+    const tool = createToolWithPrimaryImageModel(`fal/${primaryModel}`, {
+      workspaceDir: process.cwd(),
+      fallbacks: [`fal/${fallbackModel}`],
+    });
+
+    await tool.execute("call-fallback-reference-limit", {
+      prompt: "combine references",
+      images: Array.from({ length: 14 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(14);
   });
 
   it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
@@ -2452,6 +2551,25 @@ describe("createImageGenerateTool", () => {
       supportsResolution: true,
     });
     expect(openaiProvider.authEnvVars).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("reports model-specific edit limits in provider listings", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev", "google/nano-banana-2-lite"],
+        maxInputImages: 1,
+        maxInputImagesByModel: {
+          "fal-ai/flux/dev": 1,
+          "google/nano-banana-2-lite": 14,
+        },
+      }),
+    ]);
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev");
+
+    const result = await tool.execute("call-list-model-limits", { action: "list" });
+
+    expect(resultText(result)).toContain("editing up to 14 refs depending on model");
   });
 
   it("skips auth hints for prototype-like provider ids", async () => {
