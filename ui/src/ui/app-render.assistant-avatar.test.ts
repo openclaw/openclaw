@@ -330,7 +330,8 @@ describe("renderApp assistant avatar routing", () => {
     renderApp(
       createState({
         chatAvatarUrl: "https://example.com/identity-avatar.png",
-        chatAvatarStatus: "url",
+        chatAvatarStatus: "remote",
+        assistantAvatarStatus: "local",
         assistantAgentId: "main",
         assistantAvatar: "/avatar/main",
       }),
