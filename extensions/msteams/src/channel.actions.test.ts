@@ -187,9 +187,10 @@ function expectActionSuccess(
 function expectActionRuntimeCall(
   mockFn: ReturnType<typeof vi.fn>,
   params: Record<string, unknown>,
+  cfg: Record<string, unknown> = {},
 ) {
   expect(mockFn).toHaveBeenCalledWith({
-    cfg: {},
+    cfg,
     ...params,
   });
 }
@@ -198,6 +199,7 @@ async function expectSuccessfulAction(params: {
   mockFn: ReturnType<typeof vi.fn>;
   mockResult: unknown;
   action: Parameters<typeof runAction>[0]["action"];
+  cfg?: Parameters<typeof runAction>[0]["cfg"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
@@ -212,6 +214,7 @@ async function expectSuccessfulAction(params: {
   params.mockFn.mockResolvedValue(params.mockResult);
   const result = await runAction({
     action: params.action,
+    cfg: params.cfg,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -220,7 +223,7 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams);
+  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 

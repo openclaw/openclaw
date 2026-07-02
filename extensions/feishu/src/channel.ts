@@ -623,6 +623,17 @@ function shouldEnforceFeishuReadTarget(params: {
   return groupPolicy === "allowlist" || groupPolicy === "disabled";
 }
 
+function hasDisabledFeishuGroupConfig(account: ResolvedFeishuAccount): boolean {
+  return Object.values(account.config.groups ?? {}).some((group) => group?.enabled === false);
+}
+
+function shouldVerifyFeishuMessageReadTarget(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+}): boolean {
+  return shouldEnforceFeishuReadTarget(params) || hasDisabledFeishuGroupConfig(params.account);
+}
+
 function assertFeishuReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -699,14 +710,14 @@ async function assertFeishuMessageIdReadTargetAllowed(params: {
     accountId?: string;
   }) => Promise<FeishuMessageInfo | null>;
 }) {
-  if (!shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account })) {
-    return;
-  }
   assertFeishuProvidedReadTargetAllowed({
     cfg: params.cfg,
     account: params.account,
     chatId: params.requestedChatId,
   });
+  if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
+    return;
+  }
   const message = await params.getMessageFeishu({
     cfg: params.cfg,
     messageId: params.messageId,
@@ -965,13 +976,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu read requires messageId.");
             }
-            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-              assertFeishuProvidedReadTargetAllowed({
-                cfg: ctx.cfg,
-                account,
-                chatId: resolveFeishuChatId(ctx),
-              });
-            }
+            assertFeishuProvidedReadTargetAllowed({
+              cfg: ctx.cfg,
+              account,
+              chatId: resolveFeishuChatId(ctx),
+            });
             const { getMessageFeishu } = await loadFeishuChannelRuntime();
             const message = await getMessageFeishu({
               cfg: ctx.cfg,
@@ -992,7 +1001,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 details: { error: `Feishu read failed or message not found: ${messageId}` },
               };
             }
-            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
+            if (shouldVerifyFeishuMessageReadTarget({ cfg: ctx.cfg, account })) {
               assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
             }
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
