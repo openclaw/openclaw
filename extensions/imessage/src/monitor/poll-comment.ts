@@ -75,9 +75,16 @@ export function createPollCommentFolder(options?: { windowMs?: number }) {
         return false;
       }
       const replySender = normalizeSender(sender);
-      // Same-sender only. If either sender is unknown, fall back to timing alone
-      // rather than deliver a duplicate for the common 1:1 caption.
-      return !seen.sender || !replySender || seen.sender === replySender;
+      // Fail CLOSED on identity: fold only when the poll creator and the reply
+      // sender are both known and identical. This fold runs before the normal
+      // missing-sender/from-me/allowlist gate (monitor-provider handleMessageNowInner),
+      // so folding on an unknown sender could drop a real in-window reply from a
+      // different participant to the same poll guid. Unknown/mismatched sender
+      // therefore falls through and is delivered (the poll_vote_echo guard still
+      // catches a redundant spoken answer). Verified against chat.db: an inbound
+      // poll and its caption both carry the sender handle, so the 1:1 caption
+      // still folds as the same known sender.
+      return seen.sender.length > 0 && replySender.length > 0 && seen.sender === replySender;
     },
   };
 }

@@ -30,10 +30,19 @@ describe("createPollCommentFolder", () => {
     expect(folder.isPollComment(POLL_GUID, T0 + 500, "+15559998888")).toBe(false);
   });
 
-  it("folds on timing alone when a sender is unknown (common 1:1 caption)", () => {
+  it("does NOT fold when the reply sender is known but the poll sender is unknown", () => {
+    // Fail closed: an unknown-sender poll row must not turn a real in-window
+    // reply from an identified participant into a dropped message. This fold
+    // runs before the normal missing-sender/allowlist gate.
     const folder = createPollCommentFolder();
     folder.rememberPoll(POLL_GUID, T0, undefined);
-    expect(folder.isPollComment(POLL_GUID, T0 + 500, undefined)).toBe(true);
+    expect(folder.isPollComment(POLL_GUID, T0 + 500, "+15551110000")).toBe(false);
+  });
+
+  it("does NOT fold when the reply sender is unknown", () => {
+    const folder = createPollCommentFolder();
+    folder.rememberPoll(POLL_GUID, T0, "+15551110000");
+    expect(folder.isPollComment(POLL_GUID, T0 + 500, undefined)).toBe(false);
   });
 
   it("does not fold a reply to an unrelated message", () => {
