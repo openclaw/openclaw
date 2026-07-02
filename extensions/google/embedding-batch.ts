@@ -12,8 +12,8 @@ import {
 import {
   createProviderHttpError,
   readProviderJsonResponse,
+  readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
 type EmbeddingBatchExecutionParams = {
@@ -54,6 +54,7 @@ type GeminiBatchOutputLine = {
 };
 
 const GEMINI_BATCH_MAX_REQUESTS = 50000;
+const GEMINI_BATCH_OUTPUT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 function hashText(text: string): string {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
@@ -126,7 +127,7 @@ async function submitGeminiBatch(params: {
     },
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
-        const text = await fileRes.text();
+        const text = await readResponseTextLimited(fileRes);
         throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
       }
       return readProviderJsonResponse<{ name?: string; file?: { name?: string } }>(
@@ -166,7 +167,7 @@ async function submitGeminiBatch(params: {
       if (batchRes.ok) {
         return readProviderJsonResponse<GeminiBatchStatus>(batchRes, "gemini.batch-create");
       }
-      const text = await batchRes.text();
+      const text = await readResponseTextLimited(batchRes);
       if (batchRes.status === 404) {
         throw new Error(
           "gemini batch create failed: 404 (asyncBatchEmbedContent not available for this model/baseUrl). Disable remote.batch.enabled or switch providers.",
@@ -202,10 +203,12 @@ async function fetchGeminiBatchStatus(params: {
   });
 }
 
-async function fetchGeminiFileContent(params: {
+async function readGeminiBatchOutputFile(params: {
   gemini: GeminiEmbeddingClient;
   fileId: string;
-}): Promise<string> {
+  maxLines: number;
+  onLine: (line: GeminiBatchOutputLine) => void;
+}): Promise<void> {
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
   const downloadUrl = `${baseUrl}/${file}:download`;
@@ -220,18 +223,96 @@ async function fetchGeminiFileContent(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch file content failed");
       }
-      return await res.text();
+      return await readGeminiBatchOutputLines(res, {
+        maxLines: params.maxLines,
+        onLine: params.onLine,
+      });
     },
   });
 }
 
-function parseGeminiBatchOutput(text: string): GeminiBatchOutputLine[] {
-  if (!text.trim()) {
-    return [];
+function parseGeminiBatchOutputLine(line: string): GeminiBatchOutputLine {
+  return JSON.parse(line) as GeminiBatchOutputLine;
+}
+
+async function readGeminiBatchOutputLines(
+  response: Response,
+  params: {
+    maxLines: number;
+    onLine: (line: GeminiBatchOutputLine) => void;
+  },
+): Promise<void> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return;
   }
-  return normalizeStringEntries(text.split("\n")).map(
-    (line) => JSON.parse(line) as GeminiBatchOutputLine,
-  );
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let lineCount = 0;
+  let line = "";
+  let lineBytes = 0;
+
+  const appendSegment = (segment: string) => {
+    if (!segment) {
+      return;
+    }
+    lineBytes += encoder.encode(segment).byteLength;
+    if (lineBytes > GEMINI_BATCH_OUTPUT_LINE_MAX_BYTES) {
+      throw new Error(
+        `gemini.batch-file-content: JSONL line exceeds ${GEMINI_BATCH_OUTPUT_LINE_MAX_BYTES} bytes`,
+      );
+    }
+    line += segment;
+  };
+
+  const emitLine = () => {
+    lineCount += 1;
+    if (lineCount > params.maxLines) {
+      throw new Error(`gemini.batch-file-content: JSONL output exceeds ${params.maxLines} records`);
+    }
+    const trimmed = line.trim();
+    line = "";
+    lineBytes = 0;
+    if (trimmed) {
+      params.onLine(parseGeminiBatchOutputLine(trimmed));
+    }
+  };
+
+  const consumeText = (text: string) => {
+    let offset = 0;
+    while (true) {
+      const newline = text.indexOf("\n", offset);
+      if (newline === -1) {
+        appendSegment(text.slice(offset));
+        return;
+      }
+      appendSegment(text.slice(offset, newline));
+      emitLine();
+      offset = newline + 1;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value && value.byteLength > 0) {
+        consumeText(decoder.decode(value, { stream: true }));
+      }
+    }
+    consumeText(decoder.decode());
+    if (line.trim()) {
+      emitLine();
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function waitForGeminiBatch(params: {
@@ -344,37 +425,37 @@ export async function runGeminiEmbeddingBatches(
         throw new Error(`gemini batch ${batchName} completed without output file`);
       }
 
-      const content = await fetchGeminiFileContent({
-        gemini: params.gemini,
-        fileId: completed.outputFileId,
-      });
-      const outputLines = parseGeminiBatchOutput(content);
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
 
-      for (const line of outputLines) {
-        const customId = line.key ?? line.custom_id ?? line.request_id;
-        if (!customId) {
-          continue;
-        }
-        remaining.delete(customId);
-        if (line.error?.message) {
-          errors.push(`${customId}: ${line.error.message}`);
-          continue;
-        }
-        if (line.response?.error?.message) {
-          errors.push(`${customId}: ${line.response.error.message}`);
-          continue;
-        }
-        const embedding = sanitizeAndNormalizeEmbedding(
-          line.embedding?.values ?? line.response?.embedding?.values ?? [],
-        );
-        if (embedding.length === 0) {
-          errors.push(`${customId}: empty embedding`);
-          continue;
-        }
-        byCustomId.set(customId, embedding);
-      }
+      await readGeminiBatchOutputFile({
+        gemini: params.gemini,
+        fileId: completed.outputFileId,
+        maxLines: group.length,
+        onLine: (line) => {
+          const customId = line.key ?? line.custom_id ?? line.request_id;
+          if (!customId || !remaining.has(customId)) {
+            return;
+          }
+          remaining.delete(customId);
+          if (line.error?.message) {
+            errors.push(`${customId}: ${line.error.message}`);
+            return;
+          }
+          if (line.response?.error?.message) {
+            errors.push(`${customId}: ${line.response.error.message}`);
+            return;
+          }
+          const embedding = sanitizeAndNormalizeEmbedding(
+            line.embedding?.values ?? line.response?.embedding?.values ?? [],
+          );
+          if (embedding.length === 0) {
+            errors.push(`${customId}: empty embedding`);
+            return;
+          }
+          byCustomId.set(customId, embedding);
+        },
+      });
 
       if (errors.length > 0) {
         throw new Error(`gemini batch ${batchName} failed: ${errors.join("; ")}`);
