@@ -107,6 +107,10 @@ import {
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
+import {
+  createTelegramProgressSummaryTracker,
+  formatTelegramProgressSummaryLine,
+} from "./progress-summary.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -402,11 +406,10 @@ function renderTelegramProgressStringLine(text: string): string {
   // through renderTelegramHtmlText — the parse_mode=HTML-safe converter — NOT
   // markdownToTelegramRichHtml, whose rich-only block output (<h2> from a
   // setext heading, <hr>, lists) makes Telegram reject the edit and drops the
-  // whole preview to unformatted plain text.
-  // Collapse to one line first: progress lines are single-line by contract, and
-  // multi-line commentary otherwise forms block markdown (`\n\n---\n\n` turns
-  // the paragraph above it into a setext heading).
-  const trimmed = text.replace(/\s+/gu, " ").trim();
+  // whole preview to unformatted plain text. Callers convert ONE line at a
+  // time, which also keeps block markdown from forming (`---` under a
+  // paragraph is a setext heading only when they share a document).
+  const trimmed = text.trim();
   // Clip INSIDE a whole-line `_…_` wrapper (the reasoning-lane contract, marker
   // optional): clipping the assembled line chops the closing underscore, which
   // silently degrades every long reasoning line from italic to plain text.
@@ -424,8 +427,14 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   if (!line.icon && line.label === "Commentary") {
     // Commentary is model prose behind a 💬 marker: render its markdown (plain
     // unless the model emphasized) via the shared converter — distinct from the
-    // 🧠 italic reasoning lane, mirroring Discord.
-    return renderTelegramProgressStringLine(line.text);
+    // 🧠 italic reasoning lane, mirroring Discord. Multi-line notes keep their
+    // line structure (Discord parity); converting per line also prevents block
+    // markdown (setext headings) from forming across lines.
+    return line.text
+      .split(/\r?\n/u)
+      .map(renderTelegramProgressStringLine)
+      .filter(Boolean)
+      .join("<br>");
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
@@ -1035,6 +1044,16 @@ export const dispatchTelegramMessage = async ({
     }
     activeAnswerDraftIsToolProgressOnly = true;
   }
+  // Tracks whether the ephemeral progress window ever actually rendered this
+  // turn (rv mode delivers everything durably and the window stays empty). The
+  // collapse summary must reflect what ACTUALLY streamed, so it is gated on
+  // this flag, not on the compositor gate having started (Bug 6).
+  let progressDraftEverRendered = false;
+  // Turn-activity tally for the post-turn collapse summary (Discord parity).
+  // Counters feed a one-line digest posted when the progress window collapses.
+  const progressSummaryStartedAt = Date.now();
+  const progressSummary = createTelegramProgressSummaryTracker();
+  let progressSummaryDelivered = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
     mode: streamMode,
@@ -1049,6 +1068,7 @@ export const dispatchTelegramMessage = async ({
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     update: async (streamText, options) => {
+      progressDraftEverRendered = true;
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
@@ -1091,6 +1111,15 @@ export const dispatchTelegramMessage = async ({
     text?: string;
     isReasoningSnapshot?: boolean;
   }) => {
+    // Opens (or keeps open) the current window reasoning burst for the collapse
+    // summary whenever window-destined reasoning text arrives — independent of
+    // whether this particular push renders, so a short burst between renders is
+    // still counted at the summary flush (mirrors Discord's windowReasoningOpen).
+    // Gated on the window lane: durable reasoning (/reasoning on) must not feed
+    // the bar (Bug 6: the bar counts only what streamed to the window).
+    if (streamReasoningInProgressDraft && payload.text) {
+      progressSummary.noteReasoningActivity();
+    }
     return await progressDraft.pushReasoningProgress(payload.text, {
       snapshot: payload.isReasoningSnapshot === true,
     });
@@ -1872,6 +1901,29 @@ export const dispatchTelegramMessage = async ({
       await emitPreviewFinalizedHook(result);
       return result.kind !== "skipped";
     };
+    // Post-turn collapse summary (Discord parity): when the progress window
+    // collapses at end-of-turn, post a one-line activity digest as a durable
+    // standalone message, then the final answer posts below it so the timeline
+    // reads thoughts/tools → summary → answer. Emitted at most once per turn,
+    // only for a non-error final, and only when the window actually rendered
+    // (rv mode delivers everything durably and the window stays empty — no bar).
+    const deliverProgressCollapseSummary = async () => {
+      if (progressSummaryDelivered) {
+        return;
+      }
+      progressSummaryDelivered = true;
+      if (!progressDraftEverRendered) {
+        return;
+      }
+      const line = formatTelegramProgressSummaryLine(
+        progressSummary.counts(),
+        Date.now() - progressSummaryStartedAt,
+      );
+      if (!line) {
+        return;
+      }
+      await sendPayload({ text: line }, { durable: true });
+    };
     const deliverProgressModeFinalAnswer = async (
       payload: ReplyPayload,
       text: string,
@@ -1881,6 +1933,12 @@ export const dispatchTelegramMessage = async ({
       } else {
         await answerLane.stream?.clear();
         resetDraftLaneState(answerLane);
+      }
+      if (payload.isError === true) {
+        // Error finals get no collapse summary (Discord parity); mark it handled.
+        progressSummaryDelivered = true;
+      } else {
+        await deliverProgressCollapseSummary();
       }
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
       if (!delivered) {
@@ -2430,10 +2488,17 @@ export const dispatchTelegramMessage = async ({
                   onReasoningEnd: reasoningLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
+                          progressSummary.closeReasoningBurst();
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
                           resetProgressDraftState();
                         })
-                    : undefined,
+                    : () => {
+                        // Window-reasoning turns have no separate reasoning lane;
+                        // reasoning-end is still a burst boundary for the collapse
+                        // summary (some models never fire it — the tracker also
+                        // closes at the next tool call or the summary flush).
+                        progressSummary.closeReasoningBurst();
+                      },
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
@@ -2447,6 +2512,22 @@ export const dispatchTelegramMessage = async ({
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
+                    // Only the "start" phase is a boundary (later phases of the same
+                    // call must not inflate the tally). The tool closes the preceding
+                    // reasoning AND commentary bursts, counting each per-burst — so a
+                    // turn's notes sharing the turn-local id "commentary-0" tally as
+                    // N, not 1 (D3). The tool itself is counted only when it renders
+                    // to the window: under verbose, tool summaries persist as their
+                    // own durable messages and must NOT also feed the bar (invariant:
+                    // persistent message XOR bar count — D2).
+                    if (payload.phase === "start") {
+                      if (verboseProgressActive() || !canPushStreamToolProgress()) {
+                        progressSummary.closeReasoningBurst();
+                        progressSummary.closeCommentaryBurst();
+                      } else {
+                        progressSummary.noteToolCall();
+                      }
+                    }
                     const progressPromise = pushStreamToolProgress(
                       buildChannelProgressDraftLineForEntry(
                         telegramCfg,
@@ -2470,8 +2551,13 @@ export const dispatchTelegramMessage = async ({
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
                       if (verboseProgressActive()) {
+                        // Durable verbose lane owns commentary; not counted toward
+                        // the collapse summary — it did not stream to the window.
                         return;
                       }
+                      // Window path: the note renders to the progress window, so
+                      // tally it for the collapse bar (counted per-burst, D3).
+                      progressSummary.noteCommentary(payload.itemId, payload.progressText);
                       await progressDraft.pushCommentaryProgress(payload.progressText, {
                         itemId: payload.itemId,
                       });

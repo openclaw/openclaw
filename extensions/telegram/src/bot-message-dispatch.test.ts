@@ -2889,8 +2889,89 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    expectDeliveredReply(0, { text: "Branch is up to date" });
+    // The progress window collapses to a one-line activity summary (Discord
+    // parity) before the final answer posts fresh below it.
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Branch is up to date" }, 1);
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  function allDeliveredReplyTexts(): string[] {
+    return deliverReplies.mock.calls.flatMap((call: unknown[]) =>
+      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
+        (reply) => reply.text ?? "",
+      ),
+    );
+  }
+
+  it("tallies reasoning bursts and tool calls into the collapse summary", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // burst 1 → tool → burst 2 → tool, then a trailing burst flushed at the
+        // summary: 3 thoughts, 2 tool calls.
+        await replyOptions?.onReasoningStream?.({ text: "thinking a" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onReasoningStream?.({ text: "thinking b" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onReasoningStream?.({ text: "thinking c" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      // Reasoning must resolve to "stream" so thoughts route into the progress
+      // window — only window-streamed reasoning feeds the collapse summary.
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectDeliveredReply(0, { text: "🧠 3 thoughts · 🛠️ 2 tool calls · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Done" }, 1);
+  });
+
+  it("does not post a collapse summary when no progress draft started", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      // No tools, thoughts, or notes — nothing collapses; just a final answer.
+      await dispatcherOptions.deliver({ text: "Just an answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    const texts = allDeliveredReplyTexts();
+    expect(texts.some((text) => text.includes("⏱️"))).toBe(false);
+    expect(texts).toContain("Just an answer");
+  });
+
+  it("does not post a collapse summary before an error final", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "Something went wrong", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    const texts = allDeliveredReplyTexts();
+    expect(texts.some((text) => text.includes("tool call · ⏱️"))).toBe(false);
   });
 
   it("replaces Telegram command progress items with matching command output", async () => {
@@ -2956,7 +3037,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.forceNewMessage.mock.invocationCallOrder[1]).toBeLessThan(
       answerDraftStream.update.mock.invocationCallOrder[0],
     );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
+    // Collapse summary posts first, then the final answer below it.
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Branch is up to date" }, 1);
   });
 
   it("does not stream text-only tool results into progress drafts", async () => {
@@ -3039,7 +3122,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Branch is up to date" }, 1);
   });
 
   it("does not restart progress drafts for command output after final answer delivery", async () => {
@@ -3069,7 +3153,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Branch is up to date" }, 1);
   });
 
   it("does not restart progress drafts for command output while final answer delivery is pending", async () => {
@@ -3103,7 +3188,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: "Branch is up to date" }, 1);
   });
 
   it("uses the transcript final when progress-mode final text is truncated", async () => {
@@ -3133,7 +3219,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectDeliveredReply(0, { text: fullAnswer });
+    expectDeliveredReply(0, { text: "🛠️ 1 tool call · ⏱️ 1s" });
+    expectDeliveredReply(0, { text: fullAnswer }, 1);
   });
 
   it("streams the first long final chunk and sends follow-up chunks", async () => {
@@ -3458,10 +3545,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastPreview?.parseMode).toBe("HTML");
-    // Reasoning lane still italic, commentary collapsed to one inline-safe line.
+    // Reasoning lane still italic; commentary keeps its line structure (each
+    // line converted separately, so the `---` renders as a divider line instead
+    // of turning the paragraph above it into a setext <h2>).
     expect(lastPreview?.text).toContain("🧠 <i>Planning the steps</i>");
     expect(lastPreview?.text).toContain(
-      "💬 Planning: three sequential steps with a file read in between. --- <b>Step 1:</b> Run <code>sleep 6 &amp;&amp; date</code>",
+      "💬 Planning: three sequential steps with a file read in between.<br>───<br><b>Step 1:</b> Run <code>sleep 6 &amp;&amp; date</code>",
     );
     // No rich-only block HTML that Telegram's parse_mode=HTML would reject.
     expect(lastPreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
