@@ -12,7 +12,9 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
+const DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES = 24 * 1024;
+const DOCS_FORMAT_MAX_WINDOWS_COMMAND_LINE_BYTES = 6 * 1024;
+export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 function outputText(value) {
@@ -119,6 +121,12 @@ export function chunkFilesForCommand(
   return chunks;
 }
 
+export function docsFormatMaxCommandLineBytesForPlatform(platform = process.platform) {
+  return platform === "win32"
+    ? DOCS_FORMAT_MAX_WINDOWS_COMMAND_LINE_BYTES
+    : DOCS_FORMAT_MAX_POSIX_COMMAND_LINE_BYTES;
+}
+
 export function resolveOxfmtInvocation(args, params = {}) {
   const repoRoot = params.repoRoot ?? ROOT;
   const platform = params.platform ?? process.platform;
@@ -155,18 +163,21 @@ export function runOxfmt(files, params = {}, deps = {}) {
     return;
   }
   const repoRoot = params.repoRoot ?? ROOT;
+  const platform = params.platform ?? process.platform;
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
   const prefixArgs = ["--write", "--threads=1", "--config", path.join(repoRoot, ".oxfmtrc.jsonc")];
+  const maxCommandLineBytes =
+    params.maxCommandLineBytes ?? docsFormatMaxCommandLineBytesForPlatform(platform);
   for (const chunk of chunkFilesForCommand(
     files,
     prefixArgs,
-    params.maxCommandLineBytes ?? DOCS_FORMAT_MAX_COMMAND_LINE_BYTES,
+    maxCommandLineBytes,
   )) {
     const invocation = resolveOxfmtInvocation([...prefixArgs, ...chunk], {
       comSpec: params.comSpec,
       existsSync: deps.existsSync,
       nodeExecPath: params.nodeExecPath,
-      platform: params.platform,
+      platform,
       repoRoot,
     });
     const result = spawnSyncImpl(invocation.command, invocation.args, {

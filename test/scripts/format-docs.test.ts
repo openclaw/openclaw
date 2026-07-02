@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkFilesForCommand,
   docsFiles,
+  docsFormatMaxCommandLineBytesForPlatform,
   formatDocs,
   resolveOxfmtInvocation,
   runOxfmt,
@@ -63,6 +64,12 @@ describe("format-docs", () => {
       "docs/two.md",
       "docs/three.md",
     ]);
+  });
+
+  it("uses a smaller command line budget for Windows cmd.exe", () => {
+    expect(docsFormatMaxCommandLineBytesForPlatform("win32")).toBeLessThan(
+      docsFormatMaxCommandLineBytesForPlatform("linux"),
+    );
   });
 
   it("reports git and oxfmt spawn diagnostics", () => {

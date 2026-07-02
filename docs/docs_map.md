@@ -910,6 +910,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Telegram side settings
   - H2: Access control and activation
   - H3: Group bot identity
+  - H2: Plugin hooks and privacy
   - H2: Runtime behavior
   - H2: Feature reference
   - H2: Error reply controls

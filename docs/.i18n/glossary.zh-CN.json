@@ -1214,5 +1214,89 @@
   {
     "source": "Docs map",
     "target": "文档地图"
+  },
+  {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Attach CLI",
+    "target": "Attach CLI"
+  },
+  {
+    "source": "Gateway integrations for external apps",
+    "target": "Gateway integrations for external apps"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway protocol"
+  },
+  {
+    "source": "CLI agent command",
+    "target": "CLI agent command"
+  },
+  {
+    "source": "CLI message command",
+    "target": "CLI message command"
+  },
+  {
+    "source": "Background tasks",
+    "target": "Background tasks"
+  },
+  {
+    "source": "Windows Hub",
+    "target": "Windows Hub"
+  },
+  {
+    "source": "Node.js setup",
+    "target": "Node.js setup"
+  },
+  {
+    "source": "Nodes",
+    "target": "Nodes"
+  },
+  {
+    "source": "Gateway configuration",
+    "target": "Gateway configuration"
+  },
+  {
+    "source": "llama.cpp Provider",
+    "target": "llama.cpp Provider"
+  },
+  {
+    "source": "Llama Cpp plugin",
+    "target": "Llama Cpp plugin"
+  },
+  {
+    "source": "llama-cpp",
+    "target": "llama-cpp"
+  },
+  {
+    "source": "Raft plugin",
+    "target": "Raft plugin"
+  },
+  {
+    "source": "raft",
+    "target": "raft"
+  },
+  {
+    "source": "v2026.6.11",
+    "target": "v2026.6.11"
+  },
+  {
+    "source": "Microsoft Foundry plugin",
+    "target": "Microsoft Foundry plugin"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "Web Search overview"
+  },
+  {
+    "source": "Exa search",
+    "target": "Exa search"
+  },
+  {
+    "source": "Perplexity Search",
+    "target": "Perplexity Search"
   }
 ]
