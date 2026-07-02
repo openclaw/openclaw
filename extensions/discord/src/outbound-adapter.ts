@@ -5,6 +5,7 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeOptionalString,
@@ -28,6 +29,7 @@ import {
 } from "./outbound-send-context.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+const DISCORD_REQUEST_ENTITY_TOO_LARGE_STATUS = 413;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
   /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
@@ -40,6 +42,54 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const candidate =
+    "status" in error && error.status !== undefined
+      ? error.status
+      : "statusCode" in error && error.statusCode !== undefined
+        ? error.statusCode
+        : undefined;
+  if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    return candidate;
+  }
+  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
+    return Number(candidate);
+  }
+  return undefined;
+}
+
+function isDiscordRequestEntityTooLarge(error: unknown): boolean {
+  return getErrorStatus(error) === DISCORD_REQUEST_ENTITY_TOO_LARGE_STATUS;
+}
+
+function hasSentBeforeError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    (error as { sentBeforeError?: unknown }).sentBeforeError === true,
+  );
+}
+
+function createDiscordPartialDeliveryError(params: {
+  cause: unknown;
+  results: readonly OutboundDeliveryResult[];
+}): unknown {
+  if (params.cause && typeof params.cause === "object" && Object.isExtensible(params.cause)) {
+    return Object.assign(params.cause, {
+      results: [...params.results],
+      sentBeforeError: true,
+    });
+  }
+  return Object.assign(new Error("discord media delivery failed after text fallback"), {
+    cause: params.cause,
+    results: [...params.results],
+    sentBeforeError: true,
+  });
 }
 
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
@@ -277,23 +327,51 @@ export const discordOutbound: ChannelOutboundAdapter = {
             }),
         });
       }
-      return await withDiscordDeliveryRetry({
-        cfg,
-        accountId,
-        fn: async () =>
-          await send(target, text, {
-            verbose: false,
-            mediaUrl,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            replyTo: replyToId ?? undefined,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-            cfg,
-            ...formattingOptions,
-          }),
-      });
+      try {
+        return await withDiscordDeliveryRetry({
+          cfg,
+          accountId,
+          fn: async () =>
+            await send(target, text, {
+              verbose: false,
+              mediaUrl,
+              mediaAccess,
+              mediaLocalRoots,
+              mediaReadFile,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+              cfg,
+              ...formattingOptions,
+            }),
+        });
+      } catch (error) {
+        if (!text.trim() || hasSentBeforeError(error) || !isDiscordRequestEntityTooLarge(error)) {
+          throw error;
+        }
+        const fallbackResult = await withDiscordDeliveryRetry({
+          cfg,
+          accountId,
+          fn: async () =>
+            await send(target, text, {
+              verbose: false,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+              cfg,
+              ...formattingOptions,
+            }),
+        });
+        throw createDiscordPartialDeliveryError({
+          cause: error,
+          results: [
+            {
+              channel: "discord",
+              ...fallbackResult,
+            },
+          ],
+        });
+      }
     },
     sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
       await withDiscordDeliveryRetry({

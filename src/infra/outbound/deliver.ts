@@ -885,6 +885,28 @@ function filterIdentifiedDeliveryResults(
   return results.filter((result) => hasDeliveryResultIdentity(result));
 }
 
+function readPartialDeliveryResults(error: unknown): OutboundDeliveryResult[] {
+  if (!error || typeof error !== "object") {
+    return [];
+  }
+  const results = (error as { results?: unknown }).results;
+  if (!Array.isArray(results)) {
+    return [];
+  }
+  return filterIdentifiedDeliveryResults(results as OutboundDeliveryResult[]);
+}
+
+function mergeDeliveryResults(
+  first: readonly OutboundDeliveryResult[],
+  second: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  const merged: OutboundDeliveryResult[] = [];
+  for (const result of [...first, ...second]) {
+    pushIdentifiedDeliveryResult(merged, result);
+  }
+  return merged;
+}
+
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
   if (pin === true) {
@@ -1218,12 +1240,22 @@ function toOutboundDeliveryError(params: {
   payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
   stage: OutboundDeliveryFailureStage;
 }): OutboundDeliveryError {
+  const partialResults = readPartialDeliveryResults(params.error);
+  const mergedResults = mergeDeliveryResults(params.results, partialResults);
   if (params.error instanceof OutboundDeliveryError) {
-    return params.error;
+    return new OutboundDeliveryError(params.error.message, {
+      cause: (params.error as Error & { cause?: unknown }).cause ?? params.error,
+      results: mergedResults,
+      payloadOutcomes:
+        params.error.payloadOutcomes.length > 0
+          ? params.error.payloadOutcomes
+          : params.payloadOutcomes,
+      stage: params.error.stage,
+    });
   }
   return new OutboundDeliveryError(formatErrorMessage(params.error), {
     cause: params.error,
-    results: params.results,
+    results: mergedResults,
     payloadOutcomes: params.payloadOutcomes,
     stage: params.stage,
   });
@@ -1969,11 +2001,17 @@ async function deliverOutboundPayloadsCore(
         messageId: lastMessageId,
       });
     } catch (err) {
+      const partialResults = readPartialDeliveryResults(err);
+      if (params.bestEffort) {
+        for (const result of partialResults) {
+          pushIdentifiedDeliveryResult(results, result);
+        }
+      }
       recordPayloadOutcome({
         index: payloadIndex,
         status: "failed",
         error: err,
-        sentBeforeError: results.length > 0,
+        sentBeforeError: results.length > 0 || partialResults.length > 0,
         stage: "platform_send",
       });
       errorDeliveryDiagnostics(err);

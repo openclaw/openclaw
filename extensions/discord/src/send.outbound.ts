@@ -138,6 +138,29 @@ function toDiscordSendResult(
   return createDiscordSendResult(resultParams);
 }
 
+function createDiscordPartialSendError(params: {
+  error: unknown;
+  result: DiscordSendResult;
+}): unknown {
+  const partialResults = [
+    {
+      channel: "discord",
+      ...params.result,
+    },
+  ];
+  if (params.error && typeof params.error === "object" && Object.isExtensible(params.error)) {
+    return Object.assign(params.error, {
+      results: partialResults,
+      sentBeforeError: true,
+    });
+  }
+  return Object.assign(new Error("discord send failed after partial delivery"), {
+    cause: params.error,
+    results: partialResults,
+    sentBeforeError: true,
+  });
+}
+
 async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
@@ -294,12 +317,23 @@ export async function sendMessageDiscord(
         });
       }
     } catch (err) {
-      throw await buildDiscordSendError(err, {
+      const sendError = await buildDiscordSendError(err, {
         channelId: threadId,
         cfg,
         rest,
         token,
         hasMedia: Boolean(opts.mediaUrl),
+      });
+      throw createDiscordPartialSendError({
+        error: sendError,
+        result: toDiscordSendResult(
+          {
+            id: messageId,
+            channel_id: resultChannelId,
+          },
+          channelId,
+          { kind: "text", threadId },
+        ),
       });
     }
 

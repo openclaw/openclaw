@@ -2554,6 +2554,67 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
+  it("merges adapter partial results with earlier delivered payloads", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "text-1",
+      roomId: "r1",
+    });
+    const mediaFailure = Object.assign(new Error("media too large"), {
+      results: [{ channel: "matrix", messageId: "fallback-1", roomId: "r1" }],
+      sentBeforeError: true,
+    });
+    const sendMedia = vi.fn().mockRejectedValue(mediaFailure);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [
+          { text: "first" },
+          { text: "second", mediaUrl: "https://example.com/too-large.mp3" },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      name: "OutboundDeliveryError",
+      sentBeforeError: true,
+      results: [
+        { channel: "matrix", messageId: "text-1", roomId: "r1" },
+        { channel: "matrix", messageId: "fallback-1", roomId: "r1" },
+      ],
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "sent",
+          results: [{ channel: "matrix", messageId: "text-1", roomId: "r1" }],
+        },
+        {
+          index: 1,
+          status: "failed",
+          sentBeforeError: true,
+          stage: "platform_send",
+        },
+      ],
+    });
+  });
+
   it("passes formatting overrides for pre-rendered chunker output", async () => {
     const chunker = vi.fn(() => ["<b>bold</b>"]);
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
@@ -2693,6 +2754,35 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ channel: "matrix", messageId: "m2", roomId: "!room:example" }]);
+  });
+
+  it("preserves adapter partial results when bestEffort continues after a failure", async () => {
+    const partialFailure = Object.assign(new Error("media too large"), {
+      results: [{ channel: "matrix", messageId: "fallback-1", roomId: "!room:example" }],
+      sentBeforeError: true,
+    });
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(partialFailure)
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const onError = vi.fn();
+
+    const results = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/large.mp3" }, { text: "next" }],
+      deps: { matrix: sendMatrix },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      { channel: "matrix", messageId: "fallback-1", roomId: "!room:example" },
+      { channel: "matrix", messageId: "m2", roomId: "!room:example" },
+    ]);
   });
 
   it("emits internal message:sent hook with success=true for chunked payload delivery", async () => {

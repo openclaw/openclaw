@@ -466,6 +466,74 @@ describe("discordOutbound", () => {
     expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
   });
 
+  it("sends text fallback and reports partial failure when Discord rejects oversized media", async () => {
+    const tooLarge = Object.assign(new Error("Request entity too large"), { status: 413 });
+    hoisted.sendMessageDiscordMock
+      .mockRejectedValueOnce(tooLarge)
+      .mockResolvedValueOnce({ messageId: "fallback-text-1", channelId: "ch-1" });
+
+    await expect(
+      discordOutbound.sendMedia?.({
+        cfg: {},
+        to: "channel:123456",
+        text: "song ready",
+        mediaUrl: "media://local/song.mp3",
+        accountId: "default",
+        replyToId: "reply-1",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "Request entity too large",
+      sentBeforeError: true,
+      results: [{ channel: "discord", messageId: "fallback-text-1", channelId: "ch-1" }],
+    });
+
+    const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(mediaCall[0]).toBe("channel:123456");
+    expect(mediaCall[1]).toBe("song ready");
+    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2)).toMatchObject(
+      {
+        accountId: "default",
+        mediaUrl: "media://local/song.mp3",
+        replyTo: "reply-1",
+      },
+    );
+
+    const fallbackCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
+    expect(fallbackCall[0]).toBe("channel:123456");
+    expect(fallbackCall[1]).toBe("song ready");
+    const fallbackOptions = mockObjectArg(
+      hoisted.sendMessageDiscordMock,
+      "sendMessageDiscord",
+      1,
+      2,
+    );
+    expect(fallbackOptions.accountId).toBe("default");
+    expect(fallbackOptions.replyTo).toBe("reply-1");
+    expect(fallbackOptions.mediaUrl).toBeUndefined();
+  });
+
+  it("does not send duplicate fallback text when the media error already has send evidence", async () => {
+    const tooLarge = Object.assign(new Error("Request entity too large"), {
+      status: 413,
+      sentBeforeError: true,
+      results: [{ channel: "discord", messageId: "starter-1", channelId: "thread-1" }],
+    });
+    hoisted.sendMessageDiscordMock.mockRejectedValueOnce(tooLarge);
+
+    await expect(
+      discordOutbound.sendMedia?.({
+        cfg: {},
+        to: "channel:forum-1",
+        text: "song ready",
+        mediaUrl: "media://local/song.mp3",
+        accountId: "default",
+      }),
+    ).rejects.toBe(tooLarge);
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
   it("touches bound thread activity after shared outbound delivery succeeds", async () => {
     const touchThread = vi.fn();
     hoisted.getThreadBindingManagerMock.mockReturnValue({
