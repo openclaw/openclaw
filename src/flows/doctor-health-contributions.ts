@@ -1786,7 +1786,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Startup channel maintenance",
       healthCheckIds: [
         "core/doctor/channel-plugin-blockers",
-        "core/doctor/startup-channel-maintenance",
+        "core/doctor/channel-preview-warnings",
       ],
       healthChecks: [
         {
@@ -1802,13 +1802,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           },
         },
         {
-          id: "core/doctor/startup-channel-maintenance",
-          description: "Channel startup maintenance warnings are captured as structured findings.",
+          id: "core/doctor/channel-preview-warnings",
+          description: "Channel doctor preview warnings are captured as structured findings.",
           defaultEnabled: false,
           async detect(ctx) {
-            const { collectStartupChannelMaintenanceHealthFindings } =
+            const { collectChannelPreviewWarningHealthFindings } =
               await import("./doctor-startup-channel-maintenance.js");
-            return collectStartupChannelMaintenanceHealthFindings({ cfg: ctx.cfg });
+            return collectChannelPreviewWarningHealthFindings({ cfg: ctx.cfg });
           },
         },
       ],
