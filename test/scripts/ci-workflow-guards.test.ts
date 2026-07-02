@@ -146,10 +146,21 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
-    expect(refreshStep.run).toContain("run_refresh openai");
+    expect(refreshStep.run).toContain("run_openai_refresh");
+    expect(refreshStep.run).toContain("repository OpenAI key");
+    expect(refreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
-    expect(controlUiRefreshStep.run).toContain("run_refresh openai");
+    expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
+    expect(controlUiRefreshStep.run).toContain("repository OpenAI key");
+    expect(controlUiRefreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
     expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
     expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
     expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
