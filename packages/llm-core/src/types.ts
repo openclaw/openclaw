@@ -591,7 +591,10 @@ export interface Model<TApi extends Api = Api> {
    * Missing keys use provider defaults. null marks a level as unsupported.
    */
   thinkingLevelMap?: ThinkingLevelMap;
-  input: ("text" | "image")[];
+  // Input modalities a model accepts. Mirrors the model-registry/config catalog
+  // contract: provider catalog refreshes can carry "video"/"audio", so the type
+  // must admit them or the registry emits values its own Model type forbids.
+  input: ("text" | "image" | "video" | "audio")[];
   cost: {
     input: number; // $/million tokens
     output: number; // $/million tokens
