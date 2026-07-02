@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -289,7 +290,7 @@ async function fetchGoogleMeetJson<T>(params: {
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, params.errorPrefix);
   } finally {
     await release();
   }
@@ -354,7 +355,10 @@ export async function fetchGoogleMeetSpace(params: {
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.get",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.get response was missing name");
     }
@@ -368,10 +372,8 @@ export async function createGoogleMeetSpace(params: {
   accessToken: string;
   config?: GoogleMeetSpaceConfig;
 }): Promise<GoogleMeetCreateSpaceResult> {
-  const body =
-    params.config && Object.keys(params.config).length > 0
-      ? JSON.stringify({ config: params.config })
-      : "{}";
+  const hasConfig = Boolean(params.config && Object.keys(params.config).length > 0);
+  const body = hasConfig ? JSON.stringify({ config: params.config }) : "{}";
   const { response, release } = await fetchWithSsrFGuard({
     url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
     init: {
@@ -391,13 +393,15 @@ export async function createGoogleMeetSpace(params: {
       throw await googleApiError({
         response,
         prefix: "Google Meet spaces.create",
-        scopes:
-          params.config && Object.keys(params.config).length > 0
-            ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
-            : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
+        scopes: hasConfig
+          ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
+          : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.create",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.create response was missing name");
     }
