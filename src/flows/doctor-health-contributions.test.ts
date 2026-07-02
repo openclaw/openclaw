@@ -10,7 +10,7 @@ import {
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
@@ -83,6 +83,7 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
@@ -297,6 +298,11 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+vi.mock("../commands/doctor-disk-space.js", () => ({
+  noteDiskSpace: vi.fn(),
+  collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
+}));
+
 vi.mock("../commands/doctor-device-pairing.js", () => ({
   collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
@@ -490,6 +496,8 @@ describe("doctor health contributions", () => {
     mocks.noteWorkspaceStatus.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
+    mocks.collectDiskSpaceHealthFindings.mockReset();
+    mocks.collectDiskSpaceHealthFindings.mockReturnValue([]);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
@@ -1211,6 +1219,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/disk-space");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
@@ -1401,6 +1410,47 @@ describe("doctor health contributions", () => {
     });
 
     expect(findings).toEqual([]);
+  });
+
+  it("keeps disk space opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const diskSpaceCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/disk-space",
+    );
+    expect(diskSpaceCheck).toMatchObject({ defaultEnabled: false });
+    expect(diskSpaceCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [diskSpaceCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectDiskSpaceHealthFindings).not.toHaveBeenCalled();
+
+    mocks.collectDiskSpaceHealthFindings.mockReturnValueOnce([
+      {
+        checkId: "core/doctor/disk-space",
+        severity: "warning",
+        message: "Low disk space: 300 MB free on the partition containing ~/.openclaw.",
+        path: "/home/test/.openclaw",
+        requirement: "low-free-space",
+      },
+    ]);
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/disk-space"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
+    });
+    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(ctx.cfg);
   });
 
   it("keeps device pairing opt-in for default lint selection", async () => {
