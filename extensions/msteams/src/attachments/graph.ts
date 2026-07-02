@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 // Msteams plugin module implements graph behavior.
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -34,6 +35,8 @@ import type {
   MSTeamsGraphMediaResult,
   MSTeamsInboundMedia,
 } from "./types.js";
+
+const MSTEAMS_GRAPH_JSON_MAX_BYTES = 256 * 1024; // 256 KiB — graph collection pages are paginated
 
 type GraphHostedContent = {
   id?: string | null;
@@ -142,8 +145,12 @@ async function fetchGraphCollection(params: {
     if (!response.ok) {
       return { status, items: [] };
     }
+    const bytes = await readResponseWithLimit(response, MSTEAMS_GRAPH_JSON_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`MS Teams Graph response exceeds ${maxBytes} bytes (got ${size})`),
+    });
     try {
-      const data = (await response.json()) as { value?: unknown[] };
+      const data = JSON.parse(new TextDecoder().decode(bytes)) as { value?: unknown[] };
       return { status, items: Array.isArray(data.value) ? data.value : [] };
     } catch {
       return { status, items: [] };
