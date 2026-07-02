@@ -298,7 +298,8 @@ function assertMSTeamsReadTargetAllowed(params: {
   const target = normalizeOptionalString(params.target);
   const groupPolicy =
     msteamsCfg?.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist";
-  if (groupPolicy === "open") {
+  const routeAllowlistConfigured = Object.keys(msteamsCfg?.teams ?? {}).length > 0;
+  if (groupPolicy === "open" && !routeAllowlistConfigured) {
     return;
   }
   if (

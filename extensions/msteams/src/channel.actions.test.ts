@@ -413,6 +413,72 @@ describe("msteamsPlugin message actions", () => {
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
+  it("blocks explicit read targets outside configured Teams routes under open sender policy", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "open",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "19:allowed@thread.tacv2": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit read targets inside configured Teams routes under open sender policy", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        target: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
   it("advertises upload-file in the message tool surface", () => {
     expect(
       msteamsPlugin.actions?.describeMessageTool?.({
