@@ -100,11 +100,35 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
   return "unknown";
 }
 
+// When a chatId extracted by one of the thread-suffix parsers contains
+// unexpected colons that are not part of a known t.me URL form, the parser
+// is oversplitting — fall back to full-string instead of silently
+// embedding colon-separated residue in chatId.
+// Mirrors the lookup shape used by normalizeTelegramLookupTarget:
+//   /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i
+// so malformed t.me-looking inputs like "https://t.me/foo:bar:9" are
+// rejected (the extracted chatId "https://t.me/foo:bar" is not a valid
+// lookup target).
+const VALID_TME_LOOKUP_TARGET = /^(?:https?:\/\/)?t\.me\/[A-Za-z0-9_]+$/i;
+
+function hasOversplitColons(chatId: string): boolean {
+  return chatId.includes(":") && !VALID_TME_LOOKUP_TARGET.test(chatId);
+}
+
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
 
+  // Non-greedy (.+?) stops at the first :topic:, which correctly handles
+  // URL forms like "t.me/mychannel:topic:9". The guard rejects chatIds
+  // with unexpected colons (e.g. "a:b:topic:42" → "a:b" is not a real chatId).
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
+    if (hasOversplitColons(topicMatch[1])) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
     const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
     if (messageThreadId === undefined) {
       return {
@@ -119,8 +143,17 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     };
   }
 
+  // Greedy (.+) so URL-form targets like "https://t.me/mychannel:9" still
+  // parse (the scheme colon is not a thread-spec delimiter). Guard rejects
+  // chatIds with unexpected colons, same invariant as the topic parser.
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
+    if (hasOversplitColons(colonMatch[1])) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
     const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
     if (messageThreadId === undefined) {
       return {
