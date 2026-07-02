@@ -26,6 +26,10 @@ metadata:
 
 Use `himalaya` for IMAP/SMTP email from shell.
 
+For an **agent-owned** inbox (register a new `@atomicmail.ai` address over JMAP,
+with hourly triage), use the `atomicmail` skill instead. Use `himalaya` when the
+operator already has a personal mailbox (Gmail app password, corporate IMAP).
+
 ## References
 
 - `references/configuration.md`: account config, auth, backend setup.
