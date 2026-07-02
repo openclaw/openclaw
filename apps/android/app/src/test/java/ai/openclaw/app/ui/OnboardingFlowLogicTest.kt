@@ -472,6 +472,7 @@ class OnboardingFlowLogicTest {
       GatewayRecoveryUiState.Connected,
       gatewayPairingUiState(
         gatewayPaired = true,
+        gatewayPairingCanContinue = true,
         statusText = "Waiting for node approval",
         connectSettling = false,
         connectTimedOut = true,
@@ -485,6 +486,7 @@ class OnboardingFlowLogicTest {
       GatewayRecoveryUiState.ApprovalRequired,
       gatewayPairingUiState(
         gatewayPaired = true,
+        gatewayPairingCanContinue = false,
         statusText = "Connected (node offline)",
         connectSettling = false,
         gatewayConnectionProblem =
@@ -507,6 +509,7 @@ class OnboardingFlowLogicTest {
       GatewayRecoveryUiState.Pairing,
       gatewayPairingUiState(
         gatewayPaired = true,
+        gatewayPairingCanContinue = false,
         statusText = "Connected (node offline)",
         connectSettling = false,
         gatewayConnectionProblem =
@@ -524,11 +527,36 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun gatewayPairingWaitsWhenOperatorConnectedButNoContinueDestinationExists() {
+    assertEquals(
+      GatewayRecoveryUiState.Finishing,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        connectTimedOut = false,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.TakingLonger,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
   fun gatewayPairingShowsSlowConnectionWhenGatewayNeverPairs() {
     assertEquals(
       GatewayRecoveryUiState.TakingLonger,
       gatewayPairingUiState(
         gatewayPaired = false,
+        gatewayPairingCanContinue = false,
         statusText = "Connecting…",
         connectSettling = false,
         connectTimedOut = true,
