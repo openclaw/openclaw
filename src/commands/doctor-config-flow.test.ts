@@ -8,6 +8,7 @@ import {
   getDoctorConfigInputForTest,
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -1509,6 +1510,7 @@ describe("doctor config flow", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
     runDoctorRepairSequenceMock.mockReset();
+    vi.mocked(runDoctorConfigPreflight).mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
@@ -1527,6 +1529,63 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("does not run state or legacy config migrations for dry-run previews", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: ({ confirm }) =>
+        loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, dryRun: true },
+          confirm: async () => confirm(),
+        }),
+    });
+
+    expect(runDoctorConfigPreflight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: false,
+        recoverCorruptTargetStore: false,
+      }),
+    );
+  });
+
+  it("does not run state or legacy config migrations for diff previews", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: ({ confirm }) =>
+        loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, diff: true },
+          confirm: async () => confirm(),
+        }),
+    });
+
+    expect(runDoctorConfigPreflight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: false,
+        recoverCorruptTargetStore: false,
+      }),
+    );
+  });
+
+  it("keeps migrations enabled for repair runs", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(runDoctorConfigPreflight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        migrateState: true,
+        migrateLegacyConfig: true,
+        repairPrefixedConfig: true,
+        recoverCorruptTargetStore: true,
+      }),
+    );
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
