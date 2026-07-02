@@ -57,6 +57,19 @@ import { anthropicMediaUnderstandingProvider } from "./media-understanding-provi
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
+
+// Anthropic-native error types mapped to failover reasons. Vendor semantics stay
+// in the Anthropic plugin; core's code classifier remains provider-agnostic.
+function classifyAnthropicFailoverCode(code: string | undefined) {
+  switch (code?.trim().toUpperCase()) {
+    case "RATE_LIMIT_ERROR":
+      return "rate_limit" as const;
+    case "API_ERROR":
+      return "timeout" as const;
+    default:
+      return undefined;
+  }
+}
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
@@ -844,6 +857,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicFable5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
+    classifyFailoverReason: ({ provider, code }) =>
+      normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
+        ? classifyAnthropicFailoverCode(code)
+        : undefined,
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
       return isAnthropicFable5Model(contractModelId) &&

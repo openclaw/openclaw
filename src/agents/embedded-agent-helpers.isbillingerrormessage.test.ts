@@ -1493,6 +1493,33 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  // Generic cross-provider codes still classify in core without a provider hook.
+  it("classifies generic resource-exhausted codes as rate_limit", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        code: "RESOURCE_EXHAUSTED",
+        message: "",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  // Regression: message-less structured code signals must not be reported as
+  // empty responses, otherwise failover/cooldown never runs. Provider-native
+  // code -> reason mapping is owned by each provider plugin and covered there.
+  it.each([
+    { provider: "openai", code: "SERVER_ERROR" },
+    { provider: "google", code: "UNAVAILABLE" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not report code-only $provider $code failures as empty responses",
+    ({ provider, code }) => {
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
+        "empty_response",
+      );
+    },
+  );
+
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({

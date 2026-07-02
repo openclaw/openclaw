@@ -902,6 +902,10 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Core stays provider-agnostic: only cross-provider codes classify here.
+// Provider-native code semantics (OpenAI/Google/Anthropic) live in each
+// provider plugin's classifyFailoverReason hook, dispatched from
+// classifyFailoverSignal via the structured-signal provider path.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -1242,8 +1246,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredCodeSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredCodeSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
