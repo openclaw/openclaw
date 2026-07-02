@@ -100,6 +100,18 @@ export function registerDevicesCli(program: Command) {
 
   devicesCallOpts(
     devices
+      .command("rename")
+      .description("Rename a paired device")
+      .requiredOption("--device <id>", "Device id")
+      .requiredOption("--name <displayName>", "Human-friendly display name")
+      .action(async (opts: DevicesRpcOpts) => {
+        const { runDevicesRenameCommand } = await loadDevicesRuntime();
+        await runDevicesRenameCommand(opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
       .command("rotate")
       .description("Rotate a device token for a role")
       .requiredOption("--device <id>", "Device id")
