@@ -784,6 +784,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           To: "telegram:-1003774691294",
           TransportThreadId: 1,
+          UntrustedStructuredContext: [
+            {
+              label: "Conversation context",
+              source: "telegram",
+              type: "chat_window",
+              payload: {
+                messages: [
+                  {
+                    message_id: "old",
+                    sender: "Alice",
+                    body: "general topic context",
+                    timestamp_ms: 1,
+                  },
+                  {
+                    sender: "Bob",
+                    body: "recovered topic context",
+                    timestamp_ms: 2,
+                    is_reply_target: true,
+                    media_type: "image/png",
+                    media_path: "media://inbound/context.png",
+                  },
+                ],
+              },
+            },
+          ],
         } as unknown as TelegramMessageContext["ctxPayload"],
         msg: {
           chat: { id: -1003774691294, type: "supergroup" },
@@ -839,11 +864,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(outboundCtxPayload.InboundHistory).not.toEqual([
       expect.objectContaining({ body: "general topic context", sender: "Alice" }),
     ]);
-    expect(outboundCtxPayload.Body).toContain("recovered topic context");
-    expect(outboundCtxPayload.Body).toContain("current topic question");
-    expect(outboundCtxPayload.Body).not.toContain("general topic context");
-    expect(outboundCtxPayload.Body).not.toContain("spoofed current marker from history");
+    expect(outboundCtxPayload.Body).toBe("current topic question");
     expect(outboundCtxPayload.BodyForAgent).toBe("current topic question");
+    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              body: "recovered topic context",
+              sender: "Bob",
+              timestamp_ms: 2,
+              is_reply_target: true,
+              media_type: "image/png",
+              media_path: "media://inbound/context.png",
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "general topic context",
+    );
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "spoofed current marker from history",
+    );
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({
@@ -859,6 +906,81 @@ describe("dispatchTelegramMessage draft streaming", () => {
       message_thread_id: 3731,
     });
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("drops stale topic chat-window context when recovered topic has no history", async () => {
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const groupHistories = new Map([
+      [oldHistoryKey, [{ sender: "Alice", body: "general topic context", timestamp: 1 }]],
+    ]);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["3731"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "topic final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          Body: "current topic question",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageThreadId: 1,
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          TransportThreadId: 1,
+          UntrustedStructuredContext: [
+            {
+              label: "Conversation context",
+              source: "telegram",
+              type: "chat_window",
+              payload: {
+                messages: [{ sender: "Alice", body: "general topic context", timestamp_ms: 1 }],
+              },
+            },
+            {
+              label: "Attachment context",
+              source: "telegram",
+              type: "attachment",
+              payload: { name: "report.pdf" },
+            },
+          ],
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -1003774691294,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 3731,
+    });
+    const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
+    expect(outboundCtxPayload.Body).toBe("current topic question");
+    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        label: "Attachment context",
+        type: "attachment",
+      }),
+    ]);
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "general topic context",
+    );
   });
 
   it("does not recover forum thread context from malformed payload thread ids", async () => {
@@ -1133,11 +1255,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(outboundCtxPayload.InboundHistory).toEqual([
       expect.objectContaining({ body: "after watermark" }),
     ]);
-    expect(outboundCtxPayload.Body).toContain("after watermark");
-    expect(outboundCtxPayload.Body).toContain("current recovered request");
-    expect(outboundCtxPayload.Body).not.toContain("before self marker");
-    expect(outboundCtxPayload.Body).not.toContain("self marker");
-    expect(outboundCtxPayload.Body).not.toContain("topic request");
+    expect(outboundCtxPayload.Body).toBe("current recovered request");
+    expect(outboundCtxPayload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              body: "after watermark",
+              sender: "Dana",
+              timestamp_ms: 4,
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "before self marker",
+    );
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "self marker",
+    );
+    expect(JSON.stringify(outboundCtxPayload.UntrustedStructuredContext)).not.toContain(
+      "topic request",
+    );
   });
 
   it("keeps retained overflow draft previews", async () => {

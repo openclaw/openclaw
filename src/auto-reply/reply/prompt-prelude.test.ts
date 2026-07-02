@@ -97,7 +97,6 @@ describe("buildReplyPromptEnvelope", () => {
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
-        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -117,7 +116,6 @@ describe("buildReplyPromptEnvelope", () => {
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
-        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -213,14 +211,14 @@ describe("buildReplyPromptEnvelope", () => {
       sessionCtx,
       baseBody: "",
       hasUserBody: true,
-      inboundUserContext: "Sender (untrusted metadata):\nsender_id=U123",
+      inboundUserContext: 'Conversation info (untrusted metadata):\n{"sender":{"id":"U123"}}',
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
       softResetTail: "re-read persona files",
     });
 
-    expect(envelope.prefixedCommandBody).toContain("Sender (untrusted metadata):");
+    expect(envelope.prefixedCommandBody).toContain("Conversation info (untrusted metadata):");
     expect(envelope.prefixedCommandBody).toContain("Startup context");
     expect(envelope.prefixedCommandBody).toContain("re-read persona files");
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");

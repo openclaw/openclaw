@@ -20,11 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import {
-  buildHistoryContextFromEntries,
-  createChannelHistoryWindow,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -56,6 +52,8 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
+  isTelegramChatWindowPromptContext,
+  mergeTelegramGroupHistoryPromptContext,
   recordTelegramGroupHistoryEntry,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
@@ -116,10 +114,6 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
-function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEntry): boolean {
-  return entry.source === "telegram" && entry.type === "chat_window";
-}
-
 function replyTargetToChainEntry(replyTarget: TelegramReplyTarget): TelegramReplyChainEntry {
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
@@ -171,23 +165,6 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
-}
-
-function formatTelegramGroupHistoryEntry(params: {
-  entry: HistoryEntry;
-  groupLabel: string;
-  chatId: number | string;
-  envelopeOptions: ReturnType<typeof resolveEnvelopeFormatOptions>;
-}): string {
-  return formatInboundEnvelope({
-    channel: "Telegram",
-    from: params.groupLabel,
-    timestamp: params.entry.timestamp,
-    body: `${params.entry.body} [id:${params.entry.messageId ?? "unknown"} chat:${params.chatId}]`,
-    chatType: "group",
-    senderLabel: params.entry.sender,
-    envelope: params.envelopeOptions,
-  });
 }
 
 export async function buildTelegramInboundContextPayload(params: {
@@ -408,7 +385,7 @@ export async function buildTelegramInboundContextPayload(params: {
     !visibleReplyTarget;
   // Existing plain DMs already carry their history through the persistent
   // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
-  const visiblePromptContext = shouldSuppressPersistedDmChatWindowContext
+  const baseVisiblePromptContext = shouldSuppressPersistedDmChatWindowContext
     ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
     : promptContext;
   const body = formatInboundEnvelope({
@@ -449,29 +426,19 @@ export async function buildTelegramInboundContextPayload(params: {
     hasAbortRequest,
     commandSource,
   });
-  let combinedBody = body;
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
+  let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
     const fullGroupHistoryEntries = (groupHistories.get(historyKey) ?? []).slice(-historyLimit);
     watermarkedGroupHistoryEntries =
       selectTelegramGroupHistoryAfterLastSelf(fullGroupHistoryEntries).slice(-historyLimit);
-    // User-request turns use a non-destructive self-entry watermark. Room events
-    // are not session-persisted, so clearing this window loses ambient context.
-    const bodyHistoryEntries =
+    groupHistoryPromptEntries =
       inboundEventKind === "room_event" ? fullGroupHistoryEntries : watermarkedGroupHistoryEntries;
-    combinedBody = buildHistoryContextFromEntries({
-      entries: bodyHistoryEntries,
-      currentMessage: combinedBody,
-      formatEntry: (entry) =>
-        formatTelegramGroupHistoryEntry({
-          entry,
-          groupLabel: groupLabel ?? `group:${chatId}`,
-          chatId,
-          envelopeOptions,
-        }),
-      excludeLast: false,
-    });
   }
+  const visiblePromptContext = mergeTelegramGroupHistoryPromptContext({
+    promptContext: baseVisiblePromptContext,
+    entries: groupHistoryPromptEntries,
+  });
 
   const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
     groupConfig,
@@ -543,7 +510,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     message: {
       inboundEventKind,
-      body: combinedBody,
+      body,
       rawBody,
       bodyForAgent: bodyText,
       commandBody,
