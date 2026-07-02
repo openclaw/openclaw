@@ -25,13 +25,43 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
+const MAX_CHAT_COMPLETIONS_INPUT_IMAGES = 5;
 const MB = 1024 * 1024;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
+  "google/gemini-3.1-flash-image",
+  "google/gemini-3-pro-image",
   "google/gemini-3-pro-image-preview",
+  "google/gemini-2.5-flash-image",
+  "openai/gpt-5-image",
+  "openai/gpt-5-image-mini",
   "openai/gpt-5.4-image-2",
+  "microsoft/mai-image-2.5",
 ] as const;
 const SUPPORTED_ASPECT_RATIOS = [
+  "1:1",
+  "1:4",
+  "1:8",
+  "2:3",
+  "3:2",
+  "3:4",
+  "4:1",
+  "4:3",
+  "4:5",
+  "5:4",
+  "8:1",
+  "9:16",
+  "16:9",
+  "21:9",
+] as const;
+const MAX_IMAGES_API_INPUT_REFERENCES = 10;
+type OpenRouterImagesApiModelCapabilities = {
+  maxCount: number;
+  maxInputImages: number;
+  aspectRatios?: readonly string[];
+  resolutions?: readonly string[];
+};
+const GEMINI_IMAGE_ASPECT_RATIOS = [
   "1:1",
   "2:3",
   "3:2",
@@ -43,6 +73,57 @@ const SUPPORTED_ASPECT_RATIOS = [
   "16:9",
   "21:9",
 ] as const;
+const OPENROUTER_IMAGES_API_MODEL_CAPABILITIES: Record<
+  string,
+  OpenRouterImagesApiModelCapabilities
+> = {
+  "google/gemini-3.1-flash-image": {
+    maxCount: 1,
+    maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+    aspectRatios: [...GEMINI_IMAGE_ASPECT_RATIOS, "1:4", "1:8", "4:1", "8:1"],
+    resolutions: ["1K", "2K", "4K"],
+  },
+  "google/gemini-3-pro-image": {
+    maxCount: 1,
+    maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+    aspectRatios: GEMINI_IMAGE_ASPECT_RATIOS,
+    resolutions: ["1K", "2K", "4K"],
+  },
+  "google/gemini-2.5-flash-image": {
+    maxCount: 1,
+    maxInputImages: 3,
+    aspectRatios: GEMINI_IMAGE_ASPECT_RATIOS,
+  },
+  "openai/gpt-5-image": {
+    maxCount: MAX_IMAGE_RESULTS,
+    maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+  },
+  "openai/gpt-5-image-mini": {
+    maxCount: MAX_IMAGE_RESULTS,
+    maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+  },
+  "microsoft/mai-image-2.5": {
+    maxCount: 1,
+    maxInputImages: 1,
+    aspectRatios: ["1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"],
+  },
+};
+const DEDICATED_IMAGE_API_MODELS = new Set<string>(
+  Object.keys(OPENROUTER_IMAGES_API_MODEL_CAPABILITIES),
+);
+const OPENROUTER_MAX_COUNTS_BY_MODEL = Object.fromEntries(
+  SUPPORTED_MODELS.map((model) => [
+    model,
+    OPENROUTER_IMAGES_API_MODEL_CAPABILITIES[model]?.maxCount ?? MAX_IMAGE_RESULTS,
+  ]),
+);
+const OPENROUTER_MAX_INPUT_IMAGES_BY_MODEL = Object.fromEntries(
+  SUPPORTED_MODELS.map((model) => [
+    model,
+    OPENROUTER_IMAGES_API_MODEL_CAPABILITIES[model]?.maxInputImages ??
+      MAX_CHAT_COMPLETIONS_INPUT_IMAGES,
+  ]),
+);
 const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
 function throwMalformedOpenRouterImageResponse(message: string | undefined): never | undefined {
@@ -136,6 +217,42 @@ function extractImagesFromPart(
   throwMalformedOpenRouterImageResponse(malformedResponseError);
 }
 
+function extractImagesFromDataArray(
+  images: GeneratedImageAsset[],
+  data: unknown,
+  malformedResponseError?: string,
+): boolean {
+  if (data === undefined || data === null) {
+    return false;
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    return true;
+  }
+  for (const entry of data) {
+    if (!isRecord(entry)) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    const rawBase64 = normalizeOptionalString(entry.b64_json);
+    if (!rawBase64) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    const image = generatedImageAssetFromBase64({
+      base64: rawBase64,
+      index: images.length,
+      mimeType: normalizeOptionalString(entry.media_type),
+    });
+    if (!image) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return true;
+}
+
 export function extractOpenRouterImagesFromResponse(
   body: unknown,
   options: { malformedResponseError?: string } = {},
@@ -143,6 +260,10 @@ export function extractOpenRouterImagesFromResponse(
   if (!isRecord(body)) {
     throwMalformedOpenRouterImageResponse(options.malformedResponseError);
     return [];
+  }
+  const images: GeneratedImageAsset[] = [];
+  if (extractImagesFromDataArray(images, body.data, options.malformedResponseError)) {
+    return images;
   }
   const choices = body.choices;
   if (choices === undefined || choices === null) {
@@ -153,7 +274,6 @@ export function extractOpenRouterImagesFromResponse(
     return [];
   }
 
-  const images: GeneratedImageAsset[] = [];
   for (const choice of choices) {
     if (!isRecord(choice)) {
       throwMalformedOpenRouterImageResponse(options.malformedResponseError);
@@ -265,6 +385,108 @@ function buildImageConfig(req: ImageGenerationRequest, model: string): Record<st
   return imageConfig;
 }
 
+function shouldUseDedicatedImagesApi(model: string): boolean {
+  return DEDICATED_IMAGE_API_MODELS.has(model);
+}
+
+function resolveImagesApiModelCapabilities(model: string): OpenRouterImagesApiModelCapabilities {
+  return (
+    OPENROUTER_IMAGES_API_MODEL_CAPABILITIES[model] ?? {
+      maxCount: 1,
+      maxInputImages: 0,
+    }
+  );
+}
+
+function assertImagesApiModelCount(
+  model: string,
+  req: ImageGenerationRequest,
+  capabilities: OpenRouterImagesApiModelCapabilities,
+): number {
+  const count = resolveImageCount(req.count);
+  if (
+    typeof req.count === "number" &&
+    Number.isFinite(req.count) &&
+    count > capabilities.maxCount
+  ) {
+    throw new Error(
+      `OpenRouter image model ${model} supports at most ${capabilities.maxCount} output image${
+        capabilities.maxCount === 1 ? "" : "s"
+      }.`,
+    );
+  }
+  return count;
+}
+
+function assertImagesApiModelGeometry(
+  model: string,
+  req: ImageGenerationRequest,
+  capabilities: OpenRouterImagesApiModelCapabilities,
+): { aspectRatio?: string; resolution?: string } {
+  const aspectRatio = normalizeOptionalString(req.aspectRatio);
+  if (aspectRatio && !capabilities.aspectRatios?.includes(aspectRatio)) {
+    throw new Error(`OpenRouter image model ${model} does not support aspectRatio=${aspectRatio}.`);
+  }
+  const resolution = normalizeOptionalString(req.resolution);
+  if (resolution && !capabilities.resolutions?.includes(resolution)) {
+    if (req.resolutionInferred === true) {
+      return { aspectRatio };
+    }
+    throw new Error(`OpenRouter image model ${model} does not support resolution=${resolution}.`);
+  }
+  return { aspectRatio, resolution };
+}
+
+function assertImagesApiInputImages(
+  model: string,
+  req: ImageGenerationRequest,
+  capabilities: OpenRouterImagesApiModelCapabilities,
+) {
+  const inputImages = req.inputImages ?? [];
+  if (inputImages.length > capabilities.maxInputImages) {
+    throw new Error(
+      `OpenRouter image model ${model} supports at most ${
+        capabilities.maxInputImages
+      } reference image${capabilities.maxInputImages === 1 ? "" : "s"}.`,
+    );
+  }
+  return inputImages;
+}
+
+function buildImagesApiBody(req: ImageGenerationRequest, model: string) {
+  const capabilities = resolveImagesApiModelCapabilities(model);
+  const count = assertImagesApiModelCount(model, req, capabilities);
+  const { aspectRatio, resolution } = assertImagesApiModelGeometry(model, req, capabilities);
+  const inputImages = assertImagesApiInputImages(model, req, capabilities);
+  const body: Record<string, unknown> = {
+    model,
+    prompt: req.prompt,
+    n: count,
+  };
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
+  }
+  if (resolution) {
+    body.resolution = resolution;
+  }
+  if (inputImages.length > 0) {
+    body.input_references = inputImages.map((image) => ({
+      type: "image_url",
+      image_url: { url: toImageDataUrl(image) },
+    }));
+  }
+  return { body, count };
+}
+
+function assertChatCompletionsInputImages(model: string, req: ImageGenerationRequest): void {
+  const inputImages = req.inputImages ?? [];
+  if (inputImages.length > MAX_CHAT_COMPLETIONS_INPUT_IMAGES) {
+    throw new Error(
+      `OpenRouter image model ${model} supports at most ${MAX_CHAT_COMPLETIONS_INPUT_IMAGES} reference images.`,
+    );
+  }
+}
+
 export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "openrouter",
@@ -276,6 +498,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
     capabilities: {
       generate: {
         maxCount: MAX_IMAGE_RESULTS,
+        maxCountByModel: OPENROUTER_MAX_COUNTS_BY_MODEL,
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -283,7 +506,9 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       edit: {
         enabled: true,
         maxCount: MAX_IMAGE_RESULTS,
-        maxInputImages: 5,
+        maxCountByModel: OPENROUTER_MAX_COUNTS_BY_MODEL,
+        maxInputImages: MAX_IMAGES_API_INPUT_REFERENCES,
+        maxInputImagesByModel: OPENROUTER_MAX_INPUT_IMAGES_BY_MODEL,
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -321,17 +546,24 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
           transport: "http",
         });
 
-      const count = resolveImageCount(req.count);
+      const useImagesApi = shouldUseDedicatedImagesApi(model);
+      const imagesApiRequest = useImagesApi ? buildImagesApiBody(req, model) : undefined;
+      const count = imagesApiRequest?.count ?? resolveImageCount(req.count);
+      if (!useImagesApi) {
+        assertChatCompletionsInputImages(model, req);
+      }
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/chat/completions`,
+        url: useImagesApi ? `${baseUrl}/images` : `${baseUrl}/chat/completions`,
         headers,
-        body: {
-          model,
-          messages: [{ role: "user", content: buildMessageContent(req) }],
-          modalities: ["image", "text"],
-          n: count,
-          ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
-        },
+        body: imagesApiRequest
+          ? imagesApiRequest.body
+          : {
+              model,
+              messages: [{ role: "user", content: buildMessageContent(req) }],
+              modalities: ["image", "text"],
+              n: count,
+              ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
+            },
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
         allowPrivateNetwork,

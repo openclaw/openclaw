@@ -74,6 +74,7 @@ export type ImageGenerationRequest = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  resolutionInferred?: boolean;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
@@ -88,16 +89,20 @@ export type ImageGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-type ImageGenerationModeCapabilities = {
+export type ImageGenerationMode = "generate" | "edit";
+
+export type ImageGenerationModeCapabilities = {
   maxCount?: number;
+  maxCountByModel?: Readonly<Record<string, number>>;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
 };
 
-type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
+export type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
 };
 
 type ImageGenerationGeometryCapabilities = {

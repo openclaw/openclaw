@@ -74,17 +74,17 @@ internal image endpoints remain blocked by default.
 
 ## Common routes
 
-| Goal                                                 | Model ref                                          | Auth                                   |
-| ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
-| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
-| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
-| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
-| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Goal                                                 | Model ref                                    | Auth                                   |
+| ---------------------------------------------------- | -------------------------------------------- | -------------------------------------- |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                         | `OPENAI_API_KEY`                       |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                         | OpenAI ChatGPT/Codex OAuth             |
+| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                       | `OPENAI_API_KEY` or OpenAI Codex OAuth |
+| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell` | `DEEPINFRA_API_KEY`                    |
+| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`           | `FAL_KEY`                              |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image`   | `OPENROUTER_API_KEY`                   |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                        | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`        | `AZURE_OPENAI_API_KEY` or Entra ID     |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`      | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
@@ -108,7 +108,7 @@ backend emits it.
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | OpenAI            | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
-| OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (model-specific limits)        | `OPENROUTER_API_KEY`                                  |
 | Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
 | xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
@@ -273,10 +273,12 @@ a reference image path or URL:
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
-`images` parameter. fal supports 1 reference image for Flux image-to-image, up
-to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
-14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI support 1.
+OpenAI, Google, and xAI support up to 5 reference images via the `images`
+parameter. OpenRouter accepts up to 10 through the shared tool when the selected
+upstream model allows it, with smaller model-specific limits enforced before
+submission. fal supports 1 reference image for Flux image-to-image, up to 10
+for GPT Image 2 edits, up to 10 style references for Krea 2, and up to 14 for
+Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI support 1.
 
 ## Provider deep dives
 
@@ -381,8 +383,9 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes through OpenRouter's chat completions image API. Select
-    OpenRouter image models with the `openrouter/` prefix:
+    supports both OpenRouter's dedicated `/images` API and older chat-image
+    completions models. Select OpenRouter image models with the `openrouter/`
+    prefix:
 
     ```json5
     {
@@ -396,9 +399,19 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     }
     ```
 
-    OpenClaw forwards `prompt`, `count`, reference images, and
-    Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
+    Current OpenRouter image models use `/images`; existing preview/default
+    chat-image refs continue to use chat completions with
+    `modalities: ["image", "text"]`. OpenClaw applies model-specific OpenRouter
+    `/images` limits before submission: Gemini and Microsoft models request one
+    output at a time, Microsoft receives only supported aspect-ratio/reference
+    fields, and OpenAI image models do not receive unsupported Gemini-style
+    `aspect_ratio` or `resolution` fields.
+
     Current built-in OpenRouter image model shortcuts include
+    `google/gemini-3.1-flash-image`, `google/gemini-3-pro-image`,
+    `google/gemini-2.5-flash-image`, `openai/gpt-5-image`,
+    `openai/gpt-5-image-mini`, `microsoft/mai-image-2.5`, the legacy preview
+    refs
     `google/gemini-3.1-flash-image-preview`,
     `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
