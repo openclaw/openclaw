@@ -1520,6 +1520,34 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("rewrites a shared signal-qualified endpoint for each enabled OTLP signal", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(
+      "https://collector.example.com/api/public/otel/v1/traces?timeout=30s#tenant-a",
+      {
+        traces: true,
+        metrics: true,
+        logs: true,
+      },
+    );
+
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/traces?timeout=30s#tenant-a",
+    );
+    expect(metricOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/metrics?timeout=30s#tenant-a",
+    );
+    expect(logOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/logs?timeout=30s#tenant-a",
+    );
+    await service.stop?.(ctx);
+  });
+
   test("applies flush interval to trace batching", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
@@ -1573,6 +1601,28 @@ describe("diagnostics-otel service", () => {
     expect(traceOptions.url).toBe("https://trace-env.example.com/v1/traces");
     expect(metricOptions.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
     expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
+    await service.stop?.(ctx);
+  });
+
+  test("keeps explicit signal-specific OTLP endpoints exact", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    ctx.config.diagnostics!.otel!.tracesEndpoint = "https://trace.example.com/v1/traces";
+    ctx.config.diagnostics!.otel!.metricsEndpoint = "https://metric.example.com/v1/traces?legacy=1";
+    ctx.config.diagnostics!.otel!.logsEndpoint = "https://log.example.com/v1/metrics#legacy";
+
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.url).toBe("https://trace.example.com/v1/traces");
+    expect(metricOptions.url).toBe("https://metric.example.com/v1/traces?legacy=1");
+    expect(logOptions.url).toBe("https://log.example.com/v1/metrics#legacy");
     await service.stop?.(ctx);
   });
 
