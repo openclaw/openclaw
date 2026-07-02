@@ -652,13 +652,19 @@ export function createSessionMcpRuntime(params: {
               failIfDisposed();
 
               let session = sessions.get(serverName);
-              if (session?.retiring) {
-                session = undefined;
-              } else if (session && !session.connected && !session.connectPromise) {
-                // Transport closed/errored out-of-band (e.g. child process crash);
-                // the SDK client can't cleanly reconnect on the same instance
-                // (stale read buffer, chained onclose/onerror), so rebuild fresh.
+              while (
+                session &&
+                !session.retiring &&
+                !session.connected &&
+                !session.connectPromise
+              ) {
+                // A closed SDK client cannot reconnect cleanly on the same transport.
                 await retireSessionIfCurrent(serverName, session);
+                // Retirement yields while closing. Preserve any replacement that a
+                // newer catalog generation installed during that await.
+                session = sessions.get(serverName);
+              }
+              if (session?.retiring) {
                 session = undefined;
               }
               const reusedSession = Boolean(session);
@@ -701,21 +707,12 @@ export function createSessionMcpRuntime(params: {
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
                 };
-                // The SDK chains any transport-level onclose/onerror set before
-                // connect() runs; client.onclose is the authoritative "the
-                // transport is gone" signal (fires for every transport kind).
-                // onerror also fires for non-fatal protocol issues, so it only
-                // logs and must not flip `connected`.
-                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Client exposes onclose/onerror as plain settable callback properties, not an EventTarget.
+                // The SDK exposes lifecycle hooks as callback properties. A close is
+                // terminal for this client/transport pair.
+                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
                 client.onclose = () => {
                   createdSession.connected = false;
                   createdSession.disconnectReason = "mcp transport closed";
-                };
-                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- see onclose above.
-                client.onerror = (error) => {
-                  logWarn(
-                    `bundle-mcp: transport error for server "${serverName}": ${redactErrorUrls(error)}`,
-                  );
                 };
                 session = createdSession;
                 sessions.set(serverName, session);
@@ -816,20 +813,10 @@ export function createSessionMcpRuntime(params: {
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
                 if (!session.connected) {
-                  // The session ended up disconnected in this pass — either it never
-                  // connected (fresh session's connect failed, or a timed-out connect
-                  // still left the SDK client bound to a transport) or it was a reused,
-                  // previously-healthy session that died mid-refresh (e.g. the child
-                  // process was killed between ensureSessionConnected() returning and
-                  // listAllToolsBestEffort() finishing) — client.onclose already flipped
-                  // session.connected. Retiring is safe here regardless of
-                  // sharedWithNewerGeneration: that guard exists to protect a still-alive
-                  // session another generation is actively using, and a disconnected
-                  // transport isn't alive for any generation sharing it.
+                  // A close is terminal for every catalog generation sharing this
+                  // session. The identity guard preserves any newer replacement.
                   await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
-                  // Still connected, but this catalog build attempt itself failed for an
-                  // unrelated reason (e.g. a listTools timeout) on a brand-new session.
                   // Catalog invalidation can overlap generations; an older failed
                   // generation must not dispose a session a newer one already reused.
                   await retireSessionIfCurrent(serverName, session);

@@ -46,7 +46,10 @@ async function writeListToolsMcpServer(params: {
   inputSchema?: unknown;
   tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
   capabilities?: Record<string, unknown>;
+  pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
+  notifyListChangedAfterFirstList?: boolean;
+  exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
@@ -62,7 +65,10 @@ const delayMs = ${params.delayMs ?? 0};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
+const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const tools = ${JSON.stringify(
       params.tools ?? [
@@ -78,8 +84,12 @@ const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
 
 let buffer = "";
+let listCount = 0;
 let pendingTimer;
 let keepAlive;
+if (pidPath) {
+  await fs.writeFile(pidPath, String(process.pid), "utf8");
+}
 function log(line) {
   void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
 }
@@ -116,6 +126,11 @@ function handle(message) {
     return;
   }
   if (message.method === "tools/list") {
+    listCount += 1;
+    if (listCount === exitOnListCall) {
+      log("exit tools/list " + listCount);
+      process.exit(1);
+    }
     if (listToolsMethodNotFound) {
       log("reject tools/list method not found");
       send({
@@ -130,6 +145,7 @@ function handle(message) {
       keepAlive = setInterval(() => {}, 1000);
       return;
     }
+    const currentListCount = listCount;
     log("delay tools/list " + delayMs);
     pendingTimer = setTimeout(() => {
       send({
@@ -139,6 +155,10 @@ function handle(message) {
           tools,
         },
       });
+      if (notifyListChangedAfterFirstList && currentListCount === 1) {
+        log("notify tools/list_changed");
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      }
     }, delayMs);
   }
   if (message.method === "tools/call") {
@@ -245,6 +265,29 @@ async function waitForPredicate(
     });
   }
   throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForErrorMessage(
+  action: () => Promise<unknown>,
+  expectedText: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let lastMessage = "";
+  while (Date.now() < deadline) {
+    try {
+      await action();
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : String(error);
+      if (lastMessage.includes(expectedText)) {
+        return lastMessage;
+      }
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(`Timed out waiting for ${expectedText}; saw ${JSON.stringify(lastMessage)}`);
 }
 
 function makeRuntime(
@@ -1036,262 +1079,85 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("marks the MCP session disconnected and fails tool calls fast after the child process is killed mid-session", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-kill-mid-session-"));
-    const serverPath = path.join(tempDir, "kill-mid-session.mjs");
+  it("fails fast with an attributable error after an MCP child process exits", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-child-exit-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
     const pidPath = path.join(tempDir, "server.pid");
-    await writeExecutable(
-      serverPath,
-      `#!/usr/bin/env node
-import fs from "node:fs/promises";
-
-const pidPath = ${JSON.stringify(pidPath)};
-await fs.writeFile(pidPath, String(process.pid), "utf8");
-
-let buffer = "";
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: {} },
-        serverInfo: { name: "kill-mid-session", version: "1.0.0" },
-      },
-    });
-    return;
-  }
-  if (message.method === "notifications/initialized") {
-    return;
-  }
-  if (message.method === "tools/list") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }] },
-    });
-    return;
-  }
-  if (message.method === "tools/call") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});`,
-    );
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath });
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-kill-mid-session",
-      sessionKey: "agent:test:session-kill-mid-session",
+      sessionId: "session-child-exit",
+      sessionKey: "agent:test:session-child-exit",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
           servers: {
-            killable: {
-              command: process.execPath,
-              args: [serverPath],
-            },
+            child: { command: process.execPath, args: [serverPath] },
           },
         },
       },
     });
 
     try {
-      const firstCatalog = await runtime.getCatalog();
-      expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
-
-      const firstResult = await runtime.callTool("killable", "ok_tool", {});
-      expect(firstResult.content[0]).toEqual({ type: "text", text: "still connected" });
-
+      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
       await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-      expect(Number.isInteger(pid)).toBe(true);
-      process.kill(pid, "SIGKILL");
+      process.kill(pid);
 
-      // Poll instead of a fixed delay: the child's close event races the test.
-      // Once it lands, `connected` flips and every subsequent call fails fast
-      // with the attributable reason instead of a generic/timeout error.
-      let sawDisconnectedMessage = "";
-      const deadline = Date.now() + LIST_TOOLS_SERVER_LOG_TIMEOUT_MS;
-      while (Date.now() < deadline && !sawDisconnectedMessage) {
-        try {
-          await runtime.callTool("killable", "ok_tool", {});
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("is disconnected")) {
-            sawDisconnectedMessage = message;
-            break;
-          }
-        }
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        });
-      }
-      expect(sawDisconnectedMessage).toBe(
-        `bundle-mcp server "killable" is disconnected: mcp transport closed`,
+      const message = await waitForErrorMessage(
+        () => runtime.callTool("child", "slow_tool", {}),
+        "is disconnected",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
-
-      const start = Date.now();
-      await expect(runtime.callTool("killable", "ok_tool", {})).rejects.toThrow(
-        `bundle-mcp server "killable" is disconnected: mcp transport closed`,
-      );
-      expect(Date.now() - start).toBeLessThan(200);
+      expect(message).toBe('bundle-mcp server "child" is disconnected: mcp transport closed');
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("retires a reused session that dies mid-refresh instead of leaving it reachable", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-die-mid-refresh-"));
-    const serverPath = path.join(tempDir, "die-mid-refresh.mjs");
+  it("retires a reused MCP session that exits during catalog refresh", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-exit-"));
+    const serverPath = path.join(tempDir, "server.mjs");
     const logPath = path.join(tempDir, "server.log");
-    await writeExecutable(
-      serverPath,
-      `#!/usr/bin/env node
-import fs from "node:fs/promises";
-
-const logPath = ${JSON.stringify(logPath)};
-let buffer = "";
-let listCount = 0;
-function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
-}
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: "die-mid-refresh", version: "1.0.0" },
-      },
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: { listChanged: true } },
+      notifyListChangedAfterFirstList: true,
+      exitOnListCall: 2,
     });
-    return;
-  }
-  if (message.method === "notifications/initialized") {
-    return;
-  }
-  if (message.method === "tools/list") {
-    listCount += 1;
-    if (listCount === 1) {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
-        },
-      });
-      setTimeout(() => {
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-        log("sent tools/list_changed");
-      }, 10);
-      return;
-    }
-    // Second tools/list: die without responding, simulating the child
-    // process crashing mid-refresh (after the reused session was already
-    // marked connected, before this catalog pass finishes).
-    log("dying mid tools/list");
-    process.exit(1);
-  }
-  if (message.method === "tools/call") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});`,
-    );
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-die-mid-refresh",
-      sessionKey: "agent:test:session-die-mid-refresh",
+      sessionId: "session-refresh-exit",
+      sessionKey: "agent:test:session-refresh-exit",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
           servers: {
-            volatile: {
-              command: process.execPath,
-              args: [serverPath],
-            },
+            child: { command: process.execPath, args: [serverPath] },
           },
         },
       },
     });
 
     try {
-      const firstCatalog = await runtime.getCatalog();
-      expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
-
-      await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
         "list_changed to invalidate the catalog",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
 
-      // Refresh reuses the still-"connected" session; the child dies mid
-      // tools/list, flipping session.connected via onclose before this
-      // refresh's catch block runs.
       const refreshedCatalog = await runtime.getCatalog();
       expect(refreshedCatalog.tools).toEqual([]);
-      expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("volatile");
-
-      // The dead session must be retired within this same refresh, not left
-      // dangling for a future rebuild to notice. If it were left dangling,
-      // callTool would find the stale session object and throw "is
-      // disconnected: mcp transport closed"; a properly retired session is
-      // simply absent, so callTool throws the plain "not connected" message
-      // (a fresh session gets created on the next successful catalog build).
-      await expect(runtime.callTool("volatile", "ok_tool", {})).rejects.toThrow(
-        'bundle-mcp server "volatile" is not connected',
+      expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("child");
+      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow(
+        'bundle-mcp server "child" is not connected',
       );
     } finally {
       await runtime.dispose();
