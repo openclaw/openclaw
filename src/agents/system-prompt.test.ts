@@ -1098,7 +1098,10 @@ describe("buildAgentSystemPrompt", () => {
         },
       });
 
-      expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+      expect(prompt).toContain(
+        "you MUST call `message(action=send)` for visible source-channel output",
+      );
+      expect(prompt).toContain("skipping the tool means the user receives nothing");
       expect(prompt).toContain(
         "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
       );
@@ -1174,7 +1177,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
+    expect(prompt).toContain(
+      "you MUST call `message(action=send)` for visible source-channel output",
+    );
     expect(prompt).not.toContain("Discord group/thread etiquette");
   });
 
