@@ -1,5 +1,5 @@
 // Voice Call tests cover mock plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { MockProvider } from "./mock.js";
 
@@ -14,6 +14,9 @@ function createWebhookContext(rawBody: string): WebhookContext {
 }
 
 describe("MockProvider", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("returns a stable verified request key for the same webhook payload", () => {
     const provider = new MockProvider();
     const ctxA = createWebhookContext(
@@ -102,6 +105,32 @@ describe("MockProvider", () => {
 
     // The webhook handler (webhook.ts:752) uses isReplay to skip event
     // processing and return a cached response instead.
+  });
+
+  it("expires replay keys after the mock replay window elapses", () => {
+    vi.useFakeTimers();
+    const provider = new MockProvider();
+    const ctx = createWebhookContext(
+      JSON.stringify({ event: { type: "call.answered", callId: "call-expire" } }),
+    );
+
+    // First delivery: not a replay.
+    const first = provider.verifyWebhook(ctx);
+    expect(first.ok).toBe(true);
+    expect(first.isReplay).toBeFalsy();
+
+    // Within the window: is replay.
+    vi.advanceTimersByTime(5 * 60 * 1000); // +5 min
+    const beforeExpiry = provider.verifyWebhook(ctx);
+    expect(beforeExpiry.isReplay).toBe(true);
+
+    // Past the 10-minute window: not a replay anymore.
+    vi.advanceTimersByTime(6 * 60 * 1000); // +6 min → 11 min total
+    const afterExpiry = provider.verifyWebhook(ctx);
+    expect(afterExpiry.ok).toBe(true);
+    expect(afterExpiry.isReplay).toBeFalsy();
+    // Key is the same (stable derivation).
+    expect(afterExpiry.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 
   it("preserves explicit falsy event values", () => {
