@@ -24,7 +24,10 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
-function boundedTextErrorResponse(body: string, status = 502): {
+function boundedTextErrorResponse(
+  body: string,
+  status = 502,
+): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;
@@ -41,6 +44,42 @@ function boundedTextErrorResponse(body: string, status = 502): {
     ok: false,
     status,
     headers: new Headers(),
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (read) {
+            return { done: true, value: undefined };
+          }
+          read = true;
+          return { done: false, value: encoded };
+        },
+        cancel,
+        releaseLock,
+      }),
+    },
+    text,
+  } as unknown as Response;
+
+  return { response, cancel, releaseLock, text };
+}
+
+function boundedTextSuccessResponse(body: string): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+  releaseLock: ReturnType<typeof vi.fn>;
+  text: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(body);
+  let read = false;
+  const cancel = vi.fn(async () => undefined);
+  const releaseLock = vi.fn();
+  const text = vi.fn(async () => {
+    throw new Error("response.text() should not be called on success path");
+  });
+  const response = {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "Content-Type": "application/json" }),
     body: {
       getReader: () => ({
         read: async () => {
@@ -241,6 +280,24 @@ describe("OpenRouter OAuth", () => {
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads success response body through bounded reader without calling response.text()", async () => {
+    const body = JSON.stringify({ key: "sk-or-v1-test", user_id: "user-1" });
+    const { response, cancel, releaseLock, text } = boundedTextSuccessResponse(body);
+    const fetchImpl = vi.fn<typeof fetch>(async () => response);
+
+    const result = await exchangeOpenRouterOAuthCode({
+      code: "AUTHCODE",
+      codeVerifier: "verifier-1",
+      fetchImpl,
+    });
+
+    expect(result.key).toBe("sk-or-v1-test");
+    expect(result.userId).toBe("user-1");
+    expect(text).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("stores a browser OAuth result as the default OpenRouter API-key profile", async () => {
