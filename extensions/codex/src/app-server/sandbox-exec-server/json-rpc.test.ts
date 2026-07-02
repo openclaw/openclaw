@@ -69,30 +69,41 @@ describe("parseRequest WebSocket transport path", () => {
   //   socket.on("message", (data: RawData) => { parseRequest(data) })
   // RawData from ws library is Buffer | ArrayBuffer | Buffer[].
 
-  const PORT = 19876;
+  let port: number;
   let wss: WebSocketServer;
   let httpServer: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
     httpServer = createServer();
     wss = new WebSocketServer({ server: httpServer, path: "/exec" });
-    await new Promise<void>((resolve) => httpServer.listen(PORT, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", () => {
+        const addr = httpServer.address();
+        if (addr && typeof addr === "object") {
+          port = addr.port;
+        }
+        resolve();
+      });
+    });
   });
 
   afterAll(async () => {
     wss.close();
-    await new Promise<void>((resolve, reject) =>
-      httpServer.close((err) => (err ? reject(err) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((err) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
   });
 
   it("throws descriptive error on malformed JSON received over WebSocket", async () => {
-    // When a client sends malformed JSON text → server receives RawData →
-    // parseRequest(data) → our new descriptive Error (matching line 308).
     const { WebSocket } = await import("ws");
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/exec`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/exec`);
 
-    // Server: when it receives a message, call parseRequest exactly like production
     const serverReceived = new Promise<{ error: unknown }>((resolve) => {
       wss.once("connection", (serverWs) => {
         serverWs.once("message", (data: RawData) => {
@@ -106,7 +117,9 @@ describe("parseRequest WebSocket transport path", () => {
       });
     });
 
-    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
     ws.send("NOT JSON {{{");
     const result = await serverReceived;
     ws.close();
@@ -117,7 +130,7 @@ describe("parseRequest WebSocket transport path", () => {
 
   it("parses valid JSON-RPC request received over WebSocket", async () => {
     const { WebSocket } = await import("ws");
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/exec`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/exec`);
 
     const serverReceived = new Promise<{ result: unknown; error: unknown }>((resolve) => {
       wss.once("connection", (serverWs) => {
@@ -132,7 +145,9 @@ describe("parseRequest WebSocket transport path", () => {
       });
     });
 
-    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
     ws.send(JSON.stringify({ method: "tools/call", params: {}, id: 1 }));
     const { result, error } = await serverReceived;
     ws.close();
