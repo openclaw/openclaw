@@ -167,26 +167,10 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
+import { resolvePromptContextTextDedupeKey } from "./prompt-context-dedupe.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
-
-type TelegramPromptContextMessageForDedupe = {
-  body?: unknown;
-  timestamp_ms?: unknown;
-};
-
-function resolvePromptContextTextDedupeKey(
-  message: TelegramPromptContextMessageForDedupe,
-): string | undefined {
-  if (typeof message.body !== "string" || !message.body.trim()) {
-    return undefined;
-  }
-  if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
-    return undefined;
-  }
-  return `${message.timestamp_ms}:${message.body.trim()}`;
-}
 
 export const registerTelegramHandlers = ({
   cfg,
