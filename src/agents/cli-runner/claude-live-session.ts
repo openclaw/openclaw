@@ -1376,6 +1376,9 @@ export async function runClaudeLiveSessionTurn(params: {
       reject,
     });
   });
+  // Timeout/abort can reject the turn while stdin is backpressured. Keep the
+  // rejection handled until the final await below rethrows the canonical result.
+  void outputPromise.catch(() => undefined);
   const abort = () => abortTurn(liveSession, createAbortError());
   let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
@@ -1394,7 +1397,7 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await writeTurnInput(liveSession, params.prompt);
+        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }

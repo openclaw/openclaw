@@ -3139,6 +3139,77 @@ ${JSON.stringify({
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
   });
 
+  it("fails Claude live turns without unhandled rejection when stdin write is stuck", async () => {
+    vi.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    const cancel = vi.fn();
+    let pendingWriteCallback: ((err?: Error | null) => void) | undefined;
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        pendingWriteCallback = cb;
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-run-stuck-stdin",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => new Promise(() => {})),
+      cancel: vi.fn((reason: string) => {
+        cancel(reason);
+        pendingWriteCallback?.(new Error("stdin closed"));
+      }),
+    }));
+
+    try {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-stuck-stdin",
+        timeoutMs: 10_000,
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      });
+      const run = runClaudeLiveSessionTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt: "stuck write",
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      const runExpectation = expectRejectsWithFields(run, {
+        name: "FailoverError",
+        message: "CLI produced no output for 1s and was terminated.",
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await runExpectation;
+      await Promise.resolve();
+      expect(unhandledRejections).toEqual([]);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(stdin.write).toHaveBeenCalledOnce();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("restarts Claude live sessions when selected skills change", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-skills-"));
     const weatherDir = path.join(workspaceDir, "skills", "weather");
