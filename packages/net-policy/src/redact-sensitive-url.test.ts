@@ -28,6 +28,12 @@ describe("redactSensitiveUrl", () => {
     ).toBe("https://example.com/mcp?client_se%E2%80%8Bcret=***&safe=value");
   });
 
+  it("preserves repeated sensitive query params while redacting each value", () => {
+    expect(redactSensitiveUrl("https://example.com/mcp?token=one&safe=value&token=two")).toBe(
+      "https://example.com/mcp?token=***&safe=value&token=***",
+    );
+  });
+
   it("redacts encoded sensitive query names with decoded whitespace and control separators", () => {
     expect(
       redactSensitiveUrl("https://example.com/mcp?client%5Fse%20cret=space&client%5Fse%00cret=nul"),
