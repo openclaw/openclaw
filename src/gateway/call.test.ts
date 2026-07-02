@@ -2157,7 +2157,7 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
-    ).rejects.toThrow("explicit credentials");
+    ).rejects.toThrow(/remove --url/i);
   });
 
   it("throws when env URL override is set without env credentials", async () => {
@@ -2169,7 +2169,9 @@ describe("callGateway url override auth requirements", () => {
       },
     });
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      /OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD/i,
+    );
   });
 });
 
