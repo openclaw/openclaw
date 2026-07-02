@@ -542,7 +542,7 @@ describe("session accessor file-backed seam", () => {
         sessionId: "existing-session",
         updatedAt: 10,
         lastHeartbeatSentAt: 100,
-        contextBudgetStatus: "ok",
+        lastHeartbeatText: "heartbeat-1",
       },
     );
 
@@ -557,7 +557,7 @@ describe("session accessor file-backed seam", () => {
         sessionId: "existing-session",
         updatedAt: 20,
         lastHeartbeatSentAt: 200,
-        contextBudgetStatus: "warning",
+        lastHeartbeatText: "heartbeat-2",
       },
     );
 
@@ -579,6 +579,15 @@ describe("session accessor file-backed seam", () => {
       throw new Error("expected reply session initialization to commit");
     }
     expect(committed.sessionEntry.sessionId).toBe("existing-session");
+    // The accepted commit must not roll back the metadata drift that happened
+    // while the initialization was in flight.
+    expect(committed.sessionEntry.lastHeartbeatSentAt).toBe(200);
+    expect(committed.sessionEntry.lastHeartbeatText).toBe("heartbeat-2");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "existing-session",
+      lastHeartbeatSentAt: 200,
+      lastHeartbeatText: "heartbeat-2",
+    });
   });
 
   it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {

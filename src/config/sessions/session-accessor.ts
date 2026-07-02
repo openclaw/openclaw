@@ -99,7 +99,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import { mergeSessionEntry, type SessionCompactionCheckpoint, type SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -1787,7 +1787,14 @@ export async function commitReplySessionInitialization(params: {
         sessionEntry: preparedSessionEntry,
         storePath: params.storePath,
       });
-      store[resolved.normalizedKey] = sessionEntry;
+      // The identity-only guard allows commits when background activity touched
+      // non-identity metadata after the snapshot. Merge the current row so that
+      // heartbeat, delivery, context-budget, and route fields are not rolled
+      // back by the prepared turn entry; the prepared entry still wins for any
+      // fields it explicitly carries.
+      store[resolved.normalizedKey] = currentEntry
+        ? mergeSessionEntry(currentEntry, sessionEntry)
+        : sessionEntry;
       if (params.retiredEntry) {
         store[params.retiredEntry.key] = params.retiredEntry.entry;
       }
