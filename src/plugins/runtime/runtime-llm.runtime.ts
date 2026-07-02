@@ -6,7 +6,10 @@ import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import {
+  emitTrustedDiagnosticEvent,
+  type DiagnosticEventInput,
+} from "../../infra/diagnostic-events.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -485,24 +488,19 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const input = normalizedUsage?.input ?? 0;
+      const output = normalizedUsage?.output ?? 0;
+      const cacheRead = normalizedUsage?.cacheRead ?? 0;
+      const cacheWrite = normalizedUsage?.cacheWrite ?? 0;
+      const total = normalizedUsage?.total ?? 0;
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         sessionKey: options.authority?.sessionKey,
         agentId,
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
-        usage: {
-          ...(normalizedUsage?.input !== undefined ? { input: normalizedUsage.input } : {}),
-          ...(normalizedUsage?.output !== undefined ? { output: normalizedUsage.output } : {}),
-          ...(normalizedUsage?.cacheRead !== undefined
-            ? { cacheRead: normalizedUsage.cacheRead }
-            : {}),
-          ...(normalizedUsage?.cacheWrite !== undefined
-            ? { cacheWrite: normalizedUsage.cacheWrite }
-            : {}),
-          ...(normalizedUsage?.total !== undefined ? { total: normalizedUsage.total } : {}),
-        },
-      });
+        usage: { input, output, cacheRead, cacheWrite, total },
+      } as DiagnosticEventInput);
 
       return {
         text,
