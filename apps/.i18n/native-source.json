@@ -6507,7 +6507,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 16,
+      "line": 18,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "Cost",
       "surface": "apple",
@@ -6515,7 +6515,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 17,
+      "line": 19,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "Tokens",
       "surface": "apple",
@@ -6523,7 +6523,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 18,
+      "line": 20,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "Cache",
       "surface": "apple",
@@ -6531,7 +6531,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 39,
+      "line": 41,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "Daily",
       "surface": "apple",
@@ -6539,7 +6539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 45,
+      "line": 47,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "No daily usage yet",
       "surface": "apple",
@@ -6547,7 +6547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 46,
+      "line": 48,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "The gateway returned totals without daily session cost rows.",
       "surface": "apple",
@@ -6555,7 +6555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 69,
+      "line": 71,
       "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
       "source": "\\(Self.compactNumber(day.totalTokens ?? 0)) tokens",
       "surface": "apple",
