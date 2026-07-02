@@ -2602,6 +2602,17 @@ internal fun permissionContinueNeedsNodeApproval(
         nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)
     )
 
+internal fun permissionContinueNeedsNodeApproval(
+  ready: Boolean,
+  requiresNodeApprovalAfterApply: Boolean,
+  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+): Boolean =
+  !ready &&
+    (
+      requiresNodeApprovalAfterApply ||
+        nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)
+    )
+
 private fun copyApprovalCommand(
   context: Context,
   command: String,
