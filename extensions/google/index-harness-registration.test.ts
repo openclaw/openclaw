@@ -29,30 +29,31 @@ describe("google plugin Gemini CLI harness registration", () => {
     return { providerIds, cliBackendIds };
   }
 
-  it("keeps the default Google plugin on official provider paths", () => {
+  it("preserves shipped default Gemini CLI provider and backend registration", () => {
     delete process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV];
 
     expect(collectGooglePluginRegistrations()).toEqual({
-      providerIds: ["google"],
-      cliBackendIds: [],
+      providerIds: ["google-gemini-cli", "google"],
+      cliBackendIds: ["google-gemini-cli"],
     });
   });
 
-  it("does not expose Gemini CLI from default bundled runtime registration", () => {
-    delete process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV];
-
-    const registrations = collectGooglePluginRegistrations();
-
-    expect(registrations.providerIds).not.toContain("google-gemini-cli");
-    expect(registrations.cliBackendIds).not.toContain("google-gemini-cli");
-  });
-
-  it("registers Gemini CLI provider and backend only after explicit opt-in", () => {
+  it("keeps explicit opt-in env compatible with default registration", () => {
     process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV] = "1";
 
     expect(collectGooglePluginRegistrations()).toEqual({
       providerIds: ["google-gemini-cli", "google"],
       cliBackendIds: ["google-gemini-cli"],
     });
+  });
+
+  it("registers the API-backed Google provider alongside the Gemini CLI runtime", () => {
+    delete process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV];
+
+    const registrations = collectGooglePluginRegistrations();
+
+    expect(registrations.providerIds).toContain("google");
+    expect(registrations.providerIds).toContain("google-gemini-cli");
+    expect(registrations.cliBackendIds).toContain("google-gemini-cli");
   });
 });
