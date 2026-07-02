@@ -3,7 +3,10 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
@@ -237,6 +240,21 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
+function applyTrustedInboundBareBody(
+  message: Record<string, unknown>,
+  items: MessageContentItem[],
+): MessageContentItem[] | null {
+  if (message.role !== "user") {
+    return null;
+  }
+  const bareBody = resolveTrustedInboundBareBody(message);
+  if (bareBody === undefined) {
+    return null;
+  }
+  const nonTextItems = items.filter((item) => item.type !== "text");
+  return bareBody.trim() ? [{ type: "text", text: bareBody }, ...nonTextItems] : nonTextItems;
+}
+
 function expandTextContent(text: string): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
@@ -467,7 +485,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  content = stripMessageDisplayMetadata(content);
+  content = applyTrustedInboundBareBody(m, content) ?? stripMessageDisplayMetadata(content);
 
   return {
     role,
