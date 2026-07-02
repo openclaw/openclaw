@@ -62,6 +62,7 @@ targets:
       - path: Sources
     resources:
       - path: Resources/Localizable.xcstrings
+      - path: Settings.bundle
     dependencies:
       - target: OpenClawShareExtension
         embed: true

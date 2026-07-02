@@ -356,10 +356,23 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("--openclaw-notification-serving"))
         #expect(actionsSource.contains("self.notificationServingEnabled = false"))
         #expect(actionsSource.contains("notificationRelayDisclosureAccepted"))
-        #expect(actionsSource.contains("self.openNotificationSettings()"))
+        #expect(actionsSource.contains("self.openAppSettingsForNotificationPermission()"))
+        #expect(actionsSource.contains("UIApplication.openSettingsURLString"))
+        #expect(!actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
         #expect(actionsSource.contains("requestAuthorization(options:"))
         #expect(actionsSource.contains("unregisterForRemoteNotifications()"))
         #expect(actionsSource.contains("if !detail.isEmpty"))
+    }
+
+    @Test func `settings bundle keeps app settings deep link target`() throws {
+        let projectSpec = try String(contentsOf: Self.projectSpecSourceURL(), encoding: .utf8)
+        let xcodeProject = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
+        let settingsRoot = try String(contentsOf: Self.settingsBundleRootSourceURL(), encoding: .utf8)
+
+        #expect(projectSpec.contains("- path: Settings.bundle"))
+        #expect(xcodeProject.contains("Settings.bundle in Resources"))
+        #expect(settingsRoot.contains("<key>PreferenceSpecifiers</key>"))
+        #expect(settingsRoot.contains("<array/>"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -1184,6 +1197,20 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatView+Previews.swift")
+    }
+
+    private static func projectSpecSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("project.yml")
+    }
+
+    private static func settingsBundleRootSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Settings.bundle/Root.plist")
     }
 
     private static func xcodeProjectSourceURL() -> URL {

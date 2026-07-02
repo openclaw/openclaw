@@ -423,7 +423,7 @@ extension SettingsProTab {
             self.requestNotificationAuthorizationForServing()
         case .checking, .notAllowed, .unknown:
             self.notificationServingEnabled = true
-            self.openNotificationSettings()
+            self.openAppSettingsForNotificationPermission()
         }
     }
 
@@ -460,7 +460,7 @@ extension SettingsProTab {
             self.requestNotificationAuthorizationForServing()
         case .checking, .notAllowed, .unknown:
             self.notificationServingEnabled = false
-            self.openNotificationSettings()
+            self.openAppSettingsForNotificationPermission()
         }
     }
 
@@ -565,8 +565,8 @@ extension SettingsProTab {
             instanceId: instanceId)
     }
 
-    func openNotificationSettings() {
-        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
+    func openAppSettingsForNotificationPermission() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
 
