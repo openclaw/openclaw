@@ -1112,6 +1112,9 @@ function classifyFailoverClassificationFromMessage(
   if (isJsonApiInternalServerError(raw)) {
     return toReasonClassification("timeout");
   }
+  if (isProviderRefusalErrorMessage(raw)) {
+    return toReasonClassification("refusal");
+  }
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
   }
@@ -1764,6 +1767,15 @@ export function isImageSizeError(errorMessage?: string): boolean {
     return false;
   }
   return Boolean(parseImageSizeError(errorMessage));
+}
+
+function isProviderRefusalErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return (
+    raw.startsWith("Anthropic refusal") || raw.startsWith("Provider finish_reason: content_filter")
+  );
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {

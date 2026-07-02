@@ -11,6 +11,7 @@ export function shouldAllowCooldownProbeForReason(
     reason === "rate_limit" ||
     reason === "overloaded" ||
     reason === "billing" ||
+    reason === "refusal" ||
     reason === "unknown" ||
     reason === "empty_response" ||
     reason === "no_error_details" ||
@@ -26,6 +27,7 @@ export function shouldUseTransientCooldownProbeSlot(
   return (
     reason === "rate_limit" ||
     reason === "overloaded" ||
+    reason === "refusal" ||
     reason === "unknown" ||
     reason === "empty_response" ||
     reason === "no_error_details" ||

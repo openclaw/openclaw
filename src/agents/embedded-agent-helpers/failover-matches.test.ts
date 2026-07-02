@@ -232,3 +232,27 @@ describe("HTTP 429 overload wording (#98101)", () => {
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });
+
+describe("provider refusal classification (#98976)", () => {
+  it("classifies Anthropic refusal as refusal", () => {
+    expect(
+      classifyFailoverReason(
+        "Anthropic refusal (category: bio): The content contains references to biological agents.",
+      ),
+    ).toBe("refusal");
+  });
+
+  it("classifies Anthropic refusal without category as refusal", () => {
+    expect(classifyFailoverReason("Anthropic refusal.")).toBe("refusal");
+  });
+
+  it("classifies OpenAI content_filter as refusal", () => {
+    expect(classifyFailoverReason("Provider finish_reason: content_filter")).toBe("refusal");
+  });
+
+  it("does not classify unrelated messages as refusal", () => {
+    expect(classifyFailoverReason("LLM request failed.")).not.toBe("refusal");
+    expect(classifyFailoverReason("rate limit exceeded")).not.toBe("refusal");
+    expect(classifyFailoverReason("The request was refused by the proxy.")).not.toBe("refusal");
+  });
+});

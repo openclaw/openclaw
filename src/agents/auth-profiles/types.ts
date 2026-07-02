@@ -87,6 +87,7 @@ export type AuthProfileFailureReason =
   | "session_expired"
   | "empty_response"
   | "no_error_details"
+  | "refusal"
   | "unclassified"
   | "unknown";
 
