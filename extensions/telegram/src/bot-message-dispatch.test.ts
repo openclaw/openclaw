@@ -3163,10 +3163,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n🛠️ Exec\n• Checking files",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+        "Shelling\n\n🛠️ Exec\n🧠 Checking files",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n🧠 <i>Checking files</i>",
       ),
     );
+  });
+
+  it("renders model markdown in streamed reasoning and commentary lanes", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onReasoningStream?.({ text: "<think>Running `sleep 4`</think>" });
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "c1",
+        progressText: "**Reading AGENTS.md**",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.parseMode).toBe("HTML");
+    // Reasoning stays 🧠 italic with inline code rendered (not a raw backtick).
+    expect(lastPreview?.text).toContain("🧠 <i>Running <code>sleep 4</code></i>");
+    // Commentary renders the model's bold (not raw `**`), distinct from reasoning.
+    expect(lastPreview?.text).toContain("💬 <b>Reading <code>AGENTS.md</code></b>");
+    expect(lastPreview?.text).not.toContain("**");
+    expect(lastPreview?.text).not.toContain("`sleep");
   });
 
   it("renders configured Telegram commentary progress from preamble item events", async () => {
@@ -3195,8 +3228,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\nChecking recent context",
-        "<b>Shelling</b>\n<i>Checking recent context</i>",
+        "Shelling\n\n💬 Checking recent context",
+        "<b>Shelling</b>\n💬 Checking recent context",
       ),
     );
   });
@@ -3283,8 +3316,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n• Checking files",
-        "<b>Shelling</b>\n<i>Checking files</i>",
+        "Shelling\n\n🧠 Checking files",
+        "<b>Shelling</b>\n🧠 <i>Checking files</i>",
       ),
     );
   });
