@@ -25,7 +25,12 @@ import {
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  normalizeFeishuPostMarkdownLineBreaks,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -493,22 +498,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
-    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
+    sendChunk: (params: {
+      chunk: string;
+      isFirst: boolean;
+      postMarkdownLineBreaksNormalized?: boolean;
+    }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
       : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+    const deliveryText = paramsLocal.useCard
+      ? chunkSource
+      : normalizeFeishuPostMarkdownLineBreaks(chunkSource);
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;
     const chunks = resolveTextChunksWithFallback(
-      chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      deliveryText,
+      chunkText(deliveryText, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
         chunk,
         isFirst: index === 0,
+        ...(paramsLocal.useCard ? {} : { postMarkdownLineBreaksNormalized: true }),
       });
       markVisibleReplySent();
     }
@@ -540,7 +553,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk }) => {
+            sendChunk: async ({ chunk, postMarkdownLineBreaksNormalized }) => {
               await sendMessageFeishu({
                 cfg,
                 to: sendTarget,
@@ -549,6 +562,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
+                ...(postMarkdownLineBreaksNormalized
+                  ? { postMarkdownLineBreaksNormalized: true }
+                  : {}),
               });
             },
           });
@@ -567,7 +583,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: fallbackText,
                 useCard: false,
                 infoKind: "final",
-                sendChunk: async ({ chunk }) => {
+                sendChunk: async ({ chunk, postMarkdownLineBreaksNormalized }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: sendTarget,
@@ -576,6 +592,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
+                    ...(postMarkdownLineBreaksNormalized
+                      ? { postMarkdownLineBreaksNormalized: true }
+                      : {}),
                   });
                 },
               });
@@ -813,7 +832,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
+              sendChunk: async ({ chunk, isFirst, postMarkdownLineBreaksNormalized }) => {
                 await sendMessageFeishu({
                   cfg,
                   to: sendTarget,
@@ -824,6 +843,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   accountId,
                   ...(info?.kind === "final" && isFirst && mentionTargets?.length
                     ? { mentions: mentionTargets }
+                    : {}),
+                  ...(postMarkdownLineBreaksNormalized
+                    ? { postMarkdownLineBreaksNormalized: true }
                     : {}),
                 });
               },

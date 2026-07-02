@@ -1,7 +1,11 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
+import {
+  buildFeishuPostMessagePayload,
+  buildMarkdownCard,
+  normalizeFeishuPostMarkdownLineBreaks,
+} from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -104,6 +108,41 @@ describe("buildFeishuPostMessagePayload", () => {
         ],
       },
     });
+  });
+});
+
+describe("normalizeFeishuPostMarkdownLineBreaks", () => {
+  it("expands single markdown newlines outside fenced code blocks", () => {
+    expect(
+      normalizeFeishuPostMarkdownLineBreaks(
+        [
+          "First line",
+          "Second line",
+          "",
+          "Already separated",
+          "```ts",
+          "const a = 1;",
+          "const b = 2;",
+          "```",
+          "After",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "First line",
+        "",
+        "Second line",
+        "",
+        "Already separated",
+        "",
+        "```ts",
+        "const a = 1;",
+        "const b = 2;",
+        "```",
+        "",
+        "After",
+      ].join("\n"),
+    );
   });
 });
 
@@ -291,6 +330,68 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("normalizes post markdown line breaks before sending text", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_lines" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "First line\nSecond line",
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: "oc_send",
+        msg_type: "post",
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: "md", text: "First line\n\nSecond line" }]],
+          },
+        }),
+      },
+    });
+  });
+
+  it("rejects direct post sends that exceed the normalized Feishu text limit", async () => {
+    const create = vi.fn();
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    const overLimitText = Array.from({ length: 1335 }, () => "x").join("\n");
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        to: "oc_send",
+        text: overLimitText,
+      }),
+    ).rejects.toThrow(
+      "Feishu send text exceeds 4000 characters after post markdown line break normalization.",
+    );
+
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -691,7 +792,7 @@ describe("editMessageFeishu", () => {
     const result = await editMessageFeishu({
       cfg: {} as ClawdbotConfig,
       messageId: "om_edit",
-      text: "updated body",
+      text: "updated\nbody",
     });
 
     expect(mockClientPatch).toHaveBeenCalledWith({
@@ -703,7 +804,7 @@ describe("editMessageFeishu", () => {
               [
                 {
                   tag: "md",
-                  text: "updated body",
+                  text: "updated\n\nbody",
                 },
               ],
             ],
@@ -712,6 +813,47 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
+  });
+
+  it("allows post text edits at the normalized Feishu text limit", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    const nearLimitText = Array.from({ length: 1334 }, () => "x").join("\n");
+    const normalizedText = normalizeFeishuPostMarkdownLineBreaks(nearLimitText);
+    expect(normalizedText).toHaveLength(4000);
+
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit_limit",
+      text: nearLimitText,
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_edit_limit" },
+      data: {
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: "md", text: normalizedText }]],
+          },
+        }),
+      },
+    });
+    expect(result).toEqual({ messageId: "om_edit_limit", contentType: "post" });
+  });
+
+  it("rejects post text edits that exceed the normalized Feishu text limit", async () => {
+    const overLimitText = Array.from({ length: 1335 }, () => "x").join("\n");
+
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit_over_limit",
+        text: overLimitText,
+      }),
+    ).rejects.toThrow(
+      "Feishu edit text exceeds 4000 characters after post markdown line break normalization.",
+    );
+
+    expect(mockClientPatch).not.toHaveBeenCalled();
   });
 
   it("patches interactive content for card edits", async () => {

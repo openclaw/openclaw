@@ -25,6 +25,7 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
+const FEISHU_POST_TEXT_LIMIT = 4000;
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -544,6 +545,8 @@ export type SendFeishuMessageParams = {
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
   accountId?: string;
+  /** Internal: text already expanded before outbound chunking. */
+  postMarkdownLineBreaksNormalized?: boolean;
 };
 
 type FeishuPostMessageElement =
@@ -569,6 +572,46 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
     });
   }
   return elements;
+}
+
+export function normalizeFeishuPostMarkdownLineBreaks(text: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const parts: string[] = [];
+  let inFence = false;
+  let fenceMarker: "`" | "~" | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    parts.push(line);
+
+    const fence = /^(```+|~~~+)/u.exec(line.trimStart())?.[1];
+    const marker = fence?.startsWith("`") ? "`" : fence?.startsWith("~") ? "~" : null;
+    if (marker && (!inFence || marker === fenceMarker)) {
+      inFence = !inFence;
+      fenceMarker = inFence ? marker : null;
+    }
+
+    if (index === lines.length - 1) {
+      continue;
+    }
+
+    const nextLine = lines[index + 1] ?? "";
+    parts.push(inFence || line.length === 0 || nextLine.length === 0 ? "\n" : "\n\n");
+  }
+
+  return parts.join("");
+}
+
+function assertFeishuPostMessageTextWithinLimit(
+  messageText: string,
+  action: "send" | "edit",
+): void {
+  if (messageText.length <= FEISHU_POST_TEXT_LIMIT) {
+    return;
+  }
+  throw new Error(
+    `Feishu ${action} text exceeds ${FEISHU_POST_TEXT_LIMIT} characters after post markdown line break normalization.`,
+  );
 }
 
 export function buildFeishuPostMessagePayload(params: {
@@ -608,6 +651,7 @@ export async function sendMessageFeishu(
     allowTopLevelReplyFallback,
     mentions,
     accountId,
+    postMarkdownLineBreaksNormalized,
   } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = resolveMarkdownTableMode({
@@ -615,7 +659,11 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const convertedText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = postMarkdownLineBreaksNormalized
+    ? convertedText
+    : normalizeFeishuPostMarkdownLineBreaks(convertedText);
+  assertFeishuPostMessageTextWithinLimit(messageText, "send");
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
@@ -701,7 +749,10 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
+  const messageText = normalizeFeishuPostMarkdownLineBreaks(
+    convertMarkdownTables(text!, tableMode),
+  );
+  assertFeishuPostMessageTextWithinLimit(messageText, "edit");
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },

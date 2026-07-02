@@ -32,6 +32,7 @@ import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
+  normalizeFeishuPostMarkdownLineBreaks,
   resolveFeishuCardTemplate,
   sendCardFeishu,
   sendMarkdownCardFeishu,
@@ -40,6 +41,10 @@ import {
 } from "./send.js";
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
+
+type FeishuOutboundTextContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0] & {
+  postMarkdownLineBreaksNormalized?: boolean;
+};
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -84,6 +89,10 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+function chunkFeishuPostTextForOutbound(text: string, limit: number): string[] {
+  return chunkTextForOutbound(normalizeFeishuPostMarkdownLineBreaks(text), limit);
 }
 
 function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
@@ -429,8 +438,17 @@ async function sendOutboundText(params: {
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
+  postMarkdownLineBreaksNormalized?: boolean;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
+  const {
+    cfg,
+    to,
+    text,
+    accountId,
+    replyToMessageId,
+    replyInThread,
+    postMarkdownLineBreaksNormalized,
+  } = params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -456,12 +474,44 @@ async function sendOutboundText(params: {
     });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
+  return sendMessageFeishu({
+    cfg,
+    to,
+    text,
+    accountId,
+    replyToMessageId,
+    replyInThread,
+    ...(postMarkdownLineBreaksNormalized ? { postMarkdownLineBreaksNormalized: true } : {}),
+  });
+}
+
+function resolveFeishuTextPayloadAdapter(params: { commentTarget: boolean }) {
+  if (params.commentTarget) {
+    return {
+      ...feishuOutbound,
+      chunker: chunkTextForOutbound,
+    };
+  }
+  return {
+    ...feishuOutbound,
+    chunker: chunkFeishuPostTextForOutbound,
+    sendText: async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => {
+      const sendText = feishuOutbound.sendText;
+      if (!sendText) {
+        throw new Error("Feishu outbound text sender unavailable");
+      }
+      const normalizedCtx: FeishuOutboundTextContext = {
+        ...ctx,
+        postMarkdownLineBreaksNormalized: true,
+      };
+      return await sendText(normalizedCtx);
+    },
+  };
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: chunkFeishuPostTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   presentationCapabilities: {
@@ -491,11 +541,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       text: ctx.text,
       identity: ctx.identity,
     });
+    const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (!card) {
       return await sendTextMediaPayload({
         channel: "feishu",
         ctx,
-        adapter: feishuOutbound,
+        adapter: resolveFeishuTextPayloadAdapter({ commentTarget: Boolean(commentTarget) }),
       });
     }
 
@@ -503,7 +554,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
     });
-    const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (commentTarget) {
       return await sendTextMediaPayload({
         channel: "feishu",
@@ -525,7 +575,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             channelData: undefined,
           },
         },
-        adapter: feishuOutbound,
+        adapter: resolveFeishuTextPayloadAdapter({ commentTarget: true }),
       });
     }
 
@@ -561,16 +611,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
-    sendText: async ({
-      cfg,
-      to,
-      text,
-      accountId,
-      replyToId,
-      threadId,
-      mediaLocalRoots,
-      identity,
-    }) => {
+    sendText: async (ctx) => {
+      const {
+        cfg,
+        to,
+        text,
+        accountId,
+        replyToId,
+        threadId,
+        mediaLocalRoots,
+        identity,
+        postMarkdownLineBreaksNormalized,
+      } = ctx as FeishuOutboundTextContext;
       const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
         replyToId,
         threadId,
@@ -634,6 +686,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         accountId: accountId ?? undefined,
         replyToMessageId,
         replyInThread,
+        ...(postMarkdownLineBreaksNormalized ? { postMarkdownLineBreaksNormalized: true } : {}),
       });
     },
     sendMedia: async ({
