@@ -47,10 +47,32 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CALLBACK_HOST = process.env.OPENCLAW_OAUTH_CALLBACK_HOST || "127.0.0.1";
+const DEFAULT_CALLBACK_HOST = "localhost";
+const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
-const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
+
+function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
+  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
+    throw new Error("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
+  }
+  return host;
+}
+
+function resolveRedirectUri(host: string): string {
+  const hostForUrl = host === "::1" ? "[::1]" : host;
+  const url = new URL(`http://${hostForUrl}:${CALLBACK_PORT}`);
+  url.pathname = CALLBACK_PATH;
+  return url.toString();
+}
+
+function resolveCallbackConfig(): { callbackHost: string; redirectUri: string } {
+  const callbackHost = resolveCallbackHost();
+  const redirectUri = resolveRedirectUri(callbackHost);
+  return { callbackHost, redirectUri };
+}
+
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
@@ -204,14 +226,16 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
       }
     });
 
+    const { callbackHost, redirectUri } = resolveCallbackConfig();
+
     server.on("error", (err) => {
       reject(err);
     });
 
-    server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+    server.listen(CALLBACK_PORT, callbackHost, () => {
       resolve({
         server,
-        redirectUri: REDIRECT_URI,
+        redirectUri,
         cancelWait: () => {
           settleWait?.(null);
         },
@@ -306,7 +330,7 @@ export async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
-  let redirectUriForExchange = REDIRECT_URI;
+  let redirectUriForExchange = server.redirectUri;
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -314,7 +338,7 @@ export async function loginAnthropic(options: {
       code: "true",
       client_id: CLIENT_ID,
       response_type: "code",
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: server.redirectUri,
       scope: SCOPES,
       code_challenge: challenge,
       code_challenge_method: "S256",
@@ -355,7 +379,7 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
+        redirectUriForExchange = server.redirectUri;
       } else if (manualInput) {
         const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
@@ -388,7 +412,7 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
+        redirectUriForExchange = server.redirectUri;
       }
     }
 
@@ -396,7 +420,7 @@ export async function loginAnthropic(options: {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
-          placeholder: REDIRECT_URI,
+          placeholder: server.redirectUri,
         }),
         options.signal,
         server.cancelWait,
@@ -470,4 +494,10 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;
   },
+};
+
+export const testing = {
+  resolveCallbackConfig,
+  resolveCallbackHost,
+  resolveRedirectUri,
 };
