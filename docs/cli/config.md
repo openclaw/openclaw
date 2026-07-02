@@ -172,6 +172,8 @@ SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for 
 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth. `--strict-json` / `--json` do not change batch parsing behavior.
 
+`--batch-file` payloads are limited to 50 MB. Files exceeding this limit are rejected with a "Batch file too large" error before parsing.
+
 ## `config patch`
 
 Use `config patch` when you want to paste or pipe a config-shaped patch instead of running many path-based `config set` commands. The input is a JSON5 object. Objects merge recursively, arrays and scalar values replace the target value, and `null` deletes the target path.

@@ -138,13 +138,18 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  // Bounded read: allocate a buffer of MAX+1 so a full buffer means the
-  // file exceeds the limit.  This caps memory even for special files like
-  // /dev/zero whose stat.size is 0 but produce unbounded reads.
+  const fd = fs.openSync(pathname, "r");
+  // Bounded read: for regular files, use fstat to determine actual size
+  // and allocate only what's needed, so small batch files don't pay the
+  // full 50 MB memory cost.  For special files like /dev/zero whose
+  // stat.size is 0 but produce unbounded reads, use the full cap (MAX+1).
   // Loop because fs.readSync may return a short read (fewer bytes than
   // requested) on some filesystems; a single read would silently truncate.
-  const fd = fs.openSync(pathname, "r");
-  const buf = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1);
+  const fstat = fs.fstatSync(fd);
+  const allocSize = fstat.isFile()
+    ? Math.min(fstat.size, MAX_BATCH_FILE_BYTES) + 1
+    : MAX_BATCH_FILE_BYTES + 1;
+  const buf = Buffer.alloc(allocSize);
   let bytesRead = 0;
   try {
     while (bytesRead < buf.length) {
