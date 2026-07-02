@@ -3029,6 +3029,34 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     });
   });
 
+  it("does not add a fresh full delay when recovery anchors already-overdue pending work", async () => {
+    const sessionKey = "agent:main:fold-anchor-recovery-overdue";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 30_000,
+      electedAt: Date.now() - 60_000,
+      dueAt: Date.now() + 60_000,
+      maxChainLength: 8,
+      reason: "overdue restart fold proof",
+      anchorPending: true,
+      originRunId: "run-origin-RO",
+      originTurnId: "turn-origin-RO",
+    });
+    activeSessions.add(sessionKey);
+
+    await dispatchPendingContinuationWork({ sessionKey, recoverRunning: true });
+
+    expect(activeQueueDeliveries).toHaveLength(1);
+    expect(turnGrants).toHaveLength(0);
+    expect([...mockFlows.values()][0]?.stateJson).toMatchObject({
+      anchorFinalizedAt: 970_000,
+      dueAt: 1_000_000,
+      disposition: "folded-active",
+    });
+  });
+
   it("folds Cael-style active body plus +20/+21/+22 delayed rows instead of sequential later turns", async () => {
     const sessionKey = "agent:main:cael-active-overlap";
     mockSessionStore[sessionKey] = { sessionKey };

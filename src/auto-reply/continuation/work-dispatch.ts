@@ -818,10 +818,14 @@ export async function dispatchPendingContinuationWork(params: {
     ? replyRunRegistry.resolveSessionId(params.sessionKey)
     : undefined;
   const runningRecoveryBlockedByActiveReply = recoverRunning && sessionActive;
+  const anchorOptions = recoverRunning ? { matureOverdueAnchors: true } : {};
   if (activeSessionId) {
-    finalizeAnchorPendingWork(params.sessionKey, Date.now(), { activeSessionId });
+    finalizeAnchorPendingWork(params.sessionKey, Date.now(), {
+      ...anchorOptions,
+      activeSessionId,
+    });
   } else {
-    finalizeAnchorPendingWork(params.sessionKey, Date.now());
+    finalizeAnchorPendingWork(params.sessionKey, Date.now(), anchorOptions);
   }
   const works = consumePendingWork(params.sessionKey, {
     includeRunning: recoverRunning && !runningRecoveryBlockedByActiveReply,

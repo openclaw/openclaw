@@ -385,7 +385,7 @@ function buildFallbackWorkState(work: PendingContinuationWork): PendingWorkState
 export function finalizeAnchorPendingWork(
   sessionKey: string,
   anchorFinalizedAt: number,
-  options: { activeSessionId?: string } = {},
+  options: { activeSessionId?: string; matureOverdueAnchors?: boolean } = {},
 ): number {
   let anchored = 0;
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
@@ -406,13 +406,17 @@ export function finalizeAnchorPendingWork(
     ) {
       continue;
     }
+    const effectiveAnchorFinalizedAt =
+      options.matureOverdueAnchors === true && anchorFinalizedAt - state.electedAt >= state.delayMs
+        ? anchorFinalizedAt - state.delayMs
+        : anchorFinalizedAt;
     const {
       anchorPending: _anchorPending,
       idleRetry: _idleRetry,
       recoveryDueAt: _recoveryDueAt,
       ...stateWithoutPending
     } = state;
-    const dueAt = anchorFinalizedAt + state.delayMs;
+    const dueAt = effectiveAnchorFinalizedAt + state.delayMs;
     const updated = updateFlowRecordByIdExpectedRevision({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
@@ -421,12 +425,12 @@ export function finalizeAnchorPendingWork(
         stateJson: {
           ...stateWithoutPending,
           dueAt,
-          anchorFinalizedAt,
+          anchorFinalizedAt: effectiveAnchorFinalizedAt,
         },
         waitJson: null,
         blockedTaskId: null,
         blockedSummary: null,
-        updatedAt: anchorFinalizedAt,
+        updatedAt: effectiveAnchorFinalizedAt,
       },
     });
     if (updated.applied) {
