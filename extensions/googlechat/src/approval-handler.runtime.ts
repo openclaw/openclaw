@@ -99,12 +99,14 @@ function buildMetadataText(metadata: readonly { label: string; value: string }[]
     .join("<br>");
 }
 
-function formatDecision(decision: ExecApprovalDecision): string {
+function formatDecision(decision: ExecApprovalDecision | null): string {
   return decision === "allow-once"
     ? "Allowed once"
     : decision === "allow-always"
       ? "Allowed always"
-      : "Denied";
+      : decision === "deny"
+        ? "Denied"
+        : "Cancelled";
 }
 
 function buildMainTextWidget(text: string) {

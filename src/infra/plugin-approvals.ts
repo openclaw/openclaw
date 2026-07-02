@@ -41,7 +41,7 @@ export type PluginApprovalRequest = {
 /** Resolved plugin approval decision plus optional request snapshot. */
 export type PluginApprovalResolved = {
   id: string;
-  decision: ExecApprovalDecision;
+  decision: ExecApprovalDecision | null;
   resolvedBy?: string | null;
   ts: number;
   request?: PluginApprovalRequestPayload;
@@ -67,14 +67,17 @@ export function resolvePluginApprovalTimeoutMs(value: unknown): number {
 }
 
 /** Format an approval decision for user-facing messages. */
-export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
+export function approvalDecisionLabel(decision: ExecApprovalDecision | null | undefined): string {
   if (decision === "allow-once") {
     return "allowed once";
   }
   if (decision === "allow-always") {
     return "allowed always";
   }
-  return "denied";
+  if (decision === "deny") {
+    return "denied";
+  }
+  return "cancelled";
 }
 
 /** Resolve explicit plugin approval decisions or fall back to defaults. */

@@ -275,6 +275,7 @@ export type ExecApprovalsSnapshot = SchemaType<"ExecApprovalsSnapshot">;
 export type ExecApprovalGetParams = SchemaType<"ExecApprovalGetParams">;
 export type ExecApprovalRequestParams = SchemaType<"ExecApprovalRequestParams">;
 export type ExecApprovalResolveParams = SchemaType<"ExecApprovalResolveParams">;
+export type PluginApprovalCancelParams = SchemaType<"PluginApprovalCancelParams">;
 export type PluginApprovalRequestParams = SchemaType<"PluginApprovalRequestParams">;
 export type PluginApprovalResolveParams = SchemaType<"PluginApprovalResolveParams">;
 export type DevicePairListParams = SchemaType<"DevicePairListParams">;

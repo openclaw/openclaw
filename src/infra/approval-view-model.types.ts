@@ -89,7 +89,7 @@ export type PluginApprovalPendingView = PluginApprovalViewBase & {
 /** Resolved plugin approval view with the recorded decision. */
 export type PluginApprovalResolvedView = PluginApprovalViewBase & {
   phase: "resolved";
-  decision: ExecApprovalDecision;
+  decision: ExecApprovalDecision | null;
   resolvedBy?: string | null;
 };
 

@@ -230,6 +230,26 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       },
     },
+    {
+      name: "builds plugin cancelled payloads",
+      payload: buildPluginApprovalResolvedReplyPayload({
+        resolved: {
+          id: "plugin-approval-cancelled",
+          decision: null,
+          resolvedBy: "gateway-client",
+          ts: 2_000,
+        },
+      }),
+      textExpected: (text: string) => expect(text).toContain("Plugin approval cancelled"),
+      presentationExpected: undefined,
+      channelDataExpected: {
+        execApproval: {
+          approvalId: "plugin-approval-cancelled",
+          approvalSlug: "plugin-a",
+          state: "resolved",
+        },
+      },
+    },
   ])("$name", ({ payload, textExpected, presentationExpected, channelDataExpected }) => {
     if (payload.text === undefined) {
       throw new Error("expected rendered approval text");

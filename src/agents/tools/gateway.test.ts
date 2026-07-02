@@ -488,6 +488,18 @@ describe("gateway tool defaults", () => {
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
+  it("marks local plugin approval cancel calls with runtime and device identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool("plugin.approval.cancel", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.cancel");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
   it("marks local plugin approval request calls with runtime and device identity", async () => {
     mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-id" });
 

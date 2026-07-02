@@ -150,13 +150,15 @@ function buildSlackMetadataContextBlocks(metadata: readonly SlackMetadataItem[])
 }
 
 function resolveSlackApprovalDecisionLabel(
-  decision: "allow-once" | "allow-always" | "deny",
+  decision: "allow-once" | "allow-always" | "deny" | null,
 ): string {
   return decision === "allow-once"
     ? "Allowed once"
     : decision === "allow-always"
       ? "Allowed always"
-      : "Denied";
+      : decision === "deny"
+        ? "Denied"
+        : "Cancelled";
 }
 
 function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataItem[] {

@@ -209,6 +209,8 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type PluginApprovalCancelParams,
+  PluginApprovalCancelParamsSchema,
   type PluginApprovalRequestParams,
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
@@ -886,6 +888,9 @@ export const validatePluginApprovalRequestParams = lazyCompile<PluginApprovalReq
 );
 export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
+);
+export const validatePluginApprovalCancelParams = lazyCompile<PluginApprovalCancelParams>(
+  PluginApprovalCancelParamsSchema,
 );
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
