@@ -89,7 +89,6 @@ struct TalkBackgroundSettingsView: View {
             Image(uiImage: customPreview)
                 .resizable()
                 .scaledToFill()
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.primary.opacity(0.06))
@@ -108,8 +107,10 @@ struct TalkBackgroundSettingsView: View {
     {
         Button(action: action) {
             preview
-                .frame(height: 72)
                 .frame(maxWidth: .infinity)
+                .frame(height: 72)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
