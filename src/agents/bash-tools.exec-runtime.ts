@@ -136,6 +136,7 @@ export type ExecProcessOutcome =
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
+      truncated: boolean;
       timedOut: false;
       noOutputTimedOut?: boolean;
     }
@@ -146,6 +147,7 @@ export type ExecProcessOutcome =
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
+      truncated: boolean;
       timedOut: boolean;
       noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
@@ -482,6 +484,7 @@ export function buildExecExitOutcome(params: {
   aggregated: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
+  truncated?: boolean;
 }): ExecProcessOutcome {
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
@@ -497,6 +500,7 @@ export function buildExecExitOutcome(params: {
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
       aggregated: params.aggregated + exitMsg,
+      truncated: params.truncated === true,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
@@ -519,6 +523,7 @@ export function buildExecExitOutcome(params: {
     exitReason: params.exit.reason,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
+    truncated: params.truncated === true,
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
@@ -531,6 +536,7 @@ export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;
   durationMs: number;
+  truncated?: boolean;
 }): ExecProcessOutcome {
   return {
     status: "failed",
@@ -538,6 +544,7 @@ export function buildExecRuntimeErrorOutcome(params: {
     exitSignal: null,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
+    truncated: params.truncated === true,
     timedOut: false,
     failureKind: "runtime-error",
     reason: joinExecFailureOutput(params.aggregated, String(params.error)),
@@ -898,6 +905,7 @@ export async function runExecProcess(opts: {
             error: retryErr,
             aggregated: session.aggregated.trim(),
             durationMs: Date.now() - startedAt,
+            truncated: session.truncated,
           }),
           sessionKey: opts.sessionKey,
           target: diagnosticTarget,
@@ -921,6 +929,7 @@ export async function runExecProcess(opts: {
           error: err,
           aggregated: session.aggregated.trim(),
           durationMs: Date.now() - startedAt,
+          truncated: session.truncated,
         }),
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
@@ -945,6 +954,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
+        truncated: session.truncated,
       });
 
       markExited(
@@ -981,6 +991,7 @@ export async function runExecProcess(opts: {
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
+        truncated: session.truncated,
       });
       emitExecProcessCompleted({
         command: opts.command,

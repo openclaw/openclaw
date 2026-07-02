@@ -88,6 +88,7 @@ export type ExecApprovalFollowupOutcome = {
   exitCode: number | null;
   timedOut: boolean;
   aggregated: string;
+  truncated?: boolean;
   reason?: string;
 };
 

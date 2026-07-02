@@ -56,7 +56,6 @@ import {
   shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 import {
-  DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
   runExecProcess,
@@ -368,6 +367,18 @@ function formatDiagnosticsExportFailure(params: {
   return lines.join("\n");
 }
 
+function formatApprovalCompletionOutput(outcome: ExecApprovalFollowupOutcome): string {
+  const output = (outcome.aggregated || "").trim();
+  if (!output) {
+    return outcome.truncated
+      ? "[Output truncated by exec capture limit before any text was retained.]"
+      : "";
+  }
+  return outcome.truncated
+    ? `${output}\n\n[Output truncated by exec capture limit before this follow-up was delivered.]`
+    : output;
+}
+
 function buildGatewayExecApprovalFollowupSummary(params: {
   approvalId: string;
   sessionId: string;
@@ -386,9 +397,7 @@ function buildGatewayExecApprovalFollowupSummary(params: {
     return `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
   }
 
-  const output = normalizeNotifyOutput(
-    tail(params.outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
+  const output = formatApprovalCompletionOutput(params.outcome);
   return output
     ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
     : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
