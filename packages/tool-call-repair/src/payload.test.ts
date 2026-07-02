@@ -10,9 +10,10 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       '[get_weather]\n{"city":"NYC"}\n[END_TOOL_REQUEST]',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(1);
-    expect(result![0]!.name).toBe("get_weather");
-    expect(result![0]!.arguments).toEqual({ city: "NYC" });
+    const blocks = result!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.name).toBe("get_weather");
+    expect(blocks[0]!.arguments).toEqual({ city: "NYC" });
   });
 
   it("parses multiple bracket-style tool calls", () => {
@@ -20,9 +21,10 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       '[get_weather]\n{"city":"NYC"}\n[END_TOOL_REQUEST]\n[search]\n{"q":"hello"}\n[/search]',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(2);
-    expect(result![0]!.name).toBe("get_weather");
-    expect(result![1]!.name).toBe("search");
+    const blocks = result!;
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]!.name).toBe("get_weather");
+    expect(blocks[1]!.name).toBe("search");
   });
 
   it("parses tool: prefix bracket opening (no newline or closing marker required)", () => {
@@ -30,9 +32,10 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       '[tool:get_weather]{"city":"NYC"}',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(1);
-    expect(result![0]!.name).toBe("get_weather");
-    expect(result![0]!.arguments).toEqual({ city: "NYC" });
+    const blocks = result!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.name).toBe("get_weather");
+    expect(blocks[0]!.arguments).toEqual({ city: "NYC" });
   });
 
   it("parses harmony-style tool call with channel marker", () => {
@@ -40,8 +43,9 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       '<|channel|>commentary to=get_weather code {"city":"NYC"}<|call|>',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(1);
-    expect(result![0]!.name).toBe("get_weather");
+    const blocks = result!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.name).toBe("get_weather");
   });
 
   it("parses harmony-style tool call without channel marker", () => {
@@ -49,8 +53,9 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       'analysis to=search code {"q":"test"}<|call|>',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(1);
-    expect(result![0]!.name).toBe("search");
+    const blocks = result!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.name).toBe("search");
   });
 
   it("parses harmony-style with optional message marker", () => {
@@ -58,8 +63,9 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       'final to=summarize code <|message|> {"text":"hello"}<|call|>',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(1);
-    expect(result![0]!.name).toBe("summarize");
+    const blocks = result!;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.name).toBe("summarize");
   });
 
   it("respects allowedToolNames filter", () => {
@@ -151,9 +157,10 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       '[tool:search]{"q":"hello"}[tool:weather]{"city":"NYC"}',
     );
     expect(result).not.toBeNull();
-    expect(result).toHaveLength(2);
-    expect(result![0]!.name).toBe("search");
-    expect(result![1]!.name).toBe("weather");
+    const blocks = result!;
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]!.name).toBe("search");
+    expect(blocks[1]!.name).toBe("weather");
   });
 
   it("rejects bracket style missing newline before JSON", () => {
@@ -175,9 +182,10 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     const text = '[get_weather]\n{"city":"NYC"}\n[END_TOOL_REQUEST]';
     const result = parseStandalonePlainTextToolCallBlocks(text);
     expect(result).not.toBeNull();
-    expect(result![0]!.start).toBe(0);
-    expect(result![0]!.end).toBe(text.length);
-    expect(result![0]!.raw).toBe(text);
+    const blocks = result!;
+    expect(blocks[0]!.start).toBe(0);
+    expect(blocks[0]!.end).toBe(text.length);
+    expect(blocks[0]!.raw).toBe(text);
   });
 });
 

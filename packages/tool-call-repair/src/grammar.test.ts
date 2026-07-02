@@ -404,7 +404,6 @@ describe("indexOfAsciiMarkerIgnoreCase", () => {
 });
 
 describe("findXmlishToolCallEnd", () => {
-  const functionOpen = "<function=get_weather>";
   const parameterBlock = '<parameter=location>{"city":"NYC"}</parameter>';
   const functionClose = "</function>";
 
@@ -414,9 +413,9 @@ describe("findXmlishToolCallEnd", () => {
     closeTag?: string;
   }): string {
     const fn = params?.functionName ?? "get_weather";
-    const params_ = params?.parameters ?? parameterBlock;
+    const p = params?.parameters ?? parameterBlock;
     const close = params?.closeTag ?? functionClose;
-    return `<function=${fn}>${params_}${close}`;
+    return `<function=${fn}>${p}${close}`;
   }
 
   it("finds end of XML-ish tool call", () => {
