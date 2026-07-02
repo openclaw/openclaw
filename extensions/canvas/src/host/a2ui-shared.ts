@@ -60,7 +60,19 @@ export function injectCanvasLiveReload(html: string): string {
   globalThis.openclawSendUserAction = sendUserAction;
 
   try {
-    const cap = new URLSearchParams(location.search).get("oc_cap");
+    const pathCap = (() => {
+      const prefix = "/__openclaw__/cap/";
+      if (!location.pathname.startsWith(prefix)) return "";
+      const rest = location.pathname.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash <= 0) return "";
+      try {
+        return decodeURIComponent(rest.slice(0, slash));
+      } catch {
+        return "";
+      }
+    })();
+    const cap = pathCap || new URLSearchParams(location.search).get("oc_cap");
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const capQuery = cap ? "?oc_cap=" + encodeURIComponent(cap) : "";
     const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(CANVAS_WS_PATH)} + capQuery);
