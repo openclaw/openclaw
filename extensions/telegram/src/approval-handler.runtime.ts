@@ -86,6 +86,7 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
+          ask: params.view.approvalKind === "exec" ? (params.view.ask ?? undefined) : undefined,
           allowedDecisions: params.view.actions.map((action) => action.decision),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
