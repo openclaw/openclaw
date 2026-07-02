@@ -157,7 +157,12 @@ async function createConfiguredEmbeddingProvider(params: {
   };
 
   const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
-  if (adapter) {
+  // When a built-in adapter matches (e.g. "openai") but the provider config has
+  // a custom base URL, skip the direct adapter so memory embeddings use the
+  // generic provider path which respects the configured endpoint.
+  const providerCfg = params.cfg.models?.providers?.[providerId];
+  const hasCustomBaseUrl = Boolean(providerCfg?.baseUrl?.trim());
+  if (adapter && !hasCustomBaseUrl) {
     const provider = await createWithAdapter(adapter);
     if (!provider) {
       throw new Error(`Memory embedding provider ${providerId} is unavailable.`);

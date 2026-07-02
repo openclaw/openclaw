@@ -181,6 +181,16 @@ function getConfiguredMemoryEmbeddingProvider(
 ): ReturnType<typeof getMemoryEmbeddingProvider> {
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
+    // When a provider matches a built-in adapter (e.g. "openai") but has a custom
+    // base URL, skip the direct adapter so memory embeddings use the configured
+    // endpoint instead of the default public API.
+    const providerConfig = cfg.models?.providers?.[providerId];
+    if (providerConfig) {
+      const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
+      if (hasCustomBaseUrl) {
+        return undefined;
+      }
+    }
     return directAdapter;
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);

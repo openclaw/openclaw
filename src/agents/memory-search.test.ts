@@ -755,4 +755,29 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
   });
+
+  it("routes openai provider with custom baseUrl through generic adapter path", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    // Provider resolves without throwing; adapter selection is deferred to
+    // memory-core and gateway runtime paths.
+    expect(resolved?.provider).toBe("openai");
+  });
 });

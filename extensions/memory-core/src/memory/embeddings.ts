@@ -143,7 +143,18 @@ function getAdapter(
 ): MemoryEmbeddingProviderAdapter {
   const adapter = getLegacyMemoryEmbeddingProvider(id, config);
   if (adapter) {
-    return adapter;
+    // When a built-in adapter matches (e.g. "openai") but the provider config has
+    // a custom base URL, skip the legacy adapter so memory embeddings use the
+    // generic provider path which respects the configured endpoint.
+    const providerConfig = config?.models?.providers?.[id];
+    if (providerConfig) {
+      const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
+      if (!hasCustomBaseUrl) {
+        return adapter;
+      }
+    } else {
+      return adapter;
+    }
   }
   const genericAdapter = getEmbeddingProvider(id, config);
   if (genericAdapter) {
@@ -171,9 +182,15 @@ export function resolveEmbeddingProviderFallbackModel(
   fallbackSourceModel: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
-  const adapter =
-    getLegacyMemoryEmbeddingProvider(providerId, config) ??
-    getEmbeddingProvider(providerId, config);
+  const legacyAdapter = getLegacyMemoryEmbeddingProvider(providerId, config);
+  // Skip built-in adapter when provider has a custom base URL.
+  const providerConfig = config?.models?.providers?.[providerId];
+  const skipLegacy = legacyAdapter && providerConfig && Boolean(
+    providerConfig.baseUrl?.trim(),
+  );
+  const adapter = skipLegacy
+    ? getEmbeddingProvider(providerId, config)
+    : (legacyAdapter ?? getEmbeddingProvider(providerId, config));
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
