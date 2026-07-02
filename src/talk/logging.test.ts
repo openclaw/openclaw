@@ -124,6 +124,10 @@ describe("talk logging", () => {
       type: "log.record",
       level: "INFO",
       message: "talk event output.text.done",
+      event: "talk.recordtalklogevent.info",
+      category: "talk",
+      outcome: "success",
+      reason: "none",
       attributes: {
         subsystem: "talk",
         sessionId: "talk-session",
@@ -233,6 +237,10 @@ describe("talk logging", () => {
       type: "log.record",
       level: "WARN",
       message: "talk event session.error",
+      event: "talk.recordtalklogevent.warn",
+      category: "talk",
+      outcome: "warning",
+      reason: "warning",
       attributes: {
         subsystem: "talk",
         sessionId: "talk-session",

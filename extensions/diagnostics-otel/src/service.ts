@@ -71,12 +71,41 @@ const SECURITY_TARGET_NAME_VALUE_RE = /^[A-Za-z0-9@/_.:-]{1,256}$/u;
 const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
 const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
+const REDACTED_OTEL_LOG_BODY = "[message redacted]";
 const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
 const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
 const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
+const OTEL_LOG_BODY_REDACTED_ATTRIBUTE = "openclaw.log.body_redacted";
+const OTEL_EVENT_NAME_ATTRIBUTE = "otel.event.name";
+const OPENCLAW_SIGNAL_TYPE_ATTRIBUTE = "openclaw.signal.type";
+const OPENCLAW_LOG_EVENT_ATTRIBUTE = "openclaw.log.event";
+const OPENCLAW_LOG_CATEGORY_ATTRIBUTE = "openclaw.log.category";
+const OPENCLAW_LOG_OUTCOME_ATTRIBUTE = "openclaw.log.outcome";
+const OPENCLAW_LOG_REASON_ATTRIBUTE = "openclaw.log.reason";
+const OPENCLAW_LOG_SITE_ID_ATTRIBUTE = "openclaw.log.site_id";
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const RESERVED_OTEL_LOG_ATTRIBUTE_KEYS = new Set([
+  OTEL_EVENT_NAME_ATTRIBUTE,
+  OPENCLAW_SIGNAL_TYPE_ATTRIBUTE,
+  OPENCLAW_LOG_EVENT_ATTRIBUTE,
+  OPENCLAW_LOG_CATEGORY_ATTRIBUTE,
+  OPENCLAW_LOG_OUTCOME_ATTRIBUTE,
+  OPENCLAW_LOG_REASON_ATTRIBUTE,
+  OPENCLAW_LOG_SITE_ID_ATTRIBUTE,
+]);
+const RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS = new Set([
+  "eventName",
+  "otel.event.name",
+  "signal.type",
+  "log.event",
+  "log.category",
+  "log.outcome",
+  "log.reason",
+  "log.site_id",
+  "log.siteId",
+]);
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
@@ -385,6 +414,7 @@ function writeStdoutDiagnosticLogRecord(params: {
     "service.name": serviceName,
     severityText: logRecord.severityText,
     severityNumber: logRecord.severityNumber,
+    ...(logRecord.eventName ? { eventName: logRecord.eventName } : {}),
     body: logRecord.body,
     attributes: logRecord.attributes ?? {},
     ...(traceContext?.traceId ? { trace_id: traceContext.traceId } : {}),
@@ -1091,6 +1121,38 @@ function assignOtelLogAttribute(
   }
 }
 
+function assignReservedOtelLogAttribute(
+  attributes: Record<string, string | number | boolean>,
+  key: string,
+  value: string | number | boolean,
+): void {
+  if (typeof value === "string") {
+    attributes[key] = normalizeOtelLogString(value, MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS);
+    return;
+  }
+  attributes[key] = value;
+}
+
+function openClawOtelEventName(event: string, fallback: string): string {
+  const normalized = lowCardinalityAttr(
+    event.startsWith("openclaw.") ? event.slice("openclaw.".length) : event,
+    fallback,
+  );
+  return `openclaw.${normalized}`;
+}
+
+function openClawDiagnosticLogEventName(event: string): string {
+  const normalized = lowCardinalityAttr(
+    event.startsWith("openclaw.") ? event.slice("openclaw.".length) : event,
+    "log.record",
+  );
+  const eventSegment =
+    normalized === "security" || normalized.startsWith("security.")
+      ? `diagnostic.${normalized}`
+      : normalized;
+  return `openclaw.${eventSegment}`;
+}
+
 function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -1140,7 +1202,15 @@ function assignOtelLogEventAttributes(
     if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
       continue;
     }
-    assignOtelLogAttribute(attributes, `openclaw.${key}`, eventAttributes[rawKey]);
+    const attributeKey = `openclaw.${key}`;
+    if (
+      attributeKey === OTEL_LOG_BODY_REDACTED_ATTRIBUTE ||
+      RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS.has(key) ||
+      RESERVED_OTEL_LOG_ATTRIBUTE_KEYS.has(attributeKey)
+    ) {
+      continue;
+    }
+    assignOtelLogAttribute(attributes, attributeKey, eventAttributes[rawKey]);
   }
 }
 
@@ -1961,11 +2031,42 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ): BuiltOtelLogRecord => {
           const logLevelName = evt.level || "INFO";
           const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-          const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+          const captureLogBody = shouldCaptureOtelLogBody(contentCapturePolicy);
+          const logEvent = lowCardinalityAttr(evt.event, "log.record");
+          const eventName = openClawDiagnosticLogEventName(logEvent);
+          const body = captureLogBody
             ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
-            : "log";
+            : REDACTED_OTEL_LOG_BODY;
           const attributes = Object.create(null) as Record<string, string | number | boolean>;
+          assignReservedOtelLogAttribute(attributes, OTEL_EVENT_NAME_ATTRIBUTE, eventName);
+          assignReservedOtelLogAttribute(attributes, OPENCLAW_LOG_EVENT_ATTRIBUTE, logEvent);
+          assignReservedOtelLogAttribute(
+            attributes,
+            OPENCLAW_LOG_CATEGORY_ATTRIBUTE,
+            lowCardinalityAttr(evt.category),
+          );
+          assignReservedOtelLogAttribute(
+            attributes,
+            OPENCLAW_LOG_OUTCOME_ATTRIBUTE,
+            lowCardinalityAttr(evt.outcome),
+          );
+          assignReservedOtelLogAttribute(
+            attributes,
+            OPENCLAW_LOG_REASON_ATTRIBUTE,
+            lowCardinalityAttr(evt.reason, "none"),
+          );
+          if (evt.code?.siteId) {
+            assignReservedOtelLogAttribute(
+              attributes,
+              OPENCLAW_LOG_SITE_ID_ATTRIBUTE,
+              lowCardinalityAttr(evt.code.siteId),
+            );
+          }
+          assignReservedOtelLogAttribute(attributes, OPENCLAW_SIGNAL_TYPE_ATTRIBUTE, "log.record");
           assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
+          if (!captureLogBody) {
+            attributes[OTEL_LOG_BODY_REDACTED_ATTRIBUTE] = true;
+          }
           if (evt.loggerName) {
             assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
           }
@@ -1987,6 +2088,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           addTraceAttributes(attributes, traceContext);
 
           const logRecord: LogRecord = {
+            eventName,
             body,
             severityText: logLevelName,
             severityNumber,
@@ -2006,10 +2108,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ): BuiltOtelLogRecord => {
           const severityText = securitySeverityText(evt.severity);
           const attributes = Object.create(null) as Record<string, string | number | boolean>;
+          const eventName = openClawOtelEventName(
+            `security.${lowCardinalityAttr(evt.action)}`,
+            "security.event",
+          );
+          assignReservedOtelLogAttribute(attributes, OTEL_EVENT_NAME_ATTRIBUTE, eventName);
+          assignReservedOtelLogAttribute(
+            attributes,
+            OPENCLAW_SIGNAL_TYPE_ATTRIBUTE,
+            "security.event",
+          );
           assignOtelSecurityAttributes(attributes, evt);
 
           const traceContext = normalizedTrustedTraceContext(evt, metadata);
           const logRecord: LogRecord = {
+            eventName,
             body: "openclaw.security.event",
             severityText,
             severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),

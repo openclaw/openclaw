@@ -11,7 +11,15 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import {
+  attachDiagnosticLogSource,
+  attachDiagnosticLogSemantics,
+  getChildLogger,
+  hasDiagnosticLogSemantics,
+  isFileLogLevelEnabled,
+  splitDiagnosticLogSemanticFields,
+  type DiagnosticLogSource,
+} from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 
@@ -339,6 +347,72 @@ function shouldSuppressProbeConsoleLine(params: {
   return /(sessionId|runId)=probe-/.test(message);
 }
 
+function normalizeStackFilePath(value: string): string {
+  if (value.startsWith("file://")) {
+    try {
+      return decodeURIComponent(new URL(value).pathname);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function parseDiagnosticStackFrame(rawLine: string): DiagnosticLogSource | undefined {
+  const line = rawLine.trim().replace(/^at\s+/u, "");
+  const match = /^(?:(?<method>.*?)\s+\()?(?<filePath>.+):(?<line>\d+):(?<column>\d+)\)?$/u.exec(
+    line,
+  );
+  const filePath = match?.groups?.filePath;
+  const lineNumber = Number(match?.groups?.line);
+  if (!filePath || !Number.isFinite(lineNumber)) {
+    return undefined;
+  }
+  const normalizedPath = normalizeStackFilePath(filePath);
+  const rawMethod = match?.groups?.method?.trim();
+  const method = rawMethod?.replace(/^Object\./u, "");
+  if (
+    normalizedPath.startsWith("node:") ||
+    normalizedPath.includes("/node:") ||
+    normalizedPath.endsWith("src/logging/subsystem.ts") ||
+    normalizedPath.endsWith("dist/logging/subsystem.js") ||
+    method === "captureDiagnosticLogSource" ||
+    method === "parseDiagnosticStackFrame" ||
+    method === "emitLog" ||
+    method === "logToFile" ||
+    method === "trace" ||
+    method === "debug" ||
+    method === "info" ||
+    method === "warn" ||
+    method === "error" ||
+    method === "fatal" ||
+    method === "raw"
+  ) {
+    return undefined;
+  }
+  const functionName =
+    method && !method.startsWith("file://") && method !== "async" ? method : undefined;
+  return {
+    filePath: normalizedPath,
+    line: lineNumber,
+    ...(functionName ? { functionName } : {}),
+  };
+}
+
+function captureDiagnosticLogSource(): DiagnosticLogSource | undefined {
+  const stack = new Error().stack;
+  if (!stack) {
+    return undefined;
+  }
+  for (const line of stack.split("\n").slice(1)) {
+    const source = parseDiagnosticStackFrame(line);
+    if (source) {
+      return source;
+    }
+  }
+  return undefined;
+}
+
 function logToFile(
   fileLogger: TsLogger<LogObj>,
   level: LogLevel,
@@ -355,7 +429,7 @@ function logToFile(
   if (typeof method !== "function") {
     return;
   }
-  if (meta && Object.keys(meta).length > 0) {
+  if (meta && (Object.keys(meta).length > 0 || hasDiagnosticLogSemantics(meta))) {
     method.call(fileLogger, meta, message);
   } else {
     method.call(fileLogger, message);
@@ -376,6 +450,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
+    let consoleMeta = meta;
     if (meta && Object.keys(meta).length > 0) {
       const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
         consoleMessage?: unknown;
@@ -383,9 +458,17 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }
-      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+      const { attributes, semantics } = splitDiagnosticLogSemanticFields(rest);
+      consoleMeta = attributes;
+      fileMeta = semantics
+        ? attachDiagnosticLogSemantics({ ...(attributes ?? {}) }, semantics)
+        : attributes;
     }
     if (fileEnabled) {
+      const diagnosticSource = captureDiagnosticLogSource();
+      if (diagnosticSource) {
+        fileMeta = attachDiagnosticLogSource({ ...(fileMeta ?? {}) }, diagnosticSource);
+      }
       logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
     }
     if (!consoleEnabled) {
@@ -397,7 +480,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         level,
         subsystem: resolvedSubsystem,
         message: consoleMessage,
-        meta: fileMeta,
+        meta: consoleMeta,
       })
     ) {
       return;
@@ -409,7 +492,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         subsystem: resolvedSubsystem,
         message: consoleSettings.style === "json" ? message : consoleMessage,
         style: consoleSettings.style,
-        meta: fileMeta,
+        meta: consoleMeta,
       }),
       { redacted: true },
     );
