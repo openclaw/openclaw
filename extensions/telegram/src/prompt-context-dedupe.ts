@@ -1,4 +1,4 @@
-import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-chunking";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 
 export type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
@@ -14,6 +14,6 @@ export function resolvePromptContextTextDedupeKey(
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  const visibleBody = stripInlineDirectiveTagsForDisplay(message.body).text.trim();
+  const visibleBody = stripInlineDirectiveTagsForDelivery(message.body).text.trim();
   return visibleBody ? `${message.timestamp_ms}:${visibleBody}` : undefined;
 }

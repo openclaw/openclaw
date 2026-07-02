@@ -16,6 +16,20 @@ describe("resolvePromptContextTextDedupeKey", () => {
     );
   });
 
+  it("matches inline directive text to Telegram delivery-normalized cache text", () => {
+    expect(
+      resolvePromptContextTextDedupeKey({
+        timestamp_ms: 1_778_474_760_000,
+        body: "hello [[reply_to_current]] world",
+      }),
+    ).toBe(
+      resolvePromptContextTextDedupeKey({
+        timestamp_ms: 1_778_474_760_000,
+        body: "hello world",
+      }),
+    );
+  });
+
   it("keeps timestamp alignment in the dedupe key", () => {
     expect(
       resolvePromptContextTextDedupeKey({
