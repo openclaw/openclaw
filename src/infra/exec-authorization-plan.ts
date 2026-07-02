@@ -107,6 +107,34 @@ const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
   "function-definition",
 ]);
 
+// Stream-only redirections touch no filesystem: discarding stdout/stderr to
+// /dev/null or merging one std fd into another (2>&1, 1>&2) is safe to treat as
+// analyzable, so a command using only these falls through to normal per-segment
+// allowlist/safeBins evaluation instead of forcing approval. The patterns match
+// the parser's raw `file_redirect` text (e.g. "2>/dev/null", "> out.txt") after
+// whitespace removal. Anything writing/reading a real file, appending (`>>`),
+// `&>`, fd-close (`>&-`), or targeting an fd other than 1/2 is excluded and stays
+// blocking. The leading fd is optional (bare `>` = stdout) and limited to 1/2.
+const HARMLESS_REDIRECT_PATTERNS: readonly RegExp[] = [/^[12]?>\/dev\/null$/, /^[12]?>&[12]$/];
+
+function isHarmlessRedirect(text: string): boolean {
+  const normalized = text.replace(/\s+/g, "");
+  return HARMLESS_REDIRECT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+// A risk only blocks planning when it is genuinely unanalyzable. Harmless
+// stream-only redirects are the one exception: they leave argv untouched, so the
+// command can still be authorized segment by segment.
+function isUnanalyzableRisk(risk: CommandRisk): boolean {
+  if (!UNANALYZABLE_RISKS.has(risk.kind)) {
+    return false;
+  }
+  if (risk.kind === "redirect" && isHarmlessRedirect(risk.text)) {
+    return false;
+  }
+  return true;
+}
+
 const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
 export const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
@@ -231,7 +259,7 @@ function riskInsidePromptOnlyStep(risk: CommandRisk, explanation: CommandExplana
 }
 
 function findUnanalyzableRisk(explanation: CommandExplanation): CommandRisk | null {
-  return explanation.risks.find((entry) => UNANALYZABLE_RISKS.has(entry.kind)) ?? null;
+  return explanation.risks.find(isUnanalyzableRisk) ?? null;
 }
 
 function hasBlockingRisk(
@@ -262,9 +290,7 @@ function shellWrapperPreludeReasons(params: {
   risks: readonly CommandRisk[];
 }): string[] {
   const reasons = params.risks
-    .filter(
-      (risk) => UNANALYZABLE_RISKS.has(risk.kind) && riskBeforeStepExecutable(risk, params.step),
-    )
+    .filter((risk) => isUnanalyzableRisk(risk) && riskBeforeStepExecutable(risk, params.step))
     .map((risk) => risk.kind);
   return [...new Set(reasons)];
 }

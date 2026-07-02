@@ -303,7 +303,7 @@ describe("exec authorization planner", () => {
   });
 
   it("does not promote positional shell carriers with outer shell substitutions", async () => {
-    await expectSingleShellCandidate("sh -c '$0 \"$@\"' touch \"$(id)\"", {
+    await expectSingleShellCandidate('sh -c \'$0 "$@"\' touch "$(id)"', {
       sourceSegment: expect.objectContaining({
         argv: ["sh", "-c", '$0 "$@"', "touch", "$(id)"],
       }),
@@ -348,5 +348,87 @@ describe("exec authorization planner", () => {
         reason: "non-POSIX command wrapper",
       }),
     );
+  });
+});
+
+describe("harmless redirection authorization", () => {
+  // Spec-listed harmless forms + multi-redirect + redirect-before-executable.
+  const allow = [
+    "ls 2>/dev/null",
+    "ls >/dev/null",
+    "ls 1>/dev/null",
+    "cat 2>&1",
+    "cat 1>&2",
+    "ls 2>/dev/null 1>/dev/null",
+    ">/dev/null ls",
+    "ls 2> /dev/null", // whitespace between operator and target is normalized away
+  ];
+  // Out-of-spec or file-touching forms — every one stays blocked (default-deny).
+  const block = [
+    "ls > out.txt",
+    "ls 2>error.log",
+    "cat < input.txt",
+    "ls >>/dev/null",
+    "ls &>/dev/null",
+    "ls >&-",
+    "ls >/dev/null2",
+  ];
+
+  it.each(allow)("plans %s without a redirect block", async (command) => {
+    const plan = await planShellAuthorization({ command });
+    expect(plan.ok).toBe(true);
+  });
+
+  it("normalizes tab-separated harmless redirects", async () => {
+    const plan = await planShellAuthorization({ command: "ls 2>\t/dev/null" });
+    expect(plan.ok).toBe(true);
+  });
+
+  it.each(block)("keeps %s blocked", async (command) => {
+    const plan = await planShellAuthorization({ command });
+    expect(plan.ok).toBe(false);
+  });
+
+  it("auto-allows a safe pipeline carrying a harmless redirect", async () => {
+    const plan = await planShellAuthorization({
+      command: 'echo test 2>/dev/null | grep -e "test" | head -1',
+    });
+    expect(plan.ok).toBe(true);
+  });
+
+  it("blocks when a harmless redirect is mixed with a file write", async () => {
+    const plan = await planShellAuthorization({
+      command: 'grep -e "pattern" 2>/dev/null > /tmp/results.txt',
+    });
+    expect(plan).toEqual(expect.objectContaining({ ok: false, reason: "redirect" }));
+  });
+
+  it("does not let a harmless redirect lift a command-substitution block", async () => {
+    // command-substitution stays unanalyzable; the redirect exemption applies
+    // only to redirect risks, never to a sibling risk on the same command.
+    const plan = await planShellAuthorization({ command: "$(whoami) 2>/dev/null" });
+    expect(plan.ok).toBe(false);
+  });
+});
+
+describe("adversarial redirection bypass attempts", () => {
+  // Disguised file-touching or fd-escaping redirects that must NOT be classified
+  // as harmless. Each stays blocked; this is the change's security evidence.
+  const attacks = [
+    "head >/dev/null/../../../etc/crontab", // path traversal off the /dev/null prefix
+    "head >/dev/nullx", // extra char defeats the exact-match anchor
+    "head > /dev/null/subpath", // path segment after /dev/null
+    "head 2>&3", // merge into an arbitrary fd that may be bound to a file
+    "head 3>/dev/null", // fd > 2 is not in the harmless allowlist
+    "head 9>/dev/null", // fd > 2 is not in the harmless allowlist
+    "head >| /dev/null", // noclobber-override operator is not allowlisted
+    "head >&2-", // fd duplicate-and-close variant is not allowlisted
+    'head >"/dev/null"', // quoted target — classifier does not normalize quotes
+    "head >$(echo /tmp/evil).log", // command-substitution in the redirect target
+  ];
+
+  it.each(attacks)("keeps %s blocked at plan time", async (command) => {
+    const plan = await planShellAuthorization({ command });
+    expect(plan.ok).toBe(false);
   });
 });
