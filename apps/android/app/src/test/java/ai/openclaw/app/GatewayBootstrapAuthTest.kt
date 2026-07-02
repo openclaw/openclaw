@@ -12,6 +12,8 @@ import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -367,32 +369,28 @@ class GatewayBootstrapAuthTest {
             probeResult.await()
           },
         )
+      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
+      val existingJobs =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.toSet()
+          .orEmpty()
 
       runtime.connect(
         endpoint,
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       )
       probeStarted.await()
+      val probeJob =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.singleOrNull { it !in existingJobs }
+          ?: error("Expected one TLS probe job")
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aaaaaaaa"))
-      var staleProbeCleared = false
-      repeat(300) {
-        if (runtime.pendingGatewayTrust.value == null &&
-          desiredBootstrapToken(runtime, "nodeSession") == null
-        ) {
-          staleProbeCleared = true
-          return@repeat
-        }
-        Thread.sleep(10)
-      }
-      if (!staleProbeCleared) {
-        error(
-          "Timed out waiting for stale TLS probe cleanup after disconnect; " +
-            "pendingGatewayTrust=${runtime.pendingGatewayTrust.value}, " +
-            "desiredBootstrapToken=${desiredBootstrapToken(runtime, "nodeSession")}",
-        )
-      }
+      // Join the owning coroutine so assertions run after its stale-attempt guard.
+      probeJob.join()
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))
