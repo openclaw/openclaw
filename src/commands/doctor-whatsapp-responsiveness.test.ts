@@ -43,11 +43,16 @@ describe("doctor WhatsApp responsiveness", () => {
       ].join("\n"),
     });
 
-    expect(listLocalTuiProcesses()).toEqual([
-      { pid: 101, command: "openclaw-tui" },
-      { pid: 104, command: "openclaw tui --local" },
-      { pid: 105, command: "/usr/bin/openclaw chat" },
-    ]);
+    if (process.platform === "win32") {
+      expect(listLocalTuiProcesses()).toEqual([]);
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    } else {
+      expect(listLocalTuiProcesses()).toEqual([
+        { pid: 101, command: "openclaw-tui" },
+        { pid: 104, command: "openclaw tui --local" },
+        { pid: 105, command: "/usr/bin/openclaw chat" },
+      ]);
+    }
   });
 
   it("terminates stale local TUI processes with a kill fallback", async () => {

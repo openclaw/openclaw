@@ -980,7 +980,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function hasActiveGatewayExecCredential(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
 ): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
@@ -1921,15 +1921,24 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
           "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
         defaultEnabled: false,
         async detect(ctx) {
-          const { callGateway } = await import("../gateway/call.js");
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          const status = await callGateway<import("../commands/status.types.js").StatusSummary>({
-            method: "status",
-            params: { includeChannelSummary: false },
-            timeoutMs: 3000,
-            config: ctx.cfg,
-          }).catch(() => undefined);
+          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          if (
+            !(
+              (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+              ctx.allowExecSecretRefs !== true
+            )
+          ) {
+            const { callGateway } = await import("../gateway/call.js");
+            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+              method: "status",
+              params: { includeChannelSummary: false },
+              timeoutMs: 3000,
+              config: ctx.cfg,
+              deviceIdentity: null,
+            }).catch(() => undefined);
+          }
           return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
         },
       },

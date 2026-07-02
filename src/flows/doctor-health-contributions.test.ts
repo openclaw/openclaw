@@ -101,7 +101,7 @@ const mocks = vi.hoisted(() => ({
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
-  collectWhatsappResponsivenessHealthFindings: vi.fn(() => []),
+  collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   scanConfiguredChannelPluginBlockers: vi.fn(
@@ -1755,7 +1755,6 @@ describe("doctor health contributions", () => {
         requirement: "local-tui-event-loop-pressure",
       },
     ]);
-    mocks.callGateway.mockResolvedValueOnce(status);
 
     await expect(
       runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] }),
@@ -1770,6 +1769,7 @@ describe("doctor health contributions", () => {
       params: { includeChannelSummary: false },
       timeoutMs: 3000,
       config: ctx.cfg,
+      deviceIdentity: null,
     });
     expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
@@ -1794,6 +1794,36 @@ describe("doctor health contributions", () => {
     });
     expect(error).not.toHaveBeenCalled();
     expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenLastCalledWith({
+      cfg: ctx.cfg,
+      status: undefined,
+    });
+  });
+
+  it("skips WhatsApp responsiveness Gateway status probes for exec SecretRefs without allow-exec", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const whatsappCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/whatsapp-responsiveness",
+    );
+    expect(whatsappCheck).toBeDefined();
+    mocks.gatewaySecretInputPathCanWin.mockReturnValue(true);
+    mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
+
+    const ctx = {
+      cfg: { channels: { whatsapp: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [whatsappCheck!];
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       status: undefined,
     });
