@@ -234,7 +234,11 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          // Internal handoff and runtime-model-preserving runs skip CLI binding
+          // writes by returning the patch directly.  Heartbeat runs must still
+          // apply binding updates so forwarded cliSessionBinding /
+          // clearCliSessionBinding metadata is persisted (#98895).
+          return preserveUserFacingRunState || params.preserveRuntimeModel
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
@@ -285,7 +289,9 @@ export async function persistSessionUsageUpdate(params: {
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          // Internal handoff and runtime-model-preserving runs skip CLI
+          // binding writes.  Heartbeat runs must persist them (#98895).
+          return preserveUserFacingRunState || params.preserveRuntimeModel
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },

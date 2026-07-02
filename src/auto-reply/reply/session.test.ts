@@ -30,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -4363,6 +4363,53 @@ describe("persistSessionUsageUpdate", () => {
         "claude-cli": "existing-cli-session",
       },
       claudeCliSessionId: "existing-cli-session",
+    });
+  });
+
+  it("persists cliSessionBinding on heartbeat runs while preserving display model fields (#98895)", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-8",
+        contextTokens: 500_000,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "pre-heartbeat-binding" },
+        },
+        cliSessionIds: {
+          "claude-cli": "pre-heartbeat-binding",
+        },
+        claudeCliSessionId: "pre-heartbeat-binding",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      usage: { input: 200, output: 100, total: 300 },
+      lastCallUsage: { input: 180, output: 100, total: 280 },
+      contextTokensUsed: 480_000,
+      cliSessionBinding: { sessionId: "heartbeat-binding" },
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey]).toMatchObject({
+      // Display model fields preserved (heartbeat keeps user-facing state)
+      modelProvider: "anthropic",
+      model: "claude-opus-4-8",
+      // CLI binding updated (heartbeat persisted the new binding)
+      claudeCliSessionId: "heartbeat-binding",
+      cliSessionIds: {
+        "claude-cli": "heartbeat-binding",
+      },
     });
   });
 
