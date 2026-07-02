@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NodeEventSendOutcome
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
@@ -59,6 +60,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +80,140 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
+
+internal data class PendingNotificationNodeEvent(
+  val event: String,
+  val payloadJson: String?,
+)
+
+private data class QueuedNotificationNodeEvent(
+  val generation: Long,
+  val event: PendingNotificationNodeEvent,
+)
+
+internal class NotificationNodeEventOutbox(
+  private val capacity: Int = MAX_PENDING_NOTIFICATION_EVENTS,
+  private val isAuthorized: (PendingNotificationNodeEvent) -> Boolean = { true },
+  private val isConnected: () -> Boolean = { true },
+  private val deliveryIntervalMs: () -> Long = { 0L },
+  private val nowEpochMs: () -> Long = System::currentTimeMillis,
+  private val sleep: suspend (Long) -> Unit = { delay(it) },
+  private val invalidateConnection: () -> Unit = {},
+  private val send: suspend (PendingNotificationNodeEvent) -> NodeEventSendOutcome,
+) {
+  private val stateLock = Any()
+  private val generation = AtomicLong()
+  private val lastDeliveryAtMs = AtomicLong(-1L)
+  private val pending = ArrayDeque<QueuedNotificationNodeEvent>(capacity)
+  private val wakeDelivery = Channel<Unit>(Channel.CONFLATED)
+  private var inFlight: QueuedNotificationNodeEvent? = null
+
+  init {
+    require(capacity > 0) { "capacity must be positive" }
+  }
+
+  fun enqueue(event: PendingNotificationNodeEvent) {
+    synchronized(stateLock) {
+      if (pending.size == capacity) pending.removeFirst()
+      pending.addLast(QueuedNotificationNodeEvent(generation = generation.get(), event = event))
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun clear() {
+    synchronized(stateLock) {
+      clearLocked()
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun <T> updatePolicy(update: () -> T): T {
+    val result =
+      synchronized(stateLock) {
+        // Admission checks share this lock, so the new policy is visible before the next generation.
+        update().also { clearLocked() }
+      }
+    wakeDelivery.trySend(Unit)
+    return result
+  }
+
+  fun onConnected() {
+    wakeDelivery.trySend(Unit)
+  }
+
+  suspend fun deliver() {
+    while (true) {
+      wakeDelivery.receive()
+      while (true) {
+        val queued = synchronized(stateLock) { pending.firstOrNull() } ?: break
+        if (queued.generation != generation.get() || !isAuthorized(queued.event)) {
+          synchronized(stateLock) {
+            if (pending.firstOrNull() === queued) pending.removeFirst()
+          }
+          continue
+        }
+        if (!isConnected()) break
+        if (!awaitDeliverySlot(queued)) continue
+        val admitted =
+          synchronized(stateLock) {
+            if (
+              pending.firstOrNull() !== queued ||
+              queued.generation != generation.get() ||
+              !isAuthorized(queued.event) ||
+              !isConnected()
+            ) {
+              false
+            } else {
+              pending.removeFirst()
+              inFlight = queued
+              true
+            }
+          }
+        if (!admitted) continue
+
+        val outcome = send(queued.event)
+        synchronized(stateLock) {
+          if (inFlight === queued) inFlight = null
+          if (queued.generation == generation.get() && isAuthorized(queued.event)) {
+            when (outcome) {
+              NodeEventSendOutcome.COMPLETED -> lastDeliveryAtMs.set(nowEpochMs())
+              NodeEventSendOutcome.DISCONNECTED -> {
+                // This outcome is rejected before send, so it is safe to retain for reconnect.
+                if (pending.size == capacity) pending.removeLast()
+                pending.addFirst(queued)
+              }
+              // Ambiguous failures may have reached the gateway: do not retry, but charge their rate slot.
+              NodeEventSendOutcome.FAILED -> lastDeliveryAtMs.set(nowEpochMs())
+            }
+          }
+        }
+        if (outcome == NodeEventSendOutcome.DISCONNECTED) break
+      }
+    }
+  }
+
+  private suspend fun awaitDeliverySlot(queued: QueuedNotificationNodeEvent): Boolean {
+    while (queued.generation == generation.get() && isAuthorized(queued.event)) {
+      val lastDelivery = lastDeliveryAtMs.get()
+      if (lastDelivery < 0L) return true
+      val waitMs = lastDelivery + deliveryIntervalMs().coerceAtLeast(0L) - nowEpochMs()
+      if (waitMs <= 0L) return true
+      // Short slices make policy/gateway invalidation responsive without charging stale quota.
+      sleep(minOf(waitMs, 250L))
+    }
+    return false
+  }
+
+  private fun clearLocked() {
+    // Only an admitted RPC needs transport invalidation; queued payloads have no socket side effect.
+    if (inFlight?.generation == generation.get()) invalidateConnection()
+    generation.incrementAndGet()
+    lastDeliveryAtMs.set(-1L)
+    pending.clear()
+  }
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -591,6 +727,7 @@ class NodeRuntime(
           _nodeConnected.value = true
           nodeStatusText = "Connected"
         }
+        notificationOutbox.onConnected()
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
@@ -628,11 +765,49 @@ class NodeRuntime(
       },
     )
 
+  private val notificationOutbox: NotificationNodeEventOutbox by lazy {
+    NotificationNodeEventOutbox(
+      isAuthorized = ::isNotificationEventStillAuthorized,
+      isConnected = nodeSession::isReady,
+      deliveryIntervalMs = ::notificationDeliveryIntervalMs,
+      invalidateConnection = nodeSession::reconnect,
+      send = { pending ->
+        nodeSession.sendNodeEventWithOutcome(event = pending.event, payloadJson = pending.payloadJson)
+      },
+    )
+  }
+
+  private fun notificationDeliveryIntervalMs(): Long {
+    val maxEvents =
+      prefs.notificationForwardingMaxEventsPerMinute.value
+        .coerceAtLeast(1)
+        .toLong()
+    return (60_000L + maxEvents - 1L) / maxEvents
+  }
+
+  private fun isNotificationEventStillAuthorized(event: PendingNotificationNodeEvent): Boolean {
+    if (event.event != "notifications.changed") return false
+    if (!DeviceNotificationListenerService.isAccessEnabled(appContext)) return false
+    val payload =
+      runCatching { event.payloadJson?.let(json::parseToJsonElement).asObjectOrNull() }
+        .getOrNull()
+        ?: return false
+    val packageName = payload["packageName"].asStringOrNull()?.trim().orEmpty()
+    if (packageName.isEmpty()) return false
+    val policy = prefs.getNotificationForwardingPolicy(appPackageName = appContext.packageName)
+    val eventSessionKey = payload["sessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
+    return policy.enabled &&
+      policy.sessionKey == eventSessionKey &&
+      policy.allowsPackage(packageName) &&
+      !policy.isWithinQuietHours(nowEpochMs = System.currentTimeMillis())
+  }
+
   init {
+    scope.launch { notificationOutbox.deliver() }
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
-      }
+      notificationOutbox.enqueue(
+        PendingNotificationNodeEvent(event = event, payloadJson = payloadJson),
+      )
     }
   }
 
@@ -1267,29 +1442,60 @@ class NodeRuntime(
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
-    prefs.setNotificationForwardingEnabled(value)
+    if (prefs.notificationForwardingEnabled.value == value) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingEnabled(value) }
   }
 
   fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
-    prefs.setNotificationForwardingMode(mode)
+    if (prefs.notificationForwardingMode.value == mode) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingMode(mode) }
   }
 
   fun setNotificationForwardingPackages(packages: List<String>) {
-    prefs.setNotificationForwardingPackages(packages)
+    val normalized = packages.map(String::trim).filter(String::isNotEmpty).toSet()
+    if (prefs.notificationForwardingPackages.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingPackages(normalized.toList()) }
   }
 
   fun setNotificationForwardingQuietHours(
     enabled: Boolean,
     start: String,
     end: String,
-  ): Boolean = prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  ): Boolean {
+    if (!enabled) {
+      if (!prefs.notificationForwardingQuietHoursEnabled.value) return true
+      return notificationOutbox.updatePolicy {
+        prefs.setNotificationForwardingQuietHours(enabled = false, start = start, end = end)
+      }
+    }
+    val normalizedStart = normalizeLocalHourMinute(start) ?: return false
+    val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
+    val unchanged =
+      prefs.notificationForwardingQuietHoursEnabled.value &&
+        prefs.notificationForwardingQuietStart.value == normalizedStart &&
+        prefs.notificationForwardingQuietEnd.value == normalizedEnd
+    if (unchanged) return true
+    return notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingQuietHours(
+        enabled = true,
+        start = normalizedStart,
+        end = normalizedEnd,
+      )
+    }
+  }
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+    val normalized = value.coerceAtLeast(1)
+    if (prefs.notificationForwardingMaxEventsPerMinute.value == normalized) return
+    notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingMaxEventsPerMinute(normalized)
+    }
   }
 
   fun setNotificationForwardingSessionKey(value: String?) {
-    prefs.setNotificationForwardingSessionKey(value)
+    val normalized = value?.trim()?.takeIf(String::isNotEmpty)
+    if (prefs.notificationForwardingSessionKey.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -1675,6 +1881,8 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    // A user-selected connect target must never inherit notification content from another gateway.
+    notificationOutbox.clear()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
@@ -1826,6 +2034,7 @@ class NodeRuntime(
   }
 
   fun disconnect() {
+    notificationOutbox.clear()
     connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
     connectedEndpoint = null

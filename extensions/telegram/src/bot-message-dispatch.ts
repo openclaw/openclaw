@@ -7,11 +7,7 @@ import {
   logTypingFailure,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-  runChannelInboundEvent,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   createChannelMessageReplyPipeline,
@@ -38,10 +34,7 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  buildHistoryContextFromEntries,
-  createChannelHistoryWindow,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
@@ -87,7 +80,6 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
-  buildGroupLabel,
   buildTypingThreadParams,
   getTelegramTextParts,
   resolveTelegramReplyId,
@@ -110,7 +102,11 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
-import { selectTelegramGroupHistoryAfterLastSelf } from "./group-history-window.js";
+import {
+  mergeTelegramGroupHistoryPromptContext,
+  retainTelegramGroupHistoryPromptContext,
+  selectTelegramGroupHistoryAfterLastSelf,
+} from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -533,46 +529,6 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
-function buildRecoveredTelegramBody(params: {
-  cfg: OpenClawConfig;
-  context: TelegramMessageContext;
-  currentMessage: string;
-  historyKey?: string;
-  threadSpec: TelegramThreadSpec;
-}): string {
-  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
-    return params.currentMessage;
-  }
-  const groupLabel = buildGroupLabel(
-    params.context.msg,
-    params.context.chatId,
-    params.threadSpec.id,
-  );
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  const fullEntries = (params.context.groupHistories.get(params.historyKey) ?? []).slice(
-    -params.context.historyLimit,
-  );
-  const pendingEntries =
-    params.context.ctxPayload.InboundEventKind === "room_event"
-      ? fullEntries
-      : selectTelegramGroupHistoryAfterLastSelf(fullEntries).slice(-params.context.historyLimit);
-  return buildHistoryContextFromEntries({
-    entries: pendingEntries,
-    currentMessage: params.currentMessage,
-    formatEntry: (entry) =>
-      formatInboundEnvelope({
-        channel: "Telegram",
-        from: groupLabel,
-        timestamp: entry.timestamp,
-        body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${params.context.chatId}]`,
-        chatType: "group",
-        senderLabel: entry.sender,
-        envelope: envelopeOptions,
-      }),
-    excludeLast: false,
-  });
-}
-
 function buildRecoveredTelegramChatActionSender(params: {
   context: TelegramMessageContext;
   threadId?: number;
@@ -644,7 +600,6 @@ function migrateRecoveredTelegramGroupHistory(params: {
 }
 
 function resolveDispatchTelegramContext(params: {
-  cfg: OpenClawConfig;
   context: TelegramMessageContext;
 }): TelegramMessageContext {
   const threadSpec = resolveDispatchTelegramThreadSpec({
@@ -698,13 +653,25 @@ function resolveDispatchTelegramContext(params: {
   const recoveredBodyForAgent = extractCurrentTelegramBody(
     params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
   );
-  const recoveredBody = buildRecoveredTelegramBody({
-    cfg: params.cfg,
-    context: params.context,
-    currentMessage: recoveredBodyForAgent,
-    historyKey: recoveredHistoryKey,
-    threadSpec,
+  const recoveredPromptHistoryEntries =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? params.context.ctxPayload.InboundEventKind === "room_event"
+        ? recoveredHistoryEntries
+        : recoveredWatermarkedHistoryEntries
+      : [];
+  const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
+    promptContext: params.context.ctxPayload.UntrustedStructuredContext ?? [],
+    entries: recoveredPromptHistoryEntries,
   });
+  const recoveredPromptContext =
+    recoveredPromptHistoryEntries.length > 0
+      ? mergeTelegramGroupHistoryPromptContext({
+          promptContext: recoveredPromptContextBase ?? [],
+          entries: recoveredPromptHistoryEntries,
+        })
+      : recoveredPromptContextBase?.length
+        ? recoveredPromptContextBase
+        : undefined;
   const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
     context: params.context,
     threadId: threadSpec.id,
@@ -739,7 +706,7 @@ function resolveDispatchTelegramContext(params: {
         ? params.context.ctxPayload
         : {
             ...params.context.ctxPayload,
-            Body: recoveredBody,
+            Body: recoveredBodyForAgent,
             BodyForAgent: recoveredBodyForAgent,
             From: recoveredFrom,
             InboundHistory: recoveredInboundHistory,
@@ -747,6 +714,7 @@ function resolveDispatchTelegramContext(params: {
             OriginatingTo: recoveredRoutingTarget,
             To: recoveredRoutingTarget,
             TransportThreadId: threadSpec.id,
+            UntrustedStructuredContext: recoveredPromptContext,
           },
   };
 }
@@ -766,7 +734,7 @@ export const dispatchTelegramMessage = async ({
   suppressFailureFallback = false,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
+  const dispatchContext = resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });

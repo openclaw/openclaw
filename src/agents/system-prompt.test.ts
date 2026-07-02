@@ -1319,7 +1319,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.match(/Custom runtime context/g)).toHaveLength(1);
-    expect(prompt.match(/## Group Chat Context/g)).toHaveLength(1);
+    expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
@@ -1415,7 +1415,7 @@ describe("buildAgentSystemPrompt", () => {
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const messagingPos = prompt.lastIndexOf("## Messaging");
-    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const conversationContextPos = prompt.lastIndexOf("## Conversation Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
     // These sections vary with approval UI capabilities and owner identity, so
@@ -1426,7 +1426,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(boundaryPos).toBeGreaterThan(projectContextPos);
     expect(messagingPos).toBeGreaterThan(boundaryPos);
-    expect(groupChatPos).toBeGreaterThan(boundaryPos);
+    expect(conversationContextPos).toBeGreaterThan(boundaryPos);
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
     expect(approvalPos).toBeGreaterThan(boundaryPos);
