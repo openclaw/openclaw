@@ -10,6 +10,7 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -38,6 +39,7 @@ const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const SCOPE = "openid profile email offline_access";
+const OPENAI_OAUTH_TOKEN_JSON_MAX_BYTES = 256 * 1024; // 256 KiB — OAuth token responses are tiny
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed"; message: string; status?: number };
@@ -224,7 +226,19 @@ async function exchangeAuthorizationCode(
     };
   }
 
-  const json = (await response.json()) as TokenResponseJson;
+  let json: TokenResponseJson;
+  try {
+    const bytes = await readResponseWithLimit(response, OPENAI_OAUTH_TOKEN_JSON_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`OpenAI Codex token exchange response exceeds ${maxBytes} bytes (got ${size})`),
+    });
+    json = JSON.parse(new TextDecoder().decode(bytes)) as TokenResponseJson;
+  } catch (cause) {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token exchange failed: ${cause instanceof Error ? cause.message : "malformed response"}`,
+    };
+  }
 
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
@@ -266,7 +280,11 @@ async function refreshAccessToken(
       };
     }
 
-    const json = (await response.json()) as TokenResponseJson;
+    const bytes = await readResponseWithLimit(response, OPENAI_OAUTH_TOKEN_JSON_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`OpenAI Codex token refresh response exceeds ${maxBytes} bytes (got ${size})`),
+    });
+    const json = JSON.parse(new TextDecoder().decode(bytes)) as TokenResponseJson;
 
     const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {
