@@ -895,6 +895,35 @@ describe("createCodexDynamicToolBridge", () => {
     },
   );
 
+  it("normalizes raw plugin payloads that lack a content array", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "raw_lookup",
+          execute: vi.fn(async () => ({ answer: 42, status: "ok" }) as any),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "raw_lookup",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.contentItems).toEqual([
+      {
+        type: "inputText",
+        text: JSON.stringify({ answer: 42, status: "ok" }, null, 2),
+      },
+    ]);
+  });
+
   it("preserves audio-as-voice metadata from tts results", async () => {
     const toolResult = {
       content: [{ type: "text", text: "(spoken) hello" }],

@@ -503,7 +503,9 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         didStartExecution = true;
-        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
+        const rawResult = normalizePluginToolResult(
+          await tool.execute(call.callId, preparedArgs, signal),
+        );
         const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
           call.callId,
           toolResultHookContext.runId,
@@ -733,6 +735,23 @@ function failedToolResult(message: string): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
     details: { status: "failed", error: message },
+  };
+}
+
+/**
+ * Ensures a plugin tool result conforms to the `AgentToolResult` envelope.
+ * Plugin tools that return a raw payload object (without a `content` array)
+ * would otherwise crash `convertToolContents` with
+ * `Cannot read properties of undefined (reading 'reduce')`.
+ */
+function normalizePluginToolResult(result: unknown): AgentToolResult<unknown> {
+  if (isRecord(result) && Array.isArray(result.content)) {
+    return result as unknown as AgentToolResult<unknown>;
+  }
+  const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+  return {
+    content: [{ type: "text", text }],
+    details: result,
   };
 }
 
