@@ -62,7 +62,7 @@ function expectSkipPairing(
   role: PairingRole,
   expected: boolean,
   params: {
-    pairingComplete?: boolean;
+    trustedProxyAuthOk?: boolean;
     authMode?: PairingAuthMode;
     authMethod?: PairingAuthMethod;
   } = {},
@@ -71,7 +71,7 @@ function expectSkipPairing(
     shouldSkipControlUiPairing(
       policy,
       role,
-      params.pairingComplete ?? false,
+      params.trustedProxyAuthOk ?? false,
       params.authMode,
       params.authMethod,
     ),
@@ -261,7 +261,8 @@ describe("ws connect policy", () => {
     expectSkipPairing(bypass, "operator", true);
     expectSkipPairing(bypass, "node", false);
     expectSkipPairing(strict, "operator", false);
-    expectSkipPairing(strict, "operator", false, { pairingComplete: true });
+    // trustedProxyAuthOk=true should skip pairing even for strict policy
+    expectSkipPairing(strict, "operator", true, { trustedProxyAuthOk: true });
   });
 
   test("auth.mode=none skips pairing for operator control-ui only", () => {
@@ -363,6 +364,26 @@ describe("ws connect policy", () => {
         }),
       ).toBe(tc.expected);
     }
+  });
+
+  test("trusted-proxy auth skips pairing for operator control-ui (#87953 regression)", () => {
+    // When trusted-proxy auth succeeds (trustedProxyAuthOk=true), Control UI
+    // operator sessions should skip device pairing. The proxy has already
+    // verified the user identity, so requiring additional pairing adds friction
+    // without security value. This does NOT apply to node-role or non-Control-UI.
+    const controlUi = authPolicy({ isControlUi: true });
+    const nonControlUi = authPolicy();
+
+    // Control UI + operator + trustedProxyAuthOk → skip pairing
+    expectSkipPairing(controlUi, "operator", true, { trustedProxyAuthOk: true });
+    // Control UI + node + trustedProxyAuthOk → still require pairing
+    expectSkipPairing(controlUi, "node", false, { trustedProxyAuthOk: true });
+    // Non-Control-UI + operator + trustedProxyAuthOk → still require pairing
+    expectSkipPairing(nonControlUi, "operator", false, { trustedProxyAuthOk: true });
+    // Control UI + operator + trustedProxyAuthOk=false → still require pairing
+    expectSkipPairing(controlUi, "operator", false, { trustedProxyAuthOk: false });
+    // Control UI + operator + no trustedProxyAuthOk → still require pairing
+    expectSkipPairing(controlUi, "operator", false);
   });
 
   test("clears unbound scopes for device-less shared auth outside explicit preservation cases", () => {

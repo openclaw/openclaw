@@ -38,10 +38,21 @@ export function resolveControlUiAuthPolicy(params: {
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
-  _trustedProxyAuthOk = false,
+  trustedProxyAuthOk = false,
   authMode?: string,
   authMethod?: string,
 ): boolean {
+  // Trusted-proxy authenticated Control UI operator sessions skip device pairing.
+  // The proxy has already verified the user identity via headers, so requiring
+  // device pairing adds friction without additional security value. This is
+  // scoped to Control UI operator sessions only — node-role sessions and
+  // non-Control-UI paths still require device identity and pairing.
+  // Defense in depth: even though isTrustedProxyControlUiOperatorAuth already
+  // checks isControlUi && role === "operator", this guard prevents accidental
+  // bypass if trustedProxyAuthOk is incorrectly set outside that validation.
+  if (trustedProxyAuthOk && policy.isControlUi && role === "operator") {
+    return true;
+  }
   if (policy.isControlUi && role === "operator" && authMethod === "tailscale" && policy.device) {
     return true;
   }

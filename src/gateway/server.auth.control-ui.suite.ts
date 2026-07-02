@@ -380,7 +380,11 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("requires pairing for trusted-proxy control ui device identity", async () => {
+  test("skips pairing for trusted-proxy control ui with device identity", async () => {
+    // When trusted-proxy auth is active and passes, Control UI operator sessions
+    // with a device identity should skip pairing (the proxy already verified the
+    // user identity via headers). This aligns with the documented behavior:
+    // "Control UI WebSocket sessions can connect without device pairing identity."
     const { replaceConfigFile } = await import("../config/config.js");
     testState.gatewayAuth = undefined;
     testState.gatewayControlUi = {
@@ -424,11 +428,18 @@ export function registerControlUiAndPairingSuite(): void {
           device,
           client: { ...CONTROL_UI_CLIENT },
         });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
-        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-          ConnectErrorDetailCodes.PAIRING_REQUIRED,
-        );
+        // Trusted-proxy auth replaces device pairing for Control UI operator sessions.
+        // The connection should succeed with operator scopes.
+        expect(res.ok).toBe(true);
+        const payload = res.payload as
+          | {
+              auth?: { scopes?: string[]; deviceToken?: string };
+            }
+          | undefined;
+        expect(payload?.auth?.scopes).toContain("operator.admin");
+        expect(payload?.auth?.scopes).toContain("operator.read");
+        // Device token should NOT be issued for trusted-proxy sessions.
+        expect(payload?.auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
       }
