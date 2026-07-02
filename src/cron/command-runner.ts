@@ -7,6 +7,7 @@ import {
 import type { CronRunDiagnostics, CronRunOutcome, CronRunStatus, CronJob } from "./types.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
+
 const EFFECTIVELY_UNBOUNDED_TIMEOUT_MS = 2_147_483_647;
 
 function secondsToMs(value: number | undefined): number | undefined {
