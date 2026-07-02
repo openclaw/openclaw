@@ -6,6 +6,23 @@ import Testing
 
 @MainActor
 struct TalkModeManagerTests {
+    @Test func `recognizes open AI maximum duration errors as terminal`() throws {
+        let event = try JSONDecoder().decode(
+            TalkRealtimeServerEvent.self,
+            from: Data(#"{"type":"error","error":{"message":"Your session hit the maximum duration of 60 minutes."}}"#
+                .utf8))
+
+        #expect(event.isMaximumDurationError)
+    }
+
+    @Test func `keeps recoverable open AI errors in the current session`() throws {
+        let event = try JSONDecoder().decode(
+            TalkRealtimeServerEvent.self,
+            from: Data(#"{"type":"error","error":{"message":"Cancellation failed: no active response found"}}"#.utf8))
+
+        #expect(!event.isMaximumDurationError)
+    }
+
     @Test func `parses open AI realtime provider model and voice`() {
         let config: [String: Any] = [
             "talk": [

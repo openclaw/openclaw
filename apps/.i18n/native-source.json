@@ -11475,7 +11475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 503,
+      "line": 508,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Asking OpenClaw",
       "surface": "apple",
@@ -11483,7 +11483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 503,
+      "line": 508,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Updating OpenClaw",
       "surface": "apple",

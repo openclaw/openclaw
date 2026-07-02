@@ -397,6 +397,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
             self.handleToolDone(event)
         case "error":
             self.delegate?.realtimeSession(self, didChangeStatus: "Realtime error")
+            if event.isMaximumDurationError {
+                // The provider's hard limit is terminal before transport state catches up.
+                // Finish explicitly so TalkModeManager rotates the session exactly once.
+                self.stop()
+            }
         default:
             break
         }
@@ -992,10 +997,16 @@ extension TalkRealtimeWebRTCSession: RTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         Task { @MainActor in
             guard !self.stopped else { return }
-            if dataChannel.readyState == .open {
+            switch dataChannel.readyState {
+            case .open:
                 if !self.assistantAudioActive {
                     self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
                 }
+            case .closed:
+                self.delegate?.realtimeSession(self, didChangeStatus: "Realtime disconnected")
+                self.stop()
+            default:
+                break
             }
         }
     }
