@@ -68,6 +68,13 @@ export type TelegramDraftStream = {
   finalizeToPreview: (preview: TelegramDraftPreview) => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /**
+   * Reposition the window: rewind so the next update creates a new message,
+   * and schedule the superseded message's delete for AFTER the new one lands
+   * (post-new-then-delete-old, never delete-then-repost — avoids the client
+   * scroll-jump). Returns the superseded message id, if any.
+   */
+  rotateToNewMessageDeferringDelete: () => number | undefined;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
@@ -546,6 +553,37 @@ export function createTelegramDraftStream(params: {
     loop.resetThrottleWindow();
   };
 
+  // Delete a superseded preview message DETACHED (scheduled, never awaited) so
+  // teardown is never stalled. The delay is at least the remaining on-screen
+  // dwell (so a preview is never flashed), and at least `minDelayMs` — a
+  // reposition passes a small floor so the NEW message has landed below before
+  // the old one disappears, keeping the viewport anchored instead of jumping.
+  const scheduleDetachedDelete = (
+    messageId: number,
+    visibleSince: number | undefined,
+    minDelayMs = 0,
+  ) => {
+    const runDelete = async () => {
+      try {
+        await params.api.deleteMessage(chatId, messageId);
+        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
+      } catch (err) {
+        params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      }
+    };
+    const elapsedMs =
+      typeof visibleSince === "number" ? Date.now() - visibleSince : MIN_PREVIEW_DWELL_MS;
+    const remainingDwellMs = Math.max(0, MIN_PREVIEW_DWELL_MS - elapsedMs);
+    const delayMs = Math.max(remainingDwellMs, minDelayMs);
+    if (delayMs <= 0) {
+      void runDelete();
+    } else {
+      setTimeout(() => {
+        void runDelete();
+      }, delayMs);
+    }
+  };
+
   const clear = async () => {
     // Capture before the stop; takeMessageIdAfterStop resets streamVisibleSinceMs.
     const visibleSince = streamVisibleSinceMs;
@@ -557,28 +595,28 @@ export function createTelegramDraftStream(params: {
       },
     });
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
-      const runDelete = async () => {
-        try {
-          await params.api.deleteMessage(chatId, messageId);
-          params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
-        } catch (err) {
-          params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
-        }
-      };
       // Keep the preview on screen for at least MIN_PREVIEW_DWELL_MS from when it
-      // first appeared, then delete DETACHED (scheduled, not awaited) so teardown
-      // is never stalled waiting for the dwell.
-      const elapsedMs =
-        typeof visibleSince === "number" ? Date.now() - visibleSince : MIN_PREVIEW_DWELL_MS;
-      const remainingMs = Math.max(0, MIN_PREVIEW_DWELL_MS - elapsedMs);
-      if (remainingMs <= 0) {
-        void runDelete();
-      } else {
-        setTimeout(() => {
-          void runDelete();
-        }, remainingMs);
-      }
+      // first appeared, then delete.
+      scheduleDetachedDelete(messageId, visibleSince);
     }
+  };
+
+  // Reposition the window: rewind so the NEXT update creates a fresh message
+  // (below anything posted since), then delete the superseded one AFTER a short
+  // delay so the new message lands first. Post-new-then-delete-old — never
+  // delete-then-repost, which scroll-jumps the Telegram client (the on-off
+  // durable-🧠 jump). Returns the superseded message id (for tests).
+  const REPOSITION_DELETE_DELAY_MS = 1_500;
+  const rotateToNewMessageDeferringDelete = (): number | undefined => {
+    const supersededMessageId = streamMessageId;
+    const supersededVisibleSince = streamVisibleSinceMs;
+    // Rewind WITHOUT deleting; the old id is captured above.
+    resetStreamToNewMessage();
+    if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
+      scheduleDetachedDelete(supersededMessageId, supersededVisibleSince, REPOSITION_DELETE_DELAY_MS);
+      return supersededMessageId;
+    }
+    return undefined;
   };
 
   const discard = async () => {
@@ -646,6 +684,7 @@ export function createTelegramDraftStream(params: {
     materialize,
     finalizeToPreview,
     forceNewMessage,
+    rotateToNewMessageDeferringDelete,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

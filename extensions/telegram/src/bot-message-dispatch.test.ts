@@ -2746,8 +2746,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+    // The tool-progress window repositions before the final (deferred delete),
+    // never an immediate clear/delete.
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
+    // so that clear finds no live message id and never deletes the window.
+    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
+      expect(
+        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+    }
     const progressResetOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
     const progressUpdateOrder = answerDraftStream.updatePreview.mock.invocationCallOrder[0];
     expect(progressResetOrder).toBeLessThan(progressUpdateOrder);
@@ -2774,8 +2782,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    // The tool-progress window repositions (deferred delete) rather than an
+    // immediate clear when the following text block takes over the lane.
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
+    // so that clear finds no live message id and never deletes the window.
+    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
+      expect(
+        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+    }
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -2815,12 +2831,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    // Reposition, not delete-then-repost: the tool-progress window is rewound
+    // for a new message and its delete deferred until after the replacement
+    // lands. clear() (immediate delete) must NOT run — that scroll-jumps.
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
+    // so that clear finds no live message id and never deletes the window.
+    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
+      expect(
+        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+    }
+    const rotationOrder =
+      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
     const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
-    expect(clearOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -2841,12 +2865,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    // Across an assistant boundary the tool-progress window still repositions
+    // (new message first, deferred delete) rather than deleting immediately.
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
+    // so that clear finds no live message id and never deletes the window.
+    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
+      expect(
+        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+    }
+    const rotationOrder =
+      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
     const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
-    expect(clearOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -2862,12 +2893,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tests passed");
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    // Verbose tool result window repositions before the final: new message
+    // first, superseded delete deferred (no immediate clear/delete).
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    // The reposition rewinds the stream BEFORE any deliverer cleanup clear(),
+    // so that clear finds no live message id and never deletes the window.
+    if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
+      expect(
+        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
+      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+    }
+    const rotationOrder =
+      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
     const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
-    expect(clearOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -3056,6 +3094,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const texts = allDeliveredReplyTexts();
     expect(texts.filter((text) => text.includes("⏱️"))).toHaveLength(0); // bar is the in-place edit
     expect(texts).toContain("Done");
+  });
+
+  it("repositions the tool-progress window (deferred delete) when text follows durable reasoning", async () => {
+    // on-off mid-stream jump: a durable 🧠 posts BELOW the tool-progress window;
+    // when answer text then takes over the lane, the window must reposition
+    // (send-new-first, delete-old-deferred) rather than delete-then-repost,
+    // which scroll-jumps the Telegram client.
+    loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "<think>hidden</think>", isReasoning: true },
+          { kind: "block" },
+        );
+        // Answer text mid-turn takes the lane over from the tool-progress window.
+        await dispatcherOptions.deliver({ text: "Here is the answer" }, { kind: "block" });
+        await dispatcherOptions.deliver({ text: "Here is the answer." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // The tool-progress window was repositioned via the deferred-delete path,
+    // never an immediate clear() (which deletes the window above the durable 🧠
+    // and reposts below — the focus-jump).
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
   it("posts the collapse bar durably with no delete when the window has no live message", async () => {
@@ -3968,9 +4042,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
         "<b>Shelling</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>\n<b>Update</b> <code>tests passed</code>",
       ),
     );
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.materialize).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    // A tool-progress-only window with nothing to summarize is torn down via the
+    // deferred-delete reposition (new content first, delete later), not a bare
+    // immediate clear/delete or forceNewMessage.
+    expect(draftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Final after tool" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });

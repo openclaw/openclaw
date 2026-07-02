@@ -380,6 +380,48 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("rotateToNewMessageDeferringDelete posts the new message before deleting the old", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockResolvedValueOnce({ message_id: 42 });
+      const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+      stream.update("🛠️ Exec");
+      await stream.flush();
+      // Reposition: rewind for a new message; the old one's delete is deferred.
+      const superseded = stream.rotateToNewMessageDeferringDelete();
+      expect(superseded).toBe(17);
+
+      // The NEW message is sent first...
+      stream.update("Answer below");
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Answer below", {
+        message_thread_id: 42,
+      });
+      // ...and the superseded message is NOT deleted immediately (deferred so
+      // the new message lands first — no scroll-jump).
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      // Only the superseded (old) message is deleted; the new one stays.
+      expect(api.deleteMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rotateToNewMessageDeferringDelete is a no-op with no live message", () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
   it("creates new message after forceNewMessage is called", async () => {
     const { api, stream } = createForceNewMessageHarness();
 

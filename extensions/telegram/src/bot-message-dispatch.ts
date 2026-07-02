@@ -1237,8 +1237,15 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    await answerLane.stream?.clear();
-    answerLane.stream?.forceNewMessage();
+    // Reposition, don't delete-then-repost: rewind so the replacement message
+    // sends below, and defer the tool-progress window's delete until after it
+    // lands. Deleting first (clear) scroll-jumps the client when a durable 🧠
+    // was posted between the window and the replacement (the on-off jump).
+    if (answerLane.stream?.rotateToNewMessageDeferringDelete) {
+      answerLane.stream.rotateToNewMessageDeferringDelete();
+    } else {
+      answerLane.stream?.forceNewMessage();
+    }
     resetDraftLaneState(answerLane);
     suppressProgressDraftState();
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
