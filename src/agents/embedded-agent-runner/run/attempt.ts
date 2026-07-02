@@ -875,13 +875,13 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             hookMessagesForCurrentPrompt,
             promptForModel,
-            promptForSession,
             promptSubmission,
             promptToolResultAggregateMaxChars,
             promptToolResultMaxChars,
             runtimeContextMessageForCurrentTurn,
             systemPromptForHook,
           } = promptContext;
+          let promptForSession = promptContext.promptForSession;
           prePromptMessageCount = promptContext.prePromptMessageCount;
           sessionBoundary.setCurrentUserTimestampOverride(
             promptContext.currentUserTimestampOverride,
@@ -917,6 +917,16 @@ export async function runEmbeddedAttempt(
           } else if (beforeAgentRunOutcome?.kind === "transform") {
             modelBoundPrompt = beforeAgentRunOutcome.prompt;
             beforeAgentRunTransformedPrompt = true;
+            // A transform outcome carries a security/redaction intent: what the
+            // model sees must also be what gets persisted, otherwise the raw
+            // text re-enters context on the next turn via session history.
+            promptForSession = modelBoundPrompt;
+            if (promptContext.currentUserTimestampOverride) {
+              sessionBoundary.setCurrentUserTimestampOverride({
+                timestamp: promptContext.currentUserTimestampOverride.timestamp,
+                text: promptForSession,
+              });
+            }
           }
           if (systemPromptReport?.currentTurn) {
             systemPromptReport.currentTurn.promptChars = modelBoundPrompt.length;
