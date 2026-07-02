@@ -23,6 +23,10 @@ export type GatewayServerMutableState = {
   tailscaleCleanup: (() => Promise<void>) | null;
   postReadySidecars: GatewayPostReadySidecarHandle[];
   gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
+  // Stop promises for sidecars that registered after close already started.
+  // The close path awaits these so late-registered producers (e.g. the
+  // restart-sentinel sidecar) cannot keep running past shutdown.
+  lateSidecarStopPromises: Promise<void>[];
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => void;
@@ -60,6 +64,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     tailscaleCleanup: null as (() => Promise<void>) | null,
     postReadySidecars: [],
     gatewayLifetimeSidecars: [],
+    lateSidecarStopPromises: [],
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: () => {},

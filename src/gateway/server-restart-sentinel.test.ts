@@ -451,6 +451,13 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalled();
+    // The sentinel file must only be removed after the notice has a durable
+    // handoff (delivered/enqueued). If removal raced ahead of delivery, an
+    // abort in between would lose the restart notice entirely.
+    expect(mocks.removeRestartSentinelFile).toHaveBeenCalledTimes(1);
+    const deliverOrder = Math.max(...mocks.deliverOutboundPayloads.mock.invocationCallOrder);
+    const removeOrder = mocks.removeRestartSentinelFile.mock.invocationCallOrder[0];
+    expect(removeOrder).toBeGreaterThan(deliverOrder);
   });
 
   it("retries outbound delivery once and logs a warning without dropping the agent wake", async () => {

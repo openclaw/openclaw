@@ -1502,15 +1502,30 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("stops post-ready sidecars registered after close started", () => {
-    const postReadySidecar = { stop: vi.fn() };
+  it("stops post-ready sidecars registered after close started and returns their stop promises", async () => {
+    let resolveStop: (() => void) | undefined;
+    const stopPromise = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
+    const postReadySidecar = { stop: vi.fn(() => stopPromise) };
 
-    testing.stopPostReadySidecarsAfterCloseStarted({
+    const returnedPromises = testing.stopPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: true,
     });
 
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+    // The stop promise must be returned (not dropped) so the close path can
+    // await late-registered producers instead of racing past shutdown.
+    expect(returnedPromises).toHaveLength(1);
+    let settled = false;
+    void Promise.all(returnedPromises).then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+    resolveStop?.();
+    await Promise.all(returnedPromises);
+    expect(settled).toBe(true);
   });
 
   it("keeps post-ready sidecars running when close has not started", () => {

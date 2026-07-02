@@ -392,6 +392,9 @@ export function createGatewayCloseHandler(
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
+    // Stop promises for sidecars that registered after close started; awaited
+    // alongside the snapshot so late producers cannot outlive shutdown.
+    lateSidecarStopPromises?: readonly Promise<void>[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
     cron: { stop: () => void };
@@ -541,10 +544,20 @@ export function createGatewayCloseHandler(
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
-      if (params.postReadySidecars?.length) {
+      if (params.postReadySidecars?.length || params.lateSidecarStopPromises?.length) {
         await measureCloseStep("post-ready-sidecars", async () => {
-          for (const [index, sidecar] of params.postReadySidecars!.entries()) {
+          for (const [index, sidecar] of (params.postReadySidecars ?? []).entries()) {
             await shutdownStep(`post-ready-sidecar/${index}`, () => sidecar.stop(), warnings);
+          }
+          // Await sidecars that registered after the snapshot was taken: their
+          // stop() promises were tracked rather than dropped, so restart-sentinel
+          // producer work is drained before shutdown proceeds.
+          if (params.lateSidecarStopPromises?.length) {
+            await shutdownStep(
+              "post-ready-sidecar/late",
+              () => Promise.allSettled(params.lateSidecarStopPromises!).then(() => undefined),
+              warnings,
+            );
           }
         });
       }

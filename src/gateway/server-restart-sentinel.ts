@@ -582,7 +582,6 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -617,6 +616,12 @@ async function loadRestartSentinelStartupTask(params: {
         log,
       });
     }
+
+    // Remove the sentinel only after the restart notice has a durable handoff
+    // (continuation enqueued/drained and notice delivered). If shutdown aborts
+    // mid-delivery the sentinel survives and is replayed on the next boot,
+    // making delivery at-least-once instead of silently lost.
+    await removeRestartSentinelFile(sentinelPath);
 
     return { status: "ran" as const };
   };

@@ -1031,6 +1031,7 @@ export async function startGatewayServer(
       stopChannel,
       pluginServices: runtimeState.pluginServices,
       postReadySidecars: runtimeState.postReadySidecars,
+      lateSidecarStopPromises: runtimeState.lateSidecarStopPromises,
       cron: runtimeState.cronState.cron,
       heartbeatRunner: runtimeState.heartbeatRunner,
       updateCheckStop: runtimeState.stopGatewayUpdateCheck,
@@ -1624,20 +1625,24 @@ export async function startGatewayServer(
             },
             onPostReadySidecars: (postReadySidecars) => {
               runtimeState.postReadySidecars = postReadySidecars;
-              stopPostReadySidecarsAfterCloseStarted({
-                postReadySidecars,
-                closeStarted: closePreludeStarted,
-              });
+              runtimeState.lateSidecarStopPromises.push(
+                ...stopPostReadySidecarsAfterCloseStarted({
+                  postReadySidecars,
+                  closeStarted: closePreludeStarted,
+                }),
+              );
               if (closePreludeStarted) {
                 runtimeState.postReadySidecars = [];
               }
             },
             onGatewayLifetimeSidecars: (gatewayLifetimeSidecars) => {
               runtimeState.gatewayLifetimeSidecars = gatewayLifetimeSidecars;
-              stopPostReadySidecarsAfterCloseStarted({
-                postReadySidecars: gatewayLifetimeSidecars,
-                closeStarted: closePreludeStarted,
-              });
+              runtimeState.lateSidecarStopPromises.push(
+                ...stopPostReadySidecarsAfterCloseStarted({
+                  postReadySidecars: gatewayLifetimeSidecars,
+                  closeStarted: closePreludeStarted,
+                }),
+              );
               if (closePreludeStarted) {
                 runtimeState.gatewayLifetimeSidecars = [];
               }

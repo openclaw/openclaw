@@ -98,13 +98,15 @@ export type GatewayPostReadySidecarHandle = {
 export function stopPostReadySidecarsAfterCloseStarted(params: {
   postReadySidecars: readonly GatewayPostReadySidecarHandle[];
   closeStarted: boolean;
-}): void {
+}): Promise<void>[] {
   if (!params.closeStarted) {
-    return;
+    return [];
   }
-  for (const postReadySidecar of params.postReadySidecars) {
-    void postReadySidecar.stop();
-  }
+  // Return the stop promises rather than dropping them: a sidecar registered
+  // after the close path already drained its snapshot (e.g. the restart-sentinel
+  // sidecar, whose stop() awaits the sentinel wake) must still be awaited by
+  // the close path, or its producer work can continue past shutdown.
+  return params.postReadySidecars.map((postReadySidecar) => postReadySidecar.stop());
 }
 
 /** Measure a post-attach startup step when tracing is active. */
