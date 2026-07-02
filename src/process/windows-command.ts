@@ -4,7 +4,7 @@ import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[\r\n]/;
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[\r\n]/u;
 
 export function isWindowsBatchCommand(
   resolvedCommand: string,
@@ -35,23 +35,27 @@ function escapeForWindowsCmdExe(arg: string): string {
   }
   // Escape ^ first so subsequent replacements don't create new ^ sequences.
   // Then escape &|<> with ^, and double % signs to suppress variable expansion.
-  let escaped = arg
-    .replace(/\^/g, "^^")
-    .replace(/&/g, "^&")
-    .replace(/\|/g, "^|")
-    .replace(/</g, "^<")
-    .replace(/>/g, "^>")
-    .replace(/%/g, "%%");
+  const escaped = arg
+    .replaceAll("^", "^^")
+    .replaceAll("&", "^&")
+    .replaceAll("|", "^|")
+    .replaceAll("<", "^<")
+    .replaceAll(">", "^>")
+    .replaceAll("%", "%%");
   if (!escaped.includes(" ") && !escaped.includes('"')) {
     return escaped;
   }
-  return `"${escaped.replace(/"/g, '""')}"`;
+  return `"${escaped.replaceAll('"', '""')}"`;
 }
 
 export function buildWindowsCmdExeCommandLine(command: string, args: readonly string[]): string {
   const escapedCommand = escapeForWindowsCmdExe(command);
-  const commandLine = [escapedCommand, ...args.map(escapeForWindowsCmdExe)].join(" ");
-  return escapedCommand.startsWith('"') ? `"${commandLine}"` : commandLine;
+  const escapedArgs = args.map((arg) => escapeForWindowsCmdExe(arg));
+  const commandLine = [escapedCommand, ...escapedArgs].join(" ");
+  if (escapedCommand.startsWith('"')) {
+    return `"${commandLine}"`;
+  }
+  return commandLine;
 }
 
 export function resolveTrustedWindowsCmdExe(platform: NodeJS.Platform = process.platform): string {
