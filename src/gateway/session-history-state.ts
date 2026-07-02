@@ -193,6 +193,7 @@ export class SessionHistorySseState {
   private readonly limit: number | undefined;
   private readonly cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
+  private rawMessages: unknown[];
   private rawTranscriptSeq: number;
   private transcriptPath: string | undefined;
 
@@ -242,6 +243,7 @@ export class SessionHistorySseState {
         : {}),
     });
     this.sentHistory = snapshot.history;
+    this.rawMessages = [...params.initialRawMessages];
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
@@ -273,14 +275,16 @@ export class SessionHistorySseState {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: this.rawTranscriptSeq,
     });
+    const nextRawMessages = [...this.rawMessages, nextMessage];
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
     const projectedMessages = toSessionHistoryMessages(
-      projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+      projectChatDisplayMessages(nextRawMessages, {
         maxChars: this.maxChars,
       }),
     );
+    this.rawMessages = nextRawMessages;
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (addedMessages.length > 1) {
@@ -351,6 +355,7 @@ export class SessionHistorySseState {
     const rawSnapshot = await this.readRawSnapshotAsync();
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.rawMessages = [...rawSnapshot.rawMessages];
     this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
