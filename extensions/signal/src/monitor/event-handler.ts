@@ -63,7 +63,7 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentions, resolveSignalNativeMentionFacts } from "./mentions.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -724,7 +724,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const nativeMentionFacts = resolveSignalNativeMentionFacts({
+      message: rawMessage,
+      mentions: dataMessage?.mentions,
+      account: deps.account,
+      accountUuid: deps.accountUuid,
+    });
+    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -734,12 +741,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         configuredGroupDefaultsToNoMention: true,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention: nativeMentionFacts.hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {
