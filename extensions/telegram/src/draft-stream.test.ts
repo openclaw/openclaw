@@ -277,6 +277,26 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("converts <br> joins to newlines before parse_mode=HTML transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      // Progress drafts join rendered lines with <br>; Bot API parse_mode=HTML
+      // has no <br> tag, so sending it verbatim 400s every multi-line edit and
+      // drops the preview to the unformatted plain fallback.
+      renderText: (text) => ({
+        text: `<b>Shelling</b><br>🧠 <i>${text}</i>`,
+        parseMode: "HTML",
+      }),
+    });
+
+    stream.update("Thinking");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n🧠 <i>Thinking</i>", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("returns existing preview id when materializing message transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

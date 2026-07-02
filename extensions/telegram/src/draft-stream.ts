@@ -112,7 +112,10 @@ function normalizeTelegramDraftTransportPreview(
   }
   if (preview.parseMode === "HTML") {
     return {
-      text: preview.text,
+      // Bot API parse_mode=HTML has no <br>; line breaks must be literal
+      // newlines. Sending <br> verbatim 400s every multi-line preview edit,
+      // dropping the whole progress draft to the unformatted plain fallback.
+      text: telegramRichHtmlToParseModeHtml(preview.text),
       parseMode: "HTML",
       plainText: telegramHtmlToPlainTextFallback(preview.text),
     };
