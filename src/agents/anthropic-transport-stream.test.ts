@@ -517,6 +517,134 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("uses adaptive thinking without legacy fields for Claude Sonnet 5 defaults", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      maxTokens: 128000,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        temperature: 0.2,
+        onPayload: (params) => ({
+          ...(params as Record<string, unknown>),
+          top_p: 0.9,
+          top_k: 40,
+          service_tier: "auto",
+        }),
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload).not.toHaveProperty("output_config");
+    expect(payload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload).not.toHaveProperty("top_k");
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("maps Claude Sonnet 5 low thinking to adaptive effort", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        maxTokens: 128000,
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        reasoning: "low",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "low" });
+  });
+
+  it("preserves explicit adaptive thinking without forcing effort", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        maxTokens: 64000,
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        reasoning: "adaptive",
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload).not.toHaveProperty("output_config");
+  });
+
+  it("can disable thinking for Claude Sonnet 5", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        maxTokens: 128000,
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        reasoning: "off",
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("preserves forced tool choice when Claude Sonnet 5 thinking is disabled", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        maxTokens: 128000,
+      }),
+      {
+        messages: [{ role: "user", content: "Use a tool", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        reasoning: "off",
+        toolChoice: "any",
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "disabled" },
+      tool_choice: { type: "any" },
+    });
+  });
+
   it("does not add implicit Anthropic beta headers for custom compatible API-key endpoints", async () => {
     const model = makeAnthropicTransportModel({
       provider: "anthropic",
@@ -2979,6 +3107,34 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
+  });
+
+  it("keeps mandatory adaptive thinking for explicit off on canonical Claude Mythos Preview transport aliases", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "prod-mythos-preview",
+      name: "Production Claude",
+      provider: "microsoft-foundry",
+      params: { canonicalModelId: "claude-mythos-preview" },
+      reasoning: false,
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      maxTokens: 128_000,
+    });
+
+    guardedFetchMock.mockResolvedValueOnce(createSseResponse());
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "test-api-key",
+        reasoning: "off",
+      } as unknown as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "low" });
   });
 
   it("maps Claude Fable 5 transport thinking levels to adaptive effort", async () => {
