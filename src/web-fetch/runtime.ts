@@ -1,4 +1,5 @@
 /** Runtime provider selection and tool construction for the `web_fetch` tool. */
+import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   hasWebProviderEntryCredential,
@@ -41,11 +42,13 @@ type WebFetchDefinitionResolution = {
   provider: PluginWebFetchProviderEntry;
   definition: WebFetchProviderToolDefinition;
 } | null;
+type WebFetchProviderCacheEntry = {
+  cacheKey: string;
+  configFingerprint: string;
+  providers: PluginWebFetchProviderEntry[];
+};
 
-let webFetchProviderCache = new WeakMap<
-  OpenClawConfig,
-  Map<string, PluginWebFetchProviderEntry[]>
->();
+let webFetchProviderCache = new WeakMap<OpenClawConfig, WebFetchProviderCacheEntry>();
 
 /** Resolves whether web_fetch is enabled for the current config/sandbox. */
 function resolveWebFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -201,23 +204,30 @@ function resolveWebFetchProviderCacheKey(
   ]);
 }
 
+function createWebFetchProviderConfigFingerprint(config: OpenClawConfig): string {
+  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+}
+
 function resolveCachedWebFetchProviders(params: {
   cacheKey: string;
   config: OpenClawConfig;
+  configFingerprint: string;
   load: () => PluginWebFetchProviderEntry[];
 }): PluginWebFetchProviderEntry[] {
-  let configCache = webFetchProviderCache.get(params.config);
-  if (!configCache) {
-    configCache = new Map();
-    webFetchProviderCache.set(params.config, configCache);
-  }
-  const cached = configCache.get(params.cacheKey);
-  if (cached) {
-    return cached;
+  const cached = webFetchProviderCache.get(params.config);
+  if (
+    cached?.cacheKey === params.cacheKey &&
+    cached.configFingerprint === params.configFingerprint
+  ) {
+    return cached.providers;
   }
   const loaded = params.load();
   if (loaded.length > 0) {
-    configCache.set(params.cacheKey, loaded);
+    webFetchProviderCache.set(params.config, {
+      cacheKey: params.cacheKey,
+      configFingerprint: params.configFingerprint,
+      providers: loaded,
+    });
   }
   return loaded;
 }
@@ -255,6 +265,7 @@ function resolveWebFetchProvidersForOptions(
     return resolveCachedWebFetchProviders({
       config: options.config,
       cacheKey: resolveWebFetchProviderCacheKey(options),
+      configFingerprint: createWebFetchProviderConfigFingerprint(options.config),
       load,
     });
   }
