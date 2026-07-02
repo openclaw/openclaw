@@ -984,6 +984,12 @@
   min-width: 0;
 }
 
+.agent-chat__token-count {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-chat__input-btn,
 .agent-chat__toolbar .btn--ghost {
   display: inline-flex;
@@ -1558,6 +1564,29 @@
   .chat-settings-chip__text,
   .chat-settings-chip__chevron {
     display: none;
+  }
+}
+
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread {
+    min-height: 45vh;
+  }
+
+  .agent-chat__input {
+    max-height: min(34vh, 156px);
+    overflow: hidden;
+  }
+
+  .agent-chat__composer-combobox > textarea {
+    max-height: 56px;
+    padding-top: 8px;
+    padding-bottom: 6px;
+    overflow-y: auto;
+  }
+
+  .agent-chat__toolbar {
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 }
 
