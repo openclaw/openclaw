@@ -10,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
+import { clearClientCache, getFeishuUserAgent } from "./client.js";
+import { addFeishuTokenCacheClearer, requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -53,6 +53,18 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+/** Clear all cached tenant access tokens so the next getToken() call
+ *  fetches fresh tokens.  Registered with requestFeishuApi via
+ *  addFeishuTokenCacheClearer (#97287). */
+function clearFeishuTokenCache(): void {
+  tokenCache.clear();
+  // Also clear the Lark SDK client cache so the next Client creation
+  // obtains a fresh tenant token (#97287).
+  clearClientCache();
+}
+
+addFeishuTokenCacheClearer(clearFeishuTokenCache);
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
   const now = resolveDateTimestampMs(nowMs);
@@ -261,32 +273,43 @@ export class FeishuStreamingSession {
       };
     }
 
-    // Create card entity
-    const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards`,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-          "User-Agent": getFeishuUserAgent(),
+    // Create card entity (with single token-invalid retry per #97287)
+    let createData: { code: number; msg: string; data?: { card_id: string } };
+    let retriedCard = false;
+    for (;;) {
+      const { response: cr, release: rl } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
         },
-        body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.create",
-    });
-    if (!createRes.ok) {
-      await releaseCreate();
-      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
-    }
-    const createData = (await createRes.json()) as {
-      code: number;
-      msg: string;
-      data?: { card_id: string };
-    };
-    await releaseCreate();
-    if (createData.code !== 0 || !createData.data?.card_id) {
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.create",
+      });
+      if (!cr.ok) {
+        await rl();
+        throw new Error(`Create card request failed with HTTP ${cr.status}`);
+      }
+      createData = (await cr.json()) as {
+        code: number;
+        msg: string;
+        data?: { card_id: string };
+      };
+      await rl();
+      if (createData.code === 0 && createData.data?.card_id) {
+        break;
+      }
+      // Token-invalid → clear cache and retry once (#97287)
+      if ((createData.code === 99991663 || createData.code === 99991664) && !retriedCard) {
+        retriedCard = true;
+        clearFeishuTokenCache();
+        continue;
+      }
       throw new Error(`Create card failed: ${createData.msg}`);
     }
     const cardId = createData.data.card_id;
