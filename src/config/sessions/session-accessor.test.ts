@@ -534,6 +534,67 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("commits reply session initialization despite non-identity metadata changes", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+        lastHeartbeatSentAt: 100,
+        lastHeartbeatText: "heartbeat-1",
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    // Background activity (heartbeat runner, delivery retry, etc.) can touch
+    // metadata fields without rotating the session. The initialization guard
+    // should only care about session identity, so this must not conflict.
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 20,
+        lastHeartbeatSentAt: 200,
+        lastHeartbeatText: "heartbeat-2",
+      },
+    );
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      // The real caller builds the prepared entry from the snapshot, so it
+      // inherits the pre-drift heartbeat values. The commit must still notice
+      // the concurrent metadata change and preserve the newer values.
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+        lastHeartbeatSentAt: 100,
+        lastHeartbeatText: "heartbeat-1",
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("existing-session");
+    // The accepted commit must not roll back the metadata drift that happened
+    // while the initialization was in flight.
+    expect(committed.sessionEntry.lastHeartbeatSentAt).toBe(200);
+    expect(committed.sessionEntry.lastHeartbeatText).toBe("heartbeat-2");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "existing-session",
+      lastHeartbeatSentAt: 200,
+      lastHeartbeatText: "heartbeat-2",
+    });
+  });
+
   it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(

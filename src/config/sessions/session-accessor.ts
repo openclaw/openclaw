@@ -52,7 +52,6 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
-  projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
@@ -1156,16 +1155,44 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+// Background activity can mutate non-identity fields after the initialization
+// snapshot. Carry forward only those changes; the prepared entry still wins for
+// any field it explicitly modified relative to the snapshot. This preserves
+// heartbeat/delivery/context metadata without resurrecting fields that a reset
+// intentionally cleared (e.g. provider/model overrides on /new).
+function mergeConcurrentReplySessionMetadata(params: {
+  currentEntry: SessionEntry;
+  preparedEntry: SessionEntry;
+  snapshotEntry?: SessionEntry;
+}): SessionEntry {
+  const { currentEntry, preparedEntry, snapshotEntry } = params;
+  if (!snapshotEntry) {
+    return preparedEntry;
+  }
+  const merged = { ...preparedEntry } as Record<string, unknown>;
+  for (const key of Object.keys(currentEntry)) {
+    const currentValue = (currentEntry as Record<string, unknown>)[key];
+    const snapshotValue = (snapshotEntry as Record<string, unknown>)[key];
+    const preparedValue = merged[key];
+    if (currentValue !== snapshotValue && preparedValue === snapshotValue) {
+      merged[key] = currentValue;
+    }
+  }
+  return merged as SessionEntry;
+}
+
 function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
 }): string {
-  const { entry, storePath } = params;
-  // Snapshot reads may see promptRef-only disk entries while commit reads can
-  // see hydrated prompt text and runtime-only resolvedSkills cache entries.
-  // Compare the canonical persisted shape so cache hydration is not a conflict.
+  void params.storePath;
+  const { entry } = params;
+  // Only session identity matters for the initialization guard. Other persisted
+  // fields (updatedAt, heartbeat/delivery metadata, context budgets, etc.) can
+  // change due to background activity without rotating the session, so comparing
+  // the full entry caused false-positive stale-snapshot conflicts.
   return JSON.stringify(
-    entry ? projectSessionEntryForPersistenceRevision({ storePath, entry }) : null,
+    entry ? { sessionId: entry.sessionId, sessionFile: entry.sessionFile } : null,
   );
 }
 
@@ -1786,7 +1813,18 @@ export async function commitReplySessionInitialization(params: {
         sessionEntry: preparedSessionEntry,
         storePath: params.storePath,
       });
-      store[resolved.normalizedKey] = sessionEntry;
+      // The identity-only guard allows commits when background activity touched
+      // non-identity metadata after the snapshot. Merge only the fields that
+      // actually changed since the snapshot so heartbeat/delivery/context
+      // metadata is not rolled back, while reset-cleared fields (e.g. provider
+      // or model overrides on /new) stay cleared.
+      store[resolved.normalizedKey] = currentEntry
+        ? mergeConcurrentReplySessionMetadata({
+            currentEntry,
+            preparedEntry: sessionEntry,
+            snapshotEntry: params.previousEntry,
+          })
+        : sessionEntry;
       if (params.retiredEntry) {
         store[params.retiredEntry.key] = params.retiredEntry.entry;
       }
