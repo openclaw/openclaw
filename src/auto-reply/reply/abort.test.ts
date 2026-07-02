@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
   getAbortMemory,
@@ -237,7 +237,6 @@ describe("abort detection", () => {
       "stop",
       "esc",
       "abort",
-      "wait",
       "exit",
       "interrupt",
       "stop openclaw",
@@ -286,6 +285,8 @@ describe("abort detection", () => {
     }
 
     expect(isAbortTrigger("hello")).toBe(false);
+    expect(isAbortTrigger("wait")).toBe(false);
+    expect(isAbortTrigger("please wait")).toBe(false);
     expect(isAbortTrigger("please do not do that")).toBe(false);
     // /stop is NOT matched by isAbortTrigger - it's handled separately.
     expect(isAbortTrigger("/stop")).toBe(false);
@@ -313,6 +314,8 @@ describe("abort detection", () => {
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
     expect(isAbortRequestText("/status")).toBe(false);
+    expect(isAbortRequestText("wait")).toBe(false);
+    expect(isAbortRequestText("please wait")).toBe(false);
     expect(isAbortRequestText("do not do that")).toBe(true);
     expect(isAbortRequestText("please do not do that")).toBe(false);
     expect(isAbortRequestText("/abort")).toBe(false);
