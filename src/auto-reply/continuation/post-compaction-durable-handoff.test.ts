@@ -117,4 +117,28 @@ describe("post-compaction durable handoff (#1144)", () => {
     const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
     expect(rereleased.map((d) => d.task)).toContain("evacuate context");
   });
+
+  it("startup recovery boot cutoff skips rows claimed by live traffic after process start (#1144)", () => {
+    // A row claimed to `running` AFTER the boot cutoff is a live release, not a
+    // crash-orphaned row. Startup recovery must not flip it back to `queued`
+    // (which would make the live finalizer skip it and release it twice).
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_100_000);
+    stage("evacuate context");
+    const bootCutoff = Date.now();
+    // Live release claims the row well after the boot cutoff.
+    vi.setSystemTime(1_700_000_200_000);
+    const released = consumeStagedPostCompactionDelegates(sessionKey);
+    expect(released).toHaveLength(1);
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
+
+    // Bounded recovery leaves the live row `running` (not requeued).
+    expect(recoverStagedPostCompactionDelegates({ runningUpdatedAtOrBefore: bootCutoff })).toBe(0);
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
+
+    // A crash-orphaned row (updated at/before the cutoff) is still recovered when
+    // recovery runs without a cutoff.
+    expect(recoverStagedPostCompactionDelegates()).toBeGreaterThanOrEqual(1);
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+  });
 });

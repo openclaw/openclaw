@@ -793,10 +793,27 @@ export function finalizeStagedPostCompactionDelegates(
  * durable handoff (#1144). Resets them to `queued` so the next compaction seam
  * re-consumes them; called once at startup. Returns the number of rows reset.
  */
-export function recoverStagedPostCompactionDelegates(): number {
+export function recoverStagedPostCompactionDelegates(options?: {
+  /**
+   * Only reset rows last updated at or before this cutoff. Startup recovery
+   * passes a boot-time cutoff so a post-compaction release that claims a row to
+   * `running` AFTER this process started (live traffic) is NOT flipped back to
+   * `queued` — which would make the live finalizer skip it (no longer running)
+   * and the same delegate be released a second time (#1144).
+   */
+  runningUpdatedAtOrBefore?: number;
+}): number {
   let recovered = 0;
   for (const flow of listTaskFlowRecords()) {
     if (!isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+      continue;
+    }
+    if (
+      options?.runningUpdatedAtOrBefore !== undefined &&
+      flow.updatedAt > options.runningUpdatedAtOrBefore
+    ) {
+      // Claimed by live traffic after this process started — leave it to the
+      // live release/finalize path, not restart recovery.
       continue;
     }
     const state = decodeDelegateState(flow);
