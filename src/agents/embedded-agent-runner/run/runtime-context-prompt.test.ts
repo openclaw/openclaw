@@ -99,6 +99,29 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("does not repeat derived hidden context in the model prompt", () => {
+    // A before_prompt_build hook contributes model-only context, so the model
+    // prompt arrives separately and still embeds the drained system-event
+    // block; the block must render only once, via the hidden runtime context.
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: ["System: [12:00] Model switched.", "", "visible ask"].join("\n"),
+        transcriptPrompt: "visible ask",
+        modelPrompt: [
+          "System: [12:00] Model switched.",
+          "",
+          "visible ask",
+          "",
+          "memory hook append",
+        ].join("\n"),
+      }),
+    ).toEqual({
+      prompt: "visible ask",
+      modelPrompt: "visible ask\n\nmemory hook append",
+      runtimeContext: "System: [12:00] Model switched.",
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",

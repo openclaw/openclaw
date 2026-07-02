@@ -134,10 +134,20 @@ export function resolveRuntimeContextPromptParts(params: {
         };
   }
 
+  // A hook-provided model prompt still embeds the block this split just
+  // derived as hidden runtime context (for example a drained system-event
+  // block prepended into the reply body), so the model would see it twice:
+  // once inline and once via the runtime-context message. Strip the derived
+  // remainder back out of the visible model prompt; when it is not a literal
+  // substring (inline-marker prompts), leave the model prompt untouched.
+  const visibleModelPromptText =
+    runtimeContext && modelPrompt
+      ? (removeLastPromptOccurrence(modelPromptText, runtimeContext) ?? modelPromptText)
+      : modelPromptText;
   return {
     prompt,
-    ...(modelPromptText.trim() && modelPromptText !== prompt
-      ? { modelPrompt: modelPromptText }
+    ...(visibleModelPromptText.trim() && visibleModelPromptText !== prompt
+      ? { modelPrompt: visibleModelPromptText }
       : {}),
     ...(runtimeContext ? { runtimeContext } : {}),
   };
