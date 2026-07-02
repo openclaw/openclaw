@@ -4,6 +4,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import type {
+  BundledPluginLoadPathAlias,
+  BundledPluginLoadPathAliasKind,
+} from "../plugins/bundled-load-path-aliases.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -114,6 +118,21 @@ vi.mock("../plugins/installed-plugin-index-records.js", () => ({
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
 vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
+}));
+
+const resolveBundledPluginsDirMock = vi.hoisted(() =>
+  vi.fn<() => string | undefined>(() => undefined),
+);
+vi.mock("../plugins/bundled-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/bundled-dir.js")>()),
+  resolveBundledPluginsDir: resolveBundledPluginsDirMock,
+}));
+const resolvePackagedBundledLoadPathAliasMock = vi.hoisted(() =>
+  vi.fn<() => BundledPluginLoadPathAlias | null>(() => null),
+);
+vi.mock("../plugins/bundled-load-path-aliases.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/bundled-load-path-aliases.js")>()),
+  resolvePackagedBundledLoadPathAlias: resolvePackagedBundledLoadPathAliasMock,
 }));
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
@@ -1704,6 +1723,93 @@ describe("ensureOnboardingPluginInstalled", () => {
         relativeSpy.mockRestore();
         isAbsoluteSpy.mockRestore();
       }
+    });
+  });
+});
+
+describe("addPluginLoadPath bundled guard", () => {
+  beforeEach(() => {
+    resolveBundledPluginsDirMock.mockReset();
+    resolvePackagedBundledLoadPathAliasMock.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("skips adding bundled plugin load path via addPluginLoadPath guard", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-bundled-guard-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const bundledRoot = path.join(temp, "openclaw", "dist", "extensions");
+      const bundledPluginPath = path.join(bundledRoot, "demo");
+      resolveBundledPluginsDirMock.mockReturnValue(bundledRoot);
+      resolvePackagedBundledLoadPathAliasMock.mockReturnValue({
+        kind: "current" as BundledPluginLoadPathAliasKind,
+        path: bundledPluginPath,
+      });
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            npmSpec: "@demo/plugin@1.2.3",
+            localPath: "plugins/demo",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      const [recordCfg] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+        OpenClawConfig,
+        PluginInstallRecord,
+      ];
+      expect(recordCfg.plugins?.load?.paths).toBeUndefined();
+      expect(result.installed).toBe(true);
+      expect(result.status).toBe("installed");
+    });
+  });
+
+  it("adds non-bundled plugin load path when bundled guard does not match", async () => {
+    resolveBundledPluginsDirMock.mockReturnValue(undefined);
+    resolvePackagedBundledLoadPathAliasMock.mockReturnValue(null);
+
+    await withTempDir({ prefix: "openclaw-onboarding-install-non-bundled-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            npmSpec: "@demo/plugin@1.2.3",
+            localPath: "plugins/demo",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      const realPluginDir = await fs.realpath(pluginDir);
+      const [recordCfg] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+        OpenClawConfig,
+        PluginInstallRecord,
+      ];
+      expect(recordCfg.plugins?.load?.paths).toEqual([realPluginDir]);
+      expect(result.installed).toBe(true);
     });
   });
 });

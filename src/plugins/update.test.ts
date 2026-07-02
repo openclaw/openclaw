@@ -4394,6 +4394,7 @@ describe("syncPluginsForUpdateChannel", () => {
   it.each([
     {
       name: "keeps bundled path installs on beta without reinstalling from npm",
+      channel: "beta" as const,
       config: createBundledPathInstallConfig({
         loadPaths: [appBundledPluginRoot("feishu")],
         installPath: appBundledPluginRoot("feishu"),
@@ -4405,22 +4406,35 @@ describe("syncPluginsForUpdateChannel", () => {
     },
     {
       name: "repairs bundled install metadata when the load path is re-added",
+      channel: "beta" as const,
       config: createBundledPathInstallConfig({
         loadPaths: [],
         installPath: "/tmp/old-feishu",
         spec: "@openclaw/feishu",
       }),
       expectedChanged: true,
-      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedLoadPaths: [],
+      expectedInstallPath: appBundledPluginRoot("feishu"),
+    },
+    {
+      name: "does not add bundled load paths on dev channel",
+      channel: "dev" as const,
+      config: createBundledPathInstallConfig({
+        loadPaths: [],
+        installPath: appBundledPluginRoot("feishu"),
+        spec: "@openclaw/feishu",
+      }),
+      expectedChanged: true,
+      expectedLoadPaths: [],
       expectedInstallPath: appBundledPluginRoot("feishu"),
     },
   ] as const)(
     "$name",
-    async ({ config, expectedChanged, expectedLoadPaths, expectedInstallPath }) => {
+    async ({ channel, config, expectedChanged, expectedLoadPaths, expectedInstallPath }) => {
       mockBundledSources(createBundledSource());
 
       const result = await syncPluginsForUpdateChannel({
-        channel: "beta",
+        channel,
         config,
       });
 
