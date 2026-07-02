@@ -6,6 +6,7 @@ import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import type { GatewayHotReloadStatus } from "../config-reload.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -92,6 +93,7 @@ function cachedHealthDiffersFromRuntime(
 function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): HealthSummary {
   const {
     contextEngines: _cachedContextEngines,
@@ -122,6 +124,9 @@ function mergeCachedHealthRuntimeState(params: {
       ? { contextEngines: { quarantined: quarantinedContextEngines } }
       : {}),
     ...(deliveryQueues ? { deliveryQueues } : {}),
+    ...(params.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),
@@ -159,6 +164,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         mergeCachedHealthRuntimeState({
           cached,
           eventLoop: context.getEventLoopHealth?.(),
+          configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
         }),
         undefined,
         { cached: true },
