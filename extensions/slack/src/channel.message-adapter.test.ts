@@ -183,6 +183,9 @@ describe("slack channel message adapter", () => {
         messageSendingHooks: () => {
           expect(sendText).toBeTypeOf("function");
         },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
+        },
       },
     });
   });

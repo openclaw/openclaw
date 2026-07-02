@@ -42,6 +42,10 @@ export type SlackConfigAccessorAccount = {
   defaultTo: string | undefined;
 };
 
+function hasOwnConfigField(config: SlackAccountConfig | undefined, field: string): boolean {
+  return config ? Object.prototype.hasOwnProperty.call(config, field) : false;
+}
+
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
@@ -208,6 +212,7 @@ export function resolveSlackAccount(params: {
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
+  const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -222,14 +227,19 @@ export function resolveSlackAccount(params: {
     appActive && baseAllowEnv ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN) : undefined;
   const envUser =
     userActive && baseAllowEnv ? resolveSlackUserToken(process.env.SLACK_USER_TOKEN) : undefined;
-  const configBot = botActive
-    ? resolveSlackBotToken(merged.botToken, `channels.slack.accounts.${accountId}.botToken`)
-    : undefined;
-  const configApp = appActive
-    ? resolveSlackAppToken(merged.appToken, `channels.slack.accounts.${accountId}.appToken`)
-    : undefined;
+  const botTokenPath = hasOwnConfigField(accountConfig, "botToken")
+    ? `channels.slack.accounts.${accountId}.botToken`
+    : "channels.slack.botToken";
+  const appTokenPath = hasOwnConfigField(accountConfig, "appToken")
+    ? `channels.slack.accounts.${accountId}.appToken`
+    : "channels.slack.appToken";
+  const userTokenPath = hasOwnConfigField(accountConfig, "userToken")
+    ? `channels.slack.accounts.${accountId}.userToken`
+    : "channels.slack.userToken";
+  const configBot = botActive ? resolveSlackBotToken(merged.botToken, botTokenPath) : undefined;
+  const configApp = appActive ? resolveSlackAppToken(merged.appToken, appTokenPath) : undefined;
   const configUser = userActive
-    ? resolveSlackUserToken(merged.userToken, `channels.slack.accounts.${accountId}.userToken`)
+    ? resolveSlackUserToken(merged.userToken, userTokenPath)
     : undefined;
   const botToken = configBot ?? envBot;
   const appToken = configApp ?? envApp;
