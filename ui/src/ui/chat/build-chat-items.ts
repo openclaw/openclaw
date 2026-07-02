@@ -348,13 +348,25 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
 }
 
+function assistantGroupIsEmptyBoundary(group: MessageGroup): boolean {
+  if (!group.senderLabel?.trim()) {
+    return false;
+  }
+  return group.messages.every(({ message }) => {
+    const normalized = safeNormalizeMessage(message);
+    return Boolean(normalized && normalized.content.length === 0 && !normalized.replyTarget);
+  });
+}
+
 // Stamp each tool group with whether its turn ended in a successful assistant
 // reply. Codex marks any non-zero exec exit as failed, so a benign internal tool
 // failure (e.g. a no-match search) must not render as a primary error banner
 // once a clean reply exists. Backward pass: a user group ends the turn
 // downstream; an assistant reply marks success for earlier tool groups in the
-// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
-// preserving the existing error banner.
+// same turn. Empty retained agent groups also end the scan so adjacent
+// autonomous turns cannot inherit a later turn's reply. turnSucceeded stays
+// undefined for terminal or in-progress failures, preserving the existing error
+// banner.
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -370,6 +382,8 @@ function annotateToolTurnOutcome(
     } else if (role === "assistant") {
       if (assistantGroupHasReplyText(item)) {
         sawAssistantReply = true;
+      } else if (assistantGroupIsEmptyBoundary(item)) {
+        sawAssistantReply = false;
       }
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
