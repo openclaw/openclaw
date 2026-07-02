@@ -2,6 +2,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type {
+  AnyAgentTool,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,6 +42,17 @@ function registerMemoryCoreRuntime(): MemoryPluginRuntime {
     throw new Error("expected memory-core to register a memory runtime");
   }
   return runtime;
+}
+
+function materializeTool(
+  tool: AnyAgentTool | OpenClawPluginToolFactory,
+  ctx: OpenClawPluginToolContext,
+): AnyAgentTool | null {
+  const resolved = typeof tool === "function" ? tool(ctx) : tool;
+  if (Array.isArray(resolved)) {
+    return resolved[0] ?? null;
+  }
+  return resolved ?? null;
 }
 
 describe("buildPromptSection", () => {
@@ -112,6 +128,37 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("registers lazy memory_get with shared-session explicit-only guidance", () => {
+    const registeredTools: Array<{
+      tool: AnyAgentTool | OpenClawPluginToolFactory;
+      names?: string[];
+    }> = [];
+    plugin.register(
+      createTestPluginApi({
+        config: { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+        registerTool(tool, opts) {
+          registeredTools.push({ tool, names: opts?.names });
+        },
+      }),
+    );
+
+    const memoryGetRegistration = registeredTools.find((entry) =>
+      entry.names?.includes("memory_get"),
+    );
+    if (!memoryGetRegistration) {
+      throw new Error("expected memory_get registration");
+    }
+
+    const tool = materializeTool(memoryGetRegistration.tool, {
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+      config: { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+    });
+
+    expect(tool?.description).toContain("On-demand exact read tool for shared sessions");
+    expect(tool?.description).toContain("only when the user explicitly asks");
   });
 });
 

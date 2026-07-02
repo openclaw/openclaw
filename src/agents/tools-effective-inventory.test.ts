@@ -233,6 +233,21 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("passes chat type into effective tool creation", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(
+      (_options) => effectiveInventoryState.tools,
+    );
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      {
+        createToolsMock,
+      },
+    );
+
+    resolveEffectiveToolInventoryLocal({ cfg: {}, chatType: "group" });
+
+    expect(createToolsMock).toHaveBeenCalledWith(expect.objectContaining({ chatType: "group" }));
+  });
+
   it("groups bundled MCP tools separately from generic plugin tools", async () => {
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal10 } =
       await loadHarness({

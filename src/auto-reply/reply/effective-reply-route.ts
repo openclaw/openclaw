@@ -3,6 +3,7 @@ import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
@@ -78,10 +79,7 @@ export function resolveEffectiveReplyRoute(params: {
   const persistedDeliveryContext = params.entry?.deliveryContext;
   const persistedDeliveryChannel = normalizeMessageChannel(persistedDeliveryContext?.channel);
   const liveChatType = normalizeChatType(params.ctx.ChatType);
-  const persistedChatType =
-    params.entry?.route?.target?.chatType ??
-    params.entry?.chatType ??
-    normalizeChatType(params.entry?.origin?.chatType);
+  const persistedChatType = resolveSessionEntryChatType(params.entry);
   if (
     isSessionsSendInterSessionHandoff(params.ctx.InputProvenance) &&
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&

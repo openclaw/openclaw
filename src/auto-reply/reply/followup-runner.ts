@@ -1064,6 +1064,8 @@ export function createFollowupRunner(params: {
                     replyOperation,
                     sessionId: run.sessionId,
                     sessionKey: replySessionKey,
+                    chatType: run.chatType,
+                    sessionEntry: activeSessionEntry,
                     agentId: run.agentId,
                     trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
                     sessionFile: run.sessionFile,

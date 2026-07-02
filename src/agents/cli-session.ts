@@ -10,6 +10,7 @@ import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+type LongTermMemoryDefaultPolicy = NonNullable<CliSessionBinding["longTermMemoryDefaultPolicy"]>;
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
 export function hashCliSessionText(value: string | undefined): string | undefined {
@@ -58,6 +59,13 @@ export function setCliSessionBinding(
         : {}),
       ...(normalizeOptionalString(binding.promptToolNamesHash)
         ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
+        : {}),
+      ...(readLongTermMemoryDefaultPolicy(binding.longTermMemoryDefaultPolicy)
+        ? {
+            longTermMemoryDefaultPolicy: readLongTermMemoryDefaultPolicy(
+              binding.longTermMemoryDefaultPolicy,
+            ),
+          }
         : {}),
       ...(normalizeOptionalString(binding.cwdHash)
         ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
@@ -115,6 +123,7 @@ export function resolveCliSessionReuse(params: {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -126,6 +135,22 @@ export function resolveCliSessionReuse(params: {
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
     return {};
+  }
+  const currentLongTermMemoryDefaultPolicy = readLongTermMemoryDefaultPolicy(
+    params.longTermMemoryDefaultPolicy,
+  );
+  const storedLongTermMemoryDefaultPolicy = readLongTermMemoryDefaultPolicy(
+    binding?.longTermMemoryDefaultPolicy,
+  );
+  if (
+    currentLongTermMemoryDefaultPolicy &&
+    !(
+      storedLongTermMemoryDefaultPolicy === undefined &&
+      currentLongTermMemoryDefaultPolicy === "include"
+    ) &&
+    storedLongTermMemoryDefaultPolicy !== currentLongTermMemoryDefaultPolicy
+  ) {
+    return { invalidatedReason: "system-prompt" };
   }
   if (binding?.forceReuse === true) {
     return { sessionId };
@@ -186,4 +211,8 @@ export function resolveCliSessionReuse(params: {
     return { invalidatedReason: "mcp" };
   }
   return { sessionId };
+}
+
+function readLongTermMemoryDefaultPolicy(value: unknown): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
 }

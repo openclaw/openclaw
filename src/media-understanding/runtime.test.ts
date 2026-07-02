@@ -324,6 +324,7 @@ describe("media-understanding runtime", () => {
         sessionKey: "agent:main:telegram:dm:123",
         channel: "telegram",
         chatType: "private",
+        longTermMemoryDefaultPolicy: "explicit-only",
       },
     });
 
@@ -334,12 +335,14 @@ describe("media-understanding runtime", () => {
       Provider: "telegram",
       Surface: "telegram",
       ChatType: "private",
+      LongTermMemoryDefaultPolicy: "explicit-only",
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
       ctx: {
         SessionKey: "agent:main:telegram:dm:123",
         Surface: "telegram",
         ChatType: "private",
+        LongTermMemoryDefaultPolicy: "explicit-only",
       },
     });
   });

@@ -9,13 +9,21 @@ import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import {
+  deriveSessionChatTypeFromKey,
+  resolveSessionEntryChatType,
+  type SessionKeyChatType,
+} from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -63,6 +71,41 @@ function resolveSessionKey(params: { cfg: OpenClawConfig; input: ToolsInvokeInpu
     return canonicalizeSessionKeyForAgent(agentId, "main");
   }
   return resolveMainSessionKey(params.cfg);
+}
+
+function normalizeDerivedChatType(chatType: SessionKeyChatType) {
+  return chatType === "direct" || chatType === "group" || chatType === "channel"
+    ? chatType
+    : undefined;
+}
+
+type ToolsInvokeChatTypeResolution =
+  | { ok: true; chatType: ChatType | undefined }
+  | { ok: false; message: string };
+
+function resolveToolsInvokeChatType(params: {
+  sessionKey: string;
+  requestChatType?: ChatType;
+}): ToolsInvokeChatTypeResolution {
+  let loadedEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  try {
+    loadedEntry = loadSessionEntry(params.sessionKey, { strictRead: true }).entry;
+  } catch (err) {
+    logWarn(`tools-invoke: session policy lookup failed: ${String(err)}`);
+    return { ok: false, message: "session policy unavailable" };
+  }
+  const persistedChatType = resolveSessionEntryChatType(loadedEntry);
+  const derivedChatType = normalizeDerivedChatType(deriveSessionChatTypeFromKey(params.sessionKey));
+  return {
+    ok: true,
+    chatType: resolveLongTermMemoryTargetChatType({
+      sessionKey: params.sessionKey,
+      liveChatType: params.requestChatType,
+      storedChatType: persistedChatType ?? derivedChatType,
+      longTermMemoryDefaultPolicy: loadedEntry?.longTermMemoryDefaultPolicy,
+      preferStoredPolicy: true,
+    }),
+  };
 }
 
 function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
@@ -157,6 +200,7 @@ export async function invokeGatewayTool(params: {
   senderIsOwner?: boolean;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
+  requestChatType?: ChatType;
 }): Promise<ToolsInvokeOutcome> {
   const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
   if (!toolName) {
@@ -196,10 +240,24 @@ export async function invokeGatewayTool(params: {
       ? (argsRaw as Record<string, unknown>)
       : {};
   const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const chatTypeResolution = resolveToolsInvokeChatType({
+    sessionKey,
+    ...(params.requestChatType ? { requestChatType: params.requestChatType } : {}),
+  });
+  if (!chatTypeResolution.ok) {
+    return {
+      ok: false,
+      status: 500,
+      toolName,
+      error: { type: "tool_error", message: chatTypeResolution.message },
+    };
+  }
+  const chatType = chatTypeResolution.chatType;
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
+      chatType,
       messageProvider: params.messageChannel,
       accountId: params.accountId,
       agentTo: params.agentTo,

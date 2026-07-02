@@ -825,11 +825,52 @@ describe("createCopilotAgentHarness", () => {
 
       expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string; replayInvalid?: boolean };
+        initialReplayState?: {
+          longTermMemoryDefaultPolicy?: string;
+          sdkSessionId?: string;
+          replayInvalid?: boolean;
+        };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-warm");
+      expect(secondCallParams.initialReplayState?.longTermMemoryDefaultPolicy).toBe("include");
       // Must not synthesize a replayInvalid signal: undefined → resumable.
       expect(secondCallParams.initialReplayState?.replayInvalid).toBeUndefined();
+    });
+
+    it("stamps replay state with the prior shared memory policy when the next turn is direct", async () => {
+      const pool = makePoolMock();
+      const client = { deleteSession: vi.fn() } as any;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-shared",
+          pooledClient: { key: {} as any, client },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(
+        makeAttemptParams({
+          chatType: "group",
+          runId: "t1",
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        }),
+      );
+      await harness.runAttempt(
+        makeAttemptParams({
+          chatType: "direct",
+          runId: "t2",
+          sessionKey: "agent:main:acp:binding:telegram:acct:direct:user-1",
+        }),
+      );
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { longTermMemoryDefaultPolicy?: string; sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState).toMatchObject({
+        longTermMemoryDefaultPolicy: "explicit-only",
+        sdkSessionId: "sdk-sess-shared",
+      });
     });
 
     it("blocks reuse while timed-out compaction is pending, then resumes after completion", async () => {
@@ -1275,12 +1316,14 @@ describe("createCopilotAgentHarness", () => {
         expect.objectContaining({
           schemaVersion: 2,
           sdkSessionId: "sdk-sess-sqlite",
+          longTermMemoryDefaultPolicy: "include",
         }),
       );
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
-        initialReplayState?: { sdkSessionId?: string };
+        initialReplayState?: { longTermMemoryDefaultPolicy?: string; sdkSessionId?: string };
       };
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
+      expect(secondCallParams.initialReplayState?.longTermMemoryDefaultPolicy).toBe("include");
     });
 
     it("persists BYOK session compatibility with endpoint fingerprints instead of raw URLs", async () => {
@@ -1365,7 +1408,7 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
     });
 
-    it("resumes shipped schema v1 plugin-state bindings for attempts", async () => {
+    it("treats unstamped legacy plugin-state bindings as direct-session memory cache", async () => {
       const sessionStore = makeSessionStoreMock();
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         deps.onSessionEstablished?.({
@@ -1399,9 +1442,103 @@ describe("createCopilotAgentHarness", () => {
       await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
 
       const secondCallParams = mocks.runCopilotAttempt.mock.calls[0]?.[0] as {
+        initialReplayState?: { longTermMemoryDefaultPolicy?: string; sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState).toMatchObject({
+        longTermMemoryDefaultPolicy: "include",
+        sdkSessionId: "sdk-sess-v1",
+      });
+    });
+
+    it("treats unstamped schema v2 plugin-state bindings as direct-session memory cache", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-current",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      const stored = sessionStore.entries.get("oc-sess-reuse");
+      if (!stored) {
+        throw new Error("expected persisted binding");
+      }
+      sessionStore.entries.set("oc-sess-reuse", {
+        schemaVersion: 2,
+        sdkSessionId: "sdk-sess-unstamped-v2",
+        compatKey: stored.compatKey,
+        compactKey: stored.compactKey,
+        authMode: "useLoggedInUser",
+        updatedAt: Date.now(),
+      } as never);
+      mocks.runCopilotAttempt.mockClear();
+      const secondHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[0]?.[0] as {
+        initialReplayState?: { longTermMemoryDefaultPolicy?: string; sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState).toMatchObject({
+        longTermMemoryDefaultPolicy: "include",
+        sdkSessionId: "sdk-sess-unstamped-v2",
+      });
+    });
+
+    it("rotates unstamped persisted session bindings for shared turns", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-current",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      const stored = sessionStore.entries.get("oc-sess-reuse");
+      if (!stored) {
+        throw new Error("expected persisted binding");
+      }
+      sessionStore.entries.set("oc-sess-reuse", {
+        schemaVersion: 2,
+        sdkSessionId: "sdk-sess-unstamped-v2",
+        compatKey: stored.compatKey,
+        compactKey: stored.compactKey,
+        authMode: "useLoggedInUser",
+        updatedAt: Date.now(),
+      } as never);
+      mocks.runCopilotAttempt.mockClear();
+      const secondHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await secondHarness.runAttempt(
+        makeAttemptParams({
+          chatType: "group",
+          runId: "t2",
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        }),
+      );
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[0]?.[0] as {
         initialReplayState?: { sdkSessionId?: string };
       };
-      expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-v1");
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
     });
 
     it("starts a fresh SDK session when persisted binding lookup fails", async () => {
@@ -1432,6 +1569,7 @@ describe("createCopilotAgentHarness", () => {
         schemaVersion: 2,
         sdkSessionId: "sdk-sess-stale",
         compatKey: "stale",
+        longTermMemoryDefaultPolicy: "include",
         compactKey: "stale",
         authMode: "useLoggedInUser",
         updatedAt: 1,
@@ -1582,6 +1720,7 @@ describe("createCopilotAgentHarness", () => {
         schemaVersion: 2,
         sdkSessionId: "sdk-sess-orphan",
         compatKey: "compat",
+        longTermMemoryDefaultPolicy: "include",
         compactKey: "compat",
         authMode: "useLoggedInUser",
         updatedAt: 1,

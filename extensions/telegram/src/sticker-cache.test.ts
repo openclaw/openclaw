@@ -4,6 +4,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CachedStickerStoreEntry } from "./sticker-cache-store.js";
 import * as stickerCache from "./sticker-cache-store.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -14,7 +15,7 @@ describe("sticker-cache", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests({ closeDatabase: false });
     stickerCache.setTelegramStickerCacheStoreForTest(
-      createPluginStateSyncKeyedStoreForTests("telegram", {
+      createPluginStateSyncKeyedStoreForTests<CachedStickerStoreEntry>("telegram", {
         namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
         maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
       }),
@@ -49,6 +50,27 @@ describe("sticker-cache", () => {
       expect(result).toEqual(sticker);
     });
 
+    it("ignores legacy entries without the memory-neutral description policy", () => {
+      const store = createPluginStateSyncKeyedStoreForTests<CachedStickerStoreEntry>(
+        "telegram",
+        {
+          namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        },
+      );
+      store.register("legacy-private", {
+        fileId: "file-private",
+        fileUniqueId: "legacy-private",
+        description: "Potentially private cached description",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      });
+      stickerCache.setTelegramStickerCacheStoreForTest(store);
+
+      expect(stickerCache.getCachedSticker("legacy-private")).toBeNull();
+      expect(stickerCache.getAllCachedStickers()).toStrictEqual([]);
+      expect(stickerCache.searchStickers("private")).toStrictEqual([]);
+    });
+
     it("returns null after backing store is cleared", () => {
       const sticker = {
         fileId: "file123",
@@ -71,7 +93,7 @@ describe("sticker-cache", () => {
 
     it("treats plugin-state lookup failures as cache misses", () => {
       stickerCache.setTelegramStickerCacheStoreForTest({
-        ...createPluginStateSyncKeyedStoreForTests("telegram", {
+        ...createPluginStateSyncKeyedStoreForTests<CachedStickerStoreEntry>("telegram", {
           namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
           maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
         }),

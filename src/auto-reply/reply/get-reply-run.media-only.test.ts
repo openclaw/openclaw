@@ -1,5 +1,5 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -9,7 +9,16 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+import { resolveSessionStoreEntry } from "../../config/sessions/store-entry.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "../../gateway/mcp-grant-store.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { clearFollowupQueue, getFollowupQueue } from "./queue/state.js";
+import type { FollowupRun } from "./queue/types.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -41,6 +50,14 @@ const updateSessionStore = vi.hoisted(() => vi.fn());
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
   return {
+    updateSessionStore,
+  };
+});
+
+vi.mock("../../config/sessions/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
+  return {
+    ...actual,
     updateSessionStore,
   };
 });
@@ -233,6 +250,30 @@ function baseParams(
   };
 }
 
+function persistSessionStoreUpdates(
+  sessionStore: Record<string, SessionEntry>,
+  sessionKey?: string,
+): void {
+  if (sessionKey && sessionStore[sessionKey]) {
+    const { normalizedKey } = resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+    sessionStore[normalizedKey] ??= sessionStore[sessionKey];
+  }
+  updateSessionStore.mockImplementation(
+    async (_storePath: string, writer: (store: Record<string, SessionEntry>) => unknown) => {
+      const result = writer(sessionStore);
+      const entry = (result as { entry?: SessionEntry } | null | undefined)?.entry;
+      const resultKey = (result as { sessionKey?: string } | null | undefined)?.sessionKey;
+      if (!entry || !resultKey) {
+        throw new Error(`boundary mock writer returned ${JSON.stringify(result)}`);
+      }
+      if (entry && resultKey) {
+        sessionStore[resultKey] = entry;
+      }
+      return result;
+    },
+  );
+}
+
 function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   const params = baseParams();
   params.command = {
@@ -299,6 +340,10 @@ describe("runPreparedReply media-only handling", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetAttachGrantsForTest();
+    clearFollowupQueue("agent:main:main");
+    clearFollowupQueue("session-key");
+    vi.mocked(resolveSessionFilePath).mockReturnValue("/tmp/session.jsonl");
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -381,6 +426,7 @@ describe("runPreparedReply media-only handling", () => {
       sessionId: "session-thinking",
       sessionFile: "/tmp/session-thinking.jsonl",
       thinkingLevel: "high",
+      longTermMemoryDefaultPolicy: "explicit-only",
       updatedAt: 1,
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -1389,7 +1435,7 @@ describe("runPreparedReply media-only handling", () => {
       activeOperation.complete();
     }
   });
-  it("does not enable steering for active heartbeat runs", async () => {
+  it("drops active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
@@ -1404,17 +1450,14 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
     vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
-    await runPreparedReply(
+    const result = await runPreparedReply(
       baseParams({
         opts: { isHeartbeat: true },
       }),
     );
 
-    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
-    expect(call?.shouldSteer).toBe(false);
-    expect(call?.shouldFollowup).toBe(true);
-    expect(call?.isActive).toBe(true);
-    expect(call?.isStreaming).toBe(true);
+    expect(result).toBeUndefined();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1701,6 +1744,7 @@ describe("runPreparedReply media-only handling", () => {
         sessionFile: "/tmp/session-auth-profile.jsonl",
         authProfileOverride: "profile-before-wait",
         authProfileOverrideSource: "auto",
+        longTermMemoryDefaultPolicy: "explicit-only",
         updatedAt: 1,
       },
     };
@@ -1752,6 +1796,7 @@ describe("runPreparedReply media-only handling", () => {
       "session-key": {
         sessionId: "session-before-rotation",
         sessionFile: "/tmp/session-before-rotation.jsonl",
+        longTermMemoryDefaultPolicy: "explicit-only",
         updatedAt: 1,
       },
     };
@@ -2407,6 +2452,442 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
   });
 
+  it("scopes no-live explicit-only direct-shaped heartbeat runs as shared", async () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        isNewSession: false,
+        systemSent: true,
+        sessionKey: "agent:main:telegram:direct:alice",
+        ctx: {
+          Body: heartbeatPrompt,
+          RawBody: heartbeatPrompt,
+          CommandBody: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          SessionKey: "agent:main:telegram:direct:alice",
+        },
+        sessionCtx: {
+          Body: heartbeatPrompt,
+          BodyStripped: heartbeatPrompt,
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          systemSent: true,
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "direct",
+            to: "alice",
+          },
+        } as SessionEntry,
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.chatType).toBe("group");
+  });
+
+  it("preserves ordinary live direct runs despite stale explicit-only policy", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionKey: "agent:main:telegram:direct:alice",
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:telegram:direct:alice",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          systemSent: true,
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "direct",
+            to: "alice",
+          },
+        } as SessionEntry,
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.chatType).toBe("direct");
+  });
+
+  it("stamps an empty shared main session without rotating, then rotates before private reuse", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-empty-boundary-"));
+    cleanupPaths.push(tempDir);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    vi.mocked(resolveSessionFilePath).mockReturnValue(sessionFile);
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-empty-boundary",
+      updatedAt: 1,
+      sessionFile,
+      chatType: "direct",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    persistSessionStoreUpdates(sessionStore, sessionKey);
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    );
+
+    expect(sessionStore[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(sessionStore[sessionKey]?.sessionId).toBe(sessionEntry.sessionId);
+    expect(sessionStore[sessionKey]?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+    let call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.sessionFile).toBe(sessionFile);
+    expect(call.followupRun.run.chatType).toBe("group");
+    clearFollowupQueue(sessionKey);
+    const queuedRun: FollowupRun = {
+      prompt: "queued private follow-up",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "default",
+        agentDir: "/tmp/agent",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionFile,
+        workspaceDir: "/tmp/workspace",
+        config: {} as FollowupRun["run"]["config"],
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        chatType: "group",
+        timeoutMs: 30_000,
+        blockReplyBreak: "message_end",
+      },
+    };
+    getFollowupQueue(sessionKey, { mode: "followup" }).items.push(queuedRun);
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry: sessionStore[sessionKey],
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+        ctx: {
+          Body: "private follow-up",
+          RawBody: "private follow-up",
+          CommandBody: "private follow-up",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+        sessionCtx: {
+          Body: "private follow-up",
+          BodyStripped: "private follow-up",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    expect(sessionStore[sessionKey]?.longTermMemoryDefaultPolicy).toBe("include");
+    expect(sessionStore[sessionKey]?.sessionFile).not.toBe(sessionFile);
+    expect(sessionStore[sessionKey]?.sessionFile).toMatch(/memory-include-[\w-]+\.jsonl$/u);
+    const rotatedSessionId = sessionStore[sessionKey]?.sessionId;
+    expect(rotatedSessionId).toEqual(expect.any(String));
+    expect(rotatedSessionId).not.toBe(sessionEntry.sessionId);
+    call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.sessionId).toBe(rotatedSessionId);
+    expect(call.followupRun.run.sessionFile).toBe(sessionStore[sessionKey]?.sessionFile);
+    expect(call.followupRun.run.chatType).toBe("direct");
+    expect(queuedRun.run.sessionId).toBe(sessionEntry.sessionId);
+    expect(queuedRun.run.sessionFile).toBe(sessionFile);
+    expect(queuedRun.run.chatType).toBe("group");
+    clearFollowupQueue(sessionKey);
+  });
+
+  it("keeps queued private followups on their captured boundary during live shared rotation", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-private-queue-boundary-"));
+    cleanupPaths.push(tempDir);
+    const sessionFile = path.join(tempDir, "private.jsonl");
+    vi.mocked(resolveSessionFilePath).mockReturnValue(sessionFile);
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-private-boundary",
+      updatedAt: 1,
+      sessionFile,
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    persistSessionStoreUpdates(sessionStore, sessionKey);
+    const queuedRun: FollowupRun = {
+      prompt: "queued private follow-up",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "default",
+        agentDir: "/tmp/agent",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionFile,
+        workspaceDir: "/tmp/workspace",
+        config: {} as FollowupRun["run"]["config"],
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        chatType: "direct",
+        timeoutMs: 30_000,
+        blockReplyBreak: "message_end",
+      },
+    };
+    getFollowupQueue(sessionKey, { mode: "followup" }).items.push(queuedRun);
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    );
+
+    expect(sessionStore[sessionKey]?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+    expect(sessionStore[sessionKey]?.sessionFile).not.toBe(sessionFile);
+    expect(sessionStore[sessionKey]?.sessionFile).toMatch(/memory-explicit-only-[\w-]+\.jsonl$/u);
+    const rotatedSessionId = sessionStore[sessionKey]?.sessionId;
+    expect(rotatedSessionId).toEqual(expect.any(String));
+    expect(rotatedSessionId).not.toBe(sessionEntry.sessionId);
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.sessionId).toBe(rotatedSessionId);
+    expect(call.followupRun.run.sessionFile).toBe(sessionStore[sessionKey]?.sessionFile);
+    expect(call.followupRun.run.chatType).toBe("group");
+    expect(queuedRun.run.sessionId).toBe(sessionEntry.sessionId);
+    expect(queuedRun.run.sessionFile).toBe(sessionFile);
+    expect(queuedRun.run.chatType).toBe("direct");
+    clearFollowupQueue(sessionKey);
+  });
+
+  it("rotates an unstamped legacy transcript even when the entry has no sessionFile", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-boundary-"));
+    cleanupPaths.push(tempDir);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeFile(
+      sessionFile,
+      '{"type":"session","id":"session-legacy-boundary"}\n{"type":"message","message":{"role":"user","content":"prior"}}\n',
+    );
+    vi.mocked(resolveSessionFilePath).mockReturnValue(sessionFile);
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-legacy-boundary",
+      updatedAt: 1,
+      chatType: "direct",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    persistSessionStoreUpdates(sessionStore, sessionKey);
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    );
+
+    expect(sessionStore[sessionKey]?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+    expect(sessionStore[sessionKey]?.sessionFile).not.toBe(sessionFile);
+    expect(sessionStore[sessionKey]?.sessionFile).toMatch(/memory-explicit-only-[\w-]+\.jsonl$/u);
+    expect(sessionStore[sessionKey]?.sessionId).toEqual(expect.any(String));
+    expect(sessionStore[sessionKey]?.sessionId).not.toBe(sessionEntry.sessionId);
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.sessionId).toBe(sessionStore[sessionKey]?.sessionId);
+    expect(call.followupRun.run.sessionFile).toBe(sessionStore[sessionKey]?.sessionFile);
+    expect(call.followupRun.run.chatType).toBe("group");
+  });
+
+  it("fails closed when a concurrent memory-boundary write wins first", async () => {
+    const sessionKey = "session-key";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-concurrent-boundary",
+      updatedAt: 1,
+      sessionFile: "/tmp/explicit-session.jsonl",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    updateSessionStore.mockImplementationOnce(
+      async (_storePath: string, writer: (store: Record<string, SessionEntry>) => unknown) => {
+        sessionStore[sessionKey] = {
+          ...sessionEntry,
+          sessionFile: "/tmp/concurrent-include.jsonl",
+          longTermMemoryDefaultPolicy: "include",
+        };
+        return writer(sessionStore);
+      },
+    );
+
+    await expect(
+      runPreparedReply(
+        baseParams({
+          isNewSession: false,
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          storePath: "/tmp/openclaw-sessions.json",
+          ctx: {
+            Body: "private follow-up",
+            RawBody: "private follow-up",
+            CommandBody: "private follow-up",
+            Provider: "slack",
+            Surface: "slack",
+            ChatType: "direct",
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+          },
+          sessionCtx: {
+            Body: "private follow-up",
+            BodyStripped: "private follow-up",
+            Provider: "slack",
+            Surface: "slack",
+            ChatType: "direct",
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Session memory boundary changed during setup");
+
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate no-live explicit-only system runs", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const sessionFile = "/tmp/no-live-explicit.jsonl";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-no-live-explicit",
+      updatedAt: 1,
+      sessionFile,
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    persistSessionStoreUpdates(sessionStore, sessionKey);
+    vi.mocked(resolveSessionFilePath).mockReturnValue(sessionFile);
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        isNewSession: false,
+        systemSent: true,
+        sessionKey,
+        sessionId: sessionEntry.sessionId,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+        ctx: {
+          Body: "heartbeat",
+          RawBody: "heartbeat",
+          CommandBody: "heartbeat",
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+          SessionKey: sessionKey,
+        },
+        sessionCtx: {
+          Body: "heartbeat",
+          BodyStripped: "heartbeat",
+          Provider: "heartbeat",
+          Surface: "heartbeat",
+        },
+      }),
+    );
+
+    expect(updateSessionStore).not.toHaveBeenCalled();
+    expect(sessionStore[sessionKey]).toStrictEqual(sessionEntry);
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.chatType).toBe("group");
+    expect(call.followupRun.run.sessionFile).toBe(sessionFile);
+  });
+
+  it("drops active heartbeat boundary changes without mutating session state or grants", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "followup",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-active-boundary",
+      updatedAt: 1,
+      sessionFile: "/tmp/active-boundary.jsonl",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    persistSessionStoreUpdates(sessionStore, sessionKey);
+    const grant = mintAttachGrant({
+      sessionKey,
+      chatType: "direct",
+    });
+
+    const result = await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+        isNewSession: false,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(updateSessionStore).not.toHaveBeenCalled();
+    expect(sessionStore[sessionKey]).toStrictEqual(sessionEntry);
+    expect(resolveAttachGrant(grant.token)).toEqual(expect.objectContaining({ sessionKey }));
+  });
+
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
     vi.mocked(buildGroupChatContext).mockImplementationOnce(({ sessionCtx }) =>
       [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
@@ -2533,6 +3014,62 @@ describe("runPreparedReply media-only handling", () => {
       expect(call?.followupRun.transcriptPrompt).not.toContain("Sender (untrusted metadata):");
     },
   );
+
+  it("omits startup daily memory from shared bare reset model prompts", async () => {
+    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-shared-reset-"));
+    cleanupPaths.push(workspaceDir);
+    await mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "memory", `${new Date().toISOString().slice(0, 10)}.md`),
+      "private reset memory",
+      "utf-8",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        workspaceDir,
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        sessionEntry: {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+          chatType: "group",
+        },
+        ctx: {
+          Body: "/reset",
+          RawBody: "/reset",
+          CommandBody: "/reset",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "direct",
+          SessionKey: "agent:main:slack:direct:source-user",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "direct",
+          SessionKey: "agent:main:slack:direct:source-user",
+        },
+        command: {
+          surface: "slack",
+          channel: "slack",
+          isAuthorizedSender: true,
+          abortKey: "agent:main:acp:binding:telegram:acct:abc123",
+          ownerList: [],
+          senderIsOwner: true,
+          rawBodyNormalized: "/reset",
+          commandBodyNormalized: "/reset",
+        } as never,
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
+    expect(call?.commandBody).not.toContain("private reset memory");
+    expect(call?.followupRun.prompt).not.toContain("private reset memory");
+    expect(call?.followupRun.run.chatType).toBe("group");
+  });
 
   it("keeps reset user notes visible while hiding startup instructions", async () => {
     await runPreparedReply(

@@ -175,6 +175,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
+    context.params.chatType = "group";
     context.params.bootstrapContextRunKind = "commitment-only";
     const result = await runPreparedCliAgent(context);
 
@@ -192,6 +193,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(bootstrapParams).toMatchObject({
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
+      chatType: "group",
       sessionFile: "session.jsonl",
       runtimeSettings: {
         schemaVersion: 1,

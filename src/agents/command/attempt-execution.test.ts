@@ -14,6 +14,7 @@ import {
   formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
+  sessionFileHasMemoryBoundaryContent,
 } from "./attempt-execution.helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -372,6 +373,56 @@ describe("sessionFileHasContent", () => {
     const link = path.join(tmpDir, "link.jsonl");
     await fs.symlink(realFile, link);
     expect(await sessionFileHasContent(link)).toBe(false);
+  });
+});
+
+describe("sessionFileHasMemoryBoundaryContent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-memory-boundary-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns false for absent or header-only transcripts", async () => {
+    const headerOnly = path.join(tmpDir, "header-only.jsonl");
+    await fs.writeFile(headerOnly, '{"type":"session","id":"s1"}\n', "utf-8");
+
+    expect(await sessionFileHasMemoryBoundaryContent(undefined)).toBe(false);
+    expect(await sessionFileHasMemoryBoundaryContent(path.join(tmpDir, "missing.jsonl"))).toBe(
+      false,
+    );
+    expect(await sessionFileHasMemoryBoundaryContent(headerOnly)).toBe(false);
+  });
+
+  it("returns true for user-only transcripts before assistant flush", async () => {
+    const file = path.join(tmpDir, "user-only.jsonl");
+    await fs.writeFile(
+      file,
+      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    expect(await sessionFileHasMemoryBoundaryContent(file)).toBe(true);
+  });
+
+  it("treats malformed transcript content as a non-empty legacy boundary", async () => {
+    const file = path.join(tmpDir, "malformed.jsonl");
+    await fs.writeFile(file, '{"type":"session","id":"s1"}\nnot-json\n', "utf-8");
+
+    expect(await sessionFileHasMemoryBoundaryContent(file)).toBe(true);
+  });
+
+  it("fails closed when the transcript path is not a regular readable file", async () => {
+    const dirPath = path.join(tmpDir, "session-dir.jsonl");
+    await fs.mkdir(dirPath);
+
+    await expect(sessionFileHasMemoryBoundaryContent(dirPath)).rejects.toThrow(
+      "Session transcript is not a readable file",
+    );
   });
 });
 

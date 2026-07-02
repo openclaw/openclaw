@@ -124,6 +124,63 @@ describe("plugin tool descriptor cache keys", () => {
     expect(firstKey).not.toBe(secondKey);
   });
 
+  it("varies descriptor keys by exact session key and chat type", () => {
+    const base = {
+      pluginId: "memory-core",
+      source: "/tmp/memory-core.js",
+      contractToolNames: ["memory_search"],
+      ctx: {
+        workspaceDir: "/tmp/workspace",
+        agentId: "main",
+        sessionKey: "agent:main:acp:opaque-conversation",
+      },
+    };
+
+    const directKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        chatType: "direct",
+      },
+    });
+    const groupKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        chatType: "group",
+      },
+    });
+
+    expect(directKey).not.toBe(groupKey);
+
+    const firstGroupKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        sessionKey: "agent:main:discord:group:first",
+        chatType: "group",
+      },
+    });
+    const secondGroupKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        sessionKey: "agent:main:slack:group:second",
+        chatType: "group",
+      },
+    });
+    const channelKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        chatType: "channel",
+      },
+    });
+
+    expect(firstGroupKey).not.toBe(secondGroupKey);
+    expect(groupKey).not.toBe(channelKey);
+  });
+
   it("keeps descriptor keys stable across config bookkeeping writes", () => {
     const firstConfig = {
       id: "runtime",

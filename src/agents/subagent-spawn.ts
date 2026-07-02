@@ -35,6 +35,8 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -595,9 +597,18 @@ async function prepareContextEngineSubagentSpawn(params: {
   try {
     subagentSpawnDeps.ensureContextEnginesInitialized();
     const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
+    const parentChatType = resolveLongTermMemoryTargetChatType({
+      sessionKey: params.requesterInternalKey,
+      storedChatType: params.context.parentEntry
+        ? resolveSessionEntryChatType(params.context.parentEntry)
+        : undefined,
+      longTermMemoryDefaultPolicy: params.context.parentEntry?.longTermMemoryDefaultPolicy,
+      preferStoredPolicy: Boolean(params.context.parentEntry),
+    });
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,
       childSessionKey: params.childSessionKey,
+      chatType: parentChatType,
       contextMode: params.context.mode,
       parentSessionId: params.context.parentEntry?.sessionId,
       parentSessionFile: params.context.parentEntry?.sessionFile,

@@ -3,7 +3,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeChatType } from "../../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -12,6 +13,8 @@ import {
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import type { MsgContext } from "../templating.js";
 
 type RuntimePolicyContext = Pick<
@@ -32,6 +35,45 @@ type RuntimePolicyContext = Pick<
   | "Surface"
   | "To"
 >;
+
+type TargetChatTypeContext = Pick<MsgContext, "ChatType">;
+type TargetSessionContext = Pick<MsgContext, "CommandTargetSessionKey" | "SessionKey">;
+
+export function shouldPreferSessionEntryForTargetSession(params: {
+  ctx?: TargetSessionContext;
+  sessionKey?: string | null;
+}): boolean {
+  const targetSessionKey = normalizeOptionalString(params.sessionKey);
+  const currentSessionKey = normalizeOptionalString(params.ctx?.SessionKey);
+  if (!targetSessionKey) {
+    return false;
+  }
+  if (!currentSessionKey) {
+    return true;
+  }
+  if (targetSessionKey === currentSessionKey) {
+    return false;
+  }
+  const commandTargetSessionKey = normalizeOptionalString(params.ctx?.CommandTargetSessionKey);
+  return !commandTargetSessionKey || commandTargetSessionKey === targetSessionKey;
+}
+
+/** Resolves chat type for the target session, not merely the command source. */
+export function resolveTargetSessionChatType(params: {
+  ctx?: TargetChatTypeContext;
+  sessionEntry?: Pick<SessionEntry, "chatType" | "origin" | "route" | "longTermMemoryDefaultPolicy">;
+  sessionKey?: string | null;
+  preferSessionEntry?: boolean;
+}): ChatType | undefined {
+  const live = normalizeChatType(params.ctx?.ChatType);
+  return resolveLongTermMemoryTargetChatType({
+    sessionKey: params.sessionKey,
+    liveChatType: live,
+    storedChatType: resolveSessionEntryChatType(params.sessionEntry),
+    longTermMemoryDefaultPolicy: params.sessionEntry?.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: params.preferSessionEntry,
+  });
+}
 
 function resolvePolicyChannel(ctx?: RuntimePolicyContext): string | undefined {
   const raw = normalizeOptionalString(ctx?.OriginatingChannel ?? ctx?.Provider ?? ctx?.Surface);

@@ -120,6 +120,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+          "x-openclaw-chat-type": "${OPENCLAW_MCP_CHAT_TYPE}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
           "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
           "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
@@ -1230,6 +1231,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionKey: "agent:main:test",
         agentId: "main",
         trigger: "user",
+        sessionEntry: {
+          sessionId: "session-test",
+          sessionFile,
+          updatedAt: 1,
+          chatType: "group",
+        },
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -1245,6 +1252,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.params.prompt).toBe("history:2\n\nlatest ask");
+      expect(context.params.chatType).toBe("group");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(context.systemPrompt).toBe(
         `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
@@ -1286,6 +1294,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             modelProviderId?: string;
             modelId?: string;
             messageProvider?: string;
+            chatType?: string;
             trigger?: string;
             channelId?: string;
           }
@@ -1298,8 +1307,52 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(hookContext?.modelProviderId).toBe("test-cli");
       expect(hookContext?.modelId).toBe("test-model");
       expect(hookContext?.messageProvider).toBe("acp");
+      expect(hookContext?.chatType).toBe("group");
       expect(hookContext?.trigger).toBe("user");
       expect(hookContext?.channelId).toBe("telegram");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes live chat type into bootstrap resolution for opaque CLI sessions", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        chatType: "group",
+        agentId: "main",
+        trigger: "user",
+        sessionEntry: {
+          sessionId: "session-test",
+          sessionFile,
+          updatedAt: 1,
+        },
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-live-chat-type",
+        config: createCliBackendConfig(),
+      });
+
+      expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+          chatType: "group",
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1886,6 +1939,62 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("invalidates CLI session reuse when long-term memory defaults become explicit-only", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:-1001234567890",
+        chatType: "group",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-memory-policy",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.longTermMemoryDefaultPolicy).toBe("explicit-only");
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stamps include policy while keeping legacy direct CLI sessions reusable", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:dm:123456",
+        chatType: "direct",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-memory-policy-direct",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.longTermMemoryDefaultPolicy).toBe("include");
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("requires explicit message targets by default for CLI subagents", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
@@ -2237,6 +2346,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
+        sessionEntry: {
+          sessionId: "session-test",
+          sessionFile,
+          updatedAt: 1,
+          chatType: "group",
+        },
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -2254,6 +2369,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
         cfg: expect.any(Object),
         sessionKey: "agent:main:test",
+        chatType: "group",
         messageProvider: undefined,
         currentChannelId: undefined,
         currentThreadTs: undefined,
@@ -2264,6 +2380,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
         senderIsOwner: undefined,
+      });
+      expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_CHAT_TYPE: "group",
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");

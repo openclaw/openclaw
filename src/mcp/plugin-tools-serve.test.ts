@@ -23,6 +23,9 @@ const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled:
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
+const sessionEntryByKey = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const sessionEntryLoadErrorByKey = vi.hoisted(() => new Map<string, Error>());
+const sessionEntryLoadOptionsByKey = vi.hoisted(() => new Map<string, unknown[]>());
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
@@ -49,6 +52,22 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../gateway/session-utils.js", () => ({
+  loadSessionEntry: (sessionKey: string, options?: unknown) => {
+    const calls = sessionEntryLoadOptionsByKey.get(sessionKey) ?? [];
+    calls.push(options);
+    sessionEntryLoadOptionsByKey.set(sessionKey, calls);
+    const error = sessionEntryLoadErrorByKey.get(sessionKey);
+    if (error) {
+      throw error;
+    }
+    return {
+      cfg: {},
+      entry: sessionEntryByKey.get(sessionKey),
+    };
+  },
+}));
+
 vi.mock("./tools-stdio-server.js", () => ({
   connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock,
   createToolsMcpServer: createToolsMcpServerMock,
@@ -64,6 +83,9 @@ afterEach(() => {
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
   routeLogsToStderrMock.mockReset();
+  sessionEntryByKey.clear();
+  sessionEntryLoadErrorByKey.clear();
+  sessionEntryLoadOptionsByKey.clear();
   resetGlobalHookRunner();
 });
 
@@ -104,7 +126,7 @@ describe("plugin tools MCP server", () => {
 
     expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
     expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
-      context: { config: { plugins: { enabled: true } } },
+      context: { config: { plugins: { enabled: true } }, chatType: "group" },
     });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
     expect(resolvePluginToolsMock).toHaveBeenCalledWith(
@@ -117,6 +139,122 @@ describe("plugin tools MCP server", () => {
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
+  });
+
+  it("resolves direct-shaped explicit-only session context as shared", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const config = { plugins: { enabled: true } };
+    sessionEntryByKey.set(sessionKey, {
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    const { createPluginToolsMcpServer, OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV } =
+      await import("./plugin-tools-serve.js");
+
+    createPluginToolsMcpServer({
+      config,
+      env: { [OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: sessionKey } as NodeJS.ProcessEnv,
+    });
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: { config, sessionKey, chatType: "group" },
+    });
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { config, sessionKey, chatType: "group" },
+      }),
+    );
+  });
+
+  it("keeps direct include session context direct for plugin MCP tools", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const config = { plugins: { enabled: true } };
+    sessionEntryByKey.set(sessionKey, {
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    });
+    const { createPluginToolsMcpServer, OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV } =
+      await import("./plugin-tools-serve.js");
+
+    createPluginToolsMcpServer({
+      config,
+      env: { [OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: sessionKey } as NodeJS.ProcessEnv,
+    });
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: { config, sessionKey, chatType: "direct" },
+    });
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { config, sessionKey, chatType: "direct" },
+      }),
+    );
+  });
+
+  it("resolves unstamped ACP runtime sessions as shared for plugin MCP tools", async () => {
+    const sessionKey = "agent:codex:acp:runtime-123";
+    const config = { plugins: { enabled: true } };
+    const { createPluginToolsMcpServer, OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV } =
+      await import("./plugin-tools-serve.js");
+
+    createPluginToolsMcpServer({
+      config,
+      env: { [OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: sessionKey } as NodeJS.ProcessEnv,
+    });
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: { config, sessionKey, chatType: "group" },
+    });
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { config, sessionKey, chatType: "group" },
+      }),
+    );
+  });
+
+  it("keeps scoped main sessions direct before their first persisted row", async () => {
+    const sessionKey = "agent:main:main";
+    const config = { plugins: { enabled: true } };
+    const { createPluginToolsMcpServer, OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV } =
+      await import("./plugin-tools-serve.js");
+
+    createPluginToolsMcpServer({
+      config,
+      env: { [OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: sessionKey } as NodeJS.ProcessEnv,
+    });
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: { config, sessionKey, chatType: "direct" },
+    });
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { config, sessionKey, chatType: "direct" },
+      }),
+    );
+  });
+
+  it("fails closed when the persisted plugin-tool session policy cannot be read", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const config = { plugins: { enabled: true } };
+    sessionEntryLoadErrorByKey.set(sessionKey, new Error("permission denied"));
+    const { createPluginToolsMcpServer, OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV } =
+      await import("./plugin-tools-serve.js");
+
+    expect(() =>
+      createPluginToolsMcpServer({
+        config,
+        env: {
+          [OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]: sessionKey,
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toThrow("permission denied");
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(ensureStandalonePluginToolRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(resolvePluginToolsMock).not.toHaveBeenCalled();
   });
 
   it("threads global plugin tool policy into plugin resolution", async () => {

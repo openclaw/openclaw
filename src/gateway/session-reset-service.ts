@@ -51,11 +51,13 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
+import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -122,6 +124,13 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
   };
+}
+
+function validatedLongTermMemoryDefaultPolicy(
+  entry?: SessionEntry,
+): SessionEntry["longTermMemoryDefaultPolicy"] | undefined {
+  const policy = entry?.longTermMemoryDefaultPolicy;
+  return policy === "include" || policy === "explicit-only" ? policy : undefined;
 }
 
 export function archiveSessionTranscriptsForSessionDetailed(params: {
@@ -1004,6 +1013,7 @@ export async function performGatewaySessionReset(params: {
         sessionId: nextSessionId,
         sessionFile,
         updatedAt: now,
+        longTermMemoryDefaultPolicy: validatedLongTermMemoryDefaultPolicy(currentEntry),
         systemSent: false,
         abortedLastRun: false,
         thinkingLevel: currentEntry?.thinkingLevel,
@@ -1023,7 +1033,7 @@ export async function performGatewaySessionReset(params: {
         ...resetPreservedSelection,
         groupActivation: currentEntry?.groupActivation,
         groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
-        chatType: currentEntry?.chatType,
+        chatType: resolveSessionEntryChatType(currentEntry),
         model: resolvedModel.model,
         modelProvider: resolvedModel.provider,
         contextTokens: resetEntry?.contextTokens,
@@ -1124,6 +1134,9 @@ export async function performGatewaySessionReset(params: {
       });
     },
   });
+  for (const grantKey of new Set([target.canonicalKey, ...target.storeKeys])) {
+    revokeAttachGrantsForSession(grantKey);
+  }
   const next = lifecycle.nextEntry;
   const oldSessionId = lifecycle.previousSessionId;
   const oldSessionFile = lifecycle.previousSessionFile;

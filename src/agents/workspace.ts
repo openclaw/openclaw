@@ -18,6 +18,10 @@ import {
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  shouldIncludeLongTermMemoryByDefault,
+  type LongTermMemoryDefaultPolicyInput,
+} from "../sessions/session-memory-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
@@ -1113,20 +1117,28 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
-export function filterBootstrapFilesForSession(
+export function filterLongTermMemoryBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
-  sessionKey?: string,
+  session?: string | LongTermMemoryDefaultPolicyInput,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey) {
+  if (shouldIncludeLongTermMemoryByDefault(session)) {
     return files;
   }
+  return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
+}
+
+export function filterBootstrapFilesForSession(
+  files: WorkspaceBootstrapFile[],
+  session?: string | LongTermMemoryDefaultPolicyInput,
+): WorkspaceBootstrapFile[] {
+  const sessionKey = typeof session === "object" && session !== null ? session.sessionKey : session;
   if (isSubagentSessionKey(sessionKey)) {
     return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
   if (isCronSessionKey(sessionKey)) {
     return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files;
+  return filterLongTermMemoryBootstrapFilesForSession(files, session);
 }
 
 function hasGlobPattern(pattern: string): boolean {

@@ -34,12 +34,19 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
+import {
+  deriveSessionChatTypeFromKey,
+  resolveSessionEntryChatType,
+  type SessionKeyChatType,
+} from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
 
 type SkillDispatchMessageContext = {
   surface?: string;
   provider?: string;
+  chatType?: string;
   accountId?: string;
   senderId?: string;
   senderName?: string;
@@ -50,6 +57,12 @@ type SkillDispatchMessageContext = {
   messageThreadId?: string | number;
   memberRoleIds?: string[];
 };
+
+function normalizeDerivedChatType(chatType: SessionKeyChatType) {
+  return chatType === "direct" || chatType === "group" || chatType === "channel"
+    ? chatType
+    : undefined;
+}
 
 /**
  * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
@@ -62,6 +75,7 @@ export function resolveSkillDispatchTools(params: {
   agentId: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  sourceSessionKey?: string;
   sessionKey: string;
   workspaceDir: string;
   provider: string;
@@ -162,6 +176,21 @@ export function resolveSkillDispatchTools(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const shouldCaptureCronCreatorToolAllowlist =
     explicitPolicyList.some(hasRestrictiveAllowPolicy) || explicitDenylist.length > 0;
+  const sourceSessionKey = params.sourceSessionKey?.trim();
+  const targetSessionKey = params.sessionKey.trim();
+  const preferTargetEntryPolicy = Boolean(
+    sourceSessionKey && targetSessionKey && sourceSessionKey !== targetSessionKey,
+  );
+  const agentChatType =
+    resolveLongTermMemoryTargetChatType({
+      sessionKey: params.sessionKey,
+      liveChatType: params.message.chatType,
+      storedChatType:
+        resolveSessionEntryChatType(params.sessionEntry) ??
+        normalizeDerivedChatType(deriveSessionChatTypeFromKey(params.sessionKey)),
+      longTermMemoryDefaultPolicy: params.sessionEntry?.longTermMemoryDefaultPolicy,
+      preferStoredPolicy: preferTargetEntryPolicy,
+    });
   const beforeToolCallHookContext = params.skillCommand
     ? {
         cwd: params.workspaceDir,
@@ -180,6 +209,7 @@ export function resolveSkillDispatchTools(params: {
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
+    agentChatType,
     agentAccountId: params.message.accountId,
     agentTo: params.message.originatingTo ?? params.message.to,
     agentThreadId: params.message.messageThreadId ?? undefined,

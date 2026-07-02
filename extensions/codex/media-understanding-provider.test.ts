@@ -269,6 +269,67 @@ describe("codex media understanding provider", () => {
     });
   });
 
+  it("disables native long-term memory for shared scoped media turns", async () => {
+    const { client, requests } = createFakeClient();
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      scopeContext: {
+        sessionKey: "agent:main:discord:channel:C123",
+        chatType: "channel",
+      },
+    });
+
+    const startParams = requests.find((entry) => entry.method === "thread/start")?.params as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    expect(startParams?.config).toMatchObject({
+      "memories.generate_memories": false,
+      "memories.use_memories": false,
+    });
+  });
+
+  it("honors explicit memory-disable policy for direct scoped media turns", async () => {
+    const { client, requests } = createFakeClient();
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      scopeContext: {
+        sessionKey: "agent:main:telegram:direct:12345",
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+
+    const startParams = requests.find((entry) => entry.method === "thread/start")?.params as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    expect(startParams?.config).toMatchObject({
+      "memories.generate_memories": false,
+      "memories.use_memories": false,
+    });
+  });
+
   it("treats a blank agent directory as absent when starting the app-server", async () => {
     const { client, requests } = createFakeClient();
     const clientFactory = vi.fn(async () => client);

@@ -77,13 +77,13 @@ import {
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -112,6 +112,8 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -258,10 +260,22 @@ function respondDeletedAgentSessionForKey(params: {
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-  });
+  let loaded: ReturnType<typeof loadSessionEntry>;
+  try {
+    loaded = loadSessionEntry(params.sessionKey, {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      clone: false,
+      strictRead: true,
+    });
+  } catch (err) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+    );
+    return true;
+  }
+  const { cfg, entry, canonicalKey, legacyKey } = loaded;
   return respondDeletedAgentSession({
     cfg,
     canonicalKey,
@@ -281,6 +295,20 @@ function resolveCanUseInternalRuntimeHandoff(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
   return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+}
+
+function resolveGatewayAgentRunContextChatType(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  deliveryChatType?: string;
+}) {
+  return resolveLongTermMemoryTargetChatType({
+    sessionKey: params.sessionKey,
+    liveChatType: params.deliveryChatType,
+    storedChatType: resolveSessionEntryChatType(params.sessionEntry),
+    longTermMemoryDefaultPolicy: params.sessionEntry?.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
 }
 
 function emitAgentSendSessionLifecycleTransition(
@@ -475,7 +503,7 @@ async function resolveBareSessionResetResult(params: {
     entry: params.sessionEntry,
     sessionKey: params.sessionKey,
     channel: params.sessionEntry?.channel,
-    chatType: params.sessionEntry?.chatType,
+    chatType: resolveSessionEntryChatType(params.sessionEntry),
   });
   if (sendPolicy === "deny") {
     throw new Error("send blocked by session policy");
@@ -1568,6 +1596,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           } = loadSessionEntry(requestedSessionKeyRaw, {
             ...(agentId ? { agentId } : {}),
             clone: false,
+            strictRead: true,
           });
           const sessionAgentId =
             sessCanonicalKey === "global" && agentId
@@ -1657,6 +1686,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           ? (() => {
               const { cfg: sessionCfg, canonicalKey } = loadSessionEntry(requestedSessionKeyRaw, {
                 clone: false,
+                strictRead: true,
               });
               const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
               const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(sessionCfg));
@@ -1696,6 +1726,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
               const canonicalRouteSession = loadSessionEntry(route.sessionKey, {
                 clone: false,
+                strictRead: true,
               }).canonicalKey;
               const routedAgentId = resolveAgentIdFromSessionKey(canonicalRouteSession);
               if (knownAgents.includes(routedAgentId)) {
@@ -1849,6 +1880,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         const sessionLoadOptions = {
           ...(agentId ? { agentId } : {}),
           clone: false,
+          strictRead: true,
         };
         const {
           cfg: cfgLocal,
@@ -2284,7 +2316,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                         entry: merged,
                         sessionKey: canonicalKey,
                         channel: merged?.channel,
-                        chatType: merged?.chatType,
+                        chatType: resolveSessionEntryChatType(merged),
                       })
                     : "allow";
                 if (sendPolicy === "deny") {
@@ -2371,7 +2403,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             entry: sessionEntry,
             sessionKey: canonicalKey,
             channel: sessionEntry?.channel,
-            chatType: sessionEntry?.chatType,
+            chatType: resolveSessionEntryChatType(sessionEntry),
           });
           if (sendPolicy === "deny") {
             respond(
@@ -2844,6 +2876,11 @@ export const agentHandlers: GatewayRequestHandlers = {
               threadId: resolvedThreadId,
               runContext: {
                 messageChannel: originMessageChannel,
+                chatType: resolveGatewayAgentRunContextChatType({
+                  sessionKey: resolvedSessionKey,
+                  sessionEntry,
+                  deliveryChatType: effectivePlan.resolvedChatType ?? deliveryPlan.resolvedChatType,
+                }),
                 accountId: resolvedAccountId,
                 groupId: resolvedGroupId,
                 groupChannel: resolvedGroupChannel,

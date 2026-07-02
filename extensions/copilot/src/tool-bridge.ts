@@ -367,6 +367,7 @@ function buildOpenClawCodingToolsOptions(
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
+    chatType: a.chatType,
     sessionId: input.sessionId,
     runId: a.runId,
     agentDir,

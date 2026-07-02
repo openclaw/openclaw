@@ -19,6 +19,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import { asRecord } from "./dreaming-shared.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
@@ -78,6 +79,36 @@ function resolveMemorySearchToolCooldownKey(options: {
   agentSessionKey?: string;
 }): string {
   return options.agentId ?? options.agentSessionKey ?? "default";
+}
+
+function memorySearchToolDescription(options: {
+  agentSessionKey?: string;
+  agentChatType?: string;
+}): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: options.agentSessionKey,
+      chatType: options.agentChatType,
+    })
+  ) {
+    return "On-demand recall tool for shared sessions: search MEMORY.md + memory/*.md (and optional session transcripts) only when the user explicitly asks for long-term memory or a visible session instruction requests it. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files. `corpus=sessions` restricts hits to indexed session transcripts. If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.";
+  }
+  return "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.";
+}
+
+function memoryGetToolDescription(options: {
+  agentSessionKey?: string;
+  agentChatType?: string;
+}): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: options.agentSessionKey,
+      chatType: options.agentChatType,
+    })
+  ) {
+    return "On-demand exact read tool for shared sessions: read MEMORY.md or memory/*.md only when the user explicitly asks for a memory file excerpt or a visible session instruction requests it. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.";
+  }
+  return "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.";
 }
 
 function readMemorySearchToolCooldown(key: string): { error: string } | undefined {
@@ -387,6 +418,7 @@ export function createMemorySearchTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  agentChatType?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
 }) {
@@ -394,8 +426,7 @@ export function createMemorySearchTool(options: {
     options,
     label: "Memory Search",
     name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.",
+    description: memorySearchToolDescription(options),
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
@@ -483,6 +514,12 @@ export function createMemorySearchTool(options: {
                 pluginConfig,
                 cfg,
               }).enabled;
+              const shouldTrackRecallForPromotion =
+                dreamingEnabled &&
+                shouldIncludeLongTermMemoryByDefault({
+                  sessionKey: options.agentSessionKey,
+                  chatType: options.agentChatType,
+                });
               const dreaming = resolveMemoryDeepDreamingConfig({
                 pluginConfig,
                 cfg,
@@ -608,7 +645,7 @@ export function createMemorySearchTool(options: {
                     ...result,
                     corpus: result.source,
                   }));
-                  if (dreamingEnabled) {
+                  if (shouldTrackRecallForPromotion) {
                     queueShortTermRecallTracking({
                       workspaceDir: status.workspaceDir,
                       query,
@@ -708,13 +745,13 @@ export function createMemoryGetTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  agentChatType?: string;
 }) {
   return createMemoryTool({
     options,
     label: "Memory Get",
     name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
+    description: memoryGetToolDescription(options),
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>

@@ -1553,11 +1553,19 @@ export const dispatchTelegramMessage = async ({
       const stickerSupportsVision = await resolveStickerVisionSupport(cfg, route.agentId);
       let description = sticker.cachedDescription ?? null;
       if (!description) {
+        const scopeChannel = ctxPayload.Surface || ctxPayload.Provider;
+        const scopeContext = {
+          ...(ctxPayload.SessionKey ? { sessionKey: ctxPayload.SessionKey } : {}),
+          ...(scopeChannel ? { channel: scopeChannel } : {}),
+          ...(ctxPayload.ChatType ? { chatType: ctxPayload.ChatType } : {}),
+          longTermMemoryDefaultPolicy: "explicit-only" as const,
+        };
         description = await describeStickerImage({
           imagePath: ctxPayload.MediaPath,
           cfg,
           agentDir,
           agentId: route.agentId,
+          scopeContext,
         });
       }
       if (description) {

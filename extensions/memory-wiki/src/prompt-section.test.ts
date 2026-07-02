@@ -36,6 +36,16 @@ describe("default wiki prompt section", () => {
     expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
   });
 
+  it("suppresses automatic wiki guidance for shared sessions", () => {
+    const lines = buildDefaultWikiPromptSection({
+      availableTools: new Set(["memory_search", "memory_get", "wiki_search", "wiki_get"]),
+      sessionKey: "agent:main:acp:binding:opaque",
+      chatType: "group",
+    });
+
+    expect(lines).toStrictEqual([]);
+  });
+
   it("stays empty when no wiki or memory-adjacent tools are registered", () => {
     expect(
       buildDefaultWikiPromptSection({ availableTools: new Set(["web_search"]) }),
@@ -88,6 +98,14 @@ describe("default wiki prompt section", () => {
       "Alpha: entity, 3 claims, 1 open questions, 1 contradiction notes",
     );
     expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
+
+    expect(
+      builder({
+        availableTools: new Set(["web_search"]),
+        sessionKey: "agent:main:acp:binding:opaque",
+        chatType: "group",
+      }),
+    ).toStrictEqual([]);
   });
 
   it("keeps the digest snapshot disabled by default", async () => {

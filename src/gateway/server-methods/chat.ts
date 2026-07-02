@@ -99,6 +99,7 @@ import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-bi
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -3565,7 +3566,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       entry,
       sessionKey,
       channel: entry?.channel,
-      chatType: entry?.chatType,
+      chatType: resolveSessionEntryChatType(entry),
     });
     if (sendPolicy === "deny") {
       respond(

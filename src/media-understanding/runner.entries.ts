@@ -23,14 +23,17 @@ import {
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
+import { resolveCommandTurnTargetSessionKey } from "../auto-reply/command-turn-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
@@ -43,6 +46,12 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import {
+  deriveSessionChatTypeFromKey,
+  resolveSessionEntryChatType,
+} from "../sessions/session-chat-type-shared.js";
+import type { LongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -62,6 +71,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  MediaUnderstandingScopeContext,
 } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
@@ -74,6 +84,89 @@ let cachedModelAuth: {
   requireApiKey: RequireApiKey;
   isProviderAuthError: IsProviderAuthError;
 } | null = null;
+
+function normalizeLongTermMemoryDefaultPolicy(
+  value: unknown,
+): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
+}
+
+function normalizeSessionKeyChatType(sessionKey: string | undefined) {
+  const chatType = sessionKey ? deriveSessionChatTypeFromKey(sessionKey) : "unknown";
+  return chatType === "unknown" ? undefined : chatType;
+}
+
+function isSharedMediaChatType(chatType: "direct" | "group" | "channel" | undefined): boolean {
+  return chatType === "group" || chatType === "channel";
+}
+
+function resolveCommandTargetMediaPolicy(sessionKey: string | undefined): {
+  chatType?: "direct" | "group" | "channel";
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
+} {
+  if (!sessionKey) {
+    return {};
+  }
+  const keyChatType = normalizeSessionKeyChatType(sessionKey);
+  try {
+    const entry = loadSessionEntry({
+      sessionKey,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+      strictRead: true,
+    });
+    return {
+      chatType: resolveLongTermMemoryTargetChatType({
+        sessionKey,
+        liveChatType: keyChatType,
+        storedChatType: resolveSessionEntryChatType(entry),
+        longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+        preferStoredPolicy: true,
+      }),
+      longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+    };
+  } catch {
+    return {
+      chatType: "channel",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+  }
+}
+
+function buildMediaUnderstandingProviderScopeContext(
+  ctx: MsgContext,
+): MediaUnderstandingScopeContext | undefined {
+  const commandTargetSessionKey =
+    normalizeNullableString(resolveCommandTurnTargetSessionKey(ctx)) ?? undefined;
+  const sourceSessionKey = normalizeNullableString(ctx.SessionKey) ?? undefined;
+  const sessionKey = commandTargetSessionKey ?? sourceSessionKey ?? undefined;
+  const channel =
+    normalizeNullableString(ctx.Surface) ?? normalizeNullableString(ctx.Provider) ?? undefined;
+  const commandTargetPolicy = resolveCommandTargetMediaPolicy(commandTargetSessionKey);
+  const commandTargetChatType = commandTargetPolicy.chatType;
+  const sourceSessionChatType = normalizeSessionKeyChatType(sourceSessionKey);
+  const sourceChatType = normalizeChatType(normalizeNullableString(ctx.ChatType) ?? undefined);
+  const hasSharedScope =
+    isSharedMediaChatType(sourceChatType) ||
+    isSharedMediaChatType(sourceSessionChatType) ||
+    isSharedMediaChatType(commandTargetChatType);
+  const chatType = hasSharedScope
+    ? "channel"
+    : commandTargetSessionKey && !commandTargetChatType
+      ? "channel"
+      : (commandTargetChatType ?? sourceSessionChatType ?? sourceChatType);
+  const longTermMemoryDefaultPolicy = normalizeLongTermMemoryDefaultPolicy(
+    ctx.LongTermMemoryDefaultPolicy,
+  ) ?? (hasSharedScope ? "explicit-only" : commandTargetPolicy.longTermMemoryDefaultPolicy);
+  return sessionKey || channel || chatType || longTermMemoryDefaultPolicy
+    ? {
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(channel ? { channel } : {}),
+        ...(chatType ? { chatType } : {}),
+        ...(longTermMemoryDefaultPolicy ? { longTermMemoryDefaultPolicy } : {}),
+      }
+    : undefined;
+}
 
 async function loadModelAuth() {
   cachedModelAuth ??= await import("../agents/model-auth.js");
@@ -767,6 +860,7 @@ export async function runProviderEntry(params: {
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
+    const scopeContext = buildMediaUnderstandingProviderScopeContext(params.ctx);
     const imageInput = {
       buffer: normalizedMedia.buffer,
       fileName: media.fileName,
@@ -780,6 +874,7 @@ export async function runProviderEntry(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
+      ...(scopeContext ? { scopeContext } : {}),
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
     const result = await describeImage(imageInput);

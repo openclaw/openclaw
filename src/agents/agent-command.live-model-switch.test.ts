@@ -24,9 +24,12 @@ const state = vi.hoisted(() => ({
   createAcpVisibleTextAccumulatorMock: vi.fn(),
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
+  sessionFileHasContentMock: vi.fn(async (_sessionFile?: string) => false),
+  sessionFileHasMemoryBoundaryContentMock: vi.fn(async (_sessionFile?: string) => false),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
+  resolveSessionArgsMock: vi.fn(),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -76,7 +79,7 @@ vi.mock("./model-fallback.js", () => ({
 }));
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
-  buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
+  buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock.apply(null, args),
   createAcpVisibleTextAccumulator: () => state.createAcpVisibleTextAccumulatorMock(),
   emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleEnd: (...args: unknown[]) => state.emitAcpLifecycleEndMock(...args),
@@ -88,7 +91,9 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
-  sessionFileHasContent: vi.fn(async () => false),
+  sessionFileHasContent: (sessionFile?: string) => state.sessionFileHasContentMock(sessionFile),
+  sessionFileHasMemoryBoundaryContent: (sessionFile?: string) =>
+    state.sessionFileHasMemoryBoundaryContentMock(sessionFile),
 }));
 
 vi.mock("./command/attempt-execution.shared.js", async () => {
@@ -121,6 +126,7 @@ vi.mock("./command/run-context.js", () => ({
     replyChannel?: string;
     runContext?: {
       accountId?: string;
+      chatType?: string;
       currentChannelId?: string;
       currentThreadTs?: string;
       groupChannel?: string | null;
@@ -134,6 +140,7 @@ vi.mock("./command/run-context.js", () => ({
   }) => ({
     messageChannel:
       opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.replyChannel ?? opts.channel,
+    chatType: opts.runContext?.chatType,
     accountId: opts.runContext?.accountId ?? opts.accountId ?? "acct",
     groupId: opts.runContext?.groupId ?? opts.groupId,
     groupChannel: opts.runContext?.groupChannel ?? opts.groupChannel,
@@ -153,7 +160,8 @@ vi.mock("./command/session-store.runtime.js", () => ({
 }));
 
 vi.mock("./command/session.js", () => ({
-  resolveSession: () => {
+  resolveSession: (opts: unknown) => {
+    state.resolveSessionArgsMock(opts);
     const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -259,9 +267,9 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async () => ({
-    sessionFile: "/tmp/session.jsonl",
-    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+  resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
+    sessionFile: params.sessionEntry?.sessionFile ?? "/tmp/session.jsonl",
+    sessionEntry: params.sessionEntry ?? { sessionId: "session-1", updatedAt: Date.now() },
   }),
 }));
 
@@ -921,6 +929,7 @@ function setupSessionTouchStore(): void {
   const sessionEntry: SessionEntry = {
     sessionId: "session-1",
     updatedAt: 1,
+    longTermMemoryDefaultPolicy: "include",
     skillsSnapshot: { prompt: "", skills: [], version: 0 },
   };
   state.sessionEntryMock = sessionEntry;
@@ -945,6 +954,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
+    state.sessionFileHasContentMock.mockImplementation(async () => false);
+    state.sessionFileHasMemoryBoundaryContentMock.mockImplementation(async () => false);
     state.runtimeConfigMock = undefined;
     delete (state.defaultRuntimeConfig.agents as { list?: unknown }).list;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
@@ -1093,6 +1104,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("resolves command sessions with a strict persisted-policy read", async () => {
+    setupSessionTouchStore();
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expect(state.resolveSessionArgsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ strictRead: true }),
+    );
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
@@ -1804,6 +1827,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "rotated-session",
       sessionFile: "/tmp/rotated-session.jsonl",
+      longTermMemoryDefaultPolicy: "include",
       updatedAt: 2,
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
@@ -1842,6 +1866,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
       sessionId: "rotated-session",
       sessionKey: "agent:main:main",
+      expectedSessionFile: "/tmp/rotated-session.jsonl",
+      expectedLongTermMemoryDefaultPolicy: "include",
     });
     expectRecordFields(mockCallArg(state.runCliTurnCompactionLifecycleMock), {
       sessionId: "rotated-session",
@@ -2499,6 +2525,321 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
     expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+  });
+
+  it("rotates a private transcript before reusing the session for a shared run", async () => {
+    setupSingleAttemptFallback();
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      sessionFile: "/tmp/session.jsonl",
+      chatType: "direct",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.sessionFileHasMemoryBoundaryContentMock.mockImplementation(
+      async (sessionFile?: string) => sessionFile === "/tmp/session.jsonl",
+    );
+    const attemptCalls: Array<{
+      sessionEntry?: SessionEntry;
+      sessionFile?: string;
+      sessionHasHistory?: boolean;
+    }> = [];
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      attemptCalls.push(
+        params as {
+          sessionEntry?: SessionEntry;
+          sessionFile?: string;
+          sessionHasHistory?: boolean;
+        },
+      );
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "shared target",
+      to: "+1234567890",
+      skipInitialSessionTouch: true,
+      runContext: {
+        chatType: "group",
+        messageChannel: "discord",
+      },
+    });
+
+    expect(attemptCalls).toHaveLength(1);
+    const attempt = attemptCalls[0];
+    expect(attempt?.sessionFile).toMatch(/^\/tmp\/memory-explicit-only-[\w-]+\.jsonl$/u);
+    expect(attempt?.sessionFile).not.toBe("/tmp/session.jsonl");
+    expect(attempt?.sessionHasHistory).toBe(false);
+    const rotatedSessionId = attempt?.sessionEntry?.sessionId;
+    expect(rotatedSessionId).toEqual(expect.any(String));
+    expect(rotatedSessionId).not.toBe(sessionEntry.sessionId);
+    expect(attempt?.sessionEntry).toEqual(
+      expect.objectContaining({
+        sessionId: rotatedSessionId,
+        sessionFile: attempt?.sessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    );
+    const rotationWrite = state.persistSessionEntryMock.mock.calls.find((call: unknown[]) => {
+      const entry = (call[0] as { entry?: SessionEntry } | undefined)?.entry;
+      return entry?.longTermMemoryDefaultPolicy === "explicit-only";
+    });
+    expect(rotationWrite?.[0]).toEqual(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          sessionId: rotatedSessionId,
+          sessionFile: attempt?.sessionFile,
+          longTermMemoryDefaultPolicy: "explicit-only",
+        }),
+      }),
+    );
+  });
+
+  it("rotates an unstamped legacy shared transcript before shared reuse", async () => {
+    setupSingleAttemptFallback();
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-legacy-shared",
+      updatedAt: 1,
+      sessionFile: "/tmp/legacy-shared.jsonl",
+      chatType: "group",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { [sessionKey]: sessionEntry };
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.sessionFileHasMemoryBoundaryContentMock.mockImplementation(
+      async (sessionFile?: string) => sessionFile === "/tmp/legacy-shared.jsonl",
+    );
+    const attemptCalls: Array<{
+      sessionEntry?: SessionEntry;
+      sessionFile?: string;
+      sessionHasHistory?: boolean;
+    }> = [];
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      attemptCalls.push(
+        params as {
+          sessionEntry?: SessionEntry;
+          sessionFile?: string;
+          sessionHasHistory?: boolean;
+        },
+      );
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "legacy shared target",
+      to: "+1234567890",
+      runContext: {
+        chatType: "group",
+        messageChannel: "discord",
+      },
+    });
+
+    const attempt = attemptCalls[0];
+    expect(attempt?.sessionFile).toMatch(/^\/tmp\/memory-explicit-only-[\w-]+\.jsonl$/u);
+    expect(attempt?.sessionFile).not.toBe("/tmp/legacy-shared.jsonl");
+    expect(attempt?.sessionHasHistory).toBe(false);
+    expect(attempt?.sessionEntry?.sessionId).not.toBe(sessionEntry.sessionId);
+    expect(attempt?.sessionEntry).toEqual(
+      expect.objectContaining({
+        sessionFile: attempt?.sessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    );
+  });
+
+  it("stamps an empty shared transcript without rotating, then rotates before direct reuse", async () => {
+    setupSingleAttemptFallback();
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-empty-boundary",
+      updatedAt: 1,
+      sessionFile: "/tmp/session.jsonl",
+      chatType: "direct",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.sessionFileHasMemoryBoundaryContentMock.mockResolvedValue(false);
+    const attemptCalls: Array<{
+      sessionEntry?: SessionEntry;
+      sessionFile?: string;
+      sessionHasHistory?: boolean;
+    }> = [];
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      attemptCalls.push(
+        params as {
+          sessionEntry?: SessionEntry;
+          sessionFile?: string;
+          sessionHasHistory?: boolean;
+        },
+      );
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "shared target",
+      to: "+1234567890",
+      skipInitialSessionTouch: true,
+      runContext: {
+        chatType: "group",
+        messageChannel: "discord",
+      },
+    });
+
+    expect(attemptCalls[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(attemptCalls[0]?.sessionHasHistory).toBe(true);
+    expect(attemptCalls[0]?.sessionEntry?.sessionId).toBe(sessionEntry.sessionId);
+    expect(attemptCalls[0]?.sessionEntry).toEqual(
+      expect.objectContaining({
+        sessionFile: "/tmp/session.jsonl",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    );
+
+    const stampedEntry = attemptCalls[0]?.sessionEntry;
+    if (!stampedEntry) {
+      throw new Error("Expected shared boundary entry");
+    }
+    state.sessionEntryMock = stampedEntry;
+    state.sessionStoreMock = { [sessionKey]: stampedEntry };
+
+    await agentCommand({
+      message: "private target",
+      to: "+1234567890",
+      skipInitialSessionTouch: true,
+      runContext: {
+        chatType: "direct",
+        messageChannel: "discord",
+      },
+    });
+
+    expect(attemptCalls[1]?.sessionFile).toMatch(/^\/tmp\/memory-include-[\w-]+\.jsonl$/u);
+    expect(attemptCalls[1]?.sessionFile).not.toBe("/tmp/session.jsonl");
+    expect(attemptCalls[1]?.sessionHasHistory).toBe(false);
+    expect(attemptCalls[1]?.sessionEntry?.sessionId).not.toBe(stampedEntry.sessionId);
+    expect(attemptCalls[1]?.sessionEntry).toEqual(
+      expect.objectContaining({
+        sessionFile: attemptCalls[1]?.sessionFile,
+        longTermMemoryDefaultPolicy: "include",
+      }),
+    );
+  });
+
+  it("rotates an unstamped legacy transcript when the entry omits sessionFile", async () => {
+    setupSingleAttemptFallback();
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-legacy-missing-file",
+      updatedAt: 1,
+      chatType: "direct",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { [sessionKey]: sessionEntry };
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.sessionFileHasMemoryBoundaryContentMock.mockImplementation(
+      async (sessionFile?: string) => sessionFile === "/tmp/session.jsonl",
+    );
+    const attemptCalls: Array<{
+      sessionEntry?: SessionEntry;
+      sessionFile?: string;
+      sessionHasHistory?: boolean;
+    }> = [];
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      attemptCalls.push(
+        params as {
+          sessionEntry?: SessionEntry;
+          sessionFile?: string;
+          sessionHasHistory?: boolean;
+        },
+      );
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "legacy shared target",
+      to: "+1234567890",
+      skipInitialSessionTouch: true,
+      runContext: {
+        chatType: "group",
+        messageChannel: "discord",
+      },
+    });
+
+    const attempt = attemptCalls[0];
+    expect(attempt?.sessionFile).toMatch(/^\/tmp\/memory-explicit-only-[\w-]+\.jsonl$/u);
+    expect(attempt?.sessionFile).not.toBe("/tmp/session.jsonl");
+    expect(attempt?.sessionHasHistory).toBe(false);
+    expect(attempt?.sessionEntry?.sessionId).not.toBe(sessionEntry.sessionId);
+    expect(attempt?.sessionEntry).toEqual(
+      expect.objectContaining({
+        sessionFile: attempt?.sessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    );
+  });
+
+  it("fails closed when a concurrent memory-boundary write wins first", async () => {
+    setupSingleAttemptFallback();
+    const sessionKey = "agent:main:main";
+    const staleEntry: SessionEntry = {
+      sessionId: "session-concurrent-boundary",
+      updatedAt: 1,
+      sessionFile: "/tmp/explicit-session.jsonl",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = staleEntry;
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: staleEntry };
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const defaultPersistSessionEntry = state.persistSessionEntryMock.getMockImplementation();
+    state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as {
+        sessionStore?: Record<string, SessionEntry>;
+        sessionKey?: string;
+        entry?: SessionEntry;
+        shouldPersist?: (entry: SessionEntry | undefined) => boolean;
+      };
+      if (params.entry?.longTermMemoryDefaultPolicy !== "include") {
+        return await defaultPersistSessionEntry?.(...args);
+      }
+      if (params.sessionStore && params.sessionKey) {
+        params.sessionStore[params.sessionKey] = {
+          ...staleEntry,
+          sessionFile: "/tmp/concurrent-include.jsonl",
+          longTermMemoryDefaultPolicy: "include",
+        };
+      }
+      return params.sessionStore && params.sessionKey
+        ? params.sessionStore[params.sessionKey]
+        : undefined;
+    });
+
+    await expect(
+      agentCommand({
+        message: "private target",
+        to: "+1234567890",
+        skipInitialSessionTouch: true,
+        runContext: {
+          chatType: "direct",
+          messageChannel: "discord",
+        },
+      }),
+    ).rejects.toThrow("Session memory boundary changed during setup");
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
@@ -3330,6 +3671,61 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("passes live shared memory policy into ACP manager turns", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp",
+      updatedAt: 1,
+      sessionFile: "/tmp/acp.jsonl",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+
+    await agentCommand({
+      message: "shared ACP",
+      sessionKey: "agent:main:main",
+      runContext: { chatType: "group", messageChannel: "discord" },
+    });
+
+    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+    const runTurnParams = mockCallArg(state.acpRunTurnMock) as {
+      memoryPolicy?: unknown;
+    };
+    expect(runTurnParams.memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    const boundaryWriteIndex = state.persistSessionEntryMock.mock.calls.findIndex(
+      (call: unknown[]) => {
+        const entry = (call[0] as { entry?: SessionEntry } | undefined)?.entry;
+        return (
+          entry?.longTermMemoryDefaultPolicy === "explicit-only" &&
+          entry.sessionFile?.includes("memory-explicit-only-")
+        );
+      },
+    );
+    expect(boundaryWriteIndex).toBeGreaterThanOrEqual(0);
+    const persistParams = mockCallArg(state.persistSessionEntryMock, boundaryWriteIndex) as {
+      entry?: SessionEntry;
+    };
+    expect(persistParams.entry).toMatchObject({
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expect(persistParams.entry?.sessionFile).toContain("memory-explicit-only-");
+    expect(state.persistSessionEntryMock.mock.invocationCallOrder[boundaryWriteIndex]).toBeLessThan(
+      state.acpRunTurnMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {

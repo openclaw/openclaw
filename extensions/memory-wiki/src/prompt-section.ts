@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
@@ -217,7 +218,10 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
 export function createWikiPromptSectionBuilder(
   config: ResolvedMemoryWikiConfig,
 ): MemoryPromptSectionBuilder {
-  return ({ availableTools }) => {
+  return ({ availableTools, sessionKey, chatType }) => {
+    if (!shouldIncludeLongTermMemoryByDefault({ sessionKey, chatType })) {
+      return [];
+    }
     const digestLines = buildDigestPromptSection(config);
     const toolGuidance = buildWikiToolGuidance(availableTools);
     if (digestLines.length === 0 && toolGuidance.length === 0) {

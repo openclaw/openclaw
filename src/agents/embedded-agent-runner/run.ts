@@ -2566,6 +2566,7 @@ async function runEmbeddedAgentInternal(
                   {
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    chatType: params.chatType,
                     sessionFile: activeSessionFile,
                     tokenBudget: ctxInfo.tokens,
                     force: true,
@@ -2770,6 +2771,7 @@ async function runEmbeddedAgentInternal(
                   {
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    chatType: params.chatType,
                     sessionFile: activeSessionFile,
                     tokenBudget: ctxInfo.tokens,
                     ...(overflowTokenCountForCompaction !== undefined
@@ -2789,6 +2791,7 @@ async function runEmbeddedAgentInternal(
                     contextEngine,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    chatType: params.chatType,
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,

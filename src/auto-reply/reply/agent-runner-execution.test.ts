@@ -2538,6 +2538,53 @@ describe("runAgentTurnWithFallback", () => {
     expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
+  it("forwards live chat type to CLI runs for opaque shared session keys", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const sessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    followupRun.run.sessionKey = sessionKey;
+    followupRun.run.chatType = "group";
+    followupRun.originatingChatType = "group";
+    const sessionEntry: SessionEntry = {
+      sessionId: "opaque-shared-session",
+      sessionFile: "/tmp/opaque-shared-session.jsonl",
+      updatedAt: 1,
+    };
+    const activeSessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      sessionCtx: {
+        Provider: "telegram",
+        ChatType: "group",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      sessionKey,
+      chatType: "group",
+    });
+  });
+
   it("reuses CLI sessions for room-event turns", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

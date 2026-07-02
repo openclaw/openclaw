@@ -1,3 +1,4 @@
+import type { ChatType } from "../../channels/chat-type.js";
 /**
  * CLI turn compaction lifecycle.
  *
@@ -103,6 +104,7 @@ type CliCompactionRuntimeContextParams = {
   agentDir: string;
   cfg: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  chatType?: ChatType;
   senderIsOwner?: boolean;
   provider: string;
   model: string;
@@ -225,6 +227,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       sessionKey: params.sessionKey,
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
+      chatType: params.chatType,
       agentAccountId: params.agentAccountId,
       authProfileId: params.authProfileId,
       workspaceDir: params.workspaceDir,
@@ -259,6 +262,7 @@ async function compactCliTranscript(params: {
   contextTokenBudget: number;
   currentTokenCount: number;
   skillsSnapshot?: SkillSnapshot;
+  chatType?: ChatType;
   messageChannel?: string;
   agentAccountId?: string;
   authProfileId?: string;
@@ -277,6 +281,7 @@ async function compactCliTranscript(params: {
     agentDir: params.agentDir,
     cfg: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
+    chatType: params.chatType,
     senderIsOwner: params.senderIsOwner,
     provider: params.provider,
     model: params.model,
@@ -306,6 +311,7 @@ async function compactCliTranscript(params: {
       {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        chatType: params.chatType,
         sessionFile: params.sessionFile,
         tokenBudget: params.contextTokenBudget,
         currentTokenCount: params.currentTokenCount,
@@ -348,6 +354,7 @@ async function compactCliTranscript(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       reason: "compaction",
       sessionManager: params.sessionManager,
@@ -381,6 +388,7 @@ async function compactNativeHarnessCliTranscript(params: {
   currentTokenCount: number;
   contextEngine?: ContextEngine;
   skillsSnapshot?: SkillSnapshot;
+  chatType?: ChatType;
   messageChannel?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
@@ -420,6 +428,7 @@ async function compactNativeHarnessCliTranscript(params: {
           trigger: "budget",
           force: true,
           messageChannel: params.messageChannel,
+          chatType: params.chatType,
           agentAccountId: params.agentAccountId,
           senderIsOwner: params.senderIsOwner,
           thinkLevel: params.thinkLevel,
@@ -431,6 +440,7 @@ async function compactNativeHarnessCliTranscript(params: {
                 contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
+                  chatType: params.chatType,
                   agentAccountId: params.agentAccountId,
                   authProfileId,
                   workspaceDir: params.workspaceDir,
@@ -513,6 +523,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   provider: string;
   model: string;
   skillsSnapshot?: SkillSnapshot;
+  chatType?: ChatType;
   messageChannel?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
@@ -606,6 +617,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       currentTokenCount,
       contextEngine: resolvedContextEngine,
       skillsSnapshot: params.skillsSnapshot,
+      chatType: params.chatType,
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
       senderIsOwner: params.senderIsOwner,
@@ -654,6 +666,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       contextTokenBudget,
       currentTokenCount,
       skillsSnapshot: params.skillsSnapshot,
+      chatType: params.chatType,
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
       authProfileId,

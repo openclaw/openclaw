@@ -15,6 +15,7 @@ import {
   type AgentHarnessResetParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
@@ -32,6 +33,8 @@ import type {
 } from "./src/runtime.js";
 
 export type { CopilotClientPool, CopilotClientPoolOptions };
+
+type LongTermMemoryDefaultPolicy = "include" | "explicit-only";
 
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
@@ -58,6 +61,7 @@ interface TrackedSession {
   // `createSession` (no resume injection) and the new sdkSessionId
   // replaces this entry via `onSessionEstablished`.
   compatKey: string;
+  longTermMemoryDefaultPolicy: LongTermMemoryDefaultPolicy;
   compactKey: string;
   authMode: "gitHubToken" | "useLoggedInUser" | "byok";
   authProfileId?: string;
@@ -94,6 +98,7 @@ export type CopilotSessionBinding = {
   schemaVersion: 2;
   sdkSessionId: string;
   compatKey: string;
+  longTermMemoryDefaultPolicy: LongTermMemoryDefaultPolicy;
   compactKey: string;
   authMode: "gitHubToken" | "useLoggedInUser" | "byok";
   authProfileId?: string;
@@ -101,14 +106,10 @@ export type CopilotSessionBinding = {
   updatedAt: number;
 };
 
-type LegacyCopilotSessionBinding = {
-  schemaVersion: 1;
-  sdkSessionId: string;
-  compatKey: string;
-  updatedAt: number;
-};
-
-type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
+type CopilotAttemptSessionBinding = Pick<
+  CopilotSessionBinding,
+  "compatKey" | "longTermMemoryDefaultPolicy" | "sdkSessionId"
+>;
 type DeferredCompactionCleanupOutcome = "aborted" | "completed" | "deadline";
 type DeferredCompactionCleanup = {
   abort: () => void;
@@ -149,8 +150,16 @@ function sessionAuthMatches(stored: CopilotSessionAuth, current: CopilotSessionA
   );
 }
 
+type LegacyCopilotSessionBinding = {
+  schemaVersion: 1;
+  sdkSessionId: string;
+  compatKey: string;
+  updatedAt: number;
+};
+
 function normalizeBinding(
   value: CopilotSessionBinding | undefined,
+  fallbackMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
 ): CopilotSessionBinding | undefined {
   if (
     !value ||
@@ -174,10 +183,19 @@ function normalizeBinding(
   ) {
     return undefined;
   }
+  const longTermMemoryDefaultPolicy =
+    value.longTermMemoryDefaultPolicy === "include" ||
+    value.longTermMemoryDefaultPolicy === "explicit-only"
+      ? value.longTermMemoryDefaultPolicy
+      : fallbackMemoryDefaultPolicy;
+  if (!longTermMemoryDefaultPolicy) {
+    return undefined;
+  }
   return {
     schemaVersion: 2,
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
+    longTermMemoryDefaultPolicy,
     compactKey: value.compactKey,
     authMode: value.authMode,
     ...(value.authMode === "gitHubToken" || value.authMode === "byok"
@@ -190,10 +208,12 @@ function normalizeBinding(
   };
 }
 
-function normalizeAttemptBinding(value: unknown): CopilotAttemptSessionBinding | undefined {
-  const current = normalizeBinding(value as CopilotSessionBinding | undefined);
-  if (current) {
-    return current;
+function normalizeLegacyAttemptBinding(
+  value: unknown,
+  fallbackMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
+): CopilotAttemptSessionBinding | undefined {
+  if (!fallbackMemoryDefaultPolicy) {
+    return undefined;
   }
   const legacy = value as LegacyCopilotSessionBinding | undefined;
   if (
@@ -211,15 +231,53 @@ function normalizeAttemptBinding(value: unknown): CopilotAttemptSessionBinding |
   return {
     sdkSessionId: legacy.sdkSessionId.trim(),
     compatKey: legacy.compatKey,
+    longTermMemoryDefaultPolicy: fallbackMemoryDefaultPolicy,
   };
+}
+
+function normalizeAttemptBinding(
+  value: unknown,
+  fallbackMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
+): CopilotAttemptSessionBinding | undefined {
+  const current = normalizeBinding(
+    value as CopilotSessionBinding | undefined,
+    fallbackMemoryDefaultPolicy,
+  );
+  return current ?? normalizeLegacyAttemptBinding(value, fallbackMemoryDefaultPolicy);
+}
+
+function unstampedBindingFallbackPolicy(
+  currentMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
+): LongTermMemoryDefaultPolicy | undefined {
+  return currentMemoryDefaultPolicy === "include" ? "include" : undefined;
+}
+
+function resolveHarnessMemoryDefaultPolicy(params: unknown): LongTermMemoryDefaultPolicy {
+  return shouldIncludeLongTermMemoryByDefault({
+    sessionKey: readSessionString((params as { sessionKey?: unknown }).sessionKey),
+    chatType: readSessionString((params as { chatType?: unknown }).chatType),
+    longTermMemoryDefaultPolicy: readLongTermMemoryDefaultPolicy(
+      (params as { longTermMemoryDefaultPolicy?: unknown }).longTermMemoryDefaultPolicy,
+    ),
+  })
+    ? "include"
+    : "explicit-only";
+}
+
+function readLongTermMemoryDefaultPolicy(value: unknown): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
 }
 
 function lookupStoredBinding(
   store: CopilotSessionBindingStore | undefined,
   key: string,
+  currentMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
 ): CopilotAttemptSessionBinding | undefined {
   try {
-    return normalizeAttemptBinding(store?.lookup(key));
+    return normalizeAttemptBinding(
+      store?.lookup(key),
+      unstampedBindingFallbackPolicy(currentMemoryDefaultPolicy),
+    );
   } catch {
     try {
       store?.delete(key);
@@ -423,7 +481,7 @@ function computeSessionKey(
       ? p.model
       : p.runtimeModel && typeof p.runtimeModel === "object"
         ? p.runtimeModel
-      : { id: typeof p.model === "string" ? p.model : undefined };
+        : { id: typeof p.model === "string" ? p.model : undefined };
   const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
   const modelId =
     modelObj.id ??
@@ -630,14 +688,18 @@ export function createCopilotAgentHarness(
     }
   }
 
-  function hasPendingDeferredCompactionCleanup(sessionId: string): boolean {
+  function hasPendingDeferredCompactionCleanup(
+    sessionId: string,
+    currentMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy,
+  ): boolean {
     const cleanups = deferredCompactionCleanups.get(sessionId);
     if (!cleanups) {
       return false;
     }
     const currentSdkSessionId =
       trackedSessions.get(sessionId)?.sdkSessionId ??
-      lookupStoredBinding(options?.sessionStore, sessionId)?.sdkSessionId;
+      lookupStoredBinding(options?.sessionStore, sessionId, currentMemoryDefaultPolicy)
+        ?.sdkSessionId;
     return (
       currentSdkSessionId !== undefined &&
       [...cleanups.values()].some((cleanup) => cleanup.sdkSessionId === currentSdkSessionId)
@@ -753,8 +815,10 @@ export function createCopilotAgentHarness(
         //     surfaces as a prompt error.
         const currentCompatKey = computeSessionCompatKey(params);
         const currentCompactKey = computeSessionCompactKey(params);
+        const currentMemoryDefaultPolicy = resolveHarnessMemoryDefaultPolicy(params);
         const compactionCleanupPending =
-          openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
+          openclawSessionId !== undefined &&
+          hasPendingDeferredCompactionCleanup(openclawSessionId, currentMemoryDefaultPolicy);
         const replayBlocked =
           openclawSessionId !== undefined &&
           (compactionCleanupPending || resetBlockedStoredSessions.has(openclawSessionId));
@@ -763,7 +827,11 @@ export function createCopilotAgentHarness(
         const stored = openclawSessionId
           ? replayBlocked
             ? undefined
-            : lookupStoredBinding(options?.sessionStore, openclawSessionId)
+            : lookupStoredBinding(
+                options?.sessionStore,
+                openclawSessionId,
+                currentMemoryDefaultPolicy,
+              )
           : undefined;
         const resumableSessionId =
           tracked && tracked.compatKey === currentCompatKey
@@ -771,11 +839,16 @@ export function createCopilotAgentHarness(
             : !tracked && stored && stored.compatKey === currentCompatKey
               ? stored.sdkSessionId
               : undefined;
+        const resumableMemoryDefaultPolicy =
+          tracked?.longTermMemoryDefaultPolicy ??
+          stored?.longTermMemoryDefaultPolicy ??
+          currentMemoryDefaultPolicy;
         const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
           ? ({
               ...params,
               initialReplayState: {
                 ...params.initialReplayState,
+                longTermMemoryDefaultPolicy: resumableMemoryDefaultPolicy,
                 sdkSessionId: resumableSessionId,
               },
             } as AgentHarnessAttemptParams)
@@ -786,20 +859,25 @@ export function createCopilotAgentHarness(
           onSessionEstablished: openclawSessionId
             ? ({
                 compactionSessionConfig,
+                longTermMemoryDefaultPolicy,
                 sdkSessionId,
                 pooledClient,
                 sessionConfig,
               }: {
                 compactionSessionConfig?: CopilotSessionConfig;
+                longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
                 sdkSessionId: string;
                 pooledClient: PooledClient;
                 sessionConfig: CopilotSessionConfig;
               }) => {
+                const establishedMemoryDefaultPolicy =
+                  longTermMemoryDefaultPolicy ?? currentMemoryDefaultPolicy;
                 trackedSessions.set(openclawSessionId, {
                   sdkSessionId,
                   client: pooledClient.client,
                   clientOptions: poolAcquire.options,
                   compatKey: currentCompatKey,
+                  longTermMemoryDefaultPolicy: establishedMemoryDefaultPolicy,
                   compactKey: currentCompactKey,
                   poolKey: pooledClient.key,
                   sessionConfig: compactionSessionConfig ?? sessionConfig,
@@ -809,6 +887,7 @@ export function createCopilotAgentHarness(
                   schemaVersion: 2,
                   sdkSessionId,
                   compatKey: currentCompatKey,
+                  longTermMemoryDefaultPolicy: establishedMemoryDefaultPolicy,
                   compactKey: currentCompactKey,
                   ...sessionAuthFields(poolAcquire.auth),
                   updatedAt: Date.now(),
@@ -827,7 +906,11 @@ export function createCopilotAgentHarness(
                 sdkSessionId: string;
               }) => {
                 const trackedBinding = trackedSessions.get(openclawSessionId);
-                const storedBinding = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+                const storedBinding = lookupStoredBinding(
+                  options?.sessionStore,
+                  openclawSessionId,
+                  currentMemoryDefaultPolicy,
+                );
                 const ownsTrackedSession = trackedBinding?.sdkSessionId === sdkSessionId;
                 const ownsStoredSession = storedBinding?.sdkSessionId === sdkSessionId;
                 if (!ownsTrackedSession && !ownsStoredSession) {
@@ -848,6 +931,7 @@ export function createCopilotAgentHarness(
                   const currentStored = lookupStoredBinding(
                     options?.sessionStore,
                     openclawSessionId,
+                    currentMemoryDefaultPolicy,
                   );
                   const stillOwnsTrackedSession = currentTracked?.sdkSessionId === sdkSessionId;
                   const stillOwnsStoredSession = currentStored?.sdkSessionId === sdkSessionId;
@@ -888,10 +972,14 @@ export function createCopilotAgentHarness(
       // session. Capture the reset target first so reset never deletes that
       // replacement session or its durable binding.
       const tracked = trackedSessions.get(openclawSessionId);
-      const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+      const stored = lookupStoredBinding(options?.sessionStore, openclawSessionId, "include");
       resetBlockedStoredSessions.add(openclawSessionId);
       await abortDeferredCompactionCleanups(openclawSessionId);
-      const currentStored = lookupStoredBinding(options?.sessionStore, openclawSessionId);
+      const currentStored = lookupStoredBinding(
+        options?.sessionStore,
+        openclawSessionId,
+        "include",
+      );
       const stillOwnsStoredSession =
         stored !== undefined && currentStored?.sdkSessionId === stored.sdkSessionId;
       if (stillOwnsStoredSession) {
@@ -933,7 +1021,8 @@ export function createCopilotAgentHarness(
           reason: "missing-required-params",
         };
       }
-      if (hasPendingDeferredCompactionCleanup(openclawSessionId)) {
+      const currentMemoryDefaultPolicy = resolveHarnessMemoryDefaultPolicy(params);
+      if (hasPendingDeferredCompactionCleanup(openclawSessionId, currentMemoryDefaultPolicy)) {
         return {
           ok: false,
           compacted: false,

@@ -3,6 +3,7 @@
  *
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -15,6 +16,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  agentChatType?: ChatType;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
@@ -92,6 +94,7 @@ export function resolveOpenClawPluginToolInputs(params: {
         allowHostControl: options?.allowHostBrowserControl,
       },
       messageChannel: options?.agentChannel,
+      chatType: options?.agentChatType,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,

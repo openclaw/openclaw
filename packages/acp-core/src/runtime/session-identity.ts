@@ -21,6 +21,30 @@ function normalizeIdentitySource(value: unknown): SessionAcpIdentitySource | und
   return value;
 }
 
+function normalizeIdentityMemoryPolicy(
+  value: SessionAcpIdentity["memoryPolicy"] | undefined,
+): SessionAcpIdentity["memoryPolicy"] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const chatType =
+    value.chatType === "direct" || value.chatType === "group" || value.chatType === "channel"
+      ? value.chatType
+      : undefined;
+  const longTermMemoryDefaultPolicy =
+    value.longTermMemoryDefaultPolicy === "include" ||
+    value.longTermMemoryDefaultPolicy === "explicit-only"
+      ? value.longTermMemoryDefaultPolicy
+      : undefined;
+  if (!chatType && !longTermMemoryDefaultPolicy) {
+    return undefined;
+  }
+  return {
+    ...(chatType ? { chatType } : {}),
+    ...(longTermMemoryDefaultPolicy ? { longTermMemoryDefaultPolicy } : {}),
+  };
+}
+
 /** Normalize an identity object and infer pending/resolved state from stable ids. */
 function normalizeIdentity(
   identity: SessionAcpIdentity | undefined,
@@ -33,12 +57,13 @@ function normalizeIdentity(
   const acpxRecordId = normalizeText(identity.acpxRecordId);
   const acpxSessionId = normalizeText(identity.acpxSessionId);
   const agentSessionId = normalizeText(identity.agentSessionId);
+  const memoryPolicy = normalizeIdentityMemoryPolicy(identity.memoryPolicy);
   const lastUpdatedAt =
     typeof identity.lastUpdatedAt === "number" && Number.isFinite(identity.lastUpdatedAt)
       ? identity.lastUpdatedAt
       : undefined;
   const hasAnyId = Boolean(acpxRecordId || acpxSessionId || agentSessionId);
-  if (!state && !source && !hasAnyId && lastUpdatedAt === undefined) {
+  if (!state && !source && !hasAnyId && !memoryPolicy && lastUpdatedAt === undefined) {
     return undefined;
   }
   const resolved = Boolean(acpxSessionId || agentSessionId);
@@ -48,6 +73,7 @@ function normalizeIdentity(
     ...(acpxRecordId ? { acpxRecordId } : {}),
     ...(acpxSessionId ? { acpxSessionId } : {}),
     ...(agentSessionId ? { agentSessionId } : {}),
+    ...(memoryPolicy ? { memoryPolicy } : {}),
     source: source ?? "status",
     lastUpdatedAt: lastUpdatedAt ?? Date.now(),
   };
@@ -136,6 +162,8 @@ export function identityEquals(
     a.acpxRecordId === b.acpxRecordId &&
     a.acpxSessionId === b.acpxSessionId &&
     a.agentSessionId === b.agentSessionId &&
+    a.memoryPolicy?.chatType === b.memoryPolicy?.chatType &&
+    a.memoryPolicy?.longTermMemoryDefaultPolicy === b.memoryPolicy?.longTermMemoryDefaultPolicy &&
     a.source === b.source
   );
 }
@@ -169,6 +197,7 @@ export function mergeSessionIdentity(params: {
     allowIncomingValue && incoming.agentSessionId
       ? incoming.agentSessionId
       : current.agentSessionId;
+  const nextMemoryPolicy = incoming.memoryPolicy ?? current.memoryPolicy;
 
   const nextResolved = Boolean(nextAcpxSessionId || nextAgentSessionId);
   const nextState: SessionAcpIdentity["state"] = nextResolved
@@ -182,6 +211,7 @@ export function mergeSessionIdentity(params: {
     ...(nextRecordId ? { acpxRecordId: nextRecordId } : {}),
     ...(nextAcpxSessionId ? { acpxSessionId: nextAcpxSessionId } : {}),
     ...(nextAgentSessionId ? { agentSessionId: nextAgentSessionId } : {}),
+    ...(nextMemoryPolicy ? { memoryPolicy: nextMemoryPolicy } : {}),
     source: nextSource,
     lastUpdatedAt: params.now,
   };

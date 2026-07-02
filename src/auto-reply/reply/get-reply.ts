@@ -27,6 +27,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -585,7 +586,8 @@ export async function getReplyFromConfig(
             : undefined) ??
           finalized.Provider,
         groupId: groupResolution?.id ?? sessionEntry.groupId,
-        groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
+        groupChatType:
+          resolveSessionEntryChatType(sessionEntry) ?? sessionCtx.ChatType ?? finalized.ChatType,
         groupChannel:
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,

@@ -5,6 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
+import { shouldIncludeLongTermMemoryByDefault } from "../../sessions/session-memory-policy.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -292,8 +293,18 @@ async function listStartupMemoryPathsByDate(params: {
 export async function buildSessionStartupContextPrelude(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  sessionKey?: string;
+  chatType?: string;
   nowMs?: number;
 }): Promise<string | null> {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: params.sessionKey,
+      chatType: params.chatType,
+    })
+  ) {
+    return null;
+  }
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);

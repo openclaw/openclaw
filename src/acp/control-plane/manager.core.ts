@@ -2,6 +2,7 @@
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
+  AcpRuntimeEnsureInput,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
@@ -366,6 +367,7 @@ export class AcpSessionManager {
     cfg: OpenClawConfig;
     sessionKey: string;
     meta: SessionAcpMeta;
+    memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     return await ensureManagerRuntimeHandle({
       ...params,

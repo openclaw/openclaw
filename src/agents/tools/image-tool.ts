@@ -5,6 +5,7 @@
  */
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import {
@@ -19,6 +20,7 @@ import {
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
+import type { MediaUnderstandingScopeContext } from "../../media-understanding/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -633,6 +635,29 @@ type ImageSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
+function normalizeScopeString(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function buildImageToolScopeContext(options?: {
+  agentSessionKey?: string | null;
+  agentChannel?: string | null;
+  agentChatType?: ChatType | null;
+}): MediaUnderstandingScopeContext | undefined {
+  const sessionKey = normalizeScopeString(options?.agentSessionKey);
+  const channel = normalizeScopeString(options?.agentChannel);
+  const chatType = normalizeScopeString(options?.agentChatType);
+  if (!sessionKey && !channel && !chatType) {
+    return undefined;
+  }
+  return {
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(channel ? { channel } : {}),
+    ...(chatType ? { chatType } : {}),
+  };
+}
+
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -642,6 +667,7 @@ async function runImagePrompt(params: {
   prompt: string;
   images: Array<{ buffer: Buffer; mimeType: string }>;
   workspaceDir?: string;
+  scopeContext?: MediaUnderstandingScopeContext;
 }): Promise<{
   text: string;
   provider: string;
@@ -687,6 +713,7 @@ async function runImagePrompt(params: {
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -707,6 +734,7 @@ async function runImagePrompt(params: {
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -726,6 +754,7 @@ async function runImagePrompt(params: {
           agentDir: params.agentDir,
           authStore: params.authStore,
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
       }
@@ -756,8 +785,10 @@ export function createImageTool(options?: {
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  agentSessionKey?: string | null;
   agentChannel?: string | null;
   agentAccountId?: string | null;
+  agentChatType?: ChatType | null;
   currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
@@ -1062,6 +1093,7 @@ export function createImageTool(options?: {
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
         workspaceDir: options?.workspaceDir,
+        scopeContext: buildImageToolScopeContext(options),
       });
 
       const imageDetails =

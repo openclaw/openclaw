@@ -589,6 +589,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
       MediaPath: "/tmp/sticker.webp",
+      SessionKey: "agent:main:telegram:group:chat-1",
+      Provider: "telegram",
+      ChatType: "group",
       Sticker: {
         fileId: "sticker-file",
         fileUniqueId: "sticker-unique",
@@ -601,6 +604,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(describeStickerImage).toHaveBeenCalledOnce();
+    expect(describeStickerImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: "agent:main:telegram:group:chat-1",
+          channel: "telegram",
+          chatType: "group",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    );
     expect(ctxPayload.BodyForAgent).toBe("[Sticker] A curious sticker");
     expect(ctxPayload.SkipStickerMediaUnderstanding).toBe(true);
     expectDispatchParams({

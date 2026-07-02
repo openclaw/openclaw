@@ -4720,6 +4720,89 @@ describe("DiscordVoiceManager", () => {
     expect(lastAgentCommandArgs().sessionKey).toBe("agent:main:discord:channel:maintainers");
   });
 
+  it("keeps user-targeted voice consults on channel memory policy", async () => {
+    resolveAgentRouteMock.mockImplementation(
+      (params?: { peer?: { id?: string; kind?: string } }) => {
+        if (params?.peer?.kind === "direct" && params.peer.id === "u-target") {
+          return {
+            agentId: "main",
+            sessionKey: "agent:main:discord:direct:u-target",
+          };
+        }
+        return {
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel:1001",
+        };
+      },
+    );
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "targeted answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        agentSession: {
+          mode: "target",
+          target: "user:u-target",
+        },
+        realtime: {
+          provider: "openai",
+          consultPolicy: "always",
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+      route?: { sessionKey?: string };
+    };
+    expect(entry.route?.sessionKey).toBe("agent:main:discord:direct:u-target");
+
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-1",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "check the targeted direct session" },
+      },
+      realtimeSessionMock,
+    );
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+        text: "targeted answer",
+      }),
+    );
+
+    const commandArgs = lastAgentCommandArgs();
+    expect(commandArgs.sessionKey).toBe("agent:main:discord:direct:u-target");
+    expect(commandArgs.runContext).toMatchObject({ chatType: "channel" });
+  });
+
   it("keeps bidi realtime consults on the audio turn speaker context", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
     const manager = createManager({

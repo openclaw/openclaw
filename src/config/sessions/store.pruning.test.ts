@@ -560,6 +560,23 @@ describe("isProtectedSessionMaintenanceEntry", () => {
       }),
     ).toBe(true);
   });
+
+  it("protects explicit-only human entries without protecting synthetic entries", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:direct:user-1", {
+        ...makeEntry(Date.now()),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {
+        ...makeEntry(Date.now()),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("resolveMaintenanceConfigFromInput", () => {

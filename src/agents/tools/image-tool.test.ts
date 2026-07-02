@@ -1282,6 +1282,38 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("scopes image provider execution to the source session", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "codex",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const tool = createRequiredImageTool({
+        config: { agents: { defaults: { imageModel: { primary: "codex/gpt-5.5" } } } },
+        agentDir,
+        agentSessionKey: "agent:main:acp:binding:telegram:acct:shared",
+        agentChannel: "telegram",
+        agentChatType: "group",
+      });
+
+      await tool.execute("t1", {
+        prompt: "Describe this image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(firstImageRequest(describeImage).scopeContext).toEqual({
+        sessionKey: "agent:main:acp:binding:telegram:acct:shared",
+        channel: "telegram",
+        chatType: "group",
+      });
+    });
+  });
+
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");

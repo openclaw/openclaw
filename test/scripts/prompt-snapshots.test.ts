@@ -155,6 +155,7 @@ describe("happy path prompt snapshots", () => {
 
   it("renders the Codex model-bound prompt layers", async () => {
     const telegram = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
+    const discordGroup = readCommittedSnapshot("discord-group-codex-message-tool.md");
 
     expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
     expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
@@ -172,6 +173,8 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
+    expect(discordGroup).not.toContain("<MEMORY.md contents will be here>");
+    expect(discordGroup).toContain("shared-session `MEMORY.md` exclusion");
     expect(telegram).toContain("Codex loads AGENTS.md natively");
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });

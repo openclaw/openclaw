@@ -64,6 +64,21 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerMemoryBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "MEMORY.md",
+        path: path.join(context.workspaceDir, "MEMORY.md"),
+        content: "hook memory",
+        missing: false,
+      },
+    ];
+  });
+}
+
 function registerDuplicateBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -283,6 +298,79 @@ describe("resolveBootstrapFilesForRun", () => {
       path.join("packages", "core", "BOOTSTRAP.md"),
     );
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
+  });
+
+  it("keeps MEMORY.md for direct sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-direct-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "project rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:discord:direct:user-1",
+    });
+
+    expect(files.map((file) => file.name)).toContain("MEMORY.md");
+  });
+
+  it("drops MEMORY.md for shared channel sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "project rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:discord:channel:c1",
+    });
+
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("drops MEMORY.md for opaque ACP-bound shared sessions using runtime chat type", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-acp-shared-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "project rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+    });
+
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("does not let hooks re-add MEMORY.md to shared sessions", async () => {
+    registerMemoryBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "project rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1:thread:1699999999.0001",
+    });
+
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("does not let hooks re-add MEMORY.md to opaque ACP-bound shared sessions", async () => {
+    registerMemoryBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-acp-shared-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "project rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+    });
+
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
   });
 
   it("keeps subagent sessions to project and tool bootstrap files", async () => {

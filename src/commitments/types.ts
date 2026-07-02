@@ -75,6 +75,7 @@ export type CommitmentExtractionItem = CommitmentScope & {
   itemId: string;
   nowMs: number;
   timezone: string;
+  chatType?: string;
   userText: string;
   assistantText?: string;
   sourceMessageId?: string;

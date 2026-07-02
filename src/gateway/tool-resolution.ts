@@ -30,6 +30,7 @@ import {
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -48,6 +49,7 @@ export function resolveGatewayScopedTools(params: {
   sessionId?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider?: string;
+  chatType?: ChatType;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
@@ -173,6 +175,7 @@ export function resolveGatewayScopedTools(params: {
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    agentChatType: params.chatType,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
     agentTo: params.agentTo,

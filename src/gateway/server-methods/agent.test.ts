@@ -5,12 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
-import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -20,6 +14,14 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -32,6 +34,11 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
@@ -610,6 +617,7 @@ describe("gateway agent handler", () => {
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
+    setActivePluginRegistry(createTestRegistry());
     mocks.loadConfigReturn = {};
     mocks.emitGatewaySessionEndPluginHook.mockReset();
     mocks.emitGatewaySessionStartPluginHook.mockReset();
@@ -2503,6 +2511,154 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall();
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  it("carries resolved shared delivery chat type into fresh opaque-session runs", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const channel = "teamchat" as ChannelId;
+    const resolveOutboundSessionRoute = vi.fn(async (params: { target: string }) => ({
+      sessionKey: "agent:main:teamchat:group:C123",
+      baseSessionKey: "agent:main:teamchat:group:C123",
+      peer: { kind: "group" as const, id: "C123" },
+      chatType: "group" as const,
+      from: "teamchat:group:C123",
+      to: params.target,
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: channel,
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: channel,
+            capabilities: { chatTypes: ["group"] },
+            outbound: createDirectOutboundTestAdapter({ channel }),
+            messaging: {
+              resolveOutboundSessionRoute,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await invokeAgent(
+      {
+        message: "shared delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: channel,
+        to: "group:C123",
+        idempotencyKey: "test-fresh-opaque-shared-delivery-chat-type",
+      },
+      { reqId: "fresh-opaque-shared-delivery-chat-type" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      runContext?: { chatType?: string };
+    }>();
+    expect(resolveOutboundSessionRoute).toHaveBeenCalled();
+    expect(callArgs.runContext?.chatType).toBe("group");
+  });
+
+  it("does not let direct delivery target inference lift stored explicit-only session policy", async () => {
+    mocks.agentCommand.mockClear();
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const existingEntry = buildExistingMainStoreEntry({
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const channel = "teamdm" as ChannelId;
+    const resolveOutboundSessionRoute = vi.fn(async (params: { target: string }) => ({
+      sessionKey,
+      baseSessionKey: sessionKey,
+      peer: { kind: "direct" as const, id: "alice" },
+      chatType: "direct" as const,
+      from: "teamdm:direct:alice",
+      to: params.target,
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: channel,
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: channel,
+            capabilities: { chatTypes: ["direct"] },
+            outbound: createDirectOutboundTestAdapter({ channel }),
+            messaging: {
+              resolveOutboundSessionRoute,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await invokeAgent(
+      {
+        message: "direct delivery against shared transcript",
+        agentId: "main",
+        sessionKey,
+        deliver: true,
+        replyChannel: channel,
+        to: "direct:alice",
+        idempotencyKey: "test-direct-delivery-explicit-only-session",
+      },
+      { reqId: "direct-delivery-explicit-only-session" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      runContext?: { chatType?: string };
+    }>();
+    expect(resolveOutboundSessionRoute).toHaveBeenCalled();
+    expect(callArgs.runContext?.chatType).toBe("group");
+  });
+
+  it("rejects operator session runs when persisted policy cannot be read", async () => {
+    mocks.agentCommand.mockClear();
+    mocks.loadSessionEntry.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "operator no-live run",
+        sessionKey: "agent:main:acp:binding:telegram:acct:opaque",
+        deliver: false,
+        idempotencyKey: "test-policy-read-failure",
+      },
+      {
+        reqId: "policy-read-failure",
+        respond,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(
+      "agent:main:acp:binding:telegram:acct:opaque",
+      { clone: false, strictRead: true },
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
+    expectStringFieldContains(error, "message", "permission denied");
   });
 
   it("rejects strict delivery with a missing target before dispatching the agent", async () => {
@@ -4469,6 +4625,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:ops:main", {
       agentId: "ops",
       clone: false,
+      strictRead: true,
     });
   });
 
@@ -4519,6 +4676,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      strictRead: true,
     });
   });
 
@@ -4565,6 +4723,7 @@ describe("gateway agent handler", () => {
     expect(call.sessionKey).toBe("global");
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       clone: false,
+      strictRead: true,
     });
   });
 
@@ -4612,6 +4771,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:work:main", {
       agentId: "work",
       clone: false,
+      strictRead: true,
     });
   });
 
@@ -4748,6 +4908,7 @@ describe("gateway agent handler", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("main", {
       agentId: "work",
       clone: false,
+      strictRead: true,
     });
   });
 
@@ -6882,6 +7043,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      strictRead: true,
     });
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 

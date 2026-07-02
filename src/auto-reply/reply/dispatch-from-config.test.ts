@@ -798,6 +798,7 @@ function createMockAcpSessionManager() {
         mode: string;
         requestId: string;
         signal?: AbortSignal;
+        memoryPolicy?: AcpRuntimeTurnInput["memoryPolicy"];
         onEvent: (event: Record<string, unknown>) => Promise<void>;
       }) => {
         const entry = acpMocks.readAcpSessionEntry({
@@ -819,6 +820,7 @@ function createMockAcpSessionManager() {
           sessionKey: params.sessionKey,
           mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
           agent: entry?.acp?.agent || "codex",
+          ...(params.memoryPolicy ? { memoryPolicy: params.memoryPolicy } : {}),
         });
         const stream = runtimeBackend.runtime.runTurn({
           handle,
@@ -827,6 +829,7 @@ function createMockAcpSessionManager() {
           mode: params.mode as AcpRuntimeTurnInput["mode"],
           requestId: params.requestId,
           signal: params.signal,
+          ...(params.memoryPolicy ? { memoryPolicy: params.memoryPolicy } : {}),
         });
         for await (const event of stream) {
           await params.onEvent(event);
@@ -5053,6 +5056,63 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBe("hello world");
   });
 
+  it("passes live shared memory policy into ACP runtime creation", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "text_delta", text: "ok" }, { type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      },
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      ChatType: "group",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+    });
+
+    expect(firstMockArg(runtime.ensureSession, "ensure session").memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expect(firstMockArg(runtime.runTurn, "run turn").memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
   it("emits lifecycle end for ACP turns using the current run id", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
@@ -8906,6 +8966,78 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
     expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("uses live shared chat type for sendPolicy when stored metadata is stale direct", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:main",
+      ChatType: "group",
+      Provider: "discord",
+      Surface: "discord",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        session: {
+          sendPolicy: {
+            default: "allow",
+            rules: [{ action: "deny", match: { chatType: "group" } }],
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("keeps live direct sendPolicy classification despite stale explicit-only stamp", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      SessionKey: "agent:main:whatsapp:direct:user-1",
+      ChatType: "direct",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        session: {
+          sendPolicy: {
+            default: "allow",
+            rules: [{ action: "deny", match: { chatType: "group" } }],
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(result.sendPolicyDenied).toBeUndefined();
   });
 
   it("does not mark allowed group silence eligible for no-visible fallback", async () => {

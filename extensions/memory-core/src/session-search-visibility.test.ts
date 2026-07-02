@@ -608,6 +608,54 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
+  it("denies mapped live QMD session hits after the session identity rotates", async () => {
+    combinedSessionStore = {
+      "agent:main:main": {
+        sessionId: "rotated-private-session",
+        updatedAt: 2,
+        sessionFile: "/tmp/sessions/rotated-private-session.jsonl",
+      },
+    };
+    const searchPath = "qmd/sessions-main/old-shared-session.md";
+    const indexPath = await createQmdArtifactIndex({
+      agentId: "main",
+      artifactPath: "old-shared-session.md",
+      collection: "sessions-main",
+      searchPath,
+      sessionId: "old-shared-session",
+    });
+    const hit = attachMappedQmdHit(
+      {
+        path: searchPath,
+        source: "sessions",
+        score: 1,
+        snippet: "shared transcript content",
+        startLine: 1,
+        endLine: 2,
+      },
+      {
+        artifactPath: "old-shared-session.md",
+        collection: "sessions-main",
+        indexPath,
+        searchPath,
+      },
+    );
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("keeps mapped archived QMD session hits when no session-store key remains", async () => {
     combinedSessionStore = {};
     const searchPath = "qmd/sessions-main/archived-jsonl-deleted-2026-02-16t22-26-33-000z.md";

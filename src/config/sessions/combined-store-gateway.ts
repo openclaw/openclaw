@@ -22,12 +22,16 @@ function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
 
-function loadGatewayStoreEntries(storePath: string): Record<string, SessionEntry> {
+function loadGatewayStoreEntries(
+  storePath: string,
+  opts: { strictRead?: boolean } = {},
+): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ clone: false, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntries({
+      clone: false,
+      storePath,
+      ...(opts.strictRead === true ? { strictRead: true } : {}),
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
@@ -75,7 +79,7 @@ function mergeSessionEntryIntoCombined(params: {
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
-  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
+  opts: { agentId?: string; configuredAgentsOnly?: boolean; strictRead?: boolean } = {},
 ): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -85,7 +89,9 @@ export function loadCombinedSessionStoreForGateway(
     // A single shared store still needs keys canonicalized as if owned by the default agent.
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadGatewayStoreEntries(storePath);
+    const store = loadGatewayStoreEntries(storePath, {
+      ...(opts.strictRead === true ? { strictRead: true } : {}),
+    });
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
@@ -117,7 +123,9 @@ export function loadCombinedSessionStoreForGateway(
   for (const target of targets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadGatewayStoreEntries(storePath);
+    const store = loadGatewayStoreEntries(storePath, {
+      ...(opts.strictRead === true ? { strictRead: true } : {}),
+    });
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,

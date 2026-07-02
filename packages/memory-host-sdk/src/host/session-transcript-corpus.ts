@@ -10,9 +10,11 @@ import {
   isUsageCountedSessionTranscriptFileName,
   listSessionEntries,
   parseUsageCountedSessionIdFromFileName,
+  resolveSessionEntryChatType,
   resolveSessionAgentId,
   resolveSessionFilePath,
   resolveStorePath,
+  shouldIncludeLongTermMemoryByDefault,
   type SessionEntry,
 } from "./openclaw-runtime-session.js";
 
@@ -33,6 +35,8 @@ export type SessionTranscriptCorpusEntry = {
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
+  /** False when automatic private-memory ingestion must skip this active transcript. */
+  includeLongTermMemoryByDefault?: false;
 };
 
 type SessionEntrySummary = {
@@ -262,11 +266,17 @@ function toSessionStoreCorpusEntry(
     summary.entry,
     cronGeneratedSessionKeys,
   );
+  const includeLongTermMemoryByDefault = shouldIncludeLongTermMemoryByDefault({
+    sessionKey,
+    chatType: resolveSessionEntryChatType(summary.entry),
+    longTermMemoryDefaultPolicy: summary.entry.longTermMemoryDefaultPolicy,
+  });
   return {
     agentId,
     artifactKind: "active-session",
     sessionFile,
     sessionId,
+    ...(includeLongTermMemoryByDefault ? {} : { includeLongTermMemoryByDefault: false }),
     ...(sessionKey ? { sessionKey } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),

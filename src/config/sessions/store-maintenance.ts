@@ -6,6 +6,8 @@ import {
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -399,7 +401,16 @@ export function isProtectedSessionMaintenanceEntry(
   if (isExternalGroupOrChannelSessionKey(sessionKey)) {
     return true;
   }
-  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  const rawChatType =
+    resolveSessionEntryChatType(entry) ??
+    normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  const chatType =
+    resolveLongTermMemoryTargetChatType({
+      sessionKey,
+      storedChatType: rawChatType,
+      longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+      preferStoredPolicy: true,
+    }) ?? rawChatType;
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 

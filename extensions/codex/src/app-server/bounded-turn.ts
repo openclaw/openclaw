@@ -27,7 +27,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
+import {
+  buildCodexNativeMemoryThreadConfigForRun,
+  buildCodexRuntimeThreadConfig,
+} from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
@@ -72,6 +75,11 @@ type CodexBoundedTurnParams = {
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
+  longTermMemoryContext?: {
+    sessionKey?: string | null;
+    chatType?: string | null;
+    longTermMemoryDefaultPolicy?: "include" | "explicit-only" | null;
+  };
 };
 
 export async function runBoundedCodexAppServerTurn(
@@ -219,8 +227,11 @@ function resolveBoundedThreadConfig(
   workspace: { codexHome?: string },
 ): JsonObject {
   const boundedConfig =
-    mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig) ??
-    CODEX_BOUNDED_THREAD_CONFIG;
+    mergeCodexThreadConfigs(
+      CODEX_BOUNDED_THREAD_CONFIG,
+      params.threadConfig,
+      buildCodexNativeMemoryThreadConfigForRun(params.longTermMemoryContext),
+    ) ?? CODEX_BOUNDED_THREAD_CONFIG;
   return workspace.codexHome
     ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? boundedConfig)
     : boundedConfig;

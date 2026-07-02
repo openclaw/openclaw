@@ -30,6 +30,25 @@ async function getContextModule() {
   return await contextModuleLoader.load();
 }
 
+function matchesExpectedSessionBoundary(params: {
+  currentEntry: SessionEntry;
+  expectedEntry: SessionEntry;
+  expectedSessionId?: string;
+  existingEntry?: SessionEntry;
+}): boolean {
+  if (!params.expectedSessionId) {
+    return true;
+  }
+  if (!params.existingEntry || params.currentEntry.sessionId !== params.expectedSessionId) {
+    return false;
+  }
+  return (
+    params.currentEntry.sessionFile === params.expectedEntry.sessionFile &&
+    params.currentEntry.longTermMemoryDefaultPolicy ===
+      params.expectedEntry.longTermMemoryDefaultPolicy
+  );
+}
+
 function resolvePositiveInteger(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -46,12 +65,20 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
+function hasSameTranscriptBoundary(existing: SessionEntry, expected: SessionEntry): boolean {
+  return (
+    existing.sessionFile === expected.sessionFile &&
+    existing.longTermMemoryDefaultPolicy === expected.longTermMemoryDefaultPolicy
+  );
+}
+
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
+  expectedSessionFile?: string;
   storePath: string;
   sessionStore: Record<string, SessionEntry>;
   defaultProvider: string;
@@ -98,6 +125,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
+  const expectedSessionFile = normalizeOptionalString(params.expectedSessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -144,7 +172,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
     );
-  } else if (activeSessionFile) {
+  } else if (
+    activeSessionFile &&
+    (expectedSessionFile === undefined || entry.sessionFile === expectedSessionFile)
+  ) {
     next.sessionFile = activeSessionFile;
   }
   if (preserveRuntimeModel) {
@@ -294,11 +325,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       if (
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId) ||
+          (context.existingEntry.sessionId !== entry.sessionId ||
+            !hasSameTranscriptBoundary(context.existingEntry, entry))) ||
         (!context.existingEntry && sessionStore[sessionKey])
       ) {
         // A normal run may rotate its session id, so compare to the pre-run entry.
-        // Do not merge stale finalizer metadata after a delete or a competing reset.
+        // Do not merge stale finalizer metadata after a delete, reset, or privacy
+        // boundary rotation that rebound this key to a different transcript.
         return null;
       }
       return metadataPatch;
@@ -338,8 +371,12 @@ export async function clearCliSessionInStore(params: {
     },
     (currentEntry, context) => {
       if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+        !matchesExpectedSessionBoundary({
+          currentEntry,
+          expectedEntry: entry,
+          expectedSessionId,
+          existingEntry: context.existingEntry,
+        })
       ) {
         return null;
       }
@@ -421,8 +458,12 @@ export async function recordCliCompactionInStore(params: {
     },
     (currentEntry, context) => {
       if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
+        !matchesExpectedSessionBoundary({
+          currentEntry,
+          expectedEntry: entry,
+          expectedSessionId,
+          existingEntry: context.existingEntry,
+        })
       ) {
         return null;
       }

@@ -1,3 +1,4 @@
+import type { ChatType } from "../../channels/chat-type.js";
 /**
  * Manages context-engine lifecycle hooks for native agent harnesses.
  */
@@ -70,6 +71,10 @@ function buildHarnessContextEngineRuntimeSettings(
   );
 }
 
+function buildContextEngineChatTypeParams(chatType?: ChatType): { chatType?: ChatType } {
+  return chatType === "group" || chatType === "channel" ? { chatType } : {};
+}
+
 /**
  * Run optional bootstrap + bootstrap maintenance for a harness-owned context engine.
  */
@@ -78,6 +83,7 @@ export async function bootstrapHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -107,6 +113,7 @@ export async function bootstrapHarnessContextEngine(params: {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        ...buildContextEngineChatTypeParams(params.chatType),
         sessionFile: params.sessionFile,
         runtimeSettings,
       });
@@ -115,6 +122,7 @@ export async function bootstrapHarnessContextEngine(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
@@ -134,6 +142,7 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -159,6 +168,7 @@ export async function assembleHarnessContextEngine(params: {
   const result = await params.contextEngine.assemble({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    ...buildContextEngineChatTypeParams(params.chatType),
     messages,
     tokenBudget: params.tokenBudget,
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
@@ -215,6 +225,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -253,6 +264,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
+        ...buildContextEngineChatTypeParams(params.chatType),
         sessionFile: params.sessionFile,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
@@ -275,6 +287,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
           await params.contextEngine.ingestBatch({
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
+            ...buildContextEngineChatTypeParams(params.chatType),
             messages: newMessages,
             isHeartbeat: params.isHeartbeat,
           });
@@ -288,6 +301,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
             await params.contextEngine.ingest?.({
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
+              ...buildContextEngineChatTypeParams(params.chatType),
               message: msg,
               isHeartbeat: params.isHeartbeat,
             });
@@ -310,6 +324,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -363,6 +378,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
@@ -387,6 +403,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    chatType: params.chatType,
     sessionFile: params.sessionFile,
     reason: params.reason,
     sessionManager: params.sessionManager as Parameters<

@@ -879,6 +879,88 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("scopes direct-shaped explicit-only continuations as shared", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:direct:user-1",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:user-1",
+          accountId: "default",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:direct:user-1",
+        updatedAt: 0,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:direct:user-1",
+      storeKeys: ["agent:main:direct:user-1"],
+      legacyKey: undefined,
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:user-1" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expectContinuationDispatchFields(
+      {
+        channel: "telegram",
+        routeSessionKey: "agent:main:direct:user-1",
+      },
+      {
+        ChatType: "group",
+      },
+    );
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:main:direct:user-1", {
+      strictRead: true,
+    });
+  });
+
+  it("keeps the sentinel file when continuation policy lookup fails", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:telegram:direct:alice",
+        deliveryContext: {
+          channel: "telegram",
+          to: "15550002",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue after restart",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.loadSessionEntry.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:direct:alice", {
+      strictRead: true,
+    });
+    expect(mocks.clearRestartSentinel).not.toHaveBeenCalled();
+    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
+      source: "restart-sentinel",
+      sessionKey: "agent:main:telegram:direct:alice",
+      reason: "permission denied",
+    });
+  });
+
   it("authorizes routed agentTurn continuations while preserving Telegram topic routing", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {

@@ -1,5 +1,6 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
@@ -104,18 +105,21 @@ export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  chatType?: string | null;
   currentChannelId?: string | null;
   messageTo?: string | null;
   senderId?: string | null;
 }): Pick<
   PluginHookAgentContext,
-  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
+  "channel" | "channelId" | "chatId" | "chatType" | "messageProvider" | "senderId"
 > {
   const channel = resolveAgentHookChannel(params);
   const channelId = resolveAgentHookChannelId(params);
+  const chatType = normalizeChatType(params.chatType ?? undefined);
   return {
     channel,
     messageProvider: normalizeOptionalString(params.messageProvider),
+    ...(chatType ? { chatType } : {}),
     channelId,
     chatId: channelId,
     senderId: normalizeOptionalString(params.senderId),

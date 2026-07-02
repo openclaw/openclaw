@@ -139,6 +139,24 @@ describe("resolveCopilotWorkspaceBootstrapContext", () => {
     expect(result.instructions).toContain("Soul voice goes here.");
   });
 
+  it("uses runtime chat type to suppress MEMORY.md for opaque shared sessions", async () => {
+    await writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await writeFile(path.join(workspaceDir, "MEMORY.md"), "private workspace memory");
+
+    const result = await resolveCopilotWorkspaceBootstrapContext({
+      attempt: makeAttempt({
+        workspaceDir,
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        chatType: "group",
+      } as Partial<AgentHarnessAttemptParams>),
+      effectiveWorkspaceDir: workspaceDir,
+    });
+
+    expect(result.bootstrapFiles.map((file) => file.name)).not.toContain("MEMORY.md");
+    expect(result.instructions).toContain("Soul voice goes here.");
+    expect(result.instructions).not.toContain("private workspace memory");
+  });
+
   it("filters AGENTS.md out of the rendered block (SDK loads it natively)", async () => {
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
     await writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");

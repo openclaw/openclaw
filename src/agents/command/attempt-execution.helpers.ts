@@ -31,6 +31,24 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
 }
 
 type JsonlFileScan = { fileExists: boolean; hasAssistant: boolean };
+type JsonlMemoryBoundaryScan = { fileExists: boolean; hasBoundaryContent: boolean };
+
+function isMissingFileError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isSessionHeaderRecord(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "session"
+  );
+}
 
 async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileScan> {
   if (!filePath) {
@@ -78,6 +96,53 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
   return (await scanJsonlFile(filePath)).hasAssistant;
 }
 
+async function scanJsonlFileForMemoryBoundaryContent(
+  filePath: string | undefined,
+): Promise<JsonlMemoryBoundaryScan> {
+  if (!filePath) {
+    return { fileExists: false, hasBoundaryContent: false };
+  }
+  let stat;
+  try {
+    stat = await fs.lstat(filePath);
+  } catch (err) {
+    if (isMissingFileError(err)) {
+      return { fileExists: false, hasBoundaryContent: false };
+    }
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`Session transcript is not a readable file: ${filePath}`);
+  }
+
+  const fh = await fs.open(filePath, "r");
+  try {
+    const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+    let recordCount = 0;
+    for await (const line of rl) {
+      if (!line.trim()) {
+        continue;
+      }
+      recordCount++;
+      if (recordCount > SESSION_FILE_MAX_RECORDS) {
+        return { fileExists: true, hasBoundaryContent: true };
+      }
+      let obj: unknown;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        return { fileExists: true, hasBoundaryContent: true };
+      }
+      if (!isSessionHeaderRecord(obj)) {
+        return { fileExists: true, hasBoundaryContent: true };
+      }
+    }
+    return { fileExists: true, hasBoundaryContent: false };
+  } finally {
+    await fh.close();
+  }
+}
+
 /**
  * Check whether a session transcript file exists and contains at least one
  * assistant message, indicating that the SessionManager has flushed the
@@ -85,6 +150,16 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
  */
 export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
   return await jsonlFileHasAssistantMessage(sessionFile);
+}
+
+/**
+ * Memory policy rotation needs to know whether a legacy transcript has any
+ * user/tool/assistant record, not whether the first assistant turn flushed.
+ */
+export async function sessionFileHasMemoryBoundaryContent(
+  sessionFile: string | undefined,
+): Promise<boolean> {
+  return (await scanJsonlFileForMemoryBoundaryContent(sessionFile)).hasBoundaryContent;
 }
 
 /** Resolves the expected Claude CLI transcript JSONL path for a session. */

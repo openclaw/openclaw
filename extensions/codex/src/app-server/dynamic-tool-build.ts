@@ -255,6 +255,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,
+    chatType: params.chatType,
     sessionId: params.sessionId,
     runId: params.runId,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,

@@ -29,6 +29,7 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-hash",
       messageToolPolicyHash: "message-policy-hash",
       promptToolNamesHash: "prompt-tools-hash",
+      longTermMemoryDefaultPolicy: "explicit-only",
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
@@ -45,6 +46,7 @@ describe("cli-session helpers", () => {
       extraSystemPromptHash: "prompt-hash",
       messageToolPolicyHash: "message-policy-hash",
       promptToolNamesHash: "prompt-tools-hash",
+      longTermMemoryDefaultPolicy: "explicit-only",
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
@@ -207,6 +209,47 @@ describe("cli-session helpers", () => {
         binding,
         authEpochVersion: 2,
         messageToolPolicyHash: "message-policy-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+  });
+
+  it("invalidates reuse when the long-term memory default policy changes", () => {
+    expect(
+      resolveCliSessionReuse({
+        binding: { sessionId: "cli-session-1" },
+        authEpochVersion: 2,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding: { sessionId: "cli-session-1", longTermMemoryDefaultPolicy: "include" },
+        authEpochVersion: 2,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding: { sessionId: "cli-session-1", forceReuse: true },
+        authEpochVersion: 2,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding: { sessionId: "cli-session-1" },
+        authEpochVersion: 2,
+        longTermMemoryDefaultPolicy: "include",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+    expect(
+      resolveCliSessionReuse({
+        binding: {
+          sessionId: "cli-session-1",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+        authEpochVersion: 2,
+        longTermMemoryDefaultPolicy: "explicit-only",
       }),
     ).toEqual({ sessionId: "cli-session-1" });
   });

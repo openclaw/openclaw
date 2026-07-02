@@ -415,6 +415,42 @@ describe("session store writer queue", () => {
     expect(store["agent:main:array"]).toBeUndefined();
   });
 
+  it("allows strict session store reads when the store file is absent", async () => {
+    const { storePath } = await makeTmpStore({});
+
+    expect(loadSessionStore(storePath, { strictRead: true })).toEqual({});
+  });
+
+  it("rejects malformed persisted stores on strict session store reads", async () => {
+    const { storePath } = await makeTmpStore({});
+    await fsPromises.writeFile(storePath, "not-json", "utf-8");
+
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+    expect(() => loadSessionStore(storePath, { strictRead: true })).toThrow();
+  });
+
+  it("bypasses fresh object-cache hits on strict session store reads", async () => {
+    const key = "agent:main:cached-policy";
+    const { storePath } = await makeTmpStore({});
+    await fsPromises.writeFile(storePath, "not-json", "utf-8");
+    const stat = fs.statSync(storePath);
+    const serialized = JSON.stringify({
+      [key]: { sessionId: "cached-session", updatedAt: Date.now() },
+    });
+    writeSessionStoreCache({
+      storePath,
+      store: JSON.parse(serialized) as Record<string, SessionEntry>,
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+
+    expect(loadSessionStore(storePath)[key]?.sessionId).toBe("cached-session");
+    expect(() => loadSessionStore(storePath, { strictRead: true })).toThrow();
+  });
+
   it("strips malformed pending final-delivery fields on load", async () => {
     const { storePath } = await makeTmpStore({
       "agent:main:bad-pending": {

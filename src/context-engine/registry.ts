@@ -1,7 +1,9 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
@@ -94,6 +96,7 @@ const LEGACY_COMPAT_METHOD_KEYS = {
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
 type SessionKeyCompatParams = {
   sessionKey?: string;
+  chatType?: string;
   prompt?: string;
   runtimeSettings?: unknown;
 };
@@ -188,11 +191,25 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
   ],
 } as const;
 
+const CHAT_TYPE_UNKNOWN_FIELD_PATTERNS = [
+  /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]chatType['"`]/i,
+  /\badditional propert(?:y|ies)\b.*['"`]chatType['"`]/i,
+  /\bmust not have additional propert(?:y|ies)\b.*['"`]chatType['"`]/i,
+  /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]chatType['"`]/i,
+  /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]chatType['"`]/i,
+  /['"`]chatType['"`].*\b(?:was|is)\s+not allowed\b/i,
+  /"code"\s*:\s*"unrecognized_keys"[^]*"chatType"/i,
+] as const;
+
 function isLegacyCompatUnknownFieldValidationMessage(
   message: string,
   key: LegacyCompatKey,
 ): boolean {
   return LEGACY_UNKNOWN_FIELD_PATTERNS[key].some((pattern) => pattern.test(message));
+}
+
+function isChatTypeUnknownFieldValidationMessage(message: string): boolean {
+  return CHAT_TYPE_UNKNOWN_FIELD_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function isLegacyCompatErrorForKey(error: unknown, key: LegacyCompatKey): boolean {
@@ -240,6 +257,81 @@ function isLegacyCompatErrorForKey(error: unknown, key: LegacyCompatKey): boolea
     if (
       typeof issueContainer.message === "string" &&
       isLegacyCompatUnknownFieldValidationMessage(issueContainer.message, key)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function issueRejectsChatTypeStrictly(issue: unknown): boolean {
+  if (!issue || typeof issue !== "object") {
+    return false;
+  }
+
+  const issueRecord = issue as {
+    code?: unknown;
+    keys?: unknown;
+    message?: unknown;
+  };
+  if (
+    issueRecord.code === "unrecognized_keys" &&
+    Array.isArray(issueRecord.keys) &&
+    issueRecord.keys.some((issueKey) => issueKey === "chatType")
+  ) {
+    return true;
+  }
+
+  return (
+    typeof issueRecord.message === "string" &&
+    isChatTypeUnknownFieldValidationMessage(issueRecord.message)
+  );
+}
+
+function isChatTypeUnknownFieldError(error: unknown): boolean {
+  for (const candidate of iterateErrorChain(error)) {
+    if (Array.isArray(candidate)) {
+      if (candidate.some((entry) => issueRejectsChatTypeStrictly(entry))) {
+        return true;
+      }
+      continue;
+    }
+
+    if (typeof candidate === "string") {
+      if (isChatTypeUnknownFieldValidationMessage(candidate)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const issueContainer = candidate as {
+      message?: unknown;
+      issues?: unknown;
+      errors?: unknown;
+    };
+
+    if (
+      Array.isArray(issueContainer.issues) &&
+      issueContainer.issues.some((issue) => issueRejectsChatTypeStrictly(issue))
+    ) {
+      return true;
+    }
+
+    if (
+      Array.isArray(issueContainer.errors) &&
+      issueContainer.errors.some((issue) => issueRejectsChatTypeStrictly(issue))
+    ) {
+      return true;
+    }
+
+    if (
+      typeof issueContainer.message === "string" &&
+      isChatTypeUnknownFieldValidationMessage(issueContainer.message)
     ) {
       return true;
     }
@@ -765,6 +857,52 @@ function isContextEngineAbortRejection(error: unknown, methodParams: unknown): b
   return typeof error === "string" && /abort|cancelled|canceled/iu.test(error);
 }
 
+function shouldUseScopedChatTypeFallback(params: {
+  error: unknown;
+  methodName: GuardedContextEngineMethodName;
+  methodParams: unknown;
+}): boolean {
+  if (params.methodName !== "bootstrap" && params.methodName !== "assemble") {
+    return false;
+  }
+  if (
+    params.methodParams === null ||
+    typeof params.methodParams !== "object" ||
+    !Object.hasOwn(params.methodParams, "chatType")
+  ) {
+    return false;
+  }
+  return isChatTypeUnknownFieldError(params.error);
+}
+
+function hasOwnChatTypeParam(params: unknown): params is { chatType?: unknown } {
+  return params !== null && typeof params === "object" && Object.hasOwn(params, "chatType");
+}
+
+function withoutChatTypeParam<T>(params: T): T {
+  if (!hasOwnChatTypeParam(params)) {
+    return params;
+  }
+  const nextParams = { ...params };
+  delete nextParams.chatType;
+  return nextParams;
+}
+
+function isSharedContextEngineScope(methodParams: unknown): boolean {
+  if (!methodParams || typeof methodParams !== "object") {
+    return false;
+  }
+  const rawChatType = (methodParams as { chatType?: unknown }).chatType;
+  const chatType = typeof rawChatType === "string" ? normalizeChatType(rawChatType) : undefined;
+  const rawSessionKey = (methodParams as { sessionKey?: unknown }).sessionKey;
+  const sessionKey = typeof rawSessionKey === "string" ? rawSessionKey : undefined;
+  const scopedChatType = resolveLongTermMemoryTargetChatType({
+    sessionKey,
+    liveChatType: chatType,
+  });
+  return scopedChatType === "group" || scopedChatType === "channel";
+}
+
 async function invokeFallbackContextEngineMethod(params: {
   getFallbackEngine: () => Promise<ContextEngine>;
   methodName: GuardedContextEngineMethodName;
@@ -806,6 +944,11 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
 }): ContextEngine {
   let fallbackEnginePromise: Promise<ContextEngine> | undefined;
   let resolvedFallbackEngine: ContextEngine | undefined;
+  // A shared-session scoped fallback owns the rest of this proxy lifecycle.
+  // Splitting assemble/bootstrap from afterTurn/ingest can persist shared turns
+  // in a different engine than the one that assembled the prompt.
+  let useScopedFallbackEngine = false;
+  let omitChatTypeForPrivateScope = false;
   const getFallbackEngine = () => {
     fallbackEnginePromise ??= resolveDefaultContextEngine(
       params.defaultEngineId,
@@ -828,10 +971,11 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
     );
   };
   const isQuarantined = () => Boolean(getContextEngineQuarantine(params.engineId));
+  const shouldUseFallbackEngine = () => useScopedFallbackEngine || isQuarantined();
 
   const proxy = new Proxy(params.engine, {
     get(target, property, receiver) {
-      if (property === "info" && isQuarantined()) {
+      if (property === "info" && shouldUseFallbackEngine()) {
         return fallbackInfo();
       }
       const value = Reflect.get(target, property, receiver);
@@ -845,8 +989,17 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
         if (aborted) {
           throw aborted;
         }
-        if (isQuarantined()) {
+        if (shouldUseFallbackEngine()) {
           // Runtime failures downgrade future guarded calls for this process.
+          return await invokeFallbackContextEngineMethod({
+            getFallbackEngine,
+            methodName,
+            methodParams,
+          });
+        }
+        const sharedScope = isSharedContextEngineScope(methodParams);
+        if (sharedScope && target.info.supportsSharedSessionScope !== true) {
+          useScopedFallbackEngine = true;
           return await invokeFallbackContextEngineMethod({
             getFallbackEngine,
             methodName,
@@ -855,11 +1008,43 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
         }
 
         try {
-          return await (value as (methodParams: unknown) => unknown).call(target, methodParams);
+          const invocationParams =
+            omitChatTypeForPrivateScope && !sharedScope
+              ? withoutChatTypeParam(methodParams)
+              : methodParams;
+          return await (value as (methodParams: unknown) => unknown).call(target, invocationParams);
         } catch (error) {
           if (isContextEngineAbortRejection(error, methodParams)) {
             // Abort is caller intent, not engine instability; never quarantine for it.
             throw error;
+          }
+          if (
+            !sharedScope &&
+            hasOwnChatTypeParam(methodParams) &&
+            isChatTypeUnknownFieldError(error)
+          ) {
+            omitChatTypeForPrivateScope = true;
+            try {
+              return await (value as (methodParams: unknown) => unknown).call(
+                target,
+                withoutChatTypeParam(methodParams),
+              );
+            } catch (retryError) {
+              error = retryError;
+            }
+          }
+          if (shouldUseScopedChatTypeFallback({ error, methodName, methodParams })) {
+            try {
+              const fallbackResult = await invokeFallbackContextEngineMethod({
+                getFallbackEngine,
+                methodName,
+                methodParams,
+              });
+              useScopedFallbackEngine = true;
+              return fallbackResult;
+            } catch {
+              throw error;
+            }
           }
           recordContextEngineQuarantine({
             engineId: params.engineId,

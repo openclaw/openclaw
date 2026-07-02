@@ -48,6 +48,8 @@ export type LoadSessionStoreOptions = {
   runMaintenance?: boolean;
   clone?: boolean;
   hydrateSkillPromptRefs?: boolean;
+  /** When true, only a missing store file is treated as empty; read/parse failures throw. */
+  strictRead?: boolean;
 };
 
 export type ReadSessionEntryOptions = {
@@ -58,6 +60,15 @@ const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return isRecord(value);
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
@@ -381,7 +392,8 @@ export function loadSessionStore(
 ): Record<string, SessionEntry> {
   const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
   const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  const canUseSessionStoreCache = opts.strictRead !== true;
+  if (!opts.skipCache && canUseSessionStoreCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
@@ -413,15 +425,20 @@ export function loadSessionStore(
       if (isSessionStoreRecord(parsed)) {
         store = parsed;
         serializedFromDisk = raw;
+      } else if (opts.strictRead === true) {
+        throw new Error(`Session store ${storePath} did not contain an object`);
       }
       // Cache with the stat observed before this read. If another process
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
+    } catch (err) {
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
+      }
+      if (opts.strictRead === true && !isMissingFileError(err)) {
+        throw err;
       }
     }
   }
@@ -489,7 +506,12 @@ export function loadSessionStore(
 
   setSerializedSessionStore(storePath, serializedFromDisk);
 
-  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
+  if (
+    !opts.skipCache &&
+    canUseSessionStoreCache &&
+    canWriteSessionStoreCache &&
+    isSessionStoreCacheEnabled()
+  ) {
     writeSessionStoreCache({
       storePath,
       store,

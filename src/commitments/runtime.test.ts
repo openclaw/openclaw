@@ -31,6 +31,7 @@ function requireFirstEmbeddedAgentRequest(): {
   provider?: string;
   model?: string;
   disableTools?: boolean;
+  chatType?: string;
 } {
   const [call] = runEmbeddedAgentMock.mock.calls;
   if (!call) {
@@ -40,7 +41,12 @@ function requireFirstEmbeddedAgentRequest(): {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new Error("expected embedded OpenClaw agent extraction request");
   }
-  return request as { provider?: string; model?: string; disableTools?: boolean };
+  return request as {
+    provider?: string;
+    model?: string;
+    disableTools?: boolean;
+    chatType?: string;
+  };
 }
 
 describe("commitment extraction runtime", () => {
@@ -231,6 +237,38 @@ describe("commitment extraction runtime", () => {
     expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
+  });
+
+  it("marks shared opaque source batches explicit-only for extractor memory", async () => {
+    const cfg = await createConfig();
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: '{"candidates":[]}' }],
+    });
+    resolveDefaultModelMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        channel: "telegram",
+        chatType: "group",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
+    expect(requireFirstEmbeddedAgentRequest().chatType).toBe("group");
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {

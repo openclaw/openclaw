@@ -512,6 +512,7 @@ describe("installContextEngineLoopHook", () => {
     }) => Record<string, unknown> | undefined,
     onAfterTurnCheckpoint?: (messageCount: number) => void,
     isHeartbeat?: boolean,
+    chatType?: Parameters<typeof installContextEngineLoopHook>[0]["chatType"],
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -525,6 +526,7 @@ describe("installContextEngineLoopHook", () => {
       ...(getRuntimeContext ? { getRuntimeContext } : {}),
       ...(onAfterTurnCheckpoint ? { onAfterTurnCheckpoint } : {}),
       ...(isHeartbeat !== undefined ? { isHeartbeat } : {}),
+      ...(chatType !== undefined ? { chatType } : {}),
     });
   }
 
@@ -697,6 +699,50 @@ describe("installContextEngineLoopHook", () => {
 
     expect(recordMockArg(engine.afterTurn).runtimeSettings).toBe(runtimeSettings);
     expect(recordMockArg(engine.assemble).runtimeSettings).toBe(runtimeSettings);
+  });
+
+  it("passes shared chatType through context-engine loop lifecycle hooks", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      chatType: "group",
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn).chatType).toBe("group");
+    expect(recordMockArg(engine.assemble).chatType).toBe("group");
+  });
+
+  it("omits direct chatType from context-engine loop assembly", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      chatType: "direct",
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn)).not.toHaveProperty("chatType");
+    expect(recordMockArg(engine.assemble)).not.toHaveProperty("chatType");
   });
 
   it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {
@@ -1011,7 +1057,7 @@ describe("installContextEngineLoopHook", () => {
   it("ingests new messages in batches when afterTurn is absent", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({ omitAfterTurn: true });
-    installHook(agent, engine, undefined, undefined, undefined, true);
+    installHook(agent, engine, undefined, undefined, undefined, true, "group");
 
     const batch0 = [makeUser("first"), makeToolResult("call_1", "r1")];
     await callTransform(agent, batch0);
@@ -1028,8 +1074,10 @@ describe("installContextEngineLoopHook", () => {
       throw new Error("expected ingestBatch mock");
     }
     expect(recordMockArg(ingestBatch).messages).toEqual(batch1.slice(2));
+    expect(recordMockArg(ingestBatch).chatType).toBe("group");
     expect(recordMockArg(ingestBatch).isHeartbeat).toBe(true);
     expect(recordMockArg(ingestBatch, 1).messages).toEqual(batch2.slice(4));
+    expect(recordMockArg(ingestBatch, 1).chatType).toBe("group");
     expect(recordMockArg(ingestBatch, 1).isHeartbeat).toBe(true);
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
@@ -1037,7 +1085,7 @@ describe("installContextEngineLoopHook", () => {
   it("falls back to per-message ingest when ingestBatch is absent", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
-    installHook(agent, engine, 1);
+    installHook(agent, engine, 1, undefined, undefined, undefined, "group");
 
     const toolResult = makeToolResult("call_1", "r1");
     const messages = [makeUser("first"), toolResult];
@@ -1047,6 +1095,7 @@ describe("installContextEngineLoopHook", () => {
     const ingestParams = recordMockArg(engine.ingest);
     expect(ingestParams?.sessionId).toBe(sessionId);
     expect(ingestParams?.sessionKey).toBe(sessionKey);
+    expect(ingestParams?.chatType).toBe("group");
     expect(ingestParams?.message).toBe(toolResult);
     expect(ingestParams?.isHeartbeat).toBeUndefined();
     expect(engine.assemble).toHaveBeenCalledTimes(1);

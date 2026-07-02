@@ -23,6 +23,7 @@ import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+type LongTermMemoryDefaultPolicy = "include" | "explicit-only";
 export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_BINDING_LOCK_RETRY_INTERVAL_MS = 1_000;
 const CODEX_APP_SERVER_BINDING_LOCK_MIN_WAIT_MS =
@@ -78,6 +79,7 @@ export type CodexAppServerThreadBinding = {
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  nativeMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   contextEngine?: CodexAppServerContextEngineBinding;
   environmentSelectionFingerprint?: string;
   createdAt: string;
@@ -230,6 +232,7 @@ export async function readCodexAppServerBinding(
         parsed.pluginAppPolicyContext,
         schemaVersion,
       ),
+      nativeMemoryDefaultPolicy: readNativeMemoryDefaultPolicy(parsed.nativeMemoryDefaultPolicy),
       contextEngine: readContextEngineBinding(parsed.contextEngine),
       environmentSelectionFingerprint:
         typeof parsed.environmentSelectionFingerprint === "string"
@@ -284,6 +287,7 @@ export async function writeCodexAppServerBinding(
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
       pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
       pluginAppPolicyContext: binding.pluginAppPolicyContext,
+      nativeMemoryDefaultPolicy: binding.nativeMemoryDefaultPolicy,
       contextEngine: binding.contextEngine,
       environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
       createdAt: binding.createdAt ?? now,
@@ -294,6 +298,10 @@ export async function writeCodexAppServerBinding(
       `${JSON.stringify(payload, null, 2)}\n`,
     );
   });
+}
+
+function readNativeMemoryDefaultPolicy(value: unknown): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

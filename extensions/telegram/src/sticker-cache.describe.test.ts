@@ -76,6 +76,12 @@ describe("describeStickerImage", () => {
         imagePath: "/tmp/sticker.webp",
         cfg: {},
         agentDir: "/tmp/agent",
+        scopeContext: {
+          sessionKey: "agent:main:telegram:group:chat-1",
+          channel: "telegram",
+          chatType: "group",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
       }),
     ).resolves.toBe("vlm ok");
 
@@ -91,6 +97,12 @@ describe("describeStickerImage", () => {
         filePath: "/tmp/sticker.webp",
         provider: "minimax-cn",
         model: "MiniMax-VL-01",
+        scopeContext: {
+          sessionKey: "agent:main:telegram:group:chat-1",
+          channel: "telegram",
+          chatType: "group",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
       }),
     );
   });

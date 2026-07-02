@@ -1,6 +1,7 @@
 /** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
   AcpRuntime,
+  AcpRuntimeEnsureInput,
   AcpRuntimeCapabilities,
   AcpRuntimeEvent,
   AcpRuntimeHandle,
@@ -50,6 +51,7 @@ export type AcpInitializeSessionInput = {
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   cwd?: string;
   backendId?: string;
+  memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
 };
 
 export type AcpTurnAttachment = {
@@ -66,6 +68,7 @@ export type AcpRunTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
 };
@@ -175,6 +178,7 @@ export type EnsureManagerRuntimeHandle = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   meta: SessionAcpMeta;
+  memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
 }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 export type ReconcileManagerRuntimeSessionIdentifiers = (params: {

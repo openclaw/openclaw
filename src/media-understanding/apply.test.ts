@@ -31,6 +31,9 @@ const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const sessionEntryByKey = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const sessionEntryLoadErrorByKey = vi.hoisted(() => new Map<string, Error>());
+const sessionEntryLoadOptionsByKey = vi.hoisted(() => new Map<string, unknown[]>());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -302,6 +305,18 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+  vi.doMock("../config/sessions/session-accessor.js", () => ({
+      loadSessionEntry: ({ sessionKey, ...opts }: { sessionKey: string }) => {
+        const options = sessionEntryLoadOptionsByKey.get(sessionKey) ?? [];
+        options.push(opts);
+        sessionEntryLoadOptionsByKey.set(sessionKey, options);
+        const error = sessionEntryLoadErrorByKey.get(sessionKey);
+        if (error) {
+          throw error;
+        }
+        return sessionEntryByKey.get(sessionKey);
+      },
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -353,6 +368,9 @@ describe("applyMediaUnderstanding", () => {
     mockedConvertHeicToJpeg.mockReset();
     mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
+    sessionEntryByKey.clear();
+    sessionEntryLoadErrorByKey.clear();
+    sessionEntryLoadOptionsByKey.clear();
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -1149,6 +1167,10 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: relativeImagePath,
       MediaType: "image/jpeg",
       MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:slack:channel:C123",
+      ChatType: "channel",
+      LongTermMemoryDefaultPolicy: "explicit-only",
+      Surface: "slack",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1183,6 +1205,308 @@ describe("applyMediaUnderstanding", () => {
         fileName: "workspace.jpg",
         provider: "openai",
         model: "gpt-5.4",
+        scopeContext: {
+          sessionKey: "agent:main:slack:channel:C123",
+          channel: "slack",
+          chatType: "channel",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    );
+  });
+
+  it("scopes provider media turns to native command target sessions", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "targeted.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "targeted image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:discord:dm:U123",
+      ChatType: "direct",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: "agent:main:discord:channel:C123",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: "agent:main:discord:channel:C123",
+          channel: "discord",
+          chatType: "channel",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    );
+  });
+
+  it("keeps shared media source policy when native command targets a direct session", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "shared-to-direct.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "shared targeted image" }));
+    const targetSessionKey = "agent:main:discord:dm:U123";
+    sessionEntryByKey.set(targetSessionKey, {
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    });
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:discord:channel:C123",
+      ChatType: "channel",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: targetSessionKey,
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: targetSessionKey,
+          channel: "discord",
+          chatType: "channel",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    );
+  });
+
+  it("fails closed for opaque native command target media scopes", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "opaque-target.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "targeted image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:discord:dm:U123",
+      ChatType: "direct",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: "agent:main:opaque-target",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: "agent:main:opaque-target",
+          channel: "discord",
+          chatType: "channel",
+        },
+      }),
+    );
+  });
+
+  it("uses stored explicit-only policy for direct-shaped native command target media scopes", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "target-explicit-only.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "targeted image" }));
+    const targetSessionKey = "agent:main:discord:dm:U123";
+    sessionEntryByKey.set(targetSessionKey, {
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:discord:dm:U999",
+      ChatType: "direct",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: targetSessionKey,
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: targetSessionKey,
+          channel: "discord",
+          chatType: "channel",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    );
+  });
+
+  it("fails closed when native command target media policy cannot be read", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "target-policy-error.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "targeted image" }));
+    const targetSessionKey = "agent:main:discord:dm:U123";
+    sessionEntryLoadErrorByKey.set(targetSessionKey, new Error("permission denied"));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+      SessionKey: "agent:main:discord:dm:U999",
+      ChatType: "direct",
+      Surface: "discord",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: targetSessionKey,
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(sessionEntryLoadOptionsByKey.get(targetSessionKey)).toEqual([
+      { clone: false, hydrateSkillPromptRefs: false, strictRead: true },
+    ]);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeContext: {
+          sessionKey: targetSessionKey,
+          channel: "discord",
+          chatType: "channel",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
       }),
     );
   });

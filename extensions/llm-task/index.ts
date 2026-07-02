@@ -28,7 +28,8 @@ export default defineToolPlugin({
     tool({
       ...llmTaskToolDefinition,
       optional: true,
-      factory: ({ api }) => createLlmTaskTool(api) as unknown as AnyAgentTool,
+      factory: ({ api, toolContext }) =>
+        createLlmTaskTool(api, toolContext) as unknown as AnyAgentTool,
     }),
   ],
 });

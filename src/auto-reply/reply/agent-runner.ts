@@ -1090,6 +1090,7 @@ function enqueueCommitmentExtractionForTurn(params: {
   if (!userText || !assistantText || !sessionKey || !channel) {
     return;
   }
+  const targetChatType = params.followupRun.run.chatType ?? params.sessionCtx.ChatType;
   const to = resolveOriginMessageTo({
     originatingTo: params.sessionCtx.OriginatingTo,
     to: params.sessionCtx.To,
@@ -1099,6 +1100,7 @@ function enqueueCommitmentExtractionForTurn(params: {
     agentId: params.followupRun.run.agentId,
     sessionKey,
     channel,
+    ...(targetChatType ? { chatType: targetChatType } : {}),
     ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
     ...(to ? { to } : {}),
     ...(params.sessionCtx.MessageThreadId !== undefined

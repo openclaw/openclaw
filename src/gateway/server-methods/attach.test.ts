@@ -1,8 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { resetAttachGrantsForTest, resolveAttachGrant } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer } from "../mcp-http.js";
 import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+type LoadSessionEntryMockResult = {
+  canonicalKey: string;
+  entry?: Pick<SessionEntry, "chatType" | "origin" | "route" | "longTermMemoryDefaultPolicy">;
+};
+
+const sessionMocks = vi.hoisted(() => ({
+  loadSessionEntry: vi.fn(
+    (sessionKey: string, _opts?: unknown): LoadSessionEntryMockResult => ({
+      canonicalKey: sessionKey,
+      entry: undefined,
+    }),
+  ),
+}));
+
+vi.mock("../session-utils.js", () => ({
+  loadSessionEntry: sessionMocks.loadSessionEntry,
+}));
 
 const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
   ({
@@ -12,7 +31,14 @@ const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
   }) as unknown as GatewayRequestHandlerOptions;
 
 describe("attach gateway methods", () => {
-  beforeEach(() => resetAttachGrantsForTest());
+  beforeEach(() => {
+    resetAttachGrantsForTest();
+    sessionMocks.loadSessionEntry.mockReset();
+    sessionMocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: undefined,
+    }));
+  });
   afterEach(async () => {
     resetAttachGrantsForTest();
     // attach.grant lazily starts the loopback singleton; close it so it doesn't leak across files.
@@ -21,6 +47,10 @@ describe("attach gateway methods", () => {
 
   it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
     const respond = vi.fn();
+    sessionMocks.loadSessionEntry.mockReturnValueOnce({
+      canonicalKey: "agent:main:attach-method",
+      entry: { route: { target: { to: "C123", chatType: "group" } } },
+    });
     await attachHandlers["attach.grant"](grantOpts("agent:main:attach-method", respond));
 
     expect(respond).toHaveBeenCalledTimes(1);
@@ -37,7 +67,34 @@ describe("attach gateway methods", () => {
     expect(body.mcpConfig).toBeTruthy();
     expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
     expect(Object.keys(body.env)).toEqual(["OPENCLAW_MCP_TOKEN"]);
-    expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
+    expect(resolveAttachGrant(body.token)).toMatchObject({
+      sessionKey: "agent:main:attach-method",
+      chatType: "group",
+    });
+    expect(sessionMocks.loadSessionEntry).toHaveBeenCalledWith("agent:main:attach-method", {
+      strictRead: true,
+    });
+  });
+
+  it("canonicalizes session aliases before minting attach grants", async () => {
+    const respond = vi.fn();
+    sessionMocks.loadSessionEntry.mockReturnValueOnce({
+      canonicalKey: "agent:main:main",
+      entry: { chatType: "direct" },
+    });
+
+    await attachHandlers["attach.grant"](grantOpts("main", respond));
+
+    const body = respond.mock.calls[0][1] as {
+      token: string;
+      sessionKey: string;
+    };
+    expect(body.sessionKey).toBe("agent:main:main");
+    expect(resolveAttachGrant(body.token)).toMatchObject({
+      sessionKey: "agent:main:main",
+      chatType: "direct",
+    });
+    expect(sessionMocks.loadSessionEntry).toHaveBeenCalledWith("main", { strictRead: true });
   });
 
   it("returns an attach MCP config whose env placeholders are all supplied", async () => {
@@ -51,6 +108,51 @@ describe("attach gateway methods", () => {
     const configText = JSON.stringify(body.mcpConfig);
     const placeholders = [...configText.matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map((match) => match[1]);
     expect(new Set(placeholders)).toEqual(new Set(Object.keys(body.env)));
+  });
+
+  it("binds explicit-only persisted sessions as shared grants", async () => {
+    const respond = vi.fn();
+    sessionMocks.loadSessionEntry.mockReturnValueOnce({
+      canonicalKey: "agent:main:discord:default:direct:U123",
+      entry: {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+    await attachHandlers["attach.grant"](
+      grantOpts("agent:main:discord:default:direct:U123", respond),
+    );
+
+    const body = respond.mock.calls[0][1] as {
+      token: string;
+    };
+    expect(resolveAttachGrant(body.token)).toMatchObject({
+      sessionKey: "agent:main:discord:default:direct:U123",
+      chatType: "group",
+    });
+  });
+
+  it("fails closed when attach.grant cannot read the persisted session policy", async () => {
+    const respond = vi.fn();
+    sessionMocks.loadSessionEntry.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    await attachHandlers["attach.grant"](
+      grantOpts("agent:main:discord:default:direct:U123", respond),
+    );
+
+    const [ok, payload, error] = respond.mock.calls[0];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect((error as { code?: string; message?: string }).code).toBe("UNAVAILABLE");
+    expect((error as { code?: string; message?: string }).message).toBe(
+      "session policy unavailable",
+    );
+    expect(sessionMocks.loadSessionEntry).toHaveBeenCalledWith(
+      "agent:main:discord:default:direct:U123",
+      { strictRead: true },
+    );
   });
 
   it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async () => {

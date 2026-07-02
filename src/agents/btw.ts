@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
@@ -19,6 +20,11 @@ import type {
   TextContent,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import {
+  resolveLongTermMemoryDefaultPolicy,
+  resolveLongTermMemoryScopedChatType,
+} from "../sessions/session-memory-policy.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -116,6 +122,30 @@ function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): stri
   }
   lines.push("", "<btw_side_question>", question.trim(), "</btw_side_question>");
   return lines.join("\n");
+}
+
+function isSharedBtwChatType(chatType: ChatType | undefined): boolean {
+  return chatType === "group" || chatType === "channel";
+}
+
+function resolveBtwSideQuestionChatType(params: {
+  chatType?: string | null;
+  sessionKey?: string | null;
+  sessionEntry?: StoredSessionEntry;
+}): ChatType | undefined {
+  const liveChatType = normalizeChatType(params.chatType ?? undefined);
+  if (liveChatType) {
+    return liveChatType;
+  }
+  const persistedChatType = resolveSessionEntryChatType(params.sessionEntry);
+  if (isSharedBtwChatType(persistedChatType)) {
+    return persistedChatType;
+  }
+  return resolveLongTermMemoryScopedChatType({
+    sessionKey: params.sessionKey,
+    chatType: persistedChatType,
+    longTermMemoryDefaultPolicy: params.sessionEntry?.longTermMemoryDefaultPolicy,
+  });
 }
 
 function collectBtwMessageText(content: Message["content"]): string {
@@ -366,6 +396,7 @@ type RunBtwSideQuestionParams = {
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
   sandboxSessionKey?: string;
+  chatType?: string | null;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -409,6 +440,7 @@ async function runCliBtwSideQuestion(params: {
   opts?: GetReplyOptions;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   currentChannelId?: string;
 }): Promise<ReplyPayload> {
   const timeoutMs = resolveAgentTimeoutMs({
@@ -442,6 +474,7 @@ async function runCliBtwSideQuestion(params: {
     abortSignal: params.opts?.abortSignal,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
+    chatType: params.chatType,
     currentChannelId: params.currentChannelId,
   });
   try {
@@ -479,6 +512,25 @@ export async function runBtwSideQuestion(
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
+  const chatType = resolveBtwSideQuestionChatType({
+    chatType: params.chatType,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+  });
+  const memoryPolicy = resolveLongTermMemoryDefaultPolicy({
+    sessionKey: params.sessionKey,
+    chatType,
+  });
+  const previousMemoryPolicy = resolveLongTermMemoryDefaultPolicy({
+    sessionKey: params.sessionKey,
+    chatType: resolveSessionEntryChatType(params.sessionEntry),
+    longTermMemoryDefaultPolicy: params.sessionEntry.longTermMemoryDefaultPolicy,
+  });
+  if (memoryPolicy === "explicit-only" && previousMemoryPolicy === "include") {
+    throw new Error(
+      "BTW needs a fresh session memory boundary. Send a normal message first, then try /btw again.",
+    );
+  }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const preparedHarnesses = new Map<string, AgentHarness>();
   const prepareHarness = async (provider: string, modelId: string): Promise<AgentHarness> => {
@@ -562,6 +614,7 @@ export async function runBtwSideQuestion(
       sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
+      chatType,
       ...(toolsAllow ? { toolsAllow } : {}),
       authProfileId: runtime.authProfileId,
       authProfileIdSource: runtime.authProfileIdSource,
@@ -662,6 +715,7 @@ export async function runBtwSideQuestion(
       opts: params.opts,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      chatType,
       currentChannelId: params.currentChannelId,
     });
   }

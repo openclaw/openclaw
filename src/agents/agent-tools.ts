@@ -896,6 +896,7 @@ export function createOpenClawCodingTools(options?: {
           options: {
             agentSessionKey: options?.sessionKey,
             agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChatType: options?.chatType,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -978,6 +979,7 @@ export function createOpenClawCodingTools(options?: {
           runId: options?.runId,
           runSessionKey: options?.runSessionKey,
           agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+          agentChatType: options?.chatType,
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,

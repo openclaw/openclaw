@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
@@ -13,6 +17,10 @@ import {
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
+
+afterEach(() => {
+  clearMemoryPluginState();
+});
 
 describe("Codex app-server attempt context", () => {
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
@@ -115,6 +123,43 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryReferenceFiles).toEqual([]);
     expect(context.promptContext).toContain(memorySummary);
     expect(context.memoryToolRouted).toBe(false);
+  });
+
+  it("drops MEMORY.md for opaque shared Codex sessions using runtime chat type", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-shared-"));
+    const memorySummary = "Shared Codex turns must not see this private memory.";
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerMemoryCapability("test-memory", {
+      promptBuilder: ({ sessionKey, chatType }) => [
+        "## Test Memory",
+        `sessionKey=${sessionKey ?? "missing"}`,
+        `chatType=${chatType ?? "missing"}`,
+      ],
+    });
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        chatType: "group",
+        config: {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      sessionAgentId: "main",
+      memoryToolNames: ["memory_search"],
+    });
+
+    expect(context.bootstrapFiles.map((file) => file.name)).not.toContain("MEMORY.md");
+    expect(context.promptContext ?? "").not.toContain(memorySummary);
+    expect(context.memoryCollaborationInstructions).toBeUndefined();
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {

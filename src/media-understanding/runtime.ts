@@ -21,6 +21,7 @@ import {
   runCapability,
 } from "./runner.js";
 import type {
+  MediaUnderstandingScopeContext,
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
@@ -66,11 +67,7 @@ function buildFileContext(params: {
   mediaUrl?: string;
   mime?: string;
   capability?: MediaUnderstandingCapability;
-  scopeContext?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
+  scopeContext?: MediaUnderstandingScopeContext;
 }) {
   // Runtime file calls reuse message-context media plumbing so scope, local roots, and
   // remote URL handling stay identical to normal channel-triggered media understanding.
@@ -80,6 +77,9 @@ function buildFileContext(params: {
       ? { Provider: params.scopeContext.channel, Surface: params.scopeContext.channel }
       : {}),
     ...(params.scopeContext?.chatType ? { ChatType: params.scopeContext.chatType } : {}),
+    ...(params.scopeContext?.longTermMemoryDefaultPolicy
+      ? { LongTermMemoryDefaultPolicy: params.scopeContext.longTermMemoryDefaultPolicy }
+      : {}),
   };
   const remoteRef =
     params.mediaUrl ??
@@ -286,6 +286,7 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
   });
 }
 
@@ -364,6 +365,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
+    ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
   });
 }
 

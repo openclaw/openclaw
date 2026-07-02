@@ -4,9 +4,12 @@ import path from "node:path";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
 import {
   buildCommitmentExtractionPrompt,
@@ -29,6 +32,7 @@ type EmbeddedAgentPayloadResult = { payloads?: Array<{ text?: string }> };
 type CommitmentExtractionEnqueueInput = CommitmentScope & {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  chatType?: string;
   userText: string;
   assistantText?: string;
   sourceMessageId?: string;
@@ -160,6 +164,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
     agentId,
     sessionKey,
     channel,
+    ...(input.chatType?.trim() ? { chatType: input.chatType.trim() } : {}),
     ...(input.accountId?.trim() ? { accountId: input.accountId.trim() } : {}),
     ...(input.to?.trim() ? { to: input.to.trim() } : {}),
     ...(input.threadId?.trim() ? { threadId: input.threadId.trim() } : {}),
@@ -232,6 +237,30 @@ function joinPayloadText(result: EmbeddedAgentPayloadResult): string {
   );
 }
 
+function resolveCommitmentExtractorChatType(
+  items: CommitmentExtractionItem[],
+): "direct" | "group" | "channel" | undefined {
+  let sawDirect = false;
+  for (const item of items) {
+    if (
+      resolveLongTermMemoryDefaultPolicy({
+        sessionKey: item.sessionKey,
+        chatType: item.chatType,
+      }) === "explicit-only"
+    ) {
+      const normalizedChatType = normalizeChatType(item.chatType);
+      if (normalizedChatType === "group" || normalizedChatType === "channel") {
+        return normalizedChatType;
+      }
+      return deriveSessionChatTypeFromKey(item.sessionKey) === "channel" ? "channel" : "group";
+    }
+    const normalizedChatType = normalizeChatType(item.chatType);
+    const sessionKeyChatType = deriveSessionChatTypeFromKey(item.sessionKey);
+    sawDirect = sawDirect || normalizedChatType === "direct" || sessionKeyChatType === "direct";
+  }
+  return sawDirect ? "direct" : undefined;
+}
+
 async function resolveDefaultModel(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -254,6 +283,7 @@ async function defaultExtractBatch(params: {
   }
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
+  const chatType = resolveCommitmentExtractorChatType(params.items);
   const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
   const { runEmbeddedAgent } = await import("../agents/embedded-agent.js");
   const result = await runEmbeddedAgent({
@@ -275,6 +305,7 @@ async function defaultExtractBatch(params: {
     timeoutMs: resolved.extraction.timeoutSeconds * 1000,
     runId,
     bootstrapContextMode: "lightweight",
+    ...(chatType ? { chatType } : {}),
     skillsSnapshot: { prompt: "", skills: [] },
     suppressToolErrorWarnings: true,
   });

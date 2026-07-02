@@ -13,10 +13,25 @@ import {
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
+import { sessionFileHasMemoryBoundaryContent } from "../../agents/command/attempt-execution.helpers.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  updateSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
+import { resolveSessionTranscriptFile } from "../../config/sessions/transcript-resolve.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { revokeAttachGrantsForSession } from "../../gateway/mcp-grant-store.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -29,6 +44,12 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import {
+  resolveLongTermMemoryRuntimePolicyContext,
+  resolveSessionMemoryBoundaryPlan,
+  type LongTermMemoryRuntimePolicyContext,
+} from "../../sessions/session-memory-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
@@ -197,6 +218,110 @@ async function hasBoundConversationForSession(params: {
       conversationId.length > 0
     );
   });
+}
+
+async function prepareAcpDispatchSessionMemoryBoundary(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storeEntry: AcpSessionStoreEntry | null;
+  memoryPolicy: LongTermMemoryRuntimePolicyContext;
+}): Promise<void> {
+  if (!params.storeEntry?.entry?.sessionId) {
+    return;
+  }
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const storePath =
+    params.storeEntry.storePath ??
+    resolveStorePath(params.cfg.session?.store, {
+      agentId: sessionAgentId,
+    });
+  const sessionStore = loadSessionStore(storePath, { skipCache: true });
+  const currentEntry = resolveSessionStoreEntry({
+    store: sessionStore,
+    sessionKey: params.sessionKey,
+  }).existing;
+  if (!currentEntry) {
+    throw new Error("Session memory boundary changed during ACP setup; retry the request.");
+  }
+  const resolvedTranscript = await resolveSessionTranscriptFile({
+    sessionId: currentEntry.sessionId,
+    sessionKey: params.sessionKey,
+    sessionStore,
+    storePath,
+    sessionEntry: currentEntry,
+    agentId: sessionAgentId,
+  });
+  const resolvedEntry = resolvedTranscript.sessionEntry;
+  if (!resolvedEntry) {
+    throw new Error("Session memory boundary changed during ACP setup; retry the request.");
+  }
+  const plan = resolveSessionMemoryBoundaryPlan({
+    currentEntry: resolvedEntry,
+    sessionKey: params.sessionKey,
+    sessionFile: resolvedTranscript.sessionFile,
+    storedChatType: resolveSessionEntryChatType(resolvedEntry),
+    hasPersistedTranscriptContent: await sessionFileHasMemoryBoundaryContent(
+      resolvedTranscript.sessionFile,
+    ),
+    runMemoryPolicy: params.memoryPolicy.longTermMemoryDefaultPolicy,
+    runMemoryChatType: params.memoryPolicy.chatType,
+  });
+  if (!plan) {
+    return;
+  }
+
+  const now = Date.now();
+  const updateResult = await updateSessionStore(
+    storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+      const writerEntry = resolved.existing;
+      if (
+        !writerEntry ||
+        writerEntry.sessionId !== plan.currentEntry.sessionId ||
+        writerEntry.sessionFile !== plan.expectedSessionFile ||
+        writerEntry.longTermMemoryDefaultPolicy !== plan.expectedPolicy
+      ) {
+        return null;
+      }
+      const nextEntry: SessionEntry = {
+        ...writerEntry,
+        sessionId: plan.nextSessionId,
+        sessionFile: plan.nextSessionFile,
+        longTermMemoryDefaultPolicy: plan.runMemoryPolicy,
+        updatedAt: now,
+        sessionStartedAt: writerEntry.sessionStartedAt ?? now,
+      };
+      store[resolved.normalizedKey] = nextEntry;
+      return { entry: nextEntry, sessionKey: resolved.normalizedKey };
+    },
+    {
+      skipSaveWhenResult: (result) => result === null,
+      resolveSingleEntryPersistence: (result) =>
+        result
+          ? {
+              sessionKey: result.sessionKey,
+              entry: result.entry,
+            }
+          : undefined,
+    },
+  );
+  const updateMatchesMemoryBoundary =
+    updateResult?.entry.sessionId === plan.nextSessionId &&
+    updateResult?.entry.sessionFile === plan.nextSessionFile &&
+    updateResult?.entry.longTermMemoryDefaultPolicy === plan.runMemoryPolicy;
+  if (!updateMatchesMemoryBoundary) {
+    throw new Error("Session memory boundary changed during ACP setup; retry the request.");
+  }
+  const localResolved = resolveSessionStoreEntry({
+    store: sessionStore,
+    sessionKey: params.sessionKey,
+  });
+  sessionStore[localResolved.normalizedKey] = updateResult.entry;
+  revokeAttachGrantsForSession(params.sessionKey);
 }
 
 export type AcpDispatchAttemptResult = {
@@ -660,6 +785,27 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
+    const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+    const acpSessionStoreEntry = readAcpSessionEntry({
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+    });
+    if (acpSessionStoreEntry?.storeReadFailed) {
+      throw new Error("ACP session memory boundary could not be read; retry the request.");
+    }
+    const memoryPolicy = resolveLongTermMemoryRuntimePolicyContext({
+      sessionKey: canonicalSessionKey,
+      liveChatType: params.originatingChatType ?? params.ctx.ChatType,
+      storedChatType: resolveSessionEntryChatType(acpSessionStoreEntry?.entry),
+      longTermMemoryDefaultPolicy: acpSessionStoreEntry?.entry?.longTermMemoryDefaultPolicy,
+    });
+    await prepareAcpDispatchSessionMemoryBoundary({
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+      storeEntry: acpSessionStoreEntry,
+      memoryPolicy,
+    });
+
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -671,6 +817,7 @@ export async function tryDispatchAcpReply(params: {
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      memoryPolicy,
       onEvent: async (event) => await projector.onEvent(event),
     });
 

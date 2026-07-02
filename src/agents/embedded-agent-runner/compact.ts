@@ -810,6 +810,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             config: params.config,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
+            chatType: params.chatType ?? undefined,
             agentId: effectiveSkillAgentId,
             warn: makeBootstrapWarn({
               sessionLabel,
@@ -1097,6 +1098,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       node: process.version,
       model: `${provider}/${modelId}`,
       shell: detectRuntimeShell(),
+      sessionKey: params.sessionKey,
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,

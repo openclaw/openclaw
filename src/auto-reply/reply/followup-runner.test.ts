@@ -237,6 +237,7 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextChatType?: FollowupRun["run"]["chatType"];
   nextProvider?: string;
   nextModel?: string;
   nextAuthProfileId?: string;
@@ -250,10 +251,15 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   if (!queue) {
     return;
   }
+  const nextSessionFile = params.nextSessionFile?.trim() || undefined;
+  const hasSessionRewriteTarget =
+    Boolean(params.previousSessionId) && Boolean(params.nextSessionId);
+  const shouldRewriteChatType = Object.hasOwn(params, "nextChatType");
   const shouldRewriteSession =
-    Boolean(params.previousSessionId) &&
-    Boolean(params.nextSessionId) &&
-    params.previousSessionId !== params.nextSessionId;
+    hasSessionRewriteTarget &&
+    (params.previousSessionId !== params.nextSessionId ||
+      Boolean(nextSessionFile) ||
+      shouldRewriteChatType);
   const shouldRewriteSelection =
     typeof params.nextProvider === "string" ||
     typeof params.nextModel === "string" ||
@@ -268,8 +274,11 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      if (params.nextSessionFile?.trim()) {
-        run.sessionFile = params.nextSessionFile;
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
+      }
+      if (shouldRewriteChatType) {
+        run.chatType = params.nextChatType;
       }
     }
     if (shouldRewriteSelection) {
@@ -1149,6 +1158,68 @@ describe("createFollowupRunner runtime config", () => {
       suppressNextUserMessagePersistence: false,
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("forwards live chat type to queued CLI runs for opaque shared session keys", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-opaque-shared",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingChatType: "group",
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-opaque-shared",
+          sessionKey,
+          chatType: "group",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.sessionKey).toBe(sessionKey);
+    expect(call.chatType).toBe("group");
+    expect(call.sessionEntry).toBe(sessionEntry);
   });
 
   it("reuses CLI session bindings for queued room-event followups", async () => {

@@ -26,6 +26,9 @@ export function getCliSessionBinding(
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       messageToolPolicyHash: normalizeOptionalString(fromBindings?.messageToolPolicyHash),
       promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),
+      longTermMemoryDefaultPolicy: readLongTermMemoryDefaultPolicy(
+        fromBindings?.longTermMemoryDefaultPolicy,
+      ),
       cwdHash: normalizeOptionalString(fromBindings?.cwdHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
@@ -44,6 +47,12 @@ export function getCliSessionBinding(
     }
   }
   return undefined;
+}
+
+function readLongTermMemoryDefaultPolicy(
+  value: unknown,
+): CliSessionBinding["longTermMemoryDefaultPolicy"] {
+  return value === "include" || value === "explicit-only" ? value : undefined;
 }
 
 /** Read just the reusable CLI session ID for a provider. */

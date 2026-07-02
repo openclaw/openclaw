@@ -82,6 +82,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
@@ -1002,7 +1003,10 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+export function loadSessionEntry(
+  sessionKey: string,
+  opts?: { agentId?: string; clone?: boolean; strictRead?: boolean },
+) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
@@ -1010,6 +1014,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts?.strictRead === true ? { strictRead: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
@@ -1140,7 +1145,8 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
   if (key === "unknown") {
     return "unknown";
   }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+  const chatType = resolveSessionEntryChatType(entry);
+  if (chatType === "group" || chatType === "channel") {
     return "group";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
@@ -1169,9 +1175,10 @@ function isGroupOrChannelDisplaySession(
   entry: SessionEntry | undefined,
   parsed: { kind?: "group" | "channel" } | null,
 ): boolean {
+  const chatType = resolveSessionEntryChatType(entry);
   return (
-    entry?.chatType === "group" ||
-    entry?.chatType === "channel" ||
+    chatType === "group" ||
+    chatType === "channel" ||
     parsed?.kind === "group" ||
     parsed?.kind === "channel"
   );
@@ -1352,11 +1359,13 @@ function resolveGatewaySessionStoreCandidates(
 function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
+  strictRead?: boolean,
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
     listAccessorSessionEntries({
       ...(clone === false ? { clone: false } : {}),
       storePath,
+      ...(strictRead === true ? { strictRead: true } : {}),
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
@@ -1367,6 +1376,7 @@ function resolveGatewaySessionStoreLookup(params: {
   canonicalKey: string;
   agentId: string;
   clone?: boolean;
+  strictRead?: boolean;
   initialStore?: Record<string, SessionEntry>;
 }): {
   storePath: string;
@@ -1379,7 +1389,8 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
-  const loadStore = (storePath: string) => loadGatewaySessionLookupStore(storePath, params.clone);
+  const loadStore = (storePath: string) =>
+    loadGatewaySessionLookupStore(storePath, params.clone, params.strictRead);
   let selectedStorePath = fallback.storePath;
   let selectedStore = params.initialStore ?? loadStore(fallback.storePath);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
@@ -1417,6 +1428,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   clone?: boolean;
+  strictRead?: boolean;
 }): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
@@ -1451,7 +1463,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadGatewaySessionLookupStore(target.storePath, params.clone);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone, params.strictRead);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1486,6 +1498,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   key: string;
   agentId?: string;
   clone?: boolean;
+  strictRead?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
@@ -1493,6 +1506,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     cfg: params.cfg,
     key,
     clone: params.clone,
+    strictRead: params.strictRead,
   });
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
@@ -1513,6 +1527,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     canonicalKey,
     agentId,
     clone: params.clone,
+    strictRead: params.strictRead,
     initialStore: params.store,
   });
 
@@ -2159,7 +2174,7 @@ export function buildGatewaySessionRow(params: {
     subject,
     groupChannel,
     space,
-    chatType: entry?.chatType,
+    chatType: resolveSessionEntryChatType(entry),
     origin,
     updatedAt,
     sessionId: entry?.sessionId,

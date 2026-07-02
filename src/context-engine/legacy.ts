@@ -1,5 +1,6 @@
 // Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import type { AgentMessage } from "../agents/runtime/index.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
 import type {
@@ -24,11 +25,13 @@ export class LegacyContextEngine implements ContextEngine {
     id: "legacy",
     name: "Legacy Context Engine",
     version: "1.0.0",
+    supportsSharedSessionScope: true,
   };
 
   async ingest(_params: {
     sessionId: string;
     sessionKey?: string;
+    chatType?: ChatType;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
@@ -57,6 +60,7 @@ export class LegacyContextEngine implements ContextEngine {
   async afterTurn(_params: {
     sessionId: string;
     sessionKey?: string;
+    chatType?: ChatType;
     sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;

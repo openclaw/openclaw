@@ -22,6 +22,10 @@ import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js"
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
+import {
+  resolveTargetSessionChatType,
+  shouldPreferSessionEntryForTargetSession,
+} from "./runtime-policy-session-key.js";
 export { handleContextCommand } from "./commands-context-command.js";
 export { handleWhoamiCommand } from "./commands-whoami.js";
 
@@ -191,6 +195,15 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       command: params.command,
     });
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const targetChatType = resolveTargetSessionChatType({
+      ctx: params.ctx,
+      sessionEntry: targetSessionEntry,
+      sessionKey: params.sessionKey,
+      preferSessionEntry: shouldPreferSessionEntryForTargetSession({
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
+    });
     const sessionBound = Boolean(params.sessionKey);
     const agentId = sessionBound
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -208,6 +221,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentDir: sessionBound ? undefined : params.agentDir,
       modelProvider: params.provider,
       modelId: params.model,
+      chatType: targetChatType,
       messageProvider: params.command.channel,
       senderId: params.command.senderId,
       senderName: params.ctx.SenderName,
@@ -229,7 +243,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         params.cfg,
         params.ctx.OriginatingChannel ?? params.ctx.Provider,
         effectiveAccountId,
-        params.ctx.ChatType,
+        targetChatType ?? params.ctx.ChatType,
       ),
     });
     return {

@@ -57,6 +57,10 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: noPluginToolMeta,
 }));
 
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: () => ({ cfg, entry: undefined }),
+}));
+
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {

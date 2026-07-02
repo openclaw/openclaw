@@ -5,12 +5,17 @@
  */
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
@@ -273,6 +278,29 @@ async function resolveSubagentRegistryContextEngine(
   return await resolveContextEngine(cfg, options);
 }
 
+function resolveContextEngineSubagentEndedChatType(params: {
+  childSessionKey: string;
+  cfg: OpenClawConfig;
+}) {
+  const childSessionKey = params.childSessionKey.trim();
+  if (!childSessionKey) {
+    return undefined;
+  }
+  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const childEntry = loadSessionEntry({
+    agentId,
+    sessionKey: childSessionKey,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    strictRead: true,
+  });
+  return resolveLongTermMemoryTargetChatType({
+    sessionKey: childSessionKey,
+    storedChatType: childEntry ? resolveSessionEntryChatType(childEntry) : undefined,
+    longTermMemoryDefaultPolicy: childEntry?.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
+}
+
 function persistSubagentRuns() {
   subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
 }
@@ -525,7 +553,14 @@ async function notifyContextEngineSubagentEnded(params: {
     if (!engine.onSubagentEnded) {
       return;
     }
-    await engine.onSubagentEnded(params);
+    const chatType = resolveContextEngineSubagentEndedChatType({
+      childSessionKey: params.childSessionKey,
+      cfg,
+    });
+    await engine.onSubagentEnded({
+      ...params,
+      ...(chatType ? { chatType } : {}),
+    });
   } catch (err) {
     log.warn("context-engine onSubagentEnded failed (best-effort)", { err });
   }

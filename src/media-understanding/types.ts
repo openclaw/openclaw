@@ -3,6 +3,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { LongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
 
 type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
@@ -21,6 +22,13 @@ export type MediaAttachment = {
   mime?: string;
   index: number;
   alreadyTranscribed?: boolean;
+};
+
+export type MediaUnderstandingScopeContext = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
 };
 
 export type MediaUnderstandingOutput = {
@@ -149,6 +157,7 @@ export type ImageDescriptionRequest = {
   cfg: OpenClawConfig;
   model: string;
   provider: string;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type ImagesDescriptionInput = {
@@ -170,6 +179,7 @@ export type ImagesDescriptionRequest = {
   agentDir: string;
   workspaceDir?: string;
   cfg: OpenClawConfig;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type ImageDescriptionResult = {
@@ -213,6 +223,7 @@ export type StructuredExtractionRequest = {
   cfg: OpenClawConfig;
   model: string;
   provider: string;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type StructuredExtractionResult = {

@@ -11,6 +11,7 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { deriveSessionChatTypeFromKey } from "openclaw/plugin-sdk/routing";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -32,17 +33,21 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
 }
 
-function deriveChatTypeFromSessionKey(
-  sessionKey: string | undefined,
+function isSharedChatType(value: string | undefined): value is "group" | "channel" {
+  return value === "group" || value === "channel";
+}
+
+function resolveBrowserMediaChatType(
+  ctx: OpenClawPluginToolContext,
 ): "direct" | "group" | "channel" | undefined {
-  const tokens = new Set(sessionKey?.toLowerCase().split(":").filter(Boolean) ?? []);
-  if (tokens.has("group")) {
-    return "group";
+  const sessionKeyChatType = deriveSessionChatTypeFromKey(ctx.sessionKey);
+  if (isSharedChatType(sessionKeyChatType)) {
+    return sessionKeyChatType;
   }
-  if (tokens.has("channel")) {
-    return "channel";
+  if (isSharedChatType(ctx.chatType)) {
+    return ctx.chatType;
   }
-  if (tokens.has("direct") || tokens.has("dm")) {
+  if (sessionKeyChatType === "direct" || ctx.chatType === "direct") {
     return "direct";
   }
   return undefined;
@@ -115,7 +120,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   };
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
-  const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
+  const mediaChatType = resolveBrowserMediaChatType(ctx);
   return {
     ...(ctx.browser?.sandboxBridgeUrl ? { sandboxBridgeUrl: ctx.browser.sandboxBridgeUrl } : {}),
     ...(ctx.browser?.allowHostControl !== undefined

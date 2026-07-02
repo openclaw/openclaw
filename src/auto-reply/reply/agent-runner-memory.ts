@@ -39,6 +39,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
+import { shouldIncludeLongTermMemoryByDefault } from "../../sessions/session-memory-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -949,6 +950,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       sandboxSessionKey: params.runtimePolicySessionKey,
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
+      chatType: params.followupRun.run.chatType,
       groupId: entry.groupId ?? params.followupRun.run.groupId,
       groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
       groupSpace: entry.space ?? params.followupRun.run.groupSpace,
@@ -1068,6 +1070,16 @@ export async function runMemoryFlushIfNeeded(params: {
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
+    return params.sessionEntry;
+  }
+  const memoryPolicySessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  const memoryPolicyChatType = params.followupRun.run.chatType ?? params.sessionCtx.ChatType;
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: memoryPolicySessionKey,
+      chatType: memoryPolicyChatType,
+    })
+  ) {
     return params.sessionEntry;
   }
 

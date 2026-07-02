@@ -145,6 +145,7 @@ class MockContextEngine implements ContextEngine {
   async assemble(params: {
     sessionId: string;
     sessionKey?: string;
+    chatType?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
     availableTools?: Set<string>;
@@ -326,6 +327,7 @@ class LegacyAssembleStrictEngine implements ContextEngine {
     this.info = {
       id: engineId,
       name: "Legacy Assemble Strict Engine",
+      supportsSharedSessionScope: true,
     };
   }
 
@@ -639,9 +641,22 @@ describe("Engine contract tests", () => {
     expect(
       buildMemorySystemPromptAddition({
         availableTools: new Set(["memory_search"]),
+        sessionKey: "agent:main:webchat:direct:private",
         citationsMode: "off",
       }),
     ).toBe("## Memory Recall\ncitations=off");
+  });
+
+  it("suppresses memory system prompt additions for shared sessions", () => {
+    registerMemoryPromptSection(() => ["## Memory Recall", "mandatory recall"]);
+
+    expect(
+      buildMemorySystemPromptAddition({
+        availableTools: new Set(["memory_search"]),
+        sessionKey: "agent:main:acp:opaque-conversation",
+        chatType: "group",
+      }),
+    ).toBeUndefined();
   });
 
   it("returns undefined when the active memory prompt path contributes nothing", () => {
@@ -1683,6 +1698,7 @@ describe("assemble() prompt forwarding", () => {
     const result = await engine.assemble({
       sessionId: "s1",
       sessionKey: "agent:main:test",
+      chatType: "group",
       messages: [makeMockMessage("user", "hello")],
       prompt: "hello",
       runtimeSettings: { schemaVersion: 1 } as never,
@@ -1691,17 +1707,378 @@ describe("assemble() prompt forwarding", () => {
     expect(result.estimatedTokens).toBe(3);
     expect(strictEngine.assembleCalls).toHaveLength(4);
     expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.assembleCalls[0]).toHaveProperty("chatType", "group");
     expect(strictEngine.assembleCalls[0]).toHaveProperty("prompt", "hello");
     expect(strictEngine.assembleCalls[0]).toHaveProperty("runtimeSettings");
     expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[1]).toHaveProperty("chatType", "group");
     expect(strictEngine.assembleCalls[1]).toHaveProperty("prompt", "hello");
     expect(strictEngine.assembleCalls[1]).toHaveProperty("runtimeSettings");
     expect(strictEngine.assembleCalls[2]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[2]).toHaveProperty("chatType", "group");
     expect(strictEngine.assembleCalls[2]).not.toHaveProperty("prompt");
     expect(strictEngine.assembleCalls[2]).toHaveProperty("runtimeSettings");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[3]).toHaveProperty("chatType", "group");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("prompt");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("runtimeSettings");
+  });
+
+  it("uses the scoped fallback for shared sessions unless an engine opts in", async () => {
+    const engineId = uniqueEngineId("shared-scope-private-engine");
+    const message = makeMockMessage("user", "hello");
+    const ingest = vi.fn(async (_params: Parameters<ContextEngine["ingest"]>[0]) => ({
+      ingested: true,
+    }));
+    const afterTurn = vi.fn(async () => undefined);
+    const maintain = vi.fn(async () => ({
+      changed: true,
+      bytesFreed: 10,
+      rewrittenEntries: 1,
+    }));
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: [...params.messages, makeMockMessage("assistant", "private context")],
+      estimatedTokens: 99,
+      systemPromptAddition: "private context",
+    }));
+    const compact = vi.fn(async (_params: Parameters<ContextEngine["compact"]>[0]) => ({
+      ok: true,
+      compacted: false,
+    }));
+    const prepareSubagentSpawn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["prepareSubagentSpawn"]>>[0]) => ({
+        rollback: vi.fn(),
+      }),
+    );
+    const onSubagentEnded = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["onSubagentEnded"]>>[0]) => undefined,
+    );
+    const compactRuntimeSpy = installCompactRuntimeSpy();
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Shared Scope Private Engine" },
+      ingest,
+      afterTurn,
+      maintain,
+      assemble,
+      compact,
+      prepareSubagentSpawn,
+      onSubagentEnded,
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      messages: [message],
+    });
+    await engine.afterTurn?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+      messages: [message],
+      prePromptMessageCount: 0,
+    });
+    await engine.maintain?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+    });
+    await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      message,
+    });
+    const compactResult = await engine.compact({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+    });
+    const preparation = await engine.prepareSubagentSpawn?.({
+      parentSessionKey: "agent:main:channel:team-room",
+      childSessionKey: "agent:child:subagent",
+      chatType: "group",
+      contextMode: "fork",
+    });
+    const subagentEnded = await engine.onSubagentEnded?.({
+      childSessionKey: "agent:child:subagent",
+      chatType: "group",
+      reason: "deleted",
+    });
+
+    expect(result).toEqual({ messages: [message], estimatedTokens: 0 });
+    expect(compactResult.compacted).toBe(false);
+    expect(preparation).toBeUndefined();
+    expect(subagentEnded).toBeUndefined();
+    expect(engine.info.id).toBe("legacy");
+    expect(assemble).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+    expect(onSubagentEnded).not.toHaveBeenCalled();
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("falls back to legacy engine for shared session keys when chatType is omitted", async () => {
+    const engineId = uniqueEngineId("shared-key-private-engine");
+    const message = makeMockMessage("user", "hello");
+    const ingest = vi.fn(async () => ({ ingested: true }));
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Shared Key Private Engine" },
+      ingest,
+      assemble: vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: params.messages,
+        estimatedTokens: 1,
+      })),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      message,
+    });
+
+    expect(result).toEqual({ ingested: false });
+    expect(engine.info.id).toBe("legacy");
+    expect(ingest).not.toHaveBeenCalled();
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("passes shared session scope into engines that explicitly support it", async () => {
+    const engineId = uniqueEngineId("shared-scope-aware-engine");
+    const message = makeMockMessage("user", "hello");
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 1,
+    }));
+    const maintain = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["maintain"]>>[0]) => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }),
+    );
+    const compact = vi.fn(async (_params: Parameters<ContextEngine["compact"]>[0]) => ({
+      ok: true,
+      compacted: false,
+    }));
+    const prepareSubagentSpawn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["prepareSubagentSpawn"]>>[0]) => ({
+        rollback: vi.fn(),
+      }),
+    );
+    const onSubagentEnded = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["onSubagentEnded"]>>[0]) => undefined,
+    );
+    registerContextEngine(engineId, () => ({
+      info: {
+        id: engineId,
+        name: "Shared Scope Aware Engine",
+        supportsSharedSessionScope: true,
+      },
+      ingest: vi.fn(async () => ({ ingested: true })),
+      maintain,
+      assemble,
+      compact,
+      prepareSubagentSpawn,
+      onSubagentEnded,
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      messages: [message],
+    });
+    await engine.maintain?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+    });
+    await engine.compact({
+      sessionId: "s1",
+      sessionKey: "agent:main:channel:team-room",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+    });
+    await engine.prepareSubagentSpawn?.({
+      parentSessionKey: "agent:main:channel:team-room",
+      childSessionKey: "agent:child:subagent",
+      chatType: "group",
+      contextMode: "fork",
+    });
+    await engine.onSubagentEnded?.({
+      childSessionKey: "agent:child:subagent",
+      chatType: "group",
+      reason: "deleted",
+    });
+
+    expect(result.estimatedTokens).toBe(1);
+    expect(assemble.mock.calls[0]?.[0]).toHaveProperty("chatType", "group");
+    expect(maintain.mock.calls[0]?.[0]).toHaveProperty("chatType", "group");
+    expect(compact.mock.calls[0]?.[0]).toHaveProperty("chatType", "group");
+    expect(prepareSubagentSpawn.mock.calls[0]?.[0]).toHaveProperty("chatType", "group");
+    expect(onSubagentEnded.mock.calls[0]?.[0]).toHaveProperty("chatType", "group");
+    expect(engine.info.id).toBe(engineId);
+  });
+
+  it("retries strict private engines without chatType instead of falling back", async () => {
+    const engineId = uniqueEngineId("direct-chat-type-compat");
+    const message = makeMockMessage("user", "hello");
+    const assembleCalls: Array<Record<string, unknown>> = [];
+    const ingestCalls: Array<Record<string, unknown>> = [];
+    const ingest = vi.fn(async (params: Parameters<ContextEngine["ingest"]>[0]) => {
+      ingestCalls.push({ ...params });
+      return { ingested: true };
+    });
+    registerContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Direct ChatType Compat Engine" },
+      ingest,
+      assemble: vi.fn(async (params) => {
+        assembleCalls.push({ ...params });
+        if (Object.hasOwn(params, "chatType")) {
+          throw new Error("Unrecognized key(s) in object: 'chatType'");
+        }
+        return { messages: params.messages, estimatedTokens: 1 };
+      }),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    }));
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      chatType: "direct",
+      messages: [message],
+    });
+    await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:main",
+      chatType: "direct",
+      message,
+    });
+
+    expect(result.estimatedTokens).toBe(1);
+    expect(assembleCalls).toHaveLength(2);
+    expect(assembleCalls[0]).toHaveProperty("chatType", "direct");
+    expect(assembleCalls[1]).not.toHaveProperty("chatType");
+    expect(ingest).toHaveBeenCalledOnce();
+    expect(ingestCalls[0]).not.toHaveProperty("chatType");
+    expect(engine.info.id).toBe(engineId);
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("uses scoped fallback for strict legacy assemble without retrying without chatType", async () => {
+    const engineId = uniqueEngineId("assemble-chat-type-legacy");
+    const assembleCalls: Array<Record<string, unknown>> = [];
+    const strictEngine = {
+      info: {
+        id: engineId,
+        name: "Assemble ChatType Strict Engine",
+        supportsSharedSessionScope: true,
+      },
+      ingest: vi.fn(async () => ({ ingested: true })),
+      assemble: vi.fn(async (params) => {
+        assembleCalls.push({ ...params });
+        if (Object.hasOwn(params, "sessionKey")) {
+          throw new Error("Unrecognized key(s) in object: 'sessionKey'");
+        }
+        if (Object.hasOwn(params, "chatType")) {
+          throw new Error("Unrecognized key(s) in object: 'chatType'");
+        }
+        return { messages: params.messages, estimatedTokens: 0 };
+      }),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    } satisfies ContextEngine;
+    registerContextEngine(engineId, () => strictEngine);
+
+    const message = makeMockMessage("user", "hello");
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      chatType: "group",
+      messages: [message],
+    });
+
+    expect(result.messages).toEqual([message]);
+    expect(assembleCalls).toHaveLength(2);
+    expect(assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(assembleCalls[0]).toHaveProperty("chatType", "group");
+    expect(assembleCalls[1]).not.toHaveProperty("sessionKey");
+    expect(assembleCalls[1]).toHaveProperty("chatType", "group");
+    await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      message,
+    });
+    expect(strictEngine.ingest).not.toHaveBeenCalled();
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("uses scoped fallback for strict legacy bootstrap without retrying without chatType", async () => {
+    const engineId = uniqueEngineId("bootstrap-chat-type-legacy");
+    const bootstrapCalls: Array<Record<string, unknown>> = [];
+    const strictEngine = {
+      info: {
+        id: engineId,
+        name: "Bootstrap ChatType Strict Engine",
+        supportsSharedSessionScope: true,
+      },
+      bootstrap: vi.fn(async (params) => {
+        bootstrapCalls.push({ ...params });
+        if (Object.hasOwn(params, "sessionKey")) {
+          throw new Error("Unrecognized key(s) in object: 'sessionKey'");
+        }
+        if (Object.hasOwn(params, "chatType")) {
+          throw new Error("Unrecognized key(s) in object: 'chatType'");
+        }
+        return { bootstrapped: true };
+      }),
+      ingest: vi.fn(async () => ({ ingested: true })),
+      afterTurn: vi.fn(async () => undefined),
+      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    } satisfies ContextEngine;
+    registerContextEngine(engineId, () => strictEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const result = await engine.bootstrap?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      chatType: "group",
+      sessionFile: "sessions/s1.jsonl",
+    });
+
+    expect(result).toEqual({
+      bootstrapped: false,
+      reason: "context engine downgraded to legacy",
+    });
+    expect(bootstrapCalls).toHaveLength(2);
+    expect(bootstrapCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(bootstrapCalls[0]).toHaveProperty("chatType", "group");
+    expect(bootstrapCalls[1]).not.toHaveProperty("sessionKey");
+    expect(bootstrapCalls[1]).toHaveProperty("chatType", "group");
+    await engine.afterTurn?.({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      sessionFile: "sessions/s1.jsonl",
+      messages: [],
+      prePromptMessageCount: 0,
+    });
+    expect(strictEngine.afterTurn).not.toHaveBeenCalled();
+    expect(listContextEngineQuarantines()).toEqual([]);
   });
 
   it("retries strict legacy lifecycle hooks without runtimeSettings", async () => {

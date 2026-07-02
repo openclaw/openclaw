@@ -1,6 +1,7 @@
 // Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -37,6 +38,8 @@ export type OpenClawPluginToolContext = {
     allowHostControl?: boolean;
   };
   messageChannel?: string;
+  /** Trusted runtime conversation kind for the active session, when known. */
+  chatType?: ChatType;
   agentAccountId?: string;
   /** Trusted provider auth availability from the active auth profile store. */
   hasAuthForProvider?: (providerId: string) => boolean;

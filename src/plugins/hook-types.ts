@@ -251,6 +251,8 @@ export type PluginHookAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
+  /** Trusted runtime conversation kind for the active session, when known. */
+  chatType?: ChatType;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */

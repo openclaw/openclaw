@@ -73,6 +73,7 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
+import { revokeAttachGrantsForSession } from "../mcp-grant-store.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
@@ -82,6 +83,8 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryScopedChatType } from "../../sessions/session-memory-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -318,6 +321,19 @@ function emitSessionOperation(
     } satisfies SessionOperationEvent,
     connIds,
     { dropIfSlow: true },
+  );
+}
+
+function sessionEntryMatchesCompactionBoundary(
+  current: SessionEntry | undefined,
+  expected: SessionEntry | undefined,
+): boolean {
+  return (
+    current !== undefined &&
+    expected !== undefined &&
+    current.sessionId === expected.sessionId &&
+    current.sessionFile === expected.sessionFile &&
+    current.longTermMemoryDefaultPolicy === expected.longTermMemoryDefaultPolicy
   );
 }
 
@@ -2281,6 +2297,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
     if (deleted) {
+      for (const grantKey of new Set([target.canonicalKey, ...target.storeKeys])) {
+        revokeAttachGrantsForSession(grantKey);
+      }
       emitGatewaySessionEndPluginHook({
         cfg,
         sessionKey: target.canonicalKey ?? key,
@@ -2456,6 +2475,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
       const cwd = normalizeOptionalString(entry?.spawnedCwd);
+      const chatType = resolveLongTermMemoryScopedChatType({
+        sessionKey: target.canonicalKey,
+        chatType: resolveSessionEntryChatType(entry),
+        longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+      });
       const operationId = randomUUID();
       emitSessionOperation(context, {
         operationId,
@@ -2471,6 +2495,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           sessionKey: target.canonicalKey,
           agentId: target.agentId,
           allowGatewaySubagentBinding: true,
+          ...(chatType ? { chatType } : {}),
           sessionFile: filePath,
           workspaceDir,
           cwd,
@@ -2502,23 +2527,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         });
         throw err;
       }
-      emitSessionOperation(context, {
-        operationId,
-        operation: "compact",
-        phase: "end",
-        sessionKey: target.canonicalKey,
-        ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
-        completed: result.ok && result.compacted,
-        reason: result.reason,
-      });
-
+      let discardedCompactionReason: string | undefined;
       if (result.ok && result.compacted) {
+        let persistedCompaction = false;
         await updateSessionStore(storePath, (store) => {
           const entryKey = compactTarget.primaryKey;
           const entryToUpdate = store[entryKey];
-          if (!entryToUpdate) {
+          if (!sessionEntryMatchesCompactionBoundary(entryToUpdate, compactTarget.entry)) {
             return;
           }
+          persistedCompaction = true;
           entryToUpdate.updatedAt = Date.now();
           entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
           if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
@@ -2541,27 +2559,41 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             delete entryToUpdate.totalTokensFresh;
           }
         });
+        if (!persistedCompaction) {
+          discardedCompactionReason = "session changed";
+        }
       }
+      const responseCompacted = result.compacted && !discardedCompactionReason;
+      const responseReason = discardedCompactionReason ?? result.reason;
+      emitSessionOperation(context, {
+        operationId,
+        operation: "compact",
+        phase: "end",
+        sessionKey: target.canonicalKey,
+        ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+        completed: result.ok && responseCompacted,
+        reason: responseReason,
+      });
 
       respond(
         true,
         {
           ok: result.ok,
           key: target.canonicalKey,
-          compacted: result.compacted,
-          reason: result.reason,
-          result: result.result,
+          compacted: responseCompacted,
+          reason: responseReason,
+          ...(discardedCompactionReason ? {} : { result: result.result }),
         },
         undefined,
       );
-      if (result.ok) {
+      if (result.ok && !discardedCompactionReason) {
         emitSessionsChanged(context, {
           sessionKey: target.canonicalKey,
           ...(target.canonicalKey === "global" && target.agentId
             ? { agentId: target.agentId }
             : {}),
           reason: "compact",
-          compacted: result.compacted,
+          compacted: responseCompacted,
         });
       }
       return;

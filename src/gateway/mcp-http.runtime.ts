@@ -1,6 +1,7 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -32,6 +33,7 @@ type McpLoopbackScopeParams = {
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
+  chatType: ChatType | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
@@ -69,6 +71,7 @@ export class McpLoopbackToolCache {
       params.sessionId ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
+      params.chatType ?? "",
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",

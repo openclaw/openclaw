@@ -110,6 +110,7 @@ type CompactEmbeddedAgentSessionParams = {
   contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
+  chatType?: string;
   currentTokenCount?: number;
   cwd?: string;
   force?: boolean;
@@ -918,6 +919,43 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("skips memory flush for shared sessions", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionKey: "agent:main:slack:channel:C123",
+        chatType: "channel",
+      }),
+      sessionCtx: { Provider: "slack", ChatType: "channel" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { "agent:main:slack:channel:C123": sessionEntry },
+      sessionKey: "agent:main:slack:channel:C123",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("skips memory flush for compatible CLI session runtime pins", async () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
@@ -1148,6 +1186,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:main",
         cwd: "/tmp/task-repo",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        chatType: "group",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100,
@@ -1163,6 +1202,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.sessionKey).toBe("agent:main:main");
+    expect(compactCall.chatType).toBe("group");
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
   });

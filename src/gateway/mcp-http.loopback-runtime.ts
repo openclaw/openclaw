@@ -375,6 +375,7 @@ const MCP_CONTEXT_HEADERS = {
   "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
   "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
   "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+  "x-openclaw-chat-type": "${OPENCLAW_MCP_CHAT_TYPE}",
   "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
   "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
   "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",

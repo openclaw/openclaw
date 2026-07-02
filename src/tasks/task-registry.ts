@@ -8,6 +8,8 @@ import {
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -1261,7 +1263,20 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   const owner = resolveTaskDeliveryOwner(task);
-  if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
+  let requesterEntry: SessionEntry | undefined;
+  if (owner.sessionKey) {
+    try {
+      requesterEntry = loadSessionEntry({ sessionKey: owner.sessionKey, strictRead: true });
+    } catch {
+      return false;
+    }
+  }
+  if (
+    shouldRouteCompletionThroughRequesterSession({
+      requesterSessionKey: owner.sessionKey,
+      requesterEntry,
+    })
+  ) {
     return false;
   }
   return canDeliverToRequesterOrigin(owner.requesterOrigin);

@@ -15,12 +15,13 @@ hidden state.
 Your agent has three memory-related files:
 
 - **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
-  decisions. Loaded at the start of every DM session.
+  decisions. Loaded by default for private/direct sessions, not shared group or
+  channel sessions.
 - **`memory/YYYY-MM-DD.md`** (or **`memory/YYYY-MM-DD-<slug>.md`**) — daily notes.
   Running context and observations. Today and yesterday's notes are loaded
-  automatically, and slugged variants such as those written by the bundled
-  session-memory hook on `/new` or `/reset` are now picked up alongside the
-  date-only file.
+  automatically only for eligible private/direct sessions, and slugged variants
+  such as those written by the bundled session-memory hook on `/new` or
+  `/reset` are picked up alongside the date-only file.
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
@@ -44,11 +45,14 @@ instructions and heartbeat flow can do that periodically; you do not need to
 manually edit `MEMORY.md` for every remembered detail.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
-disk intact but truncates the copy injected into the model context. Treat that as
-a signal to move detailed material back into `memory/*.md`, keep only the
-durable summary in `MEMORY.md`, or raise the bootstrap limits if you explicitly
-want to spend more prompt budget. Use `/context list`, `/context detail`, or
-`openclaw doctor` to see raw vs injected sizes and truncation status.
+disk intact but truncates the copy injected into eligible private/direct model
+context. Shared group and channel sessions do not receive raw `MEMORY.md` by
+default; ask the agent to use memory tools when you want long-term memory in a
+shared conversation. Treat truncation as a signal to move detailed material back
+into `memory/*.md`, keep only the durable summary in `MEMORY.md`, or raise the
+bootstrap limits if you explicitly want to spend more prompt budget. Use
+`/context list`, `/context detail`, or `openclaw doctor` to see raw vs injected
+sizes and truncation status.
 
 <Tip>
 If you want your agent to remember something, just ask it: "Remember that I
@@ -115,6 +119,10 @@ The agent has two tools for working with memory:
 - **`memory_get`** — reads a specific memory file or line range.
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
+In shared group and channel sessions, memory tools are explicit/on-demand: the
+agent should not run long-term memory recall by default, but it can use
+`memory_search` or `memory_get` when you ask for long-term memory or a visible
+session instruction requests it.
 
 ## Memory Wiki companion plugin
 

@@ -7,8 +7,10 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  MediaUnderstandingScopeContext,
   StructuredExtractionInput,
 } from "./types.js";
+export type { MediaUnderstandingScopeContext } from "./types.js";
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
@@ -22,12 +24,6 @@ export type RunMediaUnderstandingFileParams = {
   prompt?: string;
   timeoutMs?: number;
   scopeContext?: MediaUnderstandingScopeContext;
-};
-
-export type MediaUnderstandingScopeContext = {
-  sessionKey?: string;
-  channel?: string;
-  chatType?: string;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -63,6 +59,7 @@ export type DescribeImageFileWithModelParams = {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type PreparedImageDescriptionInput = {
@@ -102,6 +99,7 @@ export type ExtractStructuredWithModelParams = {
   preferredProfile?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 type ExtractStructuredWithModelResult = Awaited<

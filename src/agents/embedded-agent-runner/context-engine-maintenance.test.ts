@@ -382,6 +382,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      chatType: "group",
       sessionFile: "/tmp/session.jsonl",
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
@@ -396,6 +397,7 @@ describe("runContextEngineMaintenance", () => {
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      chatType: "group",
       sessionFile: "/tmp/session.jsonl",
     });
     expect(
@@ -417,6 +419,31 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 123,
       rewrittenEntries: 2,
     });
+  });
+
+  it("omits direct chat type from maintain() for strict private-engine compatibility", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-direct",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      chatType: "direct",
+      sessionFile: "/tmp/session-direct.jsonl",
+      reason: "turn",
+    });
+
+    expect(firstMaintainParams(maintain)).not.toHaveProperty("chatType");
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {

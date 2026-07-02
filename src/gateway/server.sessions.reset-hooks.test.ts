@@ -17,6 +17,11 @@ import {
   expectActiveRunCleanup,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "./mcp-grant-store.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
@@ -348,6 +353,57 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset preserves explicit-only memory policy for direct-shaped sessions", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-shared-direct-target", "hello from shared direct target");
+
+  await writeSessionStore({
+    entries: {
+      "qqbot:direct:openid": sessionStoreEntry("sess-shared-direct-target", {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    },
+  });
+
+  await resetSession("qqbot:direct:openid");
+
+  const store = await loadGatewaySessionStoreForKey("qqbot:direct:openid");
+  const nextEntry = store["agent:main:qqbot:direct:openid"];
+  expect(nextEntry).toBeDefined();
+  expect(nextEntry?.sessionId).not.toBe("sess-shared-direct-target");
+  expect(nextEntry?.chatType).toBe("direct");
+  expect(nextEntry?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+});
+
+test("sessions.reset revokes attach grants for the replaced session key", async () => {
+  resetAttachGrantsForTest();
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-granted", "hello from granted session");
+
+  await writeSessionStore({
+    entries: {
+      "qqbot:direct:openid": sessionStoreEntry("sess-granted", {
+        chatType: "direct",
+      }),
+    },
+  });
+  const grant = mintAttachGrant({
+    sessionKey: "agent:main:qqbot:direct:openid",
+    chatType: "direct",
+  });
+  const aliasGrant = mintAttachGrant({
+    sessionKey: "qqbot:direct:openid",
+    chatType: "direct",
+  });
+
+  await resetSession("qqbot:direct:openid");
+
+  expect(resolveAttachGrant(grant.token)).toBeUndefined();
+  expect(resolveAttachGrant(aliasGrant.token)).toBeUndefined();
+  resetAttachGrantsForTest();
 });
 
 test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {

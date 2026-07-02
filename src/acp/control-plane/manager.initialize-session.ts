@@ -18,6 +18,10 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import {
+  buildAcpRuntimeMemoryPolicySignature,
+  resolveAcpRuntimeMemoryPolicy,
+} from "./memory-policy-context.js";
+import {
   normalizeRuntimeOptions,
   normalizeText,
   validateRuntimeOptionPatch,
@@ -47,6 +51,10 @@ export async function runManagerInitializeSession(params: {
   const requestedCwd = initialRuntimeOptions.cwd;
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
+  const memoryPolicy = resolveAcpRuntimeMemoryPolicy({
+    sessionKey,
+    memoryPolicy: input.memoryPolicy,
+  });
   params.enforceConcurrentSessionLimit({
     cfg: input.cfg,
     sessionKey,
@@ -61,6 +69,7 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
         cwd: requestedCwd,
+        ...(memoryPolicy ? { memoryPolicy } : {}),
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
@@ -86,11 +95,14 @@ export async function runManagerInitializeSession(params: {
       source: "ensure",
       lastUpdatedAt: identityNow,
     } as const);
+  const stampedIdentity = memoryPolicy
+    ? { ...initializedIdentity, memoryPolicy }
+    : initializedIdentity;
   const meta: SessionAcpMeta = {
     backend: handle.backend || backend.id,
     agent,
     runtimeSessionName: handle.runtimeSessionName,
-    identity: initializedIdentity,
+    identity: stampedIdentity,
     mode: input.mode,
     ...(Object.keys(effectiveRuntimeOptions).length > 0
       ? { runtimeOptions: effectiveRuntimeOptions }
@@ -122,6 +134,7 @@ export async function runManagerInitializeSession(params: {
     mode: input.mode,
     cwd: effectiveCwd,
     configSignature: resolveRuntimeConfigCacheKey(input.cfg),
+    memoryPolicySignature: buildAcpRuntimeMemoryPolicySignature(memoryPolicy),
   });
   return {
     runtime,

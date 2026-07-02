@@ -15,12 +15,14 @@ export function createMemorySearchToolOrThrow(params?: {
   config?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
+  agentChatType?: string;
   oneShotCliRun?: boolean;
 }) {
   const tool = createMemorySearchTool({
     config: params?.config ?? createDefaultMemoryToolConfig(),
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+    ...(params?.agentChatType ? { agentChatType: params.agentChatType } : {}),
     ...(params?.oneShotCliRun ? { oneShotCliRun: params.oneShotCliRun } : {}),
   });
   if (!tool) {

@@ -23,6 +23,11 @@ import {
   expectActiveRunCleanup,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "./mcp-grant-store.js";
 
 const {
   createConfiguredGlobalAgentSessionStore,
@@ -33,6 +38,7 @@ const {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  resetAttachGrantsForTest();
 });
 
 function expectObject(value: unknown) {
@@ -355,6 +361,33 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     "agent:main:discord:group:delete",
   );
   expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
+});
+
+test("sessions.delete revokes attach grants for the deleted session key", async () => {
+  resetAttachGrantsForTest();
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-granted", "delete granted");
+
+  await writeSessionStore({
+    entries: {
+      "discord:group:delete-granted": sessionStoreEntry("sess-delete-granted"),
+    },
+  });
+  const grant = mintAttachGrant({
+    sessionKey: "agent:main:discord:group:delete-granted",
+    chatType: "group",
+  });
+  const aliasGrant = mintAttachGrant({
+    sessionKey: "discord:group:delete-granted",
+    chatType: "group",
+  });
+
+  await expectSessionDeleteSucceeds({
+    key: "discord:group:delete-granted",
+  });
+
+  expect(resolveAttachGrant(grant.token)).toBeUndefined();
+  expect(resolveAttachGrant(aliasGrant.token)).toBeUndefined();
 });
 
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {

@@ -7,7 +7,7 @@
 - Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.
 - The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, eligible `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -236,16 +236,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 496
   },
   "totalTextOnly": {
-    "chars": 27119,
-    "roughTokens": 6780
+    "chars": 27201,
+    "roughTokens": 6801
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79031,
-    "roughTokens": 19758
+    "chars": 79113,
+    "roughTokens": 19779
   },
   "userInputText": {
-    "chars": 1367,
-    "roughTokens": 342
+    "chars": 1449,
+    "roughTokens": 363
   }
 }
 ```
@@ -511,7 +511,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. MEMORY.md is included only for sessions that receive long-term memory by default. Those files are not repeated here.
 
 # Project Context
 

@@ -18,6 +18,15 @@ export interface OnAssistantDeltaPayload {
   usage?: AssistantUsageSnapshot;
 }
 
+export interface SessionOptionsUpdateParams {
+  featureFlags?: Record<string, boolean | undefined>;
+  skipCustomInstructions?: boolean;
+}
+
+export interface SessionOptionsUpdateResult {
+  success: boolean;
+}
+
 export interface SessionLike {
   abort(): Promise<void>;
   disconnect(): Promise<void>;
@@ -33,6 +42,9 @@ export interface SessionLike {
   rpc?: {
     history?: {
       cancelBackgroundCompaction?: () => Promise<unknown>;
+    };
+    options?: {
+      update?: (params: SessionOptionsUpdateParams) => Promise<SessionOptionsUpdateResult>;
     };
   };
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;

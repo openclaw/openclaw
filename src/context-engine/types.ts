@@ -1,5 +1,6 @@
 // Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../agents/runtime/index.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -165,6 +166,12 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  /**
+   * True when the engine treats `chatType` as an authoritative privacy scope
+   * on every lifecycle method that receives it. Engines that omit this are
+   * treated as private-only and are bypassed for shared-session turns.
+   */
+  supportsSharedSessionScope?: boolean;
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
   /**
@@ -307,6 +314,8 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<BootstrapResult>;
@@ -320,6 +329,8 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
@@ -331,6 +342,8 @@ export interface ContextEngine {
   ingest(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     message: AgentMessage;
     /** True when the message belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -342,6 +355,8 @@ export interface ContextEngine {
   ingestBatch?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     messages: AgentMessage[];
     /** True when the batch belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -355,6 +370,8 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -377,6 +394,8 @@ export interface ContextEngine {
   assemble(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for the active session, when known. */
+    chatType?: ChatType;
     messages: AgentMessage[];
     tokenBudget?: number;
     /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
@@ -404,6 +423,8 @@ export interface ContextEngine {
   compact(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Trusted runtime conversation kind for this compaction target, when known. */
+    chatType?: ChatType;
     sessionFile: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
@@ -433,6 +454,8 @@ export interface ContextEngine {
   prepareSubagentSpawn?(params: {
     parentSessionKey: string;
     childSessionKey: string;
+    /** Trusted conversation kind for parent state that may be copied into the child. */
+    chatType?: ChatType;
     contextMode?: "isolated" | "fork";
     parentSessionId?: string;
     parentSessionFile?: string;
@@ -444,7 +467,12 @@ export interface ContextEngine {
   /**
    * Notify the context engine that a subagent lifecycle ended.
    */
-  onSubagentEnded?(params: { childSessionKey: string; reason: SubagentEndReason }): Promise<void>;
+  onSubagentEnded?(params: {
+    childSessionKey: string;
+    /** Trusted conversation kind for child state that may be cleaned up or retained. */
+    chatType?: ChatType;
+    reason: SubagentEndReason;
+  }): Promise<void>;
 
   /**
    * Dispose of any resources held by the engine.

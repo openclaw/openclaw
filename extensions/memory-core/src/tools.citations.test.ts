@@ -354,6 +354,57 @@ describe("memory tools", () => {
     }
   });
 
+  it("does not persist short-term recall events from shared memory_search tool hits", async () => {
+    const workspaceDir = await createTempWorkspace("memory-tools-shared-recall-");
+    try {
+      setMemoryBackend("builtin");
+      setMemoryWorkspaceDir(workspaceDir);
+      setMemorySearchImpl(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.95,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory" as const,
+        },
+      ]);
+
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        agentSessionKey: "agent:main:telegram:group:team",
+        agentChatType: "group",
+      });
+      const result = await tool.execute("call_shared_recall_no_persist", {
+        query: "glacier backup",
+      });
+
+      expect((result.details as { results?: unknown[] }).results).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const store = await shortTermPromotionTesting.readRecallStore(
+        workspaceDir,
+        new Date().toISOString(),
+      );
+      expect(Object.values(store.entries)).toHaveLength(0);
+      await expect(readMemoryHostEvents({ workspaceDir })).resolves.toHaveLength(0);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("searches registered wiki corpus supplements without calling memory search", async () => {
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [

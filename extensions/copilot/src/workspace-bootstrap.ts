@@ -89,6 +89,7 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
       config: attempt.config,
       sessionKey: readNonEmptyString((attempt as { sessionKey?: unknown }).sessionKey),
       sessionId: readNonEmptyString(attempt.sessionId),
+      chatType: readNonEmptyString((attempt as { chatType?: unknown }).chatType),
       agentId: readNonEmptyString(attempt.agentId),
       warn: params.warn,
       contextMode: attempt.bootstrapContextMode,

@@ -334,6 +334,16 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
+export function isAcpRuntimeSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const normalized = normalizeOptionalLowercaseString(scoped);
+  return normalized?.startsWith("acp:") === true && !normalized.startsWith("acp:binding:");
+}
+
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {

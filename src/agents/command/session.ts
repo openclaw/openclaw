@@ -102,6 +102,7 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   cloneOnWrite?: boolean;
+  strictRead?: boolean;
 }): SessionKeyResolution | undefined {
   if (opts.defaultAgentId === DEFAULT_AGENT_ID || !opts.sessionKey) {
     return undefined;
@@ -138,7 +139,12 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   }
   const legacyStore = loadSessionStore(
     legacyStorePath,
-    opts.cloneOnWrite ? { clone: false } : undefined,
+    opts.cloneOnWrite || opts.strictRead === true
+      ? {
+          ...(opts.cloneOnWrite ? { clone: false } : {}),
+          ...(opts.strictRead === true ? { strictRead: true } : {}),
+        }
+      : undefined,
   );
   for (const legacyKey of legacyKeys) {
     const legacyEntry = legacyStore[legacyKey];
@@ -163,6 +169,7 @@ function collectSessionIdMatchesForRequest(opts: {
   sessionId: string;
   searchOtherAgentStores: boolean;
   clone?: boolean;
+  strictRead?: boolean;
 }): SessionIdMatchSet {
   const matches: Array<[string, SessionEntry]> = [];
   const primaryStoreMatches: Array<[string, SessionEntry]> = [];
@@ -200,7 +207,15 @@ function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
     addMatches(
-      loadSessionStore(candidateStorePath, opts.clone === false ? { clone: false } : undefined),
+      loadSessionStore(
+        candidateStorePath,
+        opts.clone === false || opts.strictRead === true
+          ? {
+              ...(opts.clone === false ? { clone: false } : {}),
+              ...(opts.strictRead === true ? { strictRead: true } : {}),
+            }
+          : undefined,
+      ),
       candidateStorePath,
     );
   }
@@ -247,6 +262,7 @@ export function resolveSessionKeyForRequest(opts: {
   sessionKey?: string;
   agentId?: string;
   clone?: boolean;
+  strictRead?: boolean;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -276,7 +292,13 @@ export function resolveSessionKeyForRequest(opts: {
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
-  const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
+  const loadOptions =
+    opts.clone === false || opts.strictRead === true
+      ? {
+          ...(opts.clone === false ? { clone: false as const } : {}),
+          ...(opts.strictRead === true ? { strictRead: true as const } : {}),
+        }
+      : undefined;
   const sessionStore = loadSessionStore(storePath, loadOptions);
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
@@ -292,6 +314,7 @@ export function resolveSessionKeyForRequest(opts: {
       sessionStore,
       storePath,
       cloneOnWrite: opts.clone === false,
+      ...(opts.strictRead === true ? { strictRead: true } : {}),
     });
     if (legacyMainSession) {
       return legacyMainSession;
@@ -315,6 +338,7 @@ export function resolveSessionKeyForRequest(opts: {
       sessionId: requestedSessionId,
       searchOtherAgentStores: requestedAgentId === undefined,
       ...(opts.clone === false ? { clone: false } : {}),
+      ...(opts.strictRead === true ? { strictRead: true } : {}),
     });
     const preferredSelection = resolveSessionIdMatchSelection(matches, requestedSessionId);
     const currentStoreSelection =
@@ -348,6 +372,7 @@ export function resolveSession(opts: {
   sessionKey?: string;
   agentId?: string;
   clone?: boolean;
+  strictRead?: boolean;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
@@ -357,6 +382,7 @@ export function resolveSession(opts: {
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
     ...(opts.clone === false ? { clone: false } : {}),
+    ...(opts.strictRead === true ? { strictRead: true } : {}),
   });
   const now = Date.now();
 

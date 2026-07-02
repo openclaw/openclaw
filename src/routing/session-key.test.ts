@@ -1,12 +1,16 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import {
+  deriveSessionChatTypeFromKey,
+  resolveSessionEntryChatType,
+} from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { resolveLongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
 import {
   agentSessionKeysMatchByRequestKey,
   buildAgentPeerSessionKey,
@@ -113,7 +117,6 @@ describe("getSubagentDepth", () => {
     { key: "subagent:parent:subagent:child", expected: 2 },
   ] as const)("returns $expected for session key %j", ({ key, expected }) => {
     expect(getSubagentDepth(key)).toBe(expected);
-
   });
 });
 
@@ -138,6 +141,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:discord:guild:123:channel:456", expected: "channel" },
     { key: "agent:main:channel:legacy-room", expected: "channel" },
     { key: "agent:main:channel:!room:example.org", expected: "channel" },
     { key: "agent:main:channel:direct:user", expected: "channel" },
@@ -156,6 +160,8 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:dm:account:group:room", expected: "unknown" },
     { key: "agent:main:demo::channel:room", expected: "unknown" },
     { key: "agent::demo:direct:user", expected: "unknown" },
+    { key: "agent:main:explicit:portal-123:group:shadow", expected: "unknown" },
+    { key: "explicit:portal-123:channel:shadow", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -169,6 +175,104 @@ describe("deriveSessionChatTypeFromKey", () => {
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
       ]),
     ).toBe("channel");
+  });
+});
+
+describe("resolveSessionEntryChatType", () => {
+  it("prefers routed target chat type for opaque bound sessions", () => {
+    expect(
+      resolveSessionEntryChatType({
+        chatType: "direct",
+        origin: { chatType: "direct" },
+        route: { target: { to: "C123", chatType: "group" } },
+      }),
+    ).toBe("group");
+  });
+});
+
+describe("resolveLongTermMemoryDefaultPolicy", () => {
+  it.each([
+    { key: undefined, expected: "include" },
+    { key: "agent:main:main", expected: "include" },
+    { key: "agent:main:chat:main", expected: "include" },
+    { key: "agent:main:discord:direct:user1", expected: "include" },
+    { key: "agent:main:telegram:dm:123456", expected: "include" },
+    { key: "agent:main:discord:channel:c1", expected: "explicit-only" },
+    { key: "agent:main:slack:channel:c1:thread:1699999999.0001", expected: "explicit-only" },
+    { key: "agent:main:telegram:group:-1001234567890:topic:99", expected: "explicit-only" },
+    { key: "agent:main:discord:guild-123:channel-456", expected: "explicit-only" },
+    {
+      key: "agent:main:telegram:group:-1001234567890",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:discord:channel:c1",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:telegram:dm:123456",
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "include",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "direct",
+      expected: "include",
+    },
+    {
+      key: "agent:main:acp:runtime-123",
+      chatType: "direct",
+      expected: "explicit-only",
+    },
+    { key: "acp:runtime-123", chatType: "direct", expected: "explicit-only" },
+    {
+      key: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:acp:binding:slack:acct:abc123",
+      chatType: "channel",
+      expected: "explicit-only",
+    },
+    { key: "agent:main:explicit:portal-123:group:shadow", expected: "include" },
+    {
+      key: "agent:main:explicit:portal-123:group:shadow",
+      chatType: "group",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:telegram:direct:123456",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:subagent:worker",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+      expected: "explicit-only",
+    },
+    {
+      key: "agent:main:cron:daily:run:run-1",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+      expected: "explicit-only",
+    },
+  ] as const)("resolves long-term memory policy for %j", (testCase) => {
+    const chatType = "chatType" in testCase ? testCase.chatType : undefined;
+    const longTermMemoryDefaultPolicy =
+      "longTermMemoryDefaultPolicy" in testCase ? testCase.longTermMemoryDefaultPolicy : undefined;
+    const input =
+      chatType === undefined && longTermMemoryDefaultPolicy === undefined
+        ? testCase.key
+        : { sessionKey: testCase.key, chatType, longTermMemoryDefaultPolicy };
+    expect(resolveLongTermMemoryDefaultPolicy(input)).toBe(testCase.expected);
   });
 });
 

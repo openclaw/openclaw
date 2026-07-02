@@ -59,6 +59,7 @@ function makeKey(overrides: Partial<PoolKey> = {}): PoolKey {
     authMode: overrides.authMode ?? "useLoggedInUser",
     authProfileId: overrides.authProfileId,
     authProfileVersion: overrides.authProfileVersion,
+    clientMode: overrides.clientMode ?? "copilot-cli",
   };
 }
 
@@ -152,6 +153,24 @@ describe("createCopilotClientPool", () => {
 
     expect(first.client).not.toBe(second.client);
     expect(sdk.ctorCalls.length).toBe(2);
+  });
+
+  it("different clientMode creates distinct clients and forwards the mode", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const options = makeOptions();
+
+    const direct = await pool.acquire(makeKey({ clientMode: "copilot-cli" }), {
+      ...options,
+      mode: "copilot-cli",
+    });
+    const isolated = await pool.acquire(makeKey({ clientMode: "empty" }), {
+      ...options,
+      mode: "empty",
+    });
+
+    expect(direct.client).not.toBe(isolated.client);
+    expect(sdk.ctorCalls.map((call) => call.mode)).toEqual(["copilot-cli", "empty"]);
   });
 
   it("release decrements; non-zero refcount keeps client alive", async () => {

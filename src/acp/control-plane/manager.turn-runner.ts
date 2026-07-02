@@ -38,6 +38,7 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
+import { resolveAcpRuntimeMemoryPolicy } from "./memory-policy-context.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
@@ -68,6 +69,10 @@ export async function runManagerTurn(params: {
 }): Promise<void> {
   const { input, sessionKey } = params;
   const turnStartedAt = Date.now();
+  const memoryPolicy = resolveAcpRuntimeMemoryPolicy({
+    sessionKey,
+    memoryPolicy: input.memoryPolicy,
+  });
   const actorKey = normalizeActorKey(sessionKey);
   const taskContext =
     input.mode === "prompt"
@@ -180,6 +185,7 @@ export async function runManagerTurn(params: {
             cfg: input.cfg,
             sessionKey,
             meta: metaWithBackend,
+            ...(memoryPolicy ? { memoryPolicy } : {}),
           });
           runtime = ensured.runtime;
           handle = ensured.handle;
@@ -234,6 +240,7 @@ export async function runManagerTurn(params: {
               mode: input.mode,
               requestId: input.requestId,
               signal: combinedSignal,
+              ...(memoryPolicy ? { memoryPolicy } : {}),
             },
             eventGate,
             onOutputEvent: (event) => {

@@ -11,6 +11,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { sessionFileHasMemoryBoundaryContent } from "../../agents/command/attempt-execution.helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -25,10 +26,11 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { resolveSessionStoreEntry, updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { revokeAttachGrantsForSession } from "../../gateway/mcp-grant-store.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
@@ -39,6 +41,12 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import {
+  resolveLongTermMemoryRunPolicy,
+  resolveLongTermMemoryTargetChatType,
+  resolvePolicyIsolatedTranscriptPath,
+} from "../../sessions/session-memory-policy.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
@@ -104,7 +112,10 @@ import {
 } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import {
+  resolveRuntimePolicySessionKey,
+  resolveTargetSessionChatType,
+} from "./runtime-policy-session-key.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
@@ -247,8 +258,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
     return sessionCtx;
   }
 
-  const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(sessionEntry.origin?.chatType);
+  const persistedChatType = resolveSessionEntryChatType(sessionEntry);
   const liveChatType = normalizeChatType(sessionCtx.ChatType);
   const effectiveChatType = liveChatType ?? persistedChatType;
   const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
@@ -535,6 +545,26 @@ export async function runPreparedReply(
     ctx,
     isHeartbeat,
   });
+  const promptContextUsesPersistedChatType = Boolean(
+    promptSessionCtx !== sessionCtx &&
+    !normalizeChatType(sessionCtx.ChatType) &&
+    resolveSessionEntryChatType(sessionEntry),
+  );
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
+  const sourceSessionKey = normalizeOptionalString(ctx.SessionKey);
+  const runTargetsDifferentSession = Boolean(
+    sourceSessionKey && sessionKey && sourceSessionKey !== sessionKey,
+  );
+  const preferTargetSessionEntry =
+    promptContextUsesPersistedChatType ||
+    (commandTargetSessionKey !== undefined && commandTargetSessionKey !== ctx.SessionKey) ||
+    runTargetsDifferentSession;
+  const targetSessionChatType = resolveTargetSessionChatType({
+    ctx: promptSessionCtx,
+    sessionKey,
+    sessionEntry,
+    preferSessionEntry: preferTargetSessionEntry,
+  });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
   const isInternalPromptChannel = isInternalSourceReplyChannel(promptSessionCtx);
   const sourceReplyDeliveryMode =
@@ -718,6 +748,8 @@ export async function runPreparedReply(
       ? await buildSessionStartupContextPrelude({
           workspaceDir,
           cfg,
+          sessionKey,
+          chatType: targetSessionChatType,
         })
       : null;
   const baseBodyFinal = isBareSessionReset
@@ -788,7 +820,8 @@ export async function runPreparedReply(
           abortKey: command.abortKey,
         });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
-  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
+  const sessionEntryChatType = targetSessionChatType ?? resolveSessionEntryChatType(sessionEntry);
+  const isGroupSession = sessionEntryChatType === "group" || sessionEntryChatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes parts[0] and silently shadows any
@@ -992,6 +1025,135 @@ export async function runPreparedReply(
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
+  type PreparedSessionMemoryBoundaryPlan = {
+    currentEntry: SessionEntry;
+    runMemoryPolicy: ReturnType<typeof resolveLongTermMemoryRunPolicy>;
+    runMemoryChatType: ReturnType<typeof resolveLongTermMemoryTargetChatType>;
+    nextSessionId: string;
+    nextSessionFile: string;
+    expectedSessionFile?: string;
+    expectedPolicy?: SessionEntry["longTermMemoryDefaultPolicy"];
+    needsPolicyStamp: boolean;
+    needsTranscriptRotation: boolean;
+  };
+  const resolvePreparedSessionMemoryBoundaryPlan =
+    async (): Promise<PreparedSessionMemoryBoundaryPlan | null> => {
+      const currentEntry = preparedSessionState.sessionEntry;
+      if (!currentEntry || !sessionStore || !sessionKey) {
+        return null;
+      }
+      const storedChatType = resolveSessionEntryChatType(currentEntry);
+      const hasPersistedTranscriptContent = await sessionFileHasMemoryBoundaryContent(
+        preparedSessionState.sessionFile,
+      );
+      const runMemoryPolicy = resolveLongTermMemoryRunPolicy({
+        sessionKey,
+        liveChatType: normalizeChatType(promptSessionCtx.ChatType),
+        storedChatType,
+        longTermMemoryDefaultPolicy: currentEntry.longTermMemoryDefaultPolicy,
+        preferStoredPolicy: preferTargetSessionEntry,
+      });
+      const runMemoryChatType = resolveLongTermMemoryTargetChatType({
+        sessionKey,
+        liveChatType: normalizeChatType(promptSessionCtx.ChatType),
+        storedChatType,
+        longTermMemoryDefaultPolicy: currentEntry.longTermMemoryDefaultPolicy,
+        preferStoredPolicy: preferTargetSessionEntry,
+      });
+      const storedMemoryPolicy =
+        currentEntry.longTermMemoryDefaultPolicy ??
+        (hasPersistedTranscriptContent ? "include" : runMemoryPolicy);
+      const needsTranscriptRotation = storedMemoryPolicy !== runMemoryPolicy;
+      const needsPolicyStamp = currentEntry.longTermMemoryDefaultPolicy !== runMemoryPolicy;
+      if (!needsTranscriptRotation && !needsPolicyStamp) {
+        return null;
+      }
+      return {
+        currentEntry,
+        runMemoryPolicy,
+        runMemoryChatType,
+        nextSessionId: needsTranscriptRotation ? crypto.randomUUID() : currentEntry.sessionId,
+        nextSessionFile: needsTranscriptRotation
+          ? resolvePolicyIsolatedTranscriptPath({
+              sessionFile: preparedSessionState.sessionFile,
+              policy: runMemoryPolicy,
+            })
+          : preparedSessionState.sessionFile,
+        expectedSessionFile: currentEntry.sessionFile,
+        expectedPolicy: currentEntry.longTermMemoryDefaultPolicy,
+        needsPolicyStamp,
+        needsTranscriptRotation,
+      };
+    };
+  const rotatePreparedSessionMemoryBoundary = async (
+    plan: PreparedSessionMemoryBoundaryPlan,
+  ): Promise<boolean> => {
+    const currentEntry = preparedSessionState.sessionEntry;
+    if (!currentEntry || !sessionStore || !sessionKey) {
+      return false;
+    }
+    if (!storePath) {
+      throw new Error("Session memory boundary cannot be persisted; retry the request.");
+    }
+    const now = Date.now();
+    const updateResult = await updateSessionStore(
+      storePath,
+      (store) => {
+        const resolved = resolveSessionStoreEntry({ store, sessionKey });
+        const writerEntry = resolved.existing;
+        if (
+          !writerEntry ||
+          writerEntry.sessionId !== plan.currentEntry.sessionId ||
+          writerEntry.sessionFile !== plan.expectedSessionFile ||
+          writerEntry.longTermMemoryDefaultPolicy !== plan.expectedPolicy
+        ) {
+          return null;
+        }
+        const nextEntry: SessionEntry = {
+          ...writerEntry,
+          sessionId: plan.nextSessionId,
+          sessionFile: plan.nextSessionFile,
+          longTermMemoryDefaultPolicy: plan.runMemoryPolicy,
+          updatedAt: now,
+          sessionStartedAt: writerEntry.sessionStartedAt ?? now,
+        };
+        store[resolved.normalizedKey] = nextEntry;
+        return { entry: nextEntry, sessionKey: resolved.normalizedKey };
+      },
+      {
+        skipSaveWhenResult: (result) => result === null,
+        resolveSingleEntryPersistence: (result) =>
+          result
+            ? {
+                sessionKey: result.sessionKey,
+                entry: result.entry,
+              }
+            : undefined,
+      },
+    );
+    const updateMatchesMemoryBoundary =
+      updateResult?.entry.sessionId === plan.nextSessionId &&
+      updateResult?.entry.sessionFile === plan.nextSessionFile &&
+      updateResult?.entry.longTermMemoryDefaultPolicy === plan.runMemoryPolicy;
+    if (!updateMatchesMemoryBoundary) {
+      throw new Error("Session memory boundary changed during setup; retry the request.");
+    }
+    const localResolved = resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+    sessionStore[localResolved.normalizedKey] = updateResult.entry;
+    sessionEntryHandle?.replaceCurrent(updateResult.entry);
+    sessionEntry = updateResult.entry;
+    providedReplyOperation?.updateSessionId(updateResult.entry.sessionId);
+    preparedSessionState = {
+      sessionEntry: updateResult.entry,
+      sessionId: updateResult.entry.sessionId,
+      sessionFile: plan.nextSessionFile,
+    };
+    // Queued followups carry prompt/transcript text captured under their
+    // original memory boundary. The current turn is rebuilt below after
+    // rotation; older queued turns must drain under their captured scope.
+    revokeAttachGrantsForSession(sessionKey);
+    return true;
+  };
   const resolvedQueue = useFastReplyRuntime
     ? {
         mode: "collect" as const,
@@ -1151,13 +1313,17 @@ export async function runPreparedReply(
   const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
+  let pendingMemoryBoundaryPlan = await resolvePreparedSessionMemoryBoundaryPlan();
+  const pendingMemoryBoundaryChange = pendingMemoryBoundaryPlan !== null;
   const shouldSteer =
     !isRoomEvent &&
+    !pendingMemoryBoundaryChange &&
     activeRunAcceptsCurrentThread &&
     !isHeartbeatRun &&
     !effectiveResetTriggered &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
+    !pendingMemoryBoundaryChange &&
     !effectiveResetTriggered &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
@@ -1170,6 +1336,10 @@ export async function runPreparedReply(
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
+  if (activeRunQueueAction === "drop") {
+    typing.cleanup();
+    return undefined;
+  }
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
@@ -1206,7 +1376,21 @@ export async function runPreparedReply(
       typing.cleanup();
       return queueState.reply;
     }
+    pendingMemoryBoundaryPlan = await resolvePreparedSessionMemoryBoundaryPlan();
     resolveActiveRunAcceptsCurrentThread({ isActive });
+  }
+  if (
+    pendingMemoryBoundaryPlan &&
+    (await rotatePreparedSessionMemoryBoundary(pendingMemoryBoundaryPlan))
+  ) {
+    ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
   }
   const runHasStoredSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
@@ -1344,7 +1528,7 @@ export async function runPreparedReply(
       sessionKey,
       runtimePolicySessionKey,
       messageProvider,
-      chatType: replyRoute.chatType,
+      chatType: targetSessionChatType ?? replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:

@@ -27,7 +27,11 @@ import {
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import {
+  deriveSessionChatTypeFromKey,
+  parseAgentSessionKey,
+  parseThreadSessionSuffix,
+} from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as asRecord,
@@ -1188,6 +1192,7 @@ function isEligibleInteractiveSession(ctx: {
 
 function resolveChatType(ctx: {
   sessionKey?: string;
+  chatType?: string;
   messageProvider?: string;
   channelId?: string;
   mainKey?: string;
@@ -1195,19 +1200,24 @@ function resolveChatType(ctx: {
   const rawSessionKey = ctx.sessionKey?.trim();
   const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
   const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
+  const runtimeChatType = normalizeLowercaseStringOrEmpty(ctx.chatType);
+  if (runtimeChatType === "group" || runtimeChatType === "channel") {
+    return runtimeChatType;
+  }
+  if (sessionKey?.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
+    return "explicit";
+  }
+  const sessionKeyChatType = deriveSessionChatTypeFromKey(sessionKey);
+  if (sessionKeyChatType === "group" || sessionKeyChatType === "channel") {
+    return sessionKeyChatType;
+  }
+  if (sessionKeyChatType === "direct") {
+    return "direct";
+  }
+  if (runtimeChatType === "direct") {
+    return runtimeChatType;
+  }
   if (sessionKey) {
-    if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
-      return "explicit";
-    }
-    if (sessionKey.includes(":group:")) {
-      return "group";
-    }
-    if (sessionKey.includes(":channel:")) {
-      return "channel";
-    }
-    if (sessionKey.includes(":direct:") || sessionKey.includes(":dm:")) {
-      return "direct";
-    }
     const mainKey = ctx.mainKey?.trim().toLowerCase() || "main";
     const agentSessionParts = sessionKey.split(":");
     if (
@@ -1229,10 +1239,19 @@ function resolveChatType(ctx: {
   return undefined;
 }
 
+function toEmbeddedRecallChatType(
+  chatType: ActiveMemoryChatType | undefined,
+): "direct" | "group" | "channel" | undefined {
+  return chatType === "direct" || chatType === "group" || chatType === "channel"
+    ? chatType
+    : undefined;
+}
+
 function isAllowedChatType(
   config: ResolvedActiveRecallPluginConfig,
   ctx: {
     sessionKey?: string;
+    chatType?: string;
     messageProvider?: string;
     channelId?: string;
     mainKey?: string;
@@ -2910,6 +2929,7 @@ async function runRecallSubagent(params: {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: ActiveMemoryChatType;
   messageProvider?: string;
   channelId?: string;
   query: string;
@@ -2983,6 +3003,7 @@ async function runRecallSubagent(params: {
     messageProvider: params.messageProvider,
     channelId: params.channelId,
   });
+  const embeddedChatType = toEmbeddedRecallChatType(params.chatType);
 
   let activeSessionFile = sessionFile;
   let harnessHasUsableMemoryResult = false;
@@ -2996,6 +3017,7 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
       messageChannel,
       messageProvider,
+      ...(embeddedChatType ? { chatType: embeddedChatType } : {}),
       sessionFile,
       workspaceDir,
       agentDir,
@@ -3102,6 +3124,7 @@ async function maybeResolveActiveRecall(params: {
   agentId: string;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: ActiveMemoryChatType;
   messageProvider?: string;
   channelId?: string;
   query: string;
@@ -3708,6 +3731,11 @@ export default definePluginEntry({
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
+              chatType: resolveChatType({
+                ...ctx,
+                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+                mainKey: api.config.session?.mainKey,
+              }),
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,

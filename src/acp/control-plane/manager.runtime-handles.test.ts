@@ -49,6 +49,88 @@ describe("AcpSessionManager runtime handles", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("re-ensures cached runtime handles when the memory policy changes", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "private",
+      mode: "prompt",
+      requestId: "r-private",
+      memoryPolicy: {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      },
+    });
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "shared",
+      mode: "prompt",
+      requestId: "r-shared",
+      memoryPolicy: {
+        chatType: "group",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(runtimeState.ensureSession).memoryPolicy).toEqual({
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    });
+    expect(mockCallArg(runtimeState.ensureSession, 1).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      reason: "runtime-handle-replaced",
+    });
+  });
+
+  it("derives explicit-only memory policy for ACP runtime turns when command callers omit it", async () => {
+    const runtimeState = createRuntime();
+    const sessionKey = "agent:codex:acp:session-derived-policy";
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "shared ACP turn",
+      mode: "prompt",
+      requestId: "r-derived-policy",
+    });
+
+    expect(mockCallArg(runtimeState.ensureSession).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expect(mockCallArg(runtimeState.runTurn).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
   it("re-ensures cached runtime handles when the runtime config changes", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -291,6 +373,94 @@ describe("AcpSessionManager runtime handles", () => {
       sessionKey,
       agent: "codex",
       resumeSessionId: "acpx-sid-1",
+    });
+  });
+
+  it.each([
+    {
+      name: "stamped private identity",
+      memoryPolicy: {
+        chatType: "direct" as const,
+        longTermMemoryDefaultPolicy: "include" as const,
+      },
+    },
+    {
+      name: "legacy unstamped identity",
+      memoryPolicy: undefined,
+    },
+  ])("starts fresh when $name enters explicit-only memory policy", async ({ memoryPolicy }) => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:binding:demo-binding:default:privacy",
+      backend: "acpx",
+      runtimeSessionName: "runtime-fresh",
+      backendSessionId: "acpx-sid-fresh",
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:privacy";
+    let currentMeta: SessionAcpMeta = readySessionMeta({
+      runtimeSessionName: sessionKey,
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-private",
+        ...(memoryPolicy ? { memoryPolicy } : {}),
+        lastUpdatedAt: Date.now(),
+      },
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: currentMeta,
+    }));
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "shared",
+      mode: "prompt",
+      requestId: "r-binding-shared",
+      memoryPolicy: {
+        chatType: "group",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({ sessionKey });
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey,
+      agent: "codex",
+    });
+    expect(mockCallArg(runtimeState.ensureSession).resumeSessionId).toBeUndefined();
+    expect(mockCallArg(runtimeState.ensureSession).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(currentMeta.identity?.memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
     });
   });
 

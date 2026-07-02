@@ -13,7 +13,11 @@ import {
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
-import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  testing as memoryToolsTesting,
+} from "./tools.js";
 import {
   buildMemorySearchUnavailableResult,
   MemoryGetSchema,
@@ -60,6 +64,54 @@ describe("memory tool schemas", () => {
     expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
     expect(getCorpus.anyOf).toBeUndefined();
     expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+  });
+
+  it("keeps memory_search mandatory for private sessions", () => {
+    const tool = createMemorySearchToolOrThrow({
+      agentSessionKey: "agent:main:telegram:direct:123456",
+    });
+
+    expect(tool.description).toContain("Mandatory recall step");
+  });
+
+  it("makes memory_search explicit-only for shared sessions", () => {
+    const tool = createMemorySearchToolOrThrow({
+      agentSessionKey: "agent:main:discord:channel:c1",
+    });
+
+    expect(tool.description).toContain("On-demand recall tool for shared sessions");
+    expect(tool.description).not.toContain("Mandatory recall step");
+  });
+
+  it("uses runtime chat type for opaque ACP-bound shared sessions", () => {
+    const tool = createMemorySearchToolOrThrow({
+      agentSessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      agentChatType: "group",
+    });
+
+    expect(tool.description).toContain("On-demand recall tool for shared sessions");
+    expect(tool.description).not.toContain("Mandatory recall step");
+  });
+
+  it("keeps memory_get direct for private sessions", () => {
+    const tool = createMemoryGetTool({
+      config: asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } }),
+      agentSessionKey: "agent:main:telegram:direct:123456",
+    });
+
+    expect(tool?.description).toContain("Safe exact excerpt read");
+    expect(tool?.description).not.toContain("On-demand exact read tool for shared sessions");
+  });
+
+  it("makes memory_get explicit-only for opaque ACP-bound shared sessions", () => {
+    const tool = createMemoryGetTool({
+      config: asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } }),
+      agentSessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      agentChatType: "group",
+    });
+
+    expect(tool?.description).toContain("On-demand exact read tool for shared sessions");
+    expect(tool?.description).toContain("only when the user explicitly asks");
   });
 });
 

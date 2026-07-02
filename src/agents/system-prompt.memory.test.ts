@@ -23,4 +23,24 @@ describe("buildAgentSystemPrompt memory guidance", () => {
     expect(promptWithMemory).toContain("## Memory Recall");
     expect(promptWithoutMemory).not.toContain("## Memory Recall");
   });
+
+  it("passes the runtime session key and chat type to memory prompt builders", () => {
+    registerMemoryPromptSection(({ sessionKey, chatType }) => [
+      "## Memory Recall",
+      `session=${sessionKey ?? "missing"}`,
+      `chatType=${chatType ?? "missing"}`,
+      "",
+    ]);
+
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).toContain("session=agent:main:acp:binding:telegram:acct:abc123");
+    expect(prompt).toContain("chatType=group");
+  });
 });

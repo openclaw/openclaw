@@ -135,6 +135,7 @@ export function refreshQueuedFollowupSession(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextChatType?: FollowupRun["run"]["chatType"];
   nextProvider?: string;
   nextModel?: string;
   nextModelOverrideSource?: "auto" | "user";
@@ -149,10 +150,15 @@ export function refreshQueuedFollowupSession(params: {
   if (!queue) {
     return;
   }
+  const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+  const hasSessionRewriteTarget =
+    Boolean(params.previousSessionId) && Boolean(params.nextSessionId);
+  const shouldRewriteChatType = Object.hasOwn(params, "nextChatType");
   const shouldRewriteSession =
-    Boolean(params.previousSessionId) &&
-    Boolean(params.nextSessionId) &&
-    params.previousSessionId !== params.nextSessionId;
+    hasSessionRewriteTarget &&
+    (params.previousSessionId !== params.nextSessionId ||
+      Boolean(nextSessionFile) ||
+      shouldRewriteChatType);
   const shouldRewriteModelSelection =
     typeof params.nextProvider === "string" ||
     typeof params.nextModel === "string" ||
@@ -171,9 +177,11 @@ export function refreshQueuedFollowupSession(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
       if (nextSessionFile) {
         run.sessionFile = nextSessionFile;
+      }
+      if (shouldRewriteChatType) {
+        run.chatType = params.nextChatType;
       }
     }
     if (shouldRewriteSelection) {

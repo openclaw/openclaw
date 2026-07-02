@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import type { ChatType } from "../channels/chat-type.js";
 
 export interface McpAttachGrant {
   /** Opaque bearer presented as `Authorization: Bearer <token>`. */
   readonly token: string;
   /** The openclaw session this grant is bound to; tool scope is resolved for this key. */
   readonly sessionKey: string;
+  /** Trusted conversation kind bound when the grant is minted. */
+  readonly chatType?: ChatType;
   /** Absolute expiry (ms epoch). */
   readonly expiresAtMs: number;
   /** Absolute mint time (ms epoch). */
@@ -25,6 +28,7 @@ function clampTtlMs(ttlMs: number | undefined): number {
 
 export function mintAttachGrant(params: {
   sessionKey: string;
+  chatType?: ChatType;
   ttlMs?: number;
   nowMs?: number;
 }): McpAttachGrant {
@@ -38,6 +42,7 @@ export function mintAttachGrant(params: {
   const grant: McpAttachGrant = {
     token: crypto.randomBytes(32).toString("hex"),
     sessionKey,
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     issuedAtMs: nowMs,
     expiresAtMs: nowMs + clampTtlMs(params.ttlMs),
   };

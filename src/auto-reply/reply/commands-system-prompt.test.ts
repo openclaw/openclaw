@@ -215,6 +215,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "agent:target:telegram:direct:target-session": {
         sessionId: "target-session",
         updatedAt: Date.now(),
+        chatType: "group",
         groupId: "target-group",
         groupChannel: "#target",
         space: "target-space",
@@ -230,6 +231,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.sessionId).toBe("target-session");
+    expect(bootstrapParams.chatType).toBe("group");
     const runtimeParams = requireFirstArg(
       vi.mocked(buildSystemPromptParams),
       "buildSystemPromptParams",
@@ -248,6 +250,32 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(toolParams.groupChannel).toBe("#target");
     expect(toolParams.groupSpace).toBe("target-space");
     expect(toolParams.spawnedBy).toBe("agent:target-parent");
+    expect(toolParams.chatType).toBe("group");
+  });
+
+  it("lets live shared chat metadata override stale direct metadata for current-session prompt inspection", async () => {
+    const params = makeParams();
+    params.sessionKey = "agent:main:acp:binding:telegram:acct:opaque";
+    params.ctx.SessionKey = params.sessionKey;
+    params.ctx.ChatType = "group";
+    params.sessionEntry = {
+      sessionId: "session-current",
+      updatedAt: Date.now(),
+      chatType: "direct",
+    };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    const bootstrapParams = requireFirstArg(
+      vi.mocked(resolveBootstrapContextForRun),
+      "resolveBootstrapContextForRun",
+    );
+    expect(bootstrapParams.chatType).toBe("group");
+    const toolParams = requireFirstArg(
+      vi.mocked(createOpenClawCodingTools),
+      "createOpenClawCodingTools",
+    );
+    expect(toolParams.chatType).toBe("group");
   });
 
   it("uses the resolved session key and forwards full-access block reasons", async () => {

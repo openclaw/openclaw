@@ -323,6 +323,7 @@ export function resolveEffectiveToolInventory(
     modelApi: runtimeModelContext.modelApi,
     modelCompat,
     messageProvider: params.messageProvider,
+    chatType: params.chatType,
     senderId: params.senderId,
     senderName: params.senderName ?? undefined,
     senderUsername: params.senderUsername ?? undefined,

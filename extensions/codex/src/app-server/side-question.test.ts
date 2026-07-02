@@ -383,6 +383,22 @@ async function runSideQuestionWithManagedWebSearchCall(
   return { forkConfig, result, toolResponse };
 }
 
+function codexBinding(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    threadId: "parent-thread",
+    sessionFile: "/tmp/session-1.jsonl",
+    cwd: "/tmp/workspace",
+    authProfileId: "openai:work",
+    model: "gpt-5.5",
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    ...overrides,
+  };
+}
+
 describe("runCodexAppServerSideQuestion", () => {
   beforeEach(() => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
@@ -414,18 +430,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     ]);
 
-    readCodexAppServerBindingMock.mockResolvedValue({
-      schemaVersion: 1,
-      threadId: "parent-thread",
-      sessionFile: "/tmp/session-1.jsonl",
-      cwd: "/tmp/workspace",
-      authProfileId: "openai:work",
-      model: "gpt-5.5",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    });
+    readCodexAppServerBindingMock.mockResolvedValue(codexBinding());
     isCodexAppServerNativeAuthProfileMock.mockReturnValue(true);
     getSharedCodexAppServerClientMock.mockResolvedValue(createFakeClient());
     refreshCodexAppServerAuthTokensMock.mockResolvedValue({
@@ -444,6 +449,19 @@ describe("runCodexAppServerSideQuestion", () => {
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue(
+      codexBinding({ nativeMemoryDefaultPolicy: "explicit-only" }),
+    );
+    const directSideRunParams = testing.buildSideRunAttemptParams(
+      sideParams({
+        sessionKey: "agent:main:conversation",
+        sandboxSessionKey: "agent:main:runtime-policy",
+        chatType: "group",
+      }),
+      { cwd: "/tmp/workspace", authProfileId: "openai:work" },
+    ) as { params?: { chatType?: unknown }; chatType?: unknown };
+    expect(directSideRunParams.chatType).toBe("group");
+    expect(directSideRunParams.params?.chatType).toBe("group");
 
     const result = await runCodexAppServerSideQuestion(
       sideParams({
@@ -451,6 +469,7 @@ describe("runCodexAppServerSideQuestion", () => {
         messageProvider: "discord-voice",
         sessionKey: "agent:main:conversation",
         sandboxSessionKey: "agent:main:runtime-policy",
+        chatType: "group",
         currentChannelId: "voice-room",
         agentAccountId: "account-1",
         messageTo: "channel-1",
@@ -498,6 +517,8 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
+      "memories.generate_memories": false,
+      "memories.use_memories": false,
       web_search: "cached",
     });
     expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
@@ -570,6 +591,7 @@ describe("runCodexAppServerSideQuestion", () => {
       agentAccountId: "account-1",
       sessionKey: "agent:main:runtime-policy",
       runSessionKey: "agent:main:conversation",
+      chatType: "group",
       messageTo: "channel-1",
       messageThreadId: "thread-1",
       groupId: "group-1",
@@ -688,6 +710,30 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     });
   });
+
+  it.each([
+    { name: "unstamped legacy binding", overrides: {} },
+    { name: "direct-memory binding", overrides: { nativeMemoryDefaultPolicy: "include" } },
+  ])(
+    "rejects shared side forks from a stale parent memory policy: $name",
+    async ({ overrides }) => {
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
+      readCodexAppServerBindingMock.mockResolvedValue(codexBinding(overrides));
+
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sessionKey: "agent:main:discord:channel:C123",
+            chatType: "group",
+          }),
+        ),
+      ).rejects.toThrow("fresh Codex thread for this session memory policy");
+
+      expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables hosted search when side-question sender policy removes managed web_search", async () => {
     createOpenClawCodingToolsMock.mockImplementation((options: { senderId?: string }) =>

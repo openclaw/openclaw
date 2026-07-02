@@ -5,6 +5,10 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import {
+  resolveTargetSessionChatType,
+  shouldPreferSessionEntryForTargetSession,
+} from "./runtime-policy-session-key.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
 
@@ -58,6 +62,15 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     const currentChannelId =
       params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
     const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
+    const chatType = resolveTargetSessionChatType({
+      ctx: params.ctx,
+      sessionEntry: targetSessionEntry,
+      sessionKey: params.sessionKey,
+      preferSessionEntry: shouldPreferSessionEntryForTargetSession({
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
+    });
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
       agentDir,
@@ -67,6 +80,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
+      chatType,
       ...(params.ctx.RuntimePolicySessionKey
         ? { sandboxSessionKey: params.ctx.RuntimePolicySessionKey }
         : {}),

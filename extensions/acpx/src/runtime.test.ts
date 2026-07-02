@@ -10,7 +10,11 @@ import {
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  hashAcpxProcessCommand,
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+} from "./process-lease.js";
 import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
 
 type TestSessionStore = {
@@ -231,6 +235,49 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:research:main",
+    });
+  });
+
+  it("adds the OpenClaw session key to the managed plugin tools MCP bridge", () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+
+    const readScopedMcpEnv = (sessionKey: string) => {
+      const delegate = (
+        runtime as unknown as {
+          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+        }
+      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+        options: {
+          mcpServers?: Array<{
+            env?: Array<{ name: string; value: string }>;
+            name: string;
+          }>;
+        };
+      };
+      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-plugin-tools")
+        ?.env;
+    };
+
+    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+      name: "OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:worker:main",
+    });
+    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+      name: "OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:research:main",
     });
   });
@@ -917,7 +964,101 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ).toBe(
       "npx @zed-industries/codex-acp@0.13.0 -c model=gpt-5.4 -c model_reasoning_effort=medium",
     );
+    expect(
+      testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
+        disableNativeMemory: true,
+      }),
+    ).toBe(
+      "npx @zed-industries/codex-acp@0.13.0 -c memories.use_memories=false -c memories.generate_memories=false",
+    );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
+  });
+
+  it("disables native Codex memories at launch for explicit-only ACP memory policy", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    const leaseStore = makeLeaseStore();
+    const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? wrapperCommand : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      memoryPolicy: {
+        chatType: "group",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+
+    const expectedLaunchCommand = testing.appendCodexAcpConfigOverrides(wrapperCommand, {
+      disableNativeMemory: true,
+    });
+    expect(leaseStore.store.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandHash: hashAcpxProcessCommand(expectedLaunchCommand),
+      }),
+    );
+    expect(readFirstEnsureSessionInput(ensure).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
+  it("keeps native Codex memory launch defaults for include ACP memory policy", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    const leaseStore = makeLeaseStore();
+    const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? wrapperCommand : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:direct",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:direct",
+      agent: "codex",
+      mode: "persistent",
+      memoryPolicy: {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      },
+    });
+
+    expect(leaseStore.store.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandHash: hashAcpxProcessCommand(wrapperCommand),
+      }),
+    );
   });
 
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {

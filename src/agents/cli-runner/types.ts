@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -16,6 +17,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { LongTermMemoryDefaultPolicy } from "../../sessions/session-memory-policy.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -38,6 +40,8 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Trusted live conversation kind for the current run. */
+  chatType?: ChatType;
   sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
@@ -208,6 +212,7 @@ export type PreparedCliRunContext = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
 };

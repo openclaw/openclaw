@@ -7,6 +7,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -112,6 +113,10 @@ function resolveCronBootstrapContextMode(
     return undefined;
   }
   return isCommandStyleCronMessage(payload?.message ?? "") ? "lightweight" : undefined;
+}
+
+function resolveCronRunChatType(): ChatType {
+  return "group";
 }
 
 function buildCronDeliveryTargetRuntimeContext(params: {
@@ -272,6 +277,7 @@ export function createCronPromptExecutor(params: {
     resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  const chatType = resolveCronRunChatType();
   const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
     resolvedDeliveryOk: params.resolvedDeliveryOk,
     messageToolPromptEnabled: params.messageToolPromptEnabled,
@@ -329,6 +335,7 @@ export function createCronPromptExecutor(params: {
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionEntry: params.cronSession.sessionEntry,
+            chatType,
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
@@ -393,6 +400,7 @@ export function createCronPromptExecutor(params: {
           jobId: params.job.id,
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
+          chatType,
           messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,

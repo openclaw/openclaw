@@ -44,6 +44,18 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
+  it("forwards trusted runtime chat type", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentSessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+        agentChatType: "group",
+      },
+    });
+
+    expect(result.context.chatType).toBe("group");
+  });
+
   it("forwards runtime-owned active model metadata", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

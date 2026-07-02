@@ -13,6 +13,7 @@ import {
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
@@ -27,6 +28,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  agentChatType?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
 };
@@ -59,6 +61,30 @@ function hasMemoryToolContext(options: MemoryToolOptions): boolean {
     agentId: options.agentId,
   });
   return Boolean(resolveMemorySearchConfig(cfg, agentId));
+}
+
+function memorySearchToolDescription(options: MemoryToolOptions): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: options.agentSessionKey,
+      chatType: options.agentChatType,
+    })
+  ) {
+    return "On-demand recall tool for shared sessions: search MEMORY.md + memory/*.md (and optional session transcripts) only when the user explicitly asks for long-term memory or a visible session instruction requests it. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.";
+  }
+  return "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.";
+}
+
+function memoryGetToolDescription(options: MemoryToolOptions): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: options.agentSessionKey,
+      chatType: options.agentChatType,
+    })
+  ) {
+    return "On-demand exact read tool for shared sessions: read MEMORY.md or memory/*.md only when the user explicitly asks for a memory file excerpt or a visible session instruction requests it. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.";
+  }
+  return "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.";
 }
 
 const MemorySearchSchema = {
@@ -127,8 +153,7 @@ function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | 
     options,
     label: "Memory Search",
     name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+    description: memorySearchToolDescription(options),
     parameters: MemorySearchSchema,
     load: (module, loadOptions) => module.createMemorySearchTool(loadOptions),
   });
@@ -139,8 +164,7 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
     options,
     label: "Memory Get",
     name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
+    description: memoryGetToolDescription(options),
     parameters: MemoryGetSchema,
     load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
   });
@@ -153,6 +177,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     getConfig,
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
+    agentChatType: ctx.chatType,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
   };

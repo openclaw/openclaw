@@ -410,17 +410,22 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isManagedSessionCorpusPath(rawPath: string | undefined): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(rawPath ?? ""));
+}
+
+function isContaminatedDreamingSnippet(raw: string, rawPath?: string): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
   }
+  const allowManagedSessionTranscriptTurn = isManagedSessionCorpusPath(rawPath);
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
     RAW_SESSION_METADATA_RE.test(snippet) ||
     RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
-    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    (!allowManagedSessionTranscriptTurn && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
     MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
     PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
@@ -611,7 +616,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet, entryPath)) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1433,7 +1438,7 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet, normalizedPath)) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1561,7 +1566,7 @@ export async function recordGroundedShortTermCandidates(params: {
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
         !rawSnippet ||
-        isContaminatedDreamingSnippet(rawSnippet) ||
+        isContaminatedDreamingSnippet(rawSnippet, normalizedPath) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1859,7 +1864,7 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (isContaminatedDreamingSnippet(entry.snippet, entry.path)) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -2435,7 +2440,7 @@ export async function applyShortTermPromotions(
     const store = await readStore(workspaceDir, nowIso);
     const selected = options.candidates
       .filter((candidate) => {
-        if (isContaminatedDreamingSnippet(candidate.snippet)) {
+        if (isContaminatedDreamingSnippet(candidate.snippet, candidate.path)) {
           return false;
         }
         if (candidate.promotedAt) {
@@ -2473,7 +2478,7 @@ export async function applyShortTermPromotions(
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
       const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
-      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet)) {
+      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet, rehydrated.path)) {
         rehydratedSelected.push(rehydrated);
       }
     }

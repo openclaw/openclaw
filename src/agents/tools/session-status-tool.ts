@@ -28,6 +28,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
@@ -801,9 +802,10 @@ export function createSessionStatusTool(opts?: {
         providerForCard && defaultModelForCard
           ? `${providerForCard}/${defaultModelForCard}`
           : defaultModelForCard;
+      const statusChatType = resolveSessionEntryChatType(statusSessionEntry);
       const isGroup =
-        statusSessionEntry.chatType === "group" ||
-        statusSessionEntry.chatType === "channel" ||
+        statusChatType === "group" ||
+        statusChatType === "channel" ||
         resolved.key.includes(":group:") ||
         resolved.key.includes(":channel:");
       const taskLine = formatSessionTaskLine({

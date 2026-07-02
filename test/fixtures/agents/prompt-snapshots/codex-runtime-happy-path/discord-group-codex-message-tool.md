@@ -7,7 +7,7 @@
 - Default happy path: the same Codex agent is mentioned in a Discord group/channel while Telegram can remain the user's primary direct interface.
 - Group-visible output must be explicit through the message tool; the model is also told to mostly lurk unless directly addressed or clearly useful.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, shared-session `MEMORY.md` exclusion, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -21,7 +21,7 @@
   "modelProvider": "openai",
   "runtime": "codex_app_server",
   "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
-  "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
+  "simulatedWorkspaceBootstrapFiles": [],
   "simulatedWorkspaceDeveloperInstructionFiles": ["/tmp/openclaw-happy-path/workspace/TOOLS.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
@@ -82,6 +82,8 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.standalone_web_search": false,
+    "memories.generate_memories": false,
+    "memories.use_memories": false,
     "web_search": "cached"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -123,6 +125,8 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.standalone_web_search": false,
+    "memories.generate_memories": false,
+    "memories.use_memories": false,
     "web_search": "cached"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -235,16 +239,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 769
   },
   "totalTextOnly": {
-    "chars": 27785,
-    "roughTokens": 6947
+    "chars": 27783,
+    "roughTokens": 6946
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78738,
-    "roughTokens": 19685
+    "chars": 78736,
+    "roughTokens": 19684
   },
   "userInputText": {
-    "chars": 1629,
-    "roughTokens": 408
+    "chars": 1627,
+    "roughTokens": 407
   }
 }
 ```
@@ -503,15 +507,11 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. MEMORY.md is included only for sessions that receive long-term memory by default. Those files are not repeated here.
 
 # Project Context
 
-The following project context files have been loaded:
-
-## /tmp/openclaw-happy-path/workspace/MEMORY.md
-
-<MEMORY.md contents will be here>
+No Project Context files are loaded for this session.
 
 Current user request:
 Conversation info (untrusted metadata):

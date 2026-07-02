@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -97,6 +98,8 @@ export function createOpenClawTools(
     agentChannel?: GatewayMessageChannel;
     runId?: string;
     agentAccountId?: string;
+    /** Trusted runtime conversation kind for shared/private policy decisions. */
+    agentChatType?: ChatType;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -260,8 +263,10 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        agentSessionKey: options?.agentSessionKey,
         agentChannel: options?.agentChannel,
         agentAccountId: options?.agentAccountId,
+        agentChatType: options?.agentChatType,
         currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
         deferAutoModelResolution: true,

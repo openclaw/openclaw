@@ -13,10 +13,13 @@ import type {
   EffectiveToolInventoryResult,
 } from "../../agents/tools-effective-inventory.types.js";
 import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effective-mcp-inventory.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
@@ -58,6 +61,7 @@ type TrustedToolsEffectiveContext = {
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   accountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -102,6 +106,7 @@ function buildToolsEffectiveCacheKey(params: {
     modelProvider: optionalCacheString(context.modelProvider),
     modelId: optionalCacheString(context.modelId),
     messageProvider: optionalCacheString(context.messageProvider),
+    chatType: optionalCacheString(context.chatType),
     accountId: optionalCacheString(context.accountId),
     currentChannelId: optionalCacheString(context.currentChannelId),
     currentThreadTs: optionalCacheString(context.currentThreadTs),
@@ -362,6 +367,7 @@ function resolveBaseToolsEffectiveInventory(
     runtimeModel: runtimeModelContext.runtimeModel,
     currentChannelId: context.currentChannelId,
     currentThreadTs: context.currentThreadTs,
+    chatType: context.chatType,
     accountId: context.accountId,
     groupId: context.groupId,
     groupChannel: context.groupChannel,
@@ -459,10 +465,23 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntry(
-    params.sessionKey,
-    params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
-  );
+  let loaded: ReturnType<typeof loadSessionEntry>;
+  try {
+    loaded = loadSessionEntry(
+      params.sessionKey,
+      params.requestedAgentId
+        ? { agentId: params.requestedAgentId, strictRead: true }
+        : { strictRead: true },
+    );
+  } catch (err) {
+    logWarn(`tools.effective session policy lookup failed: ${String(err)}`);
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "session policy unavailable"),
+    );
+    return null;
+  }
   if (!loaded.entry) {
     params.respond(
       false,
@@ -505,6 +524,12 @@ function resolveTrustedToolsEffectiveContext(params: {
   const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
   const pluginRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  const chatType = resolveLongTermMemoryTargetChatType({
+    sessionKey: params.sessionKey,
+    storedChatType: resolveSessionEntryChatType(loaded.entry),
+    longTermMemoryDefaultPolicy: loaded.entry.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -521,6 +546,7 @@ function resolveTrustedToolsEffectiveContext(params: {
       loaded.entry.lastChannel ??
       loaded.entry.channel ??
       loaded.entry.origin?.provider,
+    chatType,
     accountId: delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
     currentChannelId: delivery?.to,
     currentThreadTs:
@@ -542,7 +568,7 @@ function resolveTrustedToolsEffectiveContext(params: {
         loaded.entry.channel ??
         loaded.entry.origin?.provider,
       delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
-      loaded.entry.chatType ?? loaded.entry.origin?.chatType,
+      chatType,
     ),
   };
 }

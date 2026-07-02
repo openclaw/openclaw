@@ -93,6 +93,8 @@ import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
@@ -560,7 +562,7 @@ function resolveChannelModelCandidate(params: {
     cfg: params.cfg,
     channel,
     groupId: params.entry?.groupId,
-    groupChatType: params.entry?.chatType ?? params.ctx.ChatType,
+    groupChatType: resolveSessionEntryChatType(params.entry) ?? params.ctx.ChatType,
     groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
@@ -1909,6 +1911,12 @@ export async function dispatchReplyFromConfig(
   const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
+  const sendPolicyChatType = resolveLongTermMemoryTargetChatType({
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    liveChatType: ctx.ChatType,
+    storedChatType: resolveSessionEntryChatType(sessionStoreEntry.entry),
+    longTermMemoryDefaultPolicy: sessionStoreEntry.entry?.longTermMemoryDefaultPolicy,
+  });
 
   // Resolve automatic source-delivery suppression early so every outbound path
   // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
@@ -1925,7 +1933,7 @@ export async function dispatchReplyFromConfig(
       ctx.Surface ??
       ctx.Provider ??
       undefined,
-    chatType: sessionStoreEntry.entry?.chatType,
+    chatType: sendPolicyChatType,
   });
   const {
     globalPolicy,

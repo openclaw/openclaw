@@ -40,14 +40,42 @@ export default definePluginEntry({
       createWikiCorpusSupplement({ config, appConfig: api.config }),
     );
     registerMemoryWikiGatewayMethods({ api, config, appConfig: api.config });
-    api.registerTool(createWikiStatusTool(config, api.config), { name: "wiki_status" });
-    api.registerTool(createWikiLintTool(config, api.config), { name: "wiki_lint" });
-    api.registerTool(createWikiApplyTool(config, api.config), { name: "wiki_apply" });
+    api.registerTool(
+      (ctx) =>
+        createWikiStatusTool(config, api.config, {
+          agentId: ctx.agentId,
+          agentSessionKey: ctx.sessionKey,
+          agentChatType: ctx.chatType,
+          sandboxed: ctx.sandboxed,
+        }),
+      { name: "wiki_status" },
+    );
+    api.registerTool(
+      (ctx) =>
+        createWikiLintTool(config, api.config, {
+          agentId: ctx.agentId,
+          agentSessionKey: ctx.sessionKey,
+          agentChatType: ctx.chatType,
+          sandboxed: ctx.sandboxed,
+        }),
+      { name: "wiki_lint" },
+    );
+    api.registerTool(
+      (ctx) =>
+        createWikiApplyTool(config, api.config, {
+          agentId: ctx.agentId,
+          agentSessionKey: ctx.sessionKey,
+          agentChatType: ctx.chatType,
+          sandboxed: ctx.sandboxed,
+        }),
+      { name: "wiki_apply" },
+    );
     api.registerTool(
       (ctx) =>
         createWikiSearchTool(config, api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
+          agentChatType: ctx.chatType,
           sandboxed: ctx.sandboxed,
         }),
       { name: "wiki_search" },
@@ -57,6 +85,7 @@ export default definePluginEntry({
         createWikiGetTool(config, api.config, {
           agentId: ctx.agentId,
           agentSessionKey: ctx.sessionKey,
+          agentChatType: ctx.chatType,
           sandboxed: ctx.sandboxed,
         }),
       { name: "wiki_get" },

@@ -150,6 +150,8 @@ export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 export { defaultRuntime } from "../../../../src/runtime.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+export { shouldIncludeLongTermMemoryByDefault } from "../../../../src/sessions/session-memory-policy.js";
+export { resolveSessionEntryChatType } from "../../../../src/sessions/session-chat-type-shared.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { formatDocsLink } from "../../../terminal-core/src/links.js";

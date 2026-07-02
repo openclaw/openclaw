@@ -154,6 +154,28 @@ function makeCoreInventory(
   };
 }
 
+function makeInventoryForChatType(params: Record<string, unknown>): ToolsEffectivePayload {
+  const inventory = makeCoreInventory();
+  if (params.chatType === "direct") {
+    inventory.groups?.push({
+      id: "memory",
+      label: "Memory tools",
+      source: "plugin",
+      tools: [
+        {
+          id: "memory_store",
+          label: "Memory Store",
+          description: "Write durable memory",
+          rawDescription: "Write durable memory",
+          source: "plugin",
+          pluginId: "memory",
+        },
+      ],
+    });
+  }
+  return inventory;
+}
+
 function makeMcpCatalog(): McpToolCatalog {
   return { version: 1, generatedAt: 1, servers: {}, tools: [] };
 }
@@ -286,6 +308,21 @@ describe("tools.effective handler", () => {
     expectInvalidResponse(respond, 'unknown session key "missing-session"');
   });
 
+  it("fails closed when the persisted session policy cannot be read", async () => {
+    runtimeMocks.loadSessionEntry.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(call?.[2]?.message).toBe("session policy unavailable");
+    expect(runtimeMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
+  });
+
   it("returns the read-only effective runtime inventory without MCP startup", async () => {
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
@@ -304,6 +341,7 @@ describe("tools.effective handler", () => {
     expect(inventoryParams?.groupId).toBe("group-4");
     expect(inventoryParams?.groupChannel).toBe("#ops");
     expect(inventoryParams?.groupSpace).toBe("workspace-5");
+    expect(inventoryParams?.chatType).toBe("group");
     expect(inventoryParams?.replyToMode).toBe("first");
     expect(inventoryParams?.messageProvider).toBe("telegram");
     expect(inventoryParams?.modelProvider).toBe("openai");
@@ -574,6 +612,82 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
+  it("passes route-target chat type into the effective runtime inventory", async () => {
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "main:abc",
+      entry: {
+        sessionId: "session-route-chat",
+        updatedAt: 1,
+        route: { target: { to: "channel-1", chatType: "group" } },
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.chatType).toBe("group");
+  });
+
+  it("uses stored explicit-only policy for direct-shaped effective tool descriptors", async () => {
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:telegram:direct:alice",
+      entry: {
+        sessionId: "explicit-only-direct-shaped",
+        updatedAt: 1,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(makeInventoryForChatType);
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:telegram:direct:alice",
+    });
+    await invoke();
+
+    const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload | undefined;
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.chatType).toBe("group");
+    expect(payload?.groups?.flatMap((group) => group.tools ?? []).map((tool) => tool.id)).not.toContain(
+      "memory_store",
+    );
+  });
+
+  it("keeps direct include effective tool descriptors private-session capable", async () => {
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:telegram:direct:alice",
+      entry: {
+        sessionId: "include-direct",
+        updatedAt: 1,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(makeInventoryForChatType);
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:telegram:direct:alice",
+    });
+    await invoke();
+
+    const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload | undefined;
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.chatType).toBe("direct");
+    expect(payload?.groups?.flatMap((group) => group.tools ?? []).map((tool) => tool.id)).toContain(
+      "memory_store",
+    );
+  });
+
   it("rejects unknown agent ids before loading the session", async () => {
     const { respond, invoke } = createInvokeParams({
       sessionKey: "main:abc",
@@ -615,7 +729,10 @@ describe("tools.effective handler", () => {
     });
     await invoke();
 
-    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      strictRead: true,
+    });
     expect(runtimeMocks.resolveSessionAgentId).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "work",

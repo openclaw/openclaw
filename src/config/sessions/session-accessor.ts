@@ -130,6 +130,8 @@ export type SessionAccessScope = {
   hydrateSkillPromptRefs?: boolean;
   /** Use latest when the caller must bypass any in-process metadata snapshot. */
   readConsistency?: "latest";
+  /** Fail store reads closed except for a genuinely missing store file. */
+  strictRead?: boolean;
   /** Canonical or alias session key for the entry being read or written. */
   sessionKey: string;
   /** Explicit store path for callers that already resolved the owning store. */
@@ -317,6 +319,10 @@ export type SessionTranscriptTurnPersistOptions = {
    * the same write transaction as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
+  /** Reject when the persisted key no longer points at this transcript file. */
+  expectedSessionFile?: string;
+  /** Reject when the persisted key crossed a long-term memory boundary. */
+  expectedLongTermMemoryDefaultPolicy?: SessionEntry["longTermMemoryDefaultPolicy"];
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Controls whether the update event includes the last appended message. */
@@ -909,11 +915,12 @@ export async function updateResolvedSessionEntry<T>(
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
-  if (scope.clone === false || scope.readConsistency === "latest") {
+  if (scope.clone === false || scope.readConsistency === "latest" || scope.strictRead === true) {
     const store = loadSessionStore(resolveSessionStorePathForScope(scope), {
       ...(scope.clone === false ? { clone: false } : {}),
       ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
       ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+      ...(scope.strictRead === true ? { strictRead: true } : {}),
     });
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
   }
@@ -927,6 +934,7 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
       loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
         clone: false,
         ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+        ...(scope.strictRead === true ? { strictRead: true } : {}),
       }),
     ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   }
@@ -2481,6 +2489,12 @@ async function persistExpectedSessionTranscriptTurn(
     throw new Error("Cannot guard a transcript turn without a session store and key");
   }
   const expectedSessionId = options.expectedSessionId;
+  const expectedSessionFile = options.expectedSessionFile?.trim();
+  const hasExpectedMemoryPolicy = Object.hasOwn(
+    options,
+    "expectedLongTermMemoryDefaultPolicy",
+  );
+  const expectedMemoryPolicy = options.expectedLongTermMemoryDefaultPolicy;
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
@@ -2506,7 +2520,12 @@ async function persistExpectedSessionTranscriptTurn(
       storePath: scope.storePath,
     },
     async (currentEntry) => {
-      if (currentEntry.sessionId !== expectedSessionId) {
+      if (
+        currentEntry.sessionId !== expectedSessionId ||
+        (expectedSessionFile && currentEntry.sessionFile !== expectedSessionFile) ||
+        (hasExpectedMemoryPolicy &&
+          currentEntry.longTermMemoryDefaultPolicy !== expectedMemoryPolicy)
+      ) {
         rejectedEntry = currentEntry;
         return null;
       }
