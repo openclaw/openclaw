@@ -1,8 +1,8 @@
+import fs from "node:fs";
 // Gateway tests cover archived-transcript retention cleanup: every retention
 // rule shares one directory listing per cleanup call. Store maintenance runs
 // this on each save, so per-rule listings would multiply READDIR load.
 import fsPromises from "node:fs/promises";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,15 +107,21 @@ describe("cleanupArchivedSessionTranscripts", () => {
     const trajectoryDir = path.join(dir, "trajectory-override");
     fs.mkdirSync(trajectoryDir, { recursive: true });
     const previous = process.env.OPENCLAW_TRAJECTORY_DIR;
+    const runtimeHeader = JSON.stringify({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      source: "runtime",
+      sessionId: "session",
+    });
     try {
       process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
       await fsPromises.writeFile(
-        path.join(trajectoryDir, `session.jsonl.reset.${OLD_STAMP}`),
-        "",
+        path.join(trajectoryDir, `session.trajectory.jsonl.reset.${OLD_STAMP}`),
+        `${runtimeHeader}\n`,
       );
       await fsPromises.writeFile(
-        path.join(trajectoryDir, `session.jsonl.reset.${FRESH_STAMP}`),
-        "",
+        path.join(trajectoryDir, `session.trajectory.jsonl.reset.${FRESH_STAMP}`),
+        `${runtimeHeader}\n`,
       );
 
       const result = await cleanupArchivedSessionTranscripts({
@@ -126,8 +132,50 @@ describe("cleanupArchivedSessionTranscripts", () => {
 
       expect(result.scanned).toBe(2);
       expect(result.removed).toBe(1);
-      const remaining = await fsPromises.readdir(trajectoryDir);
-      expect(remaining).toEqual([`session.jsonl.reset.${FRESH_STAMP}`]);
+      const trajectoryRemaining = await fsPromises.readdir(trajectoryDir);
+      expect(trajectoryRemaining).toEqual([`session.trajectory.jsonl.reset.${FRESH_STAMP}`]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previous;
+      }
+      fs.rmSync(trajectoryDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves unrelated archive-looking files in OPENCLAW_TRAJECTORY_DIR (#94593)", async () => {
+    const trajectoryDir = path.join(dir, "trajectory-override");
+    fs.mkdirSync(trajectoryDir, { recursive: true });
+    const previous = process.env.OPENCLAW_TRAJECTORY_DIR;
+    const runtimeHeader = JSON.stringify({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      source: "runtime",
+      sessionId: "session",
+    });
+    try {
+      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
+      const owned = `session.trajectory.jsonl.reset.${OLD_STAMP}`;
+      const unrelated = `backup.jsonl.reset.${OLD_STAMP}`;
+      const unrelatedDeleted = `backup.jsonl.deleted.${OLD_STAMP}`;
+      await fsPromises.writeFile(path.join(trajectoryDir, owned), `${runtimeHeader}\n`);
+      await fsPromises.writeFile(path.join(trajectoryDir, unrelated), "not a trajectory\n");
+      await fsPromises.writeFile(path.join(trajectoryDir, unrelatedDeleted), "not a trajectory\n");
+
+      const result = await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [
+          { reason: "reset", olderThanMs: 30 * DAY_MS },
+          { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        ],
+        nowMs: NOW_MS,
+      });
+
+      expect(result.removed).toBe(1);
+      expect(result.scanned).toBe(3);
+      const trajectoryRemaining = (await fsPromises.readdir(trajectoryDir)).toSorted();
+      expect(trajectoryRemaining).toEqual([unrelatedDeleted, unrelated]);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TRAJECTORY_DIR;

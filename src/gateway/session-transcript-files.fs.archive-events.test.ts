@@ -250,11 +250,57 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       });
 
       // Transcript + override runtime + pointer = 3 archived entries.
+      // The override runtime is archived with an unambiguous trajectory name so
+      // it is never discovered as a transcript archive (#94593).
       expect(archived).toHaveLength(3);
       expect(fs.existsSync(overrideRuntime)).toBe(false);
       expect(fs.existsSync(pointerFile)).toBe(false);
       const remaining = fs.readdirSync(trajectoryDir);
-      expect(remaining.some((name) => name.includes(".jsonl.reset."))).toBe(true);
+      expect(remaining.some((name) => name.includes(".trajectory.jsonl.reset."))).toBe(true);
+      expect(remaining.some((name) => /^[0-9a-f-]+\.jsonl\.reset\./.test(name))).toBe(false);
+    } finally {
+      if (previousTrajectoryDir === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("archives both override and env-free sibling runtimes when the env changed after creation (#94593)", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-trajectory-env-change-"));
+    const previousTrajectoryDir = process.env.OPENCLAW_TRAJECTORY_DIR;
+    try {
+      const sessionId = "77777777-7777-4777-8777-777777777777";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      const trajectoryDir = path.join(tmpDir, "traces");
+      const overrideRuntime = path.join(trajectoryDir, `${sessionId}.jsonl`);
+      const siblingRuntime = path.join(tmpDir, `${sessionId}.trajectory.jsonl`);
+      const pointerFile = path.join(tmpDir, `${sessionId}.trajectory-path.json`);
+      fs.mkdirSync(trajectoryDir, { recursive: true });
+      // Session was created before OPENCLAW_TRAJECTORY_DIR existed, so the live
+      // runtime is the env-free sibling. Later the operator enabled the override
+      // dir, and the pointer was updated to point there.
+      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
+      writeSessionMeta(sessionFile, "main");
+      writeTrajectoryRuntime(siblingRuntime, sessionId);
+      writeTrajectoryRuntime(overrideRuntime, sessionId);
+      writeTrajectoryPointer(pointerFile, sessionId, overrideRuntime);
+
+      const archived = archiveSessionTranscriptsDetailed({
+        sessionId,
+        storePath: path.join(tmpDir, "store.json"),
+        sessionFile,
+        agentId: "main",
+        reason: "reset",
+      });
+
+      // Transcript + override runtime + env-free sibling runtime + pointer = 4.
+      expect(archived).toHaveLength(4);
+      expect(fs.existsSync(overrideRuntime)).toBe(false);
+      expect(fs.existsSync(siblingRuntime)).toBe(false);
+      expect(fs.existsSync(pointerFile)).toBe(false);
     } finally {
       if (previousTrajectoryDir === undefined) {
         delete process.env.OPENCLAW_TRAJECTORY_DIR;

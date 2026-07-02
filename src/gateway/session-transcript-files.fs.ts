@@ -384,21 +384,22 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
 // the runtimeFile field can name any writable path. This gate requires the
 // resolved basename to match the expected session-scoped trajectory name and the
 // first line to carry a matching session event before the file is trusted.
-function isValidPointerResolvedTrajectoryRuntime(
-  filePath: string,
-  sessionId: string,
-): boolean {
+function isValidPointerResolvedTrajectoryRuntime(filePath: string, sessionId: string): boolean {
   const expectedName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
   if (path.basename(path.resolve(filePath)) !== expectedName) {
     return false;
   }
+  return isTrajectoryRuntimeFileHeader(filePath, sessionId);
+}
+
+function readTrajectoryRuntimeHeader(filePath: string): unknown {
   try {
     const fd = fs.openSync(filePath, "r");
     const buffer = Buffer.alloc(64 * 1024);
     const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
     fs.closeSync(fd);
     if (bytesRead <= 0) {
-      return false;
+      return undefined;
     }
     const firstLine = buffer
       .subarray(0, bytesRead)
@@ -406,19 +407,30 @@ function isValidPointerResolvedTrajectoryRuntime(
       .split(/\r?\n/u)
       .find((line) => line.trim());
     if (!firstLine) {
-      return false;
+      return undefined;
     }
-    const parsed: unknown = JSON.parse(firstLine.trim());
-    return (
-      isRecord(parsed) &&
-      parsed.traceSchema === "openclaw-trajectory" &&
-      parsed.schemaVersion === 1 &&
-      parsed.source === "runtime" &&
-      parsed.sessionId === sessionId
-    );
+    return JSON.parse(firstLine.trim());
   } catch {
+    return undefined;
+  }
+}
+
+function isTrajectoryRuntimeFileHeader(filePath: string, sessionId?: string): boolean {
+  const parsed = readTrajectoryRuntimeHeader(filePath);
+  if (!isRecord(parsed)) {
     return false;
   }
+  if (
+    parsed.traceSchema !== "openclaw-trajectory" ||
+    parsed.schemaVersion !== 1 ||
+    parsed.source !== "runtime"
+  ) {
+    return false;
+  }
+  if (sessionId !== undefined && parsed.sessionId !== sessionId) {
+    return false;
+  }
+  return true;
 }
 
 // Rename the trajectory runtime file and its pointer sidecar next to a reset
@@ -469,7 +481,19 @@ function archiveResetTrajectorySiblings(
     sessionFile: transcriptPath,
     sessionId,
   });
-  const runtimeTargets = new Set<string>([defaultRuntimePath]);
+  // Also archive the env-free sibling path. If OPENCLAW_TRAJECTORY_DIR was
+  // enabled after the session was created, the live runtime may still live next
+  // to the transcript while the pointer names the override dir (#94593).
+  const envFreeSiblingRuntimePath = resolveTrajectoryFilePath({
+    env: {},
+    sessionFile: transcriptPath,
+    sessionId,
+  });
+  const trajectoryDirOverride = process.env.OPENCLAW_TRAJECTORY_DIR?.trim();
+  const overrideDirResolved = trajectoryDirOverride
+    ? path.resolve(resolveHomeRelativePath(trajectoryDirOverride))
+    : undefined;
+  const runtimeTargets = new Set<string>([defaultRuntimePath, envFreeSiblingRuntimePath]);
   const pointerRuntime = readArchiveTrajectoryPointerRuntimeFile(pointerPath, sessionId);
   if (
     pointerRuntime &&
@@ -483,10 +507,19 @@ function archiveResetTrajectorySiblings(
     }
   }
   const archived: ArchivedSessionTranscript[] = [];
-  const renameArchive = (filePath: string) => {
+  const renameArchive = (filePath: string, archivedName?: string) => {
     try {
       if (fs.existsSync(filePath)) {
-        const archivedPath = `${filePath}.reset.${ts}`;
+        let archivedPath: string;
+        if (archivedName) {
+          // Override runtimes live as <sessionId>.jsonl inside OPENCLAW_TRAJECTORY_DIR.
+          // If that directory overlaps with the sessions directory, a plain
+          // .jsonl.reset.<ts> name would be discovered as a transcript archive.
+          // Archive with an unambiguous trajectory name instead (#94593).
+          archivedPath = path.join(path.dirname(filePath), archivedName);
+        } else {
+          archivedPath = `${filePath}.reset.${ts}`;
+        }
         fs.renameSync(filePath, archivedPath);
         archived.push({ sourcePath: filePath, archivedPath });
       }
@@ -495,8 +528,17 @@ function archiveResetTrajectorySiblings(
       // sibling that cannot be archived just falls back to prior behavior.
     }
   };
+  const safeSessionName = safeTrajectorySessionFileName(sessionId);
   for (const runtimePath of runtimeTargets) {
-    renameArchive(runtimePath);
+    const runtimeDir = path.dirname(path.resolve(runtimePath));
+    const isOverrideRuntime =
+      overrideDirResolved !== undefined &&
+      canonicalizePathForComparison(runtimeDir) ===
+        canonicalizePathForComparison(overrideDirResolved);
+    renameArchive(
+      runtimePath,
+      isOverrideRuntime ? `${safeSessionName}.trajectory.jsonl.reset.${ts}` : undefined,
+    );
   }
   renameArchive(pointerPath);
   return archived;
@@ -636,15 +678,21 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   // `.trajectory.jsonl.reset.<ts>` archives are pruned by the existing reset
   // retention rule (#90707).
   const trajectoryDirOverride = process.env.OPENCLAW_TRAJECTORY_DIR?.trim();
+  const overrideDirResolved = trajectoryDirOverride
+    ? path.resolve(resolveHomeRelativePath(trajectoryDirOverride))
+    : undefined;
   const dirs = opts.directories.map((dir) => path.resolve(dir));
-  if (trajectoryDirOverride) {
-    dirs.push(path.resolve(resolveHomeRelativePath(trajectoryDirOverride)));
+  if (overrideDirResolved) {
+    dirs.push(overrideDirResolved);
   }
   const directories = uniqueStrings(dirs);
   let removed = 0;
   let scanned = 0;
 
   for (const dir of directories) {
+    const isOverrideDir =
+      overrideDirResolved !== undefined &&
+      canonicalizePathForComparison(dir) === canonicalizePathForComparison(overrideDirResolved);
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
       for (const rule of rules) {
@@ -657,6 +705,12 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
           if (stat?.isFile()) {
+            // The override directory is operator-configured and may contain
+            // unrelated archive-looking files. Only remove files that carry an
+            // OpenClaw trajectory runtime header (#94593).
+            if (isOverrideDir && !isTrajectoryRuntimeFileHeader(fullPath)) {
+              continue;
+            }
             await fs.promises.rm(fullPath).catch(() => undefined);
             removed += 1;
           }
