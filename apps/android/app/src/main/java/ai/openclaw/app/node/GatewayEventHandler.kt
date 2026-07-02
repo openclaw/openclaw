@@ -12,13 +12,27 @@ import kotlinx.serialization.json.JsonArray
 /**
  * Handles gateway-originated events that need to update local Android preferences.
  */
-class GatewayEventHandler(
+class GatewayEventHandler internal constructor(
   private val scope: CoroutineScope,
   private val prefs: SecurePrefs,
   private val json: Json,
-  private val operatorSession: GatewaySession,
+  private val requestSender: GatewayRequestSender,
   private val isConnected: () -> Boolean,
 ) {
+  constructor(
+    scope: CoroutineScope,
+    prefs: SecurePrefs,
+    json: Json,
+    operatorSession: GatewaySession,
+    isConnected: () -> Boolean,
+  ) : this(
+    scope = scope,
+    prefs = prefs,
+    json = json,
+    requestSender = GatewaySessionRequestSender(operatorSession),
+    isConnected = isConnected,
+  )
+
   private var suppressWakeWordsSync = false
   private var wakeWordsSyncJob: Job? = null
 
@@ -42,7 +56,7 @@ class GatewayEventHandler(
         val jsonList = snapshot.joinToString(separator = ",") { it.toJsonString() }
         val params = """{"triggers":[$jsonList]}"""
         try {
-          operatorSession.request("voicewake.set", params)
+          requestSender.request("voicewake.set", params)
         } catch (_: Throwable) {
           // ignore
         }
@@ -53,7 +67,7 @@ class GatewayEventHandler(
   suspend fun refreshWakeWordsFromGateway() {
     if (!isConnected()) return
     try {
-      val res = operatorSession.request("voicewake.get", "{}")
+      val res = requestSender.request("voicewake.get", "{}")
       val payload = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val array = payload["triggers"] as? JsonArray ?: return
       val triggers = array.mapNotNull { it.asStringOrNull() }
@@ -75,4 +89,20 @@ class GatewayEventHandler(
       // ignore
     }
   }
+}
+
+internal fun interface GatewayRequestSender {
+  suspend fun request(
+    method: String,
+    paramsJson: String?,
+  ): String
+}
+
+private class GatewaySessionRequestSender(
+  private val session: GatewaySession,
+) : GatewayRequestSender {
+  override suspend fun request(
+    method: String,
+    paramsJson: String?,
+  ): String = session.request(method, paramsJson)
 }
