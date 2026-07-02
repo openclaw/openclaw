@@ -18,6 +18,8 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
@@ -475,7 +477,15 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  // Policy priority: memory flush comes before sandbox/native allowlist checks.
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  // Codex native code mode owns shell and filesystem access as one surface.
+  // Until Codex exposes a true workspace-only read/write profile, OpenClaw
+  // workspace-only policy must keep that native surface disabled and rely on
+  // OpenClaw-owned workspace-scoped dynamic tools instead.
+  if (isCodexWorkspaceOnlyFsPolicyActive(params, options)) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
@@ -489,6 +499,69 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     hasWildcardCodexToolsAllow(toolsAllow) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
+}
+
+type WorkspaceOnlyPolicyConfig = Pick<OpenClawConfig, "agents" | "tools">;
+type WorkspaceOnlyPolicyAgent = NonNullable<
+  NonNullable<WorkspaceOnlyPolicyConfig["agents"]>["list"]
+>[number];
+
+/** Returns true when workspace-only filesystem policy constrains native Codex filesystem access.
+ *
+ * Per-agent `workspaceOnly` is authoritative: `true` enables the workspace
+ * sandbox and `false` explicitly opts that agent out even when global config is
+ * true.
+ * Default-agent policy only applies when there is no active agent identity.
+ * A stale or unknown active agent id must fall back to global policy, matching
+ * OpenClaw-owned fs tools and avoiding a split native-filesystem boundary.
+ */
+export function isCodexWorkspaceOnlyFsPolicyActive(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+  } = {},
+): boolean {
+  const config = params.config as WorkspaceOnlyPolicyConfig | undefined;
+  const agent = resolveWorkspaceOnlyPolicyAgent(config, params, options);
+  const agentWorkspaceOnly = readWorkspaceOnlyFs(agent?.tools?.fs);
+  if (agentWorkspaceOnly !== undefined) {
+    return agentWorkspaceOnly;
+  }
+  return readWorkspaceOnlyFs(config?.tools?.fs) === true;
+}
+
+function readWorkspaceOnlyFs(
+  fsConfig: { workspaceOnly?: unknown } | undefined,
+): boolean | undefined {
+  if (!fsConfig || typeof fsConfig !== "object" || !("workspaceOnly" in fsConfig)) {
+    return undefined;
+  }
+  return fsConfig.workspaceOnly === true;
+}
+
+function resolveWorkspaceOnlyPolicyAgent(
+  config: WorkspaceOnlyPolicyConfig | undefined,
+  params: EmbeddedRunAttemptParams,
+  options: { agentId?: string; runtimeSessionKey?: string },
+): WorkspaceOnlyPolicyAgent | undefined {
+  const agents = Array.isArray(config?.agents?.list) ? config?.agents?.list : [];
+  const candidateSessionKey =
+    options.runtimeSessionKey?.trim() ||
+    params.sandboxSessionKey?.trim() ||
+    params.sessionKey?.trim();
+  const agentId =
+    normalizeWorkspaceOnlyAgentId(options.agentId) ??
+    (candidateSessionKey ? resolveAgentIdFromSessionKey(candidateSessionKey) : undefined);
+  if (agentId !== undefined) {
+    return agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
+  }
+  return agents.find((entry) => entry?.default === true);
+}
+
+function normalizeWorkspaceOnlyAgentId(value: unknown): string | undefined {
+  const normalized = typeof value === "string" ? normalizeAgentId(value) : "";
+  return normalized || undefined;
 }
 
 /** Returns true when OpenClaw policy requires the Node-owned exec/process tools instead. */
