@@ -472,7 +472,11 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               });
             },
           });
-          const trimmedValue = rawValue.trim();
+          // Mirror the defensive handling in promptSingleChannelToken (#67366):
+          // `WizardPrompter.text` is typed `Promise<string>` but the production
+          // crash on `Cannot read properties of undefined (reading 'trim')`
+          // showed some implementations can resolve to undefined here.
+          const trimmedValue = normalizeOptionalString(rawValue) ?? "";
           if (!trimmedValue && textInput.required === false) {
             if (textInput.applyEmptyValue) {
               next = await applyWizardTextInputValue({

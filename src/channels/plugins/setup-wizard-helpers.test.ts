@@ -461,6 +461,67 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
   });
 });
 
+describe("promptSingleChannelToken defensive handling of non-string prompt results (#67366)", () => {
+  it("does not crash when prompter.text resolves to undefined while replacing a configured token", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => undefined as unknown as string),
+    };
+
+    const result = await promptSingleChannelToken({
+      prompter,
+      accountConfigured: true,
+      canUseEnv: false,
+      hasConfigToken: true,
+      envPrompt: "use env",
+      keepPrompt: "Telegram token already configured. Keep it?",
+      inputPrompt: "Enter a new Telegram bot token",
+    });
+
+    expect(result).toEqual({ useEnv: false, token: "" });
+    expect(prompter.text).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not crash when prompter.text resolves to undefined after declining env", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => undefined as unknown as string),
+    };
+
+    const result = await promptSingleChannelToken({
+      prompter,
+      accountConfigured: false,
+      canUseEnv: true,
+      hasConfigToken: false,
+      envPrompt: "TELEGRAM_BOT_TOKEN detected. Use env var?",
+      keepPrompt: "keep",
+      inputPrompt: "Enter Telegram bot token",
+    });
+
+    expect(result).toEqual({ useEnv: false, token: "" });
+    expect(prompter.text).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves trim behavior when prompter.text returns a non-empty string with surrounding whitespace", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => "  1234567890:ABCdefGHI  "),
+    };
+
+    const result = await promptSingleChannelToken({
+      prompter,
+      accountConfigured: true,
+      canUseEnv: false,
+      hasConfigToken: true,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "Enter a new Telegram bot token",
+    });
+
+    expect(result).toEqual({ useEnv: false, token: "1234567890:ABCdefGHI" });
+  });
+});
+
 describe("promptSingleChannelToken", () => {
   it.each([
     {
