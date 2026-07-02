@@ -55,19 +55,21 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
 }
 
 enum OpenClawBrand {
-    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
-    static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
-    static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
-    static let uiInfo = adaptiveUIColor(light: (0, 91, 196), dark: (100, 168, 255))
+    static let uiAccent = adaptiveUIColor(light: (232, 48, 42), dark: (232, 48, 42))
+    static let uiAccentHot = adaptiveUIColor(light: (240, 69, 64), dark: (240, 69, 64))
+    static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (52, 211, 153))
+    static let uiWarn = adaptiveUIColor(light: (180, 83, 9), dark: (245, 158, 11))
+    static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (255, 59, 59))
+    static let uiInfo = adaptiveUIColor(light: (37, 99, 235), dark: (96, 165, 250))
 
     static let accent = Color(uiColor: Self.uiAccent)
-    static let accentHot = Color(uiColor: adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86)))
-    static let danger = Color(uiColor: adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165)))
+    static let accentHot = Color(uiColor: Self.uiAccentHot)
+    static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)
     static let warn = Color(uiColor: Self.uiWarn)
     static let info = Color(uiColor: Self.uiInfo)
-    static let graphite = Color(uiColor: adaptiveUIColor(light: (246, 247, 249), dark: (20, 22, 24)))
-    static let graphiteElevated = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (34, 36, 39)))
+    static let graphite = Color(uiColor: adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17)))
+    static let graphiteElevated = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28)))
 
     static var sheetBackground: LinearGradient {
         LinearGradient(
