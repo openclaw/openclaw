@@ -553,10 +553,10 @@ describe("normalizeOllamaCompatMessageToolArgs (OpenAI-compatible Ollama Cloud)"
 
     normalizeOllamaCompatMessageToolArgs(payload);
 
-    const args = (payload.messages[0].tool_calls as Array<Record<string, never>>)[0].function
-      .arguments;
+    const args = (payload.messages[0].tool_calls as Array<{ function: { arguments: unknown } }>)[0]
+      .function.arguments;
     expect(typeof args).toBe("string");
-    expect(JSON.parse(args as unknown as string)).toEqual({ key: "gateway.port" });
+    expect(JSON.parse(args as string)).toEqual({ key: "gateway.port" });
   });
 
   it("leaves already-stringified arguments unchanged (no double-encoding)", () => {
@@ -576,10 +576,10 @@ describe("normalizeOllamaCompatMessageToolArgs (OpenAI-compatible Ollama Cloud)"
 
     normalizeOllamaCompatMessageToolArgs(payload);
 
-    const args = (payload.messages[0].tool_calls as Array<Record<string, never>>)[0].function
-      .arguments;
+    const args = (payload.messages[0].tool_calls as Array<{ function: { arguments: unknown } }>)[0]
+      .function.arguments;
     expect(args).toBe('{"q":"hello"}');
-    expect(JSON.parse(args as unknown as string)).toEqual({ q: "hello" });
+    expect(JSON.parse(args as string)).toEqual({ q: "hello" });
   });
 
   it("normalizes the legacy function_call shape to a string", () => {
