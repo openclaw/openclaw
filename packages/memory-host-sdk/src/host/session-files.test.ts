@@ -868,10 +868,14 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    // generatedByCronRun stays unset — the [cron: prefix is user-typed text,
-    // not a cron-generated signal.  (The field is only present when true.)
-    expect(entry.generatedByCronRun).toBeFalsy();
-    // Content collected before and after the [cron: message must survive.
+    // archiveOpaqueByCronPromptText triggers from the text-based [cron: check
+    // to preserve opacity for no-metadata cron archives.  This is a deliberate
+    // tradeoff: a human archive whose first user message starts with [cron: is
+    // also marked opaque, but its content is preserved (no wipe, no skip). (#98241)
+    expect(entry.generatedByCronRun).toBe(true);
+    // Content collected before and after the [cron: message must survive — only
+    // the cross-message WIPE was removed.  The individual [cron: message itself
+    // is dropped by sanitizeSessionText.
     expect(entry.content).toContain("vendor is Acme, budget 5000");
     expect(entry.content).toContain("Noted: Acme, 5000 USD");
   });

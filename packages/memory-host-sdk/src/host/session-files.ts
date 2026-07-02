@@ -787,6 +787,11 @@ export async function buildSessionEntry(
       false;
     let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
+    // Text-based [cron: prefix detection for no-metadata archives.  Set
+    // separately from generatedByCronRun so the content wipe + message
+    // skip only fire on record-level trusted provenance, not on user-
+    // typed text that happens to match the cron prefix pattern.  (#98241)
+    let archiveOpaqueByCronPromptText = false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
@@ -841,14 +846,21 @@ export async function buildSessionEntry(
         continue;
       }
       if (allowArchiveContentCronClassification) {
-        // Usage-counted archives (.reset / .deleted) must stay indexed so
-        // memory_search can surface hits on post-reset / post-delete history.
-        // A user-typed message starting with [cron: is not a cron-generated
-        // prompt, and treating it as one would silently discard the entire
-        // archive's indexed content (collected.length = 0) plus every
-        // subsequent message (generatedByCronRun = true).  The session-store
-        // classifier and record-level check above are sufficient for
-        // detecting genuine cron-generated sessions.  (#98241)
+        // Detect no-metadata cron archives through the [cron: text
+        // prefix for opacity (so internal cron output stays excluded
+        // from memory_search).  Do NOT wipe collected content or skip
+        // subsequent messages — only record-level cron provenance
+        // (isCronRunGeneratedRecord) triggers the cross-message wipe.
+        // User-typed text like "[cron:daily-digest] why did it fail?"
+        // is indistinguishable from a genuine cron prompt by string
+        // matching alone, so the per-message sanitizer handles
+        // individual messages while the archive opacity flag keeps
+        // genuine no-metadata cron archives opaque.  (#98241)
+        if (
+          isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
+        ) {
+          archiveOpaqueByCronPromptText = true;
+        }
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
@@ -886,7 +898,7 @@ export async function buildSessionEntry(
       lineMap,
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
-      ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
+      ...(generatedByCronRun || archiveOpaqueByCronPromptText ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);
