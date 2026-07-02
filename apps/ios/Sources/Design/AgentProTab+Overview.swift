@@ -36,7 +36,7 @@ extension AgentProTab {
                 TextField("Search agents", text: self.$agentSearchText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                     .frame(height: 38)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -77,7 +77,7 @@ extension AgentProTab {
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
+                        .font(OpenClawType.title3)
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
@@ -185,7 +185,7 @@ extension AgentProTab {
 
             if let overviewErrorText {
                 Text(overviewErrorText)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(OpenClawBrand.warn)
                     .padding(.horizontal, OpenClawProMetric.pagePadding)
             }
@@ -245,9 +245,9 @@ extension AgentProTab {
             ProIconBadge(systemName: "person.2.slash", color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(self.emptyAgentsTitle)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(self.emptyAgentsDetail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -266,12 +266,12 @@ extension AgentProTab {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(self.agentName(for: agent))
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(self.agentDetail(for: agent))
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -281,7 +281,7 @@ extension AgentProTab {
 
                 if isActive {
                     Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(OpenClawBrand.accent)
                         .frame(width: 24, height: 44)
                         .accessibilityHidden(true)
@@ -302,7 +302,7 @@ extension AgentProTab {
     {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
         }
         .buttonBorderShape(.circle)
@@ -342,20 +342,20 @@ extension AgentProTab {
             ProIconBadge(systemName: icon, color: color)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(color)
                 .lineLimit(1)
             if showsChevron {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
         }
@@ -410,15 +410,15 @@ extension AgentProTab {
                     ProValuePill(value: value, color: color)
                     if showsChevron {
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
+                            .font(OpenClawType.captionSemiBold)
                             .foregroundStyle(.secondary)
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                     Text(detail)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -434,11 +434,11 @@ extension AgentProTab {
             ProIconBadge(systemName: "clock.badge.questionmark", color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(self.gatewayConnected ? "No scheduled jobs" : "Cron unavailable")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(self.gatewayConnected
                     ? "The gateway has no visible cron jobs."
                     : "Connect a gateway to load scheduled work.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -452,16 +452,16 @@ extension AgentProTab {
                 color: job.enabled ? OpenClawBrand.accent : .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(job.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.cronJobDetail(job))
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(self.cronJobState(job))
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(job.enabled ? OpenClawBrand.accent : .secondary)
                 .lineLimit(1)
         }

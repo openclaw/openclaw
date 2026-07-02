@@ -105,12 +105,12 @@ struct IPadWorkboardScreen: View {
                 self.boardScopeMenu
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(.secondary)
                     TextField("Search cards", text: self.$query)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .font(.subheadline)
+                        .font(OpenClawType.subhead)
                     if !self.query.isEmpty {
                         Button {
                             self.query = ""
@@ -164,12 +164,12 @@ struct IPadWorkboardScreen: View {
 
                 if let dispatchSummaryText {
                     Text(dispatchSummaryText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -182,7 +182,7 @@ struct IPadWorkboardScreen: View {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text("\(self.filteredCards.count) cards")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Spacer(minLength: 8)
                     self.compactRefreshButton
                 }
@@ -206,19 +206,19 @@ struct IPadWorkboardScreen: View {
                     }
                 } else {
                     Text(Self.compactWriteUnavailableMessage(canRead: self.canRead))
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
 
                 if let dispatchSummaryText {
                     Text(dispatchSummaryText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -231,7 +231,7 @@ struct IPadWorkboardScreen: View {
             Task { await self.loadCards(force: true) }
         } label: {
             Image(systemName: "arrow.clockwise")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .frame(width: 32, height: 32)
         }
         .buttonStyle(.plain)
@@ -266,19 +266,21 @@ struct IPadWorkboardScreen: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "rectangle.stack")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                 Text(self.boardScopeLabel)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(OpenClawType.caption2Bold)
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                Color.primary.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
@@ -313,7 +315,7 @@ struct IPadWorkboardScreen: View {
             self.selectedStatus = status
         } label: {
             Text(IPadWorkboardDefaults.label(for: status))
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .lineLimit(1)
                 .padding(.horizontal, 10)
                 .frame(height: 30)
@@ -339,7 +341,7 @@ struct IPadWorkboardScreen: View {
     private var boardScopeMenu: some View {
         HStack(spacing: 8) {
             Text("Board")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
                 Button("All boards") {
@@ -353,10 +355,10 @@ struct IPadWorkboardScreen: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(self.boardScopeLabel)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(OpenClawType.caption2Bold)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -370,7 +372,7 @@ struct IPadWorkboardScreen: View {
     private var statusMenu: some View {
         HStack(spacing: 8) {
             Text("Status")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
                 Button("Active") {
@@ -384,9 +386,9 @@ struct IPadWorkboardScreen: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(IPadWorkboardDefaults.label(for: self.selectedStatus))
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(OpenClawType.caption2Bold)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -972,10 +974,10 @@ private struct IPadWorkboardKanbanCard: View {
                         ProIconBadge(systemName: self.icon, color: self.color)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(self.card.title)
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                                 .lineLimit(2)
                             Text(self.detail)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                         }
@@ -983,7 +985,7 @@ private struct IPadWorkboardKanbanCard: View {
 
                     if !self.card.labels.isEmpty {
                         Text(self.card.labels.prefix(3).joined(separator: ", "))
-                            .font(.caption2.weight(.medium))
+                            .font(OpenClawType.caption2Medium)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -1022,7 +1024,7 @@ private struct IPadWorkboardKanbanCard: View {
                 ProValuePill(value: IPadWorkboardDefaults.label(for: self.card.status), color: self.color)
             }
         }
-        .padding(12)
+        .padding(OpenClawSpacing.space3)
         .contentShape(Rectangle())
     }
 
@@ -1075,10 +1077,10 @@ struct IPadWorkboardQueueRow: View {
                     ProIconBadge(systemName: self.icon, color: self.color)
                     VStack(alignment: .leading, spacing: 5) {
                         Text(self.card.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                             .lineLimit(2)
                         Text(self.detail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -1094,7 +1096,7 @@ struct IPadWorkboardQueueRow: View {
                 self.actionMenuItems
             } label: {
                 Image(systemName: self.isBusy ? "hourglass" : "ellipsis.circle")
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(OpenClawType.headline)
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }

@@ -35,10 +35,10 @@ extension SettingsProTab {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Gateway")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.gatewaySummaryDetail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -140,10 +140,10 @@ extension SettingsProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     if let detail, !detail.isEmpty {
                         Text(detail)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -200,6 +200,10 @@ extension SettingsProTab {
 
     var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                self.gatewayProblemCard(gatewayProblem)
+            }
+
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
@@ -263,12 +267,12 @@ extension SettingsProTab {
                     ProIconBadge(systemName: "bell.slash.fill", color: OpenClawBrand.warn)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Notifications are off")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text(
                             """
                             Enable Notifications to receive approval notifications while OpenClaw is not open.
                             """)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -304,7 +308,7 @@ extension SettingsProTab {
 
                     if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
                         Text(errorText)
-                            .font(.caption2.weight(.medium))
+                            .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawBrand.danger)
                     }
 
@@ -345,9 +349,9 @@ extension SettingsProTab {
                         ProIconBadge(systemName: "checkmark.shield.fill", color: OpenClawBrand.ok)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("No approvals waiting")
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                             Text(self.approvalEmptyDetail)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -481,7 +485,7 @@ extension SettingsProTab {
                     .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
 
                     Text(self.notificationStatusDetail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -489,11 +493,11 @@ extension SettingsProTab {
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "network")
-                            .font(.caption.weight(.semibold))
+                            .font(OpenClawType.captionSemiBold)
                             .foregroundStyle(OpenClawBrand.accent)
                             .frame(width: 22, height: 22)
                         Text(self.notificationRelayDetail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -505,12 +509,21 @@ extension SettingsProTab {
 
     var aboutDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
+            self.detailStatusCard(
+                icon: "info.circle",
+                title: "OpenClaw",
+                detail: "iOS companion app",
+                value: DeviceInfoHelper.openClawVersionString(),
+                color: OpenClawBrand.accent)
+
             self.detailListCard {
-                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
+                self.detailRow("Version", value: DeviceInfoHelper.openClawVersionString())
                 Divider()
                 self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 Divider()
-                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
+                Divider()
+                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
             }
         }
     }
@@ -526,9 +539,9 @@ extension SettingsProTab {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: isBusy ? "hourglass" : icon)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
             }
@@ -554,9 +567,9 @@ extension SettingsProTab {
                     ProIconBadge(systemName: icon, color: isOn.wrappedValue ? OpenClawBrand.accent : .secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text(detail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -577,9 +590,9 @@ extension SettingsProTab {
                             .accent)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Location")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text("Controls whether location can be shared with gateway tools.")
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -600,7 +613,7 @@ extension SettingsProTab {
 
                 if let locationStatusText {
                     Text(locationStatusText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -612,7 +625,7 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Default Agent")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Picker("Agent", selection: self.$selectedAgentPickerId) {
                     Text("Default").tag("")
                     let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
@@ -623,7 +636,7 @@ extension SettingsProTab {
                     }
                 }
                 Text("Used for new Chat and Talk sessions.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -634,7 +647,7 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Setup Code")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 TextField("Paste setup code", text: self.$setupCode)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -660,13 +673,13 @@ extension SettingsProTab {
                 }
                 if let status = self.setupStatusLine {
                     Text(status)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 if let warning = self.tailnetWarningText {
                     Text(warning)
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -678,10 +691,10 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Discovered Gateways")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 if self.gatewayController.gateways.isEmpty {
                     Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
@@ -700,9 +713,9 @@ extension SettingsProTab {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: gateway.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -863,7 +876,7 @@ extension SettingsProTab {
                 }
                 .buttonStyle(.bordered)
                 Text(self.appModel.lastShareEventText)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -905,6 +918,21 @@ extension SettingsProTab {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    func gatewayProblemCard(_ problem: GatewayConnectionProblem) -> some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            GatewayProblemBanner(
+                problem: problem,
+                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+                onPrimaryAction: {
+                    Task { await self.handleGatewayProblemPrimaryAction(problem) }
+                },
+                onShowDetails: {
+                    self.showGatewayProblemDetails = true
+                })
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
     func settingsToggle(
         _ title: String,
         isOn: Binding<Bool>,
@@ -928,9 +956,9 @@ extension SettingsProTab {
             HStack {
                 Text(title)
                 Spacer(minLength: 8)
-                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
+                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
             }
-            .font(.subheadline)
+            .font(OpenClawType.subhead)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -939,19 +967,6 @@ extension SettingsProTab {
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
         }
-    }
-
-    func settingsSwitchIndicator(isOn: Bool) -> some View {
-        Capsule()
-            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
-            .overlay(alignment: isOn ? .trailing : .leading) {
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 28, height: 28)
-                    .padding(2)
-                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
-            }
     }
 
     func simpleSettingsRow(title: String, value: String) -> some View {
@@ -963,9 +978,9 @@ extension SettingsProTab {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
         }
-        .font(.subheadline)
+        .font(OpenClawType.subhead)
     }
 }

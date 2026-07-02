@@ -15,7 +15,7 @@ struct RootTabsPhoneControlHub: View {
             List {
                 Section {
                     Button {
-                        self.openGatewayDetail()
+                        self.openPhoneRootDestination(.gateway)
                     } label: {
                         self.gatewayRow
                     }
@@ -48,15 +48,16 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayRow: some View {
         HStack(spacing: 12) {
-            ProIconBadge(
-                systemName: "antenna.radiowaves.left.and.right",
-                color: self.gatewayStateColor)
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(OpenClawType.headline)
+                .foregroundStyle(self.gatewayStateColor)
+                .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Gateway")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.primary)
                 Text(self.sidebarActiveAgentTitle)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -64,10 +65,10 @@ struct RootTabsPhoneControlHub: View {
             HStack(spacing: 6) {
                 ProStatusDot(color: self.gatewayStateColor)
                 Text(self.gatewayStateText)
-                    .font(.footnote.weight(.semibold))
+                    .font(OpenClawType.footnoteSemiBold)
                     .foregroundStyle(self.gatewayStateColor)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
         }
@@ -88,7 +89,7 @@ struct RootTabsPhoneControlHub: View {
                     self.rowLabel(destination)
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
@@ -103,9 +104,12 @@ struct RootTabsPhoneControlHub: View {
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: .secondary)
+            Image(systemName: destination.systemImage)
+                .font(OpenClawType.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
             Text(destination.title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
         }
         .padding(.vertical, 3)
@@ -114,10 +118,8 @@ struct RootTabsPhoneControlHub: View {
     @ViewBuilder
     private func detail(for destination: RootTabs.SidebarDestination) -> some View {
         switch destination {
-        case .chat, .talk, .agents:
+        case .chat, .talk, .agents, .gateway:
             EmptyView()
-        case .gateway:
-            SettingsProTab(directRoute: .gateway)
         case .overview:
             CommandCenterTab(
                 ownsNavigationStack: false,
@@ -125,27 +127,27 @@ struct RootTabsPhoneControlHub: View {
                 headerTitle: "Overview",
                 showsHeaderMark: false,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openGatewayDetail() },
+                openSettings: { self.openPhoneRootDestination(.gateway) },
                 openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .workboard:
             IPadWorkboardScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 usesNativeNavigationChrome: true,
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerTitle: "Instances",
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .sessions:
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
@@ -154,30 +156,24 @@ struct RootTabsPhoneControlHub: View {
             AgentProTab(
                 directRoute: .dreaming,
                 headerTitle: "Dreaming",
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerTitle: "Usage",
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.openGatewayDetail() })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(
                 usesNativeNavigationChrome: true,
-                gatewayAction: { self.openGatewayDetail() })
+                gatewayAction: { self.openPhoneRootDestination(.gateway) })
         case .settings:
             EmptyView()
         }
-    }
-
-    /// Gateway settings open as a pushed detail on this stack so Back returns
-    /// to the hub screen the user came from, not the canonical Settings tab.
-    private func openGatewayDetail() {
-        self.navigationPath.append(.gateway)
     }
 
     private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination) {

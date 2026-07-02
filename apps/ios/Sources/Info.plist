@@ -86,6 +86,23 @@
 	<string>$(OPENCLAW_PUSH_MODE)</string>
 	<key>OpenClawPushRelayBaseURL</key>
 	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>PlusJakartaSans-Light.ttf</string>
+		<string>PlusJakartaSans-Regular.ttf</string>
+		<string>PlusJakartaSans-Medium.ttf</string>
+		<string>PlusJakartaSans-SemiBold.ttf</string>
+		<string>PlusJakartaSans-Bold.ttf</string>
+		<string>PlusJakartaSans-ExtraBold.ttf</string>
+		<string>DMSans-Light.ttf</string>
+		<string>DMSans-Regular.ttf</string>
+		<string>DMSans-Italic.ttf</string>
+		<string>DMSans-Medium.ttf</string>
+		<string>DMSans-SemiBold.ttf</string>
+		<string>JetBrainsMono-Regular.ttf</string>
+		<string>JetBrainsMono-Medium.ttf</string>
+		<string>JetBrainsMono-SemiBold.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

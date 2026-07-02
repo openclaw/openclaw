@@ -46,6 +46,7 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
+    @State var showGatewayProblemDetails = false
     @State var showQRScanner = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
@@ -175,11 +176,6 @@ struct SettingsProTab: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
-            .onChange(of: self.onboardingRequestID) { _, _ in
-                // Root-owned resets leave Settings mounted behind onboarding.
-                // Reload cleared credentials before the view can persist stale state.
-                self.syncAfterOnboardingReset()
-            }
             .onChange(of: self.navigationPath) { _, _ in
                 self.notifyRouteChange()
             }
@@ -187,6 +183,16 @@ struct SettingsProTab: View {
 
     private func settingsModalPresentation(_ content: some View) -> some View {
         content
+            .sheet(isPresented: self.$showGatewayProblemDetails) {
+                if let gatewayProblem = self.appModel.lastGatewayProblem {
+                    GatewayProblemDetailsSheet(
+                        problem: gatewayProblem,
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                        onPrimaryAction: {
+                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
+                        })
+                }
+            }
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
@@ -250,9 +256,7 @@ struct SettingsProTab: View {
             navigateToRoute(.notifications)
             return
         }
-        // Push, don't replace: Back from Notifications must return to the
-        // Approvals screen the user came from, not reset to the Settings root.
-        self.navigationPath.append(.notifications)
+        self.navigationPath = [.notifications]
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -281,12 +285,12 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
+                        .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3)
                     Text(self.message)
-                        .font(.body)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -296,18 +300,17 @@ struct HostedPushRelayDisclosureSheet: View {
                     self.dismiss()
                     self.onContinue()
                 } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
+                    Text("Continue")
                 }
-                .buttonStyle(.borderedProminent)
+                .openClawPrimaryButton()
                 Button("Not Now", role: .cancel) {
                     self.dismiss()
                 }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity)
+                .openClawSecondaryButton()
             }
         }
         .tint(OpenClawBrand.accent)
-        .padding(24)
+        .padding(OpenClawSpacing.space6)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

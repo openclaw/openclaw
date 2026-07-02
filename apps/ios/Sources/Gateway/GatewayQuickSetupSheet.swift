@@ -15,7 +15,7 @@ struct GatewayQuickSetupSheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Connect to a Gateway?")
-                    .font(.title2.bold())
+                    .font(OpenClawType.title2)
 
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemBanner(
@@ -46,7 +46,6 @@ struct GatewayQuickSetupSheet: View {
                             await MainActor.run {
                                 self.connecting = false
                                 self.connectError = err
-                                // If we kicked off a connect, leave the sheet up so the user can see status evolve.
                             }
                         }
                     } label: {
@@ -60,14 +59,13 @@ struct GatewayQuickSetupSheet: View {
                                 Text("Connect")
                             }
                         }
-                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .openClawPrimaryButton()
                     .disabled(self.connecting)
 
                     if let connectError {
                         Text(connectError)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -76,9 +74,8 @@ struct GatewayQuickSetupSheet: View {
                         self.dismiss()
                     } label: {
                         Text("Not now")
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .openClawSecondaryButton()
                     .disabled(self.connecting)
 
                     self.fullRowToggle("Don’t show this again", isOn: self.$quickSetupDismissed)
@@ -173,10 +170,10 @@ private struct GatewayQuickSetupCandidatePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(verbatim: self.name)
-                .font(.system(.headline, design: .monospaced))
+                .font(OpenClawType.monoHeadline)
                 .foregroundStyle(.primary)
             Text(verbatim: self.debugID)
-                .font(.system(.footnote, design: .monospaced))
+                .font(OpenClawType.monoFootnote)
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -187,7 +184,7 @@ private struct GatewayQuickSetupCandidatePanel: View {
                 Text(verbatim: "Node: \(self.nodeStatusText)")
                 Text(verbatim: "Operator: \(self.operatorStatusText)")
             }
-            .font(.system(.footnote, design: .monospaced))
+            .font(OpenClawType.monoFootnote)
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: Self.readableMonospaceWidth, alignment: .leading)
@@ -195,7 +192,7 @@ private struct GatewayQuickSetupCandidatePanel: View {
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .background(OpenClawBrand.obsidian)
+        .clipShape(RoundedRectangle(cornerRadius: OpenClawRadius.lg))
     }
 }

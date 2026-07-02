@@ -64,32 +64,30 @@ struct PrivacyAccessSectionView: View {
             HStack {
                 Label(title, systemImage: icon)
                 Spacer()
-                Text(status)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(self.statusColor(for: status))
+                OpenClawStatusBadge(label: status, tone: self.statusTone(for: status))
             }
             Text(detail)
-                .font(.footnote)
+                .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .buttonStyle(.bordered)
             }
         }
         .padding(.vertical, 2)
     }
 
-    private func statusColor(for status: String) -> Color {
+    private func statusTone(for status: String) -> OpenClawStatusTone {
         switch status {
         case "Allowed":
-            OpenClawBrand.ok
+            .ok
         case "Not Set":
-            OpenClawBrand.warn
+            .warn
         case "Add-Only":
-            OpenClawBrand.warn
+            .warn
         default:
-            OpenClawBrand.danger
+            .danger
         }
     }
 
