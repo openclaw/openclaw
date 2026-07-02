@@ -259,7 +259,7 @@ struct RootTabsSourceGuardTests {
         #expect(!settingsList.contains("ProCard("))
         #expect(settingsRow.contains("NavigationLink(value: route)"))
         #expect(!settingsRow.contains("chevron.right"))
-        #expect(settingsSource.contains("settings-appearance-menu"))
+        #expect(settingsSource.contains("settings-appearance-row"))
         #expect(!settingsSource.contains(".pickerStyle(.segmented)"))
         #expect(!overviewSource.contains("ProCapsule("))
         #expect(overviewSource.contains("value: self.gatewayConnectionText"))
@@ -294,6 +294,45 @@ struct RootTabsSourceGuardTests {
         #expect(diagnosticsDestination
             .contains("self.detailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
         #expect(diagnosticsDestination.contains("self.detailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+    }
+
+    @Test func settingsAppearanceSelectorLivesInDeviceRow() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let settingsTabSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            settingsSource,
+            from: "var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let appearanceRowSource = try Self.extract(
+            settingsSource,
+            from: "var appearanceRow: some View",
+            to: "var appearanceRowLabel: some View")
+
+        #expect(settingsSource.contains("var appearanceRow: some View"))
+        #expect(settingsSource.contains("var appearanceRowLabel: some View"))
+        #expect(appearanceRowSource.contains("self.isShowingAppearanceDialog = true"))
+        #expect(appearanceRowSource.contains(".confirmationDialog("))
+        #expect(appearanceRowSource.contains("self.appearancePreferenceRaw = preference.rawValue"))
+        #expect(settingsSource.contains("AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system"))
+        #expect(settingsSource.contains("systemName: \"circle.lefthalf.filled\""))
+        #expect(settingsSource.contains("chevron.up.chevron.down"))
+        #expect(settingsSource.contains("settings-appearance-row"))
+        #expect(settingsSource.contains(".accessibilityValue(self.currentAppearancePreference.label)"))
+        #expect(!appearanceRowSource.contains("Menu {"))
+        #expect(!appearanceRowSource.contains("Rectangle()"))
+        #expect(!settingsSource.contains("settings-appearance-menu"))
+        #expect(!settingsSource.contains("Label(\"Appearance\", systemImage: \"ellipsis\")"))
+
+        let deviceRange = try #require(settingsList.range(of: "Section(\"Device\") {"))
+        let appearanceRange = try #require(settingsList.range(of: "self.appearanceRow"))
+        let diagnosticsRange = try #require(settingsList.range(of: "title: \"Diagnostics\""))
+        #expect(deviceRange.lowerBound < appearanceRange.lowerBound)
+        #expect(appearanceRange.lowerBound < diagnosticsRange.lowerBound)
+
+        #expect(settingsTabSource.contains("ToolbarItem(placement: .topBarLeading)"))
+        #expect(settingsTabSource.contains("@State var isShowingAppearanceDialog = false"))
+        #expect(!settingsTabSource.contains("ToolbarItem(placement: .topBarTrailing)"))
+        #expect(!settingsTabSource.contains("self.appearanceMenu"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {

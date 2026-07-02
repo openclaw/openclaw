@@ -248,17 +248,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertNotEqual(speakerphone.value as? String, initialValue)
     }
 
-    func testAppearanceUsesToolbarMenu() throws {
+    func testAppearanceUsesSettingsRow() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
             name: "appearance-compact"))
 
-        let menu = try XCTUnwrap(app?.buttons["settings-appearance-menu"])
-        XCTAssertTrue(menu.waitForExistence(timeout: 8))
+        let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
         XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
-        menu.tap()
+        row.tap()
         XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
         XCTAssertTrue(self.app?.buttons["Light"].exists == true)
         XCTAssertTrue(self.app?.buttons["Dark"].exists == true)

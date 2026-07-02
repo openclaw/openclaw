@@ -57,6 +57,26 @@ import UIKit
         }
     }
 
+    @Test @MainActor func settingsProTabAppearanceRowBuildsForAllPreferences() throws {
+        for preference in AppAppearancePreference.allCases {
+            let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: suiteName))
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+            defaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
+
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let root = SettingsProTab()
+                .defaultAppStorage(defaults)
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+
+            _ = Self.host(root)
+        }
+    }
+
     @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
         for typeSize in [DynamicTypeSize.large, .accessibility5] {
             let root = HostedPushRelayDisclosureSheet(
