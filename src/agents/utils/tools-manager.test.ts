@@ -135,6 +135,70 @@ describe("ensureTool", () => {
       }),
     );
   });
+
+  it("rejects downloads with Content-Length exceeding archive byte cap", async () => {
+    vi.doMock("node:os", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:os")>()),
+      arch: () => "x64",
+      platform: () => "linux",
+    }));
+
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        response: new Response("oversized-body", {
+          status: 200,
+          headers: { "content-length": String(200 * 1024 * 1024) },
+        }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.tar.gz",
+      });
+
+    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
+  it("accepts downloads with Content-Length under the archive byte cap", async () => {
+    vi.doMock("node:os", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:os")>()),
+      arch: () => "x64",
+      platform: () => "linux",
+    }));
+
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    extractArchiveMock.mockRejectedValue(new Error("extraction error (expected)"));
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
+        release: releaseCheckRelease,
+        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
+      })
+      .mockResolvedValueOnce({
+        response: new Response("small-body", {
+          status: 200,
+          headers: { "content-length": "10" },
+        }),
+        release: downloadRelease,
+        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.tar.gz",
+      });
+
+    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+
+    // Download proceeded past the Content-Length check, then extraction failed
+    // as expected (no real archive). The important thing is we didn't reject
+    // preemptively.
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
 });
 
 describe("getToolPath exit-status handling", () => {

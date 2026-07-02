@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
@@ -27,6 +27,10 @@ import { APP_NAME, getBinDir } from "../config.js";
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+// Maximum compressed archive size allowed for tool downloads (100 MB).
+// Matches the limit enforced during extraction so oversized archives are
+// rejected before hitting disk, not just when extractArchiveSafe runs.
+const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -158,8 +162,12 @@ async function getLatestVersion(repo: string): Promise<string> {
   }
 }
 
-// Download a file from URL
-async function downloadFile(url: string, dest: string): Promise<void> {
+// Download a file from URL with an optional byte cap. When maxBytes is set the
+// Content-Length header is checked before the body is read and a streaming byte
+// counter aborts the pipeline mid-transfer if the cap is exceeded. Without this
+// check an oversized release asset would fully download to disk before the
+// compression-bomb guard in extractArchiveSafe has a chance to reject it.
+async function downloadFile(url: string, dest: string, maxBytes?: number): Promise<void> {
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -177,8 +185,46 @@ async function downloadFile(url: string, dest: string): Promise<void> {
       throw new Error("No response body");
     }
 
+    // Check Content-Length before reading the body so oversized responses are
+    // rejected without consuming any download bandwidth or disk space.
+    if (maxBytes !== undefined) {
+      const contentLength = response.headers.get("content-length");
+      if (contentLength !== null) {
+        const length = parseInt(contentLength, 10);
+        if (!isNaN(length) && length > maxBytes) {
+          await cancelUnreadResponseBody(response);
+          throw new Error(
+            `Download aborted: content-length ${length} exceeds ${maxBytes} byte limit`,
+          );
+        }
+      }
+    }
+
     const fileStream = createWriteStream(dest);
-    await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+
+    if (maxBytes !== undefined) {
+      // Streaming byte counter — catches oversized responses even when the
+      // Content-Length header is missing or under-reported.
+      let downloaded = 0;
+      const byteCap = new PassThrough();
+      byteCap.on("data", (chunk: Buffer) => {
+        downloaded += chunk.length;
+        if (downloaded > maxBytes) {
+          byteCap.destroy(
+            new Error(
+              `Download aborted: exceeded ${maxBytes} byte limit after ${downloaded} bytes`,
+            ),
+          );
+        }
+      });
+      await pipeline(
+        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+        byteCap,
+        fileStream,
+      );
+    } else {
+      await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+    }
   } finally {
     await guarded.release();
   }
@@ -223,7 +269,7 @@ async function extractArchiveSafe(
       destDir: extractDir,
       timeoutMs: 60_000,
       limits: {
-        maxArchiveBytes: 100 * 1024 * 1024,
+        maxArchiveBytes: MAX_ARCHIVE_BYTES,
         maxExtractedBytes: 500 * 1024 * 1024,
         maxEntries: 1000,
       },
@@ -265,8 +311,9 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
 
-  // Download
-  await downloadFile(downloadUrl, archivePath);
+  // Download with byte cap so oversized archives are rejected before
+  // hitting disk, not just during extraction.
+  await downloadFile(downloadUrl, archivePath, MAX_ARCHIVE_BYTES);
 
   // Extract into a unique temp directory. fd and rg downloads can run concurrently
   // during startup, so sharing a fixed directory causes races.
