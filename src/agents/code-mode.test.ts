@@ -2122,4 +2122,31 @@ describe("Code Mode", () => {
       expect(result.error).toContain("interrupted");
     }
   });
+
+  it("handles rejected pending promises in waitForPending when timeout wins", async () => {
+    // If the timeout resolves before all pending promises settle, a later
+    // rejection must not cause an unhandledRejection. The fix adds a rejection
+    // handler via .then(() => true, () => false).
+    const unhandledRejections: Array<{ reason: unknown }> = [];
+    const handler = (reason: unknown) => {
+      unhandledRejections.push({ reason });
+    };
+    process.on("unhandledRejection", handler);
+    try {
+      const deadline = 5;
+      const rejecting = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("too late")), deadline + 10);
+      });
+      const result = await testing.waitForPending(
+        [{ id: "1", method: "search", args: [], promise: rejecting }],
+        deadline,
+      );
+      expect(result).toBe(false);
+      // Allow the rejecting promise to settle so we can check for unhandled rejections.
+      await new Promise((r) => setTimeout(r, deadline + 20));
+      expect(unhandledRejections).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", handler);
+    }
+  });
 });

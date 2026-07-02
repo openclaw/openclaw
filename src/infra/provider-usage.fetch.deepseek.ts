@@ -112,3 +112,5 @@ export async function fetchDeepSeekUsage(
     ...(data.is_available === false ? { plan: "Unavailable" } : {}),
   };
 }
+
+export const testing = { formatCurrencyAmount };

@@ -1,7 +1,7 @@
 // Covers DeepSeek provider usage fetch parsing.
 import { describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
-import { fetchDeepSeekUsage } from "./provider-usage.fetch.deepseek.js";
+import { fetchDeepSeekUsage, testing } from "./provider-usage.fetch.deepseek.js";
 
 describe("fetchDeepSeekUsage", () => {
   it("aggregates mixed-currency balance snapshots", async () => {
@@ -92,5 +92,11 @@ describe("fetchDeepSeekUsage", () => {
 
     expect(result.summary).toBe("Balance ¥0.00");
     expect(result.plan).toBe("Unavailable");
+  });
+
+  it("handles non-finite amount in formatCurrencyAmount without crashing", () => {
+    expect(testing.formatCurrencyAmount(NaN, "USD")).toBe("unknown");
+    expect(testing.formatCurrencyAmount(Infinity, "CNY")).toBe("unknown");
+    expect(testing.formatCurrencyAmount(-Infinity, "EUR")).toBe("unknown");
   });
 });

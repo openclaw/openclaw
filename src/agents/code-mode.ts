@@ -1277,6 +1277,7 @@ export const testing = {
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
+  waitForPending,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
