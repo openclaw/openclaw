@@ -296,6 +296,36 @@ struct RootTabsSourceGuardTests {
         #expect(diagnosticsDestination.contains("self.detailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
     }
 
+    @Test func `settings privacy owns notification controls`() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            settingsSource,
+            from: "var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let privacyDestination = try Self.extract(
+            settingsSource,
+            from: "var privacyDestination: some View",
+            to: "var notificationsDestination: some View")
+        let notificationsDestination = try Self.extract(
+            settingsSource,
+            from: "var notificationsDestination: some View",
+            to: "var notificationsSection: some View")
+        let notificationsSection = try Self.extract(
+            settingsSource,
+            from: "var notificationsSection: some View",
+            to: "var aboutDestination: some View")
+
+        #expect(!settingsList.contains("title: \"Notifications\""))
+        #expect(privacyDestination.contains("self.notificationsSection"))
+        let notificationsRange = try #require(privacyDestination.range(of: "self.notificationsSection"))
+        let privacyCardRange = try #require(privacyDestination.range(of: "title: \"Privacy\""))
+        #expect(notificationsRange.lowerBound < privacyCardRange.lowerBound)
+        #expect(notificationsDestination.contains("self.notificationsSection"))
+        #expect(notificationsSection.contains("title: \"Notifications\""))
+        #expect(notificationsSection.contains("self.handleNotificationAction()"))
+        #expect(notificationsSection.contains("self.notificationRelayDetail"))
+    }
+
     @Test func `routed headers use shared adaptive layout`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let featureChromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)

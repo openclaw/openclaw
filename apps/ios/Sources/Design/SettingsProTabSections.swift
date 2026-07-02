@@ -116,11 +116,6 @@ extension SettingsProTab {
                 detail: self.privacyDetail,
                 route: .privacy)
             self.settingsListRow(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusText,
-                route: .notifications)
-            self.settingsListRow(
                 icon: "info.circle",
                 title: "About",
                 route: .about)
@@ -432,6 +427,8 @@ extension SettingsProTab {
 
     var privacyDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
+            self.notificationsSection
+
             self.detailStatusCard(
                 icon: "hand.raised",
                 title: "Privacy",
@@ -458,6 +455,10 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
+        self.notificationsSection
+    }
+
+    var notificationsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             self.detailStatusCard(
                 icon: "bell",
