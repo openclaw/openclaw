@@ -5,6 +5,7 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  parseCliOutput,
   supportsCliJsonlToolEvents,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
@@ -421,6 +422,51 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("prefers final-answer phase content over Gemini stream-json message text", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: "progress text",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          status: "success",
+          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: {
+        input: 4,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 9,
+      },
+    });
+  });
+
   it("parses Gemini stream-json result errors as provider errors", () => {
     const result = parseCliJsonl(
       [
@@ -752,6 +798,168 @@ describe("parseCliJsonl", () => {
 
     expect(result).toBe(message);
   });
+
+  it("prefers task_complete.last_agent_message over commentary and final-answer events", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "response_start", thread_id: "thread-789" }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "agent_message",
+            phase: "commentary",
+            message: "Commentary that should stay internal",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer from phase" }],
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: "Terminal answer from task_complete",
+          },
+          usage: {
+            input_tokens: 9,
+            output_tokens: 4,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "codex",
+        output: "jsonl",
+      },
+      "openai-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Terminal answer from task_complete",
+      sessionId: "thread-789",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
+  it("prefers final-answer phase content and ignores commentary-phase item text", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Commentary text",
+            phase: "commentary",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer from payload" }],
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "codex",
+        output: "jsonl",
+      },
+      "openai-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Final answer from payload",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("uses final-answer envelope phase when payload message omits phase", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "response_item",
+        phase: "final_answer",
+        payload: {
+          type: "message",
+          content: [{ type: "output_text", text: "Final answer from envelope phase" }],
+        },
+      }),
+      {
+        command: "codex",
+        output: "jsonl",
+      },
+      "openai-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Final answer from envelope phase",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("does not fall back to raw JSONL when only commentary-phase item text is skipped", () => {
+    const result = parseCliOutput({
+      raw: JSON.stringify({
+        type: "response_item",
+        item: {
+          type: "message",
+          text: "Commentary text",
+          phase: "commentary",
+        },
+      }),
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("does not fall back to raw JSONL when final-answer content is structured but empty", () => {
+    const result = parseCliOutput({
+      raw: JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          phase: "final_answer",
+          content: [],
+        },
+      }),
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
@@ -974,6 +1182,185 @@ describe("createCliJsonlStreamingParser", () => {
         total: 1,
       },
       errorText: "Invalid stream payload",
+    });
+  });
+
+  it("prefers streamed task_complete.last_agent_message over commentary and final-answer events", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "response_start", thread_id: "thread-stream-789" }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "agent_message",
+            phase: "commentary",
+            message: "Commentary that should stay internal",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer from phase" }],
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: "Terminal answer from task_complete",
+          },
+          usage: {
+            input_tokens: 9,
+            output_tokens: 4,
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
+    expect(parser.getOutput()).toEqual({
+      text: "Terminal answer from task_complete",
+      sessionId: "thread-stream-789",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
+  it("prefers streamed final-answer phase content over generic item text", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => {
+        throw new Error("unexpected streaming delta");
+      },
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Generic item text",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("prefers streamed final-answer phase content over Gemini result output", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: "progress text",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          status: "success",
+          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: {
+        input: 4,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 9,
+      },
+    });
+  });
+
+  it("keeps streamed commentary-only structured output empty instead of null", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "response_item",
+        item: {
+          type: "message",
+          text: "Commentary text",
+          phase: "commentary",
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
     });
   });
 
