@@ -82,6 +82,9 @@ let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
+let contextEngineControlHttpModulePromise:
+  | Promise<typeof import("./context-engine-control-http.js")>
+  | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let pluginNodeCapabilityAuthModulePromise:
   | Promise<typeof import("./server/plugin-node-capability-auth.js")>
@@ -134,6 +137,11 @@ function getSessionHistoryHttpModule() {
 function getSessionKillHttpModule() {
   sessionKillHttpModulePromise ??= import("./session-kill-http.js");
   return sessionKillHttpModulePromise;
+}
+
+function getContextEngineControlHttpModule() {
+  contextEngineControlHttpModulePromise ??= import("./context-engine-control-http.js");
+  return contextEngineControlHttpModulePromise;
 }
 
 function getToolsInvokeHttpModule() {
@@ -219,6 +227,12 @@ function isOpenResponsesPath(pathname: string): boolean {
 
 function isToolsInvokePath(pathname: string): boolean {
   return pathname === "/tools/invoke";
+}
+
+function isContextEngineControlPath(pathname: string): boolean {
+  return (
+    pathname === "/v1/context-engine/capabilities" || pathname === "/v1/context-engine/control"
+  );
 }
 
 function isManagedOutgoingImagePath(pathname: string): boolean {
@@ -638,6 +652,22 @@ export function createGatewayHttpServer(opts: {
               allowRealIpFallback,
               rateLimiter,
             }),
+        });
+      }
+      if (isContextEngineControlPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "context-engine-control",
+          run: async () =>
+            (await getContextEngineControlHttpModule()).handleContextEngineControlHttpRequest(
+              req,
+              res,
+              {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              },
+            ),
         });
       }
       if (isSessionKillPath(scopedRequestPath)) {
