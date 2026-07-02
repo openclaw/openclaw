@@ -4,7 +4,7 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
-@Suite struct SwiftUIRenderSmokeTests {
+struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View, size: CGSize? = nil) -> UIWindow {
         let frame = CGRect(origin: .zero, size: size ?? UIScreen.main.bounds.size)
         let window = UIWindow(frame: frame)
@@ -15,7 +15,7 @@ import UIKit
         return window
     }
 
-    @Test @MainActor func settingsProTabBuildsAViewHierarchy() {
+    @Test @MainActor func `settings pro tab builds A view hierarchy`() {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
@@ -27,7 +27,7 @@ import UIKit
         _ = Self.host(root)
     }
 
-    @Test @MainActor func settingsProTabBuildsInLightAndDarkMode() {
+    @Test @MainActor func `settings pro tab builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
@@ -57,7 +57,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func settingsProTabAppearanceRowBuildsForAllPreferences() throws {
+    @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
         for preference in AppAppearancePreference.allCases {
             let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
             let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -77,7 +77,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
+    @Test @MainActor func `hosted push relay disclosure builds A view hierarchy`() {
         for typeSize in [DynamicTypeSize.large, .accessibility5] {
             let root = HostedPushRelayDisclosureSheet(
                 message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
@@ -88,7 +88,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func rootTabsBuildsDeviceOrientationShellMatrix() {
+    @Test @MainActor func `root tabs builds device orientation shell matrix`() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
@@ -105,7 +105,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func rootTabsBuildGatewayStateViewHierarchies() {
+    @Test @MainActor func `root tabs build gateway state view hierarchies`() {
         for appModel in Self.rootTabsGatewayStateModels() {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
@@ -118,7 +118,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func gatewayTrustPromptAlertPresentsWhenPromptAppearsAfterInitialRender() async {
+    @Test @MainActor func `gateway trust prompt alert presents when prompt appears after initial render`() async {
         let appModel = NodeAppModel()
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
@@ -132,7 +132,7 @@ import UIKit
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
     }
 
-    @Test @MainActor func rootPromptAlertStackPresentsGatewayTrustPrompt() async {
+    @Test @MainActor func `root prompt alert stack presents gateway trust prompt`() async {
         let appModel = NodeAppModel()
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
@@ -148,7 +148,7 @@ import UIKit
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
     }
 
-    @Test @MainActor func rootPromptAlertStackStillPresentsDeepLinkPrompt() async throws {
+    @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
         appModel._test_setGatewayConnected(true)
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
@@ -186,7 +186,7 @@ import UIKit
         await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
-    @Test @MainActor func phoneControlHubBuildsGatewayStateViewHierarchies() {
+    @Test @MainActor func `phone control hub builds gateway state view hierarchies`() {
         for appModel in Self.rootTabsGatewayStateModels() {
             let root = RootTabsPhoneControlHub(
                 groups: RootTabs.phoneControlGroups,
@@ -198,7 +198,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func phoneControlHubBuildsLandscapeCompactState() {
+    @Test @MainActor func `phone control hub builds landscape compact state`() {
         let appModel = NodeAppModel()
         let root = RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
@@ -211,7 +211,7 @@ import UIKit
         _ = Self.host(root)
     }
 
-    @Test @MainActor func routedSidebarScreensBuildOfflineStates() {
+    @Test @MainActor func `routed sidebar screens build offline states`() {
         let appModel = NodeAppModel()
         let screens: [AnyView] = [
             AnyView(CommandCenterTab(openChat: {}, openSettings: {})),
@@ -234,7 +234,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func taskScreensBuildPhoneLandscapeCompactStates() {
+    @Test @MainActor func `task screens build phone landscape compact states`() {
         let appModel = NodeAppModel()
         let screens: [AnyView] = [
             AnyView(IPadWorkboardScreen(openChat: {}, openSettings: {})),
@@ -251,20 +251,20 @@ import UIKit
         }
     }
 
-    @Test @MainActor func voiceWakeWordsViewBuildsAViewHierarchy() {
+    @Test @MainActor func `voice wake words view builds A view hierarchy`() {
         let appModel = NodeAppModel()
         let root = NavigationStack { VoiceWakeWordsSettingsView() }
             .environment(appModel)
         _ = Self.host(root)
     }
 
-    @Test @MainActor func voiceWakeToastBuildsAViewHierarchy() {
+    @Test @MainActor func `voice wake toast builds A view hierarchy`() {
         let root = VoiceWakeToast(command: "openclaw: do something")
         _ = Self.host(root)
     }
 
     @MainActor private static func waitForPresentedAlert(in window: UIWindow) async {
-        for _ in 0 ..< 10 {
+        for _ in 0..<10 {
             if window.rootViewController?.presentedViewController != nil { return }
             await Task.yield()
             try? await Task.sleep(nanoseconds: 50_000_000)

@@ -253,17 +253,31 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
-            name: "appearance-compact"))
+            name: "appearance-compact"), appearance: nil)
 
         let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
         XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
+
         row.tap()
         XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
         XCTAssertTrue(self.app?.buttons["Light"].exists == true)
         XCTAssertTrue(self.app?.buttons["Dark"].exists == true)
-        self.attachScreenshot(named: "appearance-menu")
+        self.app?.buttons["System"].firstMatch.tap()
+        self.waitForValue("System", of: row)
+        self.attachScreenshot(named: "appearance-system")
+
+        row.tap()
+        XCTAssertTrue(self.app?.buttons["Dark"].waitForExistence(timeout: 3) == true)
+        self.app?.buttons["Dark"].firstMatch.tap()
+        self.waitForValue("Dark", of: row)
+        self.attachScreenshot(named: "appearance-dark")
+
+        row.tap()
+        XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
+        self.app?.buttons["System"].firstMatch.tap()
+        self.waitForValue("System", of: row)
     }
 
     func testAgentUsesToolbarFilter() throws {
@@ -336,6 +350,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.app = app
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+    }
+
+    private func waitForValue(_ value: String, of element: XCUIElement) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", value),
+            object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed)
     }
 
     private func launchPairedLiveGatewayApp(
