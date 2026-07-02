@@ -28,6 +28,7 @@ import type {
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
 } from "./conversation-binding.types.js";
+import type { PluginConversationBindingResolvedHandlerRegistration } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/binding");
@@ -968,21 +969,65 @@ function dispatchPluginConversationBindingResolved(params: {
   });
 }
 
+type ConversationBindingResolvedHandlerEntry = {
+  pluginId: string;
+  pluginRoot?: string;
+  handler: PluginConversationBindingResolvedHandlerRegistration["handler"];
+};
+
+function listConversationBindingResolvedHandlers(params: {
+  pluginId: string;
+  pluginRoot: string;
+}): ConversationBindingResolvedHandlerEntry[] {
+  let registrations: unknown;
+  try {
+    registrations = getActivePluginRegistry()?.conversationBindingResolvedHandlers;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(registrations)) {
+    return [];
+  }
+  const handlers: ConversationBindingResolvedHandlerEntry[] = [];
+  for (const registration of registrations) {
+    try {
+      const entry = registration as Partial<PluginConversationBindingResolvedHandlerRegistration>;
+      if (entry.pluginId !== params.pluginId) {
+        continue;
+      }
+      const registeredRoot =
+        typeof entry.pluginRoot === "string" && entry.pluginRoot.trim()
+          ? entry.pluginRoot.trim()
+          : undefined;
+      if (registeredRoot && registeredRoot !== params.pluginRoot) {
+        continue;
+      }
+      if (typeof entry.handler !== "function") {
+        continue;
+      }
+      handlers.push(
+        registeredRoot
+          ? { pluginId: entry.pluginId, pluginRoot: registeredRoot, handler: entry.handler }
+          : { pluginId: entry.pluginId, handler: entry.handler },
+      );
+    } catch {
+      continue;
+    }
+  }
+  return handlers;
+}
+
 async function notifyPluginConversationBindingResolved(params: {
   status: "approved" | "denied";
   binding?: PluginConversationBinding;
   decision: PluginConversationBindingResolutionDecision;
   request: PendingPluginBindingRequest;
 }): Promise<void> {
-  const registrations = getActivePluginRegistry()?.conversationBindingResolvedHandlers ?? [];
+  const registrations = listConversationBindingResolvedHandlers({
+    pluginId: params.request.pluginId,
+    pluginRoot: params.request.pluginRoot,
+  });
   for (const registration of registrations) {
-    if (registration.pluginId !== params.request.pluginId) {
-      continue;
-    }
-    const registeredRoot = registration.pluginRoot?.trim();
-    if (registeredRoot && registeredRoot !== params.request.pluginRoot) {
-      continue;
-    }
     try {
       const event: PluginConversationBindingResolvedEvent = {
         status: params.status,

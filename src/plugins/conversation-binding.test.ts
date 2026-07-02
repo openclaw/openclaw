@@ -869,6 +869,56 @@ describe("plugin conversation binding approvals", () => {
     await expectResolutionCallback(testCase);
   });
 
+  it("keeps dispatching resolved callbacks after an unreadable registration", async () => {
+    const onResolved = vi.fn(async () => undefined);
+    const registry = createEmptyPluginRegistry();
+    const brokenRegistration = {
+      pluginRoot: "/plugins/callback-guard",
+      handler: async () => undefined,
+      source: "/plugins/callback-guard/index.ts",
+      rootDir: "/plugins/callback-guard",
+    } as PluginRegistry["conversationBindingResolvedHandlers"][number];
+    Object.defineProperty(brokenRegistration, "pluginId", {
+      get() {
+        throw new Error("binding resolved plugin id getter exploded");
+      },
+    });
+    registry.conversationBindingResolvedHandlers.push(brokenRegistration, {
+      pluginId: "codex",
+      pluginRoot: "/plugins/callback-guard",
+      handler: onResolved,
+      source: "/plugins/callback-guard/index.ts",
+      rootDir: "/plugins/callback-guard",
+    });
+    setActivePluginRegistry(registry);
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/callback-guard",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:callback-guard",
+      },
+      binding: { summary: "Bind this conversation despite a bad callback sibling." },
+    });
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    });
+
+    await flushMicrotasks();
+    expect(onResolved).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "does not wait for an approved bind callback before returning",
