@@ -233,7 +233,11 @@ describe("exec approvals gateway methods", () => {
       respond,
       context: {
         nodeRegistry: { get: nodeRegistryGetMock },
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => ({
+          gateway: {
+            nodes: { denyCommands: ["system.execApprovals.get"] },
+          },
+        }),
       } as never,
     });
 
@@ -276,7 +280,11 @@ describe("exec approvals gateway methods", () => {
       respond,
       context: {
         nodeRegistry: { get: nodeRegistryGetMock },
-        getRuntimeConfig: () => ({}),
+        getRuntimeConfig: () => ({
+          gateway: {
+            nodes: { denyCommands: ["system.execApprovals.set"] },
+          },
+        }),
       } as never,
     });
 
