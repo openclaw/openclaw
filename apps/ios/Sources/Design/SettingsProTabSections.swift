@@ -7,61 +7,25 @@ extension SettingsProTab {
     }
 
     var accentColorPicker: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Picker(selection: self.$accentColorPreferenceRaw) {
+            ForEach(AppAccentColorPreference.allCases) { preference in
+                Label {
+                    Text(preference.label)
+                } icon: {
+                    Circle()
+                        .fill(preference.color)
+                        .frame(width: 14, height: 14)
+                }
+                .tag(preference.rawValue)
+            }
+        } label: {
             HStack(spacing: 12) {
                 ProIconBadge(systemName: "paintpalette.fill", color: self.accentColorPreference.color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Accent Color")
-                        .font(.subheadline.weight(.semibold))
-                    Text(self.accentColorPreference.label)
-                        .font(OpenClawProFont.minimum)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
+                Text("Accent Color")
             }
-
-            HStack(spacing: 10) {
-                ForEach(AppAccentColorPreference.allCases) { preference in
-                    self.accentColorOption(preference)
-                }
-            }
-            .frame(maxWidth: .infinity)
         }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .contain)
+        .pickerStyle(.menu)
         .accessibilityIdentifier("settings-accent-color-picker")
-    }
-
-    private func accentColorOption(_ preference: AppAccentColorPreference) -> some View {
-        let isSelected = self.accentColorPreference == preference
-        return Button {
-            self.accentColorPreferenceRaw = preference.rawValue
-            OpenClawBrand.applyWindowChrome(appearance: self.appearancePreference)
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(preference.color)
-                    .frame(width: 34, height: 34)
-                if isSelected {
-                    Circle()
-                        .strokeBorder(.white, lineWidth: 2)
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                }
-            }
-            .overlay {
-                Circle()
-                    .strokeBorder(
-                        isSelected ? preference.color : Color.primary.opacity(0.12),
-                        lineWidth: isSelected ? 2 : 1)
-                    .frame(width: 38, height: 38)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(preference.label)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var appearancePreference: AppAppearancePreference {
