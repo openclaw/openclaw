@@ -1020,6 +1020,7 @@ export async function resolveApiKeyForProvider(params: {
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   modelApi?: string;
+  fallbackOnIncompatibleProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
@@ -1057,12 +1058,24 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
     };
-    assertAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      profileId: resolvedProfileId,
-      mode: result.mode,
-    });
+    try {
+      assertAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        profileId: resolvedProfileId,
+        mode: result.mode,
+      });
+    } catch (err) {
+      if (params.fallbackOnIncompatibleProfile && !params.lockedProfile) {
+        return resolveApiKeyForProvider({
+          ...params,
+          store,
+          profileId: undefined,
+          lockedProfile: true,
+        });
+      }
+      throw err;
+    }
     // When the resolved key is a provider-owned synthetic profile marker and
     // the caller has not locked this profile, fall through to env/config
     // resolution so provider-owned real credentials take precedence. The auth
@@ -1528,6 +1541,7 @@ export async function getApiKeyForModel(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  fallbackOnIncompatibleProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -1540,6 +1554,7 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     modelApi: params.model.api,
+    fallbackOnIncompatibleProfile: params.fallbackOnIncompatibleProfile,
   });
 }
 
