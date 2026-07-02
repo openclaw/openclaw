@@ -2510,6 +2510,52 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
   });
+
+  test("uses label when displayName and subject are missing", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "My Label via /name",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("My Label via /name");
+  });
+
+  test("prefers subject over label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Subject Text",
+      label: "Label via /name",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Subject Text");
+  });
+
+  test("prefers label over auto-derived first user message", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "Label via /name",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Hello, what can you do?")).toBe("Label via /name");
+  });
+
+  test("ignores empty label and falls through to first user message", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "   ",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry, "Hello!")).toBe("Hello!");
+  });
+
+  test("label-only entry without displayName, subject, or firstUserMessage returns label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      label: "Custom Name",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Custom Name");
+  });
 });
 
 describe("resolveGatewayModelSupportsImages", () => {
