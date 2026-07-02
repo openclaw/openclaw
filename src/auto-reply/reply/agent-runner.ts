@@ -3210,15 +3210,22 @@ export async function runReplyAgent(replyParams: {
             delegates: stagedCompactionDelegates,
           });
         } catch (err) {
-          postCompactionDelegatesToPreserve.push(...stagedCompactionDelegates);
+          // Session-store persist failed. Re-stage the delegates as fresh queued
+          // TaskFlow rows NOW — before we finalize the claimed rows — so they are
+          // durably recoverable. Finalizing against only the volatile
+          // postCompactionDelegatesToPreserve list would drop them on a crash
+          // before the finally re-stage runs (#1144).
+          for (const delegate of stagedCompactionDelegates) {
+            stagePostCompactionDelegate(sessionKey, delegate);
+          }
           defaultRuntime.log(
-            `Failed to persist post-compaction delegates for ${sessionKey} (re-staged ${stagedCompactionDelegates.length}): ${String(err)}`,
+            `Failed to persist post-compaction delegates for ${sessionKey}; re-staged ${stagedCompactionDelegates.length} to the durable queue: ${String(err)}`,
           );
         }
-        // The staged delegates are now durable (session store, or the
-        // preserve list the finally re-stages). Finish the claimed TaskFlow
-        // rows so they are not re-consumed; a crash before here leaves them
-        // recoverable via recoverStagedPostCompactionDelegates.
+        // Content is now durable (session store on success, re-staged queued rows
+        // on failure). Finish the claimed rows so they are not re-consumed; a
+        // crash before here leaves them recoverable via
+        // recoverStagedPostCompactionDelegates.
         finalizeStagedPostCompactionDelegates(sessionKey, stagedClaimHorizon);
       }
     }

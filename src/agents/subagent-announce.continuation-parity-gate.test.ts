@@ -69,11 +69,15 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
 
 vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
+  enqueuePendingDelegate: vi.fn(),
   markPendingDelegateFailed: vi.fn(),
   stagePostCompactionDelegate: vi.fn(),
 }));
 
-import { stagePostCompactionDelegate } from "../auto-reply/continuation-delegate-store.js";
+import {
+  enqueuePendingDelegate,
+  stagePostCompactionDelegate,
+} from "../auto-reply/continuation-delegate-store.js";
 import {
   retainContinuationTimerRef,
   registerContinuationTimerHandle,
@@ -221,23 +225,29 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
 
   // -- 4. Delay modifier (+Ns) --
 
-  it("dispatches exactly once for [[CONTINUE_DELEGATE: task +30s]] (delay)", async () => {
+  it("enqueues a delayed bracket delegate durably instead of a volatile timer (+Ns)", async () => {
     const params = buildParityParams("[[CONTINUE_DELEGATE: continue after delay +30s]]");
     await runSubagentAnnounceFlow(params);
-    // Timer path fires with clamped delay (maxDelayMs=0 → fires immediately)
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
     });
 
-    expect(spawnSpy).toHaveBeenCalledTimes(1);
-    const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
-    expect(spawnArgs.task).toContain("[continuation:chain-hop:2]");
-    expect(spawnArgs.task).toContain("continue after delay");
+    // #1144: a delayed bracket delegate is routed through the durable pending
+    // delegate store (survives restart) exactly once, not fired via a volatile
+    // in-process setTimeout.
+    expect(enqueuePendingDelegate).toHaveBeenCalledTimes(1);
+    const [enqueueSession, enqueued] = vi.mocked(enqueuePendingDelegate).mock.calls[0] as [
+      string,
+      { task: string; delayMs?: number },
+    ];
+    expect(enqueueSession).toBe(requesterSessionKey);
+    expect(enqueued.task).toBe("continue after delay");
     // +30s is consumed by the parser, not included in the task body
-    expect(spawnArgs.task).not.toContain("+30s");
-    // Delay path uses timer registration
-    expect(retainContinuationTimerRef).toHaveBeenCalled();
-    expect(registerContinuationTimerHandle).toHaveBeenCalled();
+    expect(enqueued.task).not.toContain("+30s");
+    // Not fired immediately, and the removed volatile-timer path is not used.
+    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(retainContinuationTimerRef).not.toHaveBeenCalled();
+    expect(registerContinuationTimerHandle).not.toHaveBeenCalled();
   });
 
   // -- 5. Target modifier --

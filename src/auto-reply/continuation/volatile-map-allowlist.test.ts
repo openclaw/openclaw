@@ -179,6 +179,17 @@ const ALLOWLIST = [
     restartContract:
       "Lost on process restart; new ReplyOperation instances register fresh after-clear callbacks when work resumes.",
   },
+  {
+    file: "src/auto-reply/continuation/delegate-turn-admission.ts",
+    symbol: "delegatesScheduledThisTurn",
+    owner: "continue_delegate per-turn admission",
+    purpose:
+      "Counts how many continue_delegate calls a session has scheduled in the current assistant turn so the maxDelegatesPerTurn cap resets at each assistant-turn boundary (the tool list is built once per run).",
+    safeVolatileClassification:
+      "The count is turn-scoped rate state, not durable delegate substrate; the delegates themselves are persisted in the TaskFlow-backed delegate store, and the cap is also enforced by the post-response dispatcher.",
+    restartContract:
+      "Lost on process restart, which is the correct post-restart state: the next turn starts at a zero admission count and the durable delegate queue is unaffected.",
+  },
 ] as const satisfies readonly AllowlistEntry[];
 
 // These older reply-continuation symbols are already pinned by

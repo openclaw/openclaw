@@ -788,12 +788,16 @@ export async function dispatchPostCompactionDelegates(
     }
   }
 
-  // Durable handoff is complete: every consumed delegate is now either queued
-  // for delivery, re-staged to the session store, or intentionally dropped
-  // (stale/over-budget). Finalize the claimed TaskFlow rows so they are not
-  // re-consumed. Crash before this leaves them `running` for restart recovery
-  // (#1144) rather than lost behind a premature `finished`.
-  deps.finalizeStagedPostCompactionDelegates(params.sessionKey, stagedClaimHorizon);
+  // Finalize the claimed TaskFlow rows only when the durable handoff fully
+  // succeeded: everything is now either queued for delivery or re-staged into
+  // the session store (preserve list drained). If the re-stage persist itself
+  // failed, the delegates survive ONLY in the volatile preserve list until the
+  // caller's finally re-stages them; finalizing here would drop them on a crash
+  // in that window (#1144). Leaving the rows `running` lets startup recovery
+  // (recoverStagedPostCompactionDelegates) re-queue them instead.
+  if (params.postCompactionDelegatesToPreserve.length === 0) {
+    deps.finalizeStagedPostCompactionDelegates(params.sessionKey, stagedClaimHorizon);
+  }
 
   const lifecycleEvent = buildPostCompactionLifecycleEvent({
     compactionCount: params.compactionCount,

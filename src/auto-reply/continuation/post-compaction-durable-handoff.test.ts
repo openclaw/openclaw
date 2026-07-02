@@ -99,4 +99,28 @@ describe("post-compaction durable handoff (#1144)", () => {
     const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
     expect(rereleased.map((d) => d.task)).toContain("second");
   });
+
+  it("re-staging before finalize preserves a delegate when the durable persist fails", () => {
+    // Models the persist-failure path (agent-runner / dispatch): after claiming
+    // the row to `running`, a fresh queued row is re-staged BEFORE the claimed
+    // row is finalized, so a crash cannot drop the delegate behind a premature
+    // `finished` row (#1144 autoreview follow-up).
+    stage("evacuate context");
+    const released = consumeStagedPostCompactionDelegates(sessionKey);
+    const claimHorizon = Date.now();
+    expect(released).toHaveLength(1);
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
+
+    // Re-stage a fresh queued row (durable) BEFORE finalizing the claimed row.
+    stagePostCompactionDelegate(sessionKey, released[0]);
+    const finalized = finalizeStagedPostCompactionDelegates(sessionKey, claimHorizon);
+    expect(finalized).toBe(1);
+
+    // The re-staged queued row survives; the old claimed row is terminal, so
+    // recovery finds nothing to reset and the delegate is not duplicated.
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+    expect(recoverStagedPostCompactionDelegates()).toBe(0);
+    const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
+    expect(rereleased.map((d) => d.task)).toContain("evacuate context");
+  });
 });
