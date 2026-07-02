@@ -1,4 +1,5 @@
 // Web media helpers load local and remote media for web-facing surfaces.
+import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
@@ -15,10 +16,20 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import {
@@ -44,6 +55,12 @@ export type WebMediaResult = {
   contentType?: string;
   kind: MediaKind | undefined;
   fileName?: string;
+  /**
+   * True only when the source was a local trusted-generated HTML path (under the
+   * OpenClaw temp root). Outbound staging uses this to persist a provenance
+   * marker so the staged copy remains a trusted host-read source.
+   */
+  trustedGeneratedHtmlSource?: boolean;
 };
 
 type WebMediaOptions = {
@@ -297,28 +314,162 @@ function hasHtmlDocumentShape(text: string): boolean {
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
 }
 
-async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined): Promise<boolean> {
+type HostReadHtmlTrust =
+  | { source: "temp-root" }
+  | { source: "outbound"; expectedSha256: string; expectedSize: number };
+
+async function isTrustedGeneratedHostReadHtmlPath(
+  filePath: string | undefined,
+): Promise<HostReadHtmlTrust | undefined> {
   if (!filePath) {
-    return false;
+    return undefined;
   }
   const info = await lstat(filePath).catch(() => undefined);
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-    return false;
+    return undefined;
   }
-  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+  const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+    realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
-  return Boolean(
-    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
+  if (!resolvedFilePath) {
+    return undefined;
+  }
+  if (tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)) {
+    return { source: "temp-root" };
+  }
+  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
+    return marker
+      ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
+      : undefined;
+  }
+  return undefined;
+}
+
+const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
+const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
+
+type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
+
+async function getTrustedGeneratedHtmlMarker(
+  resolvedFilePath: string,
+): Promise<{ sha256: string; size: number } | undefined> {
+  try {
+    const { db } = openOpenClawStateDatabase();
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .selectFrom("outbound_media_provenance")
+        .select(["kind", "version", "sha256", "size_bytes"])
+        .where("realpath", "=", resolvedFilePath),
+    );
+    const matched =
+      row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+      row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION;
+    if (shouldLogVerbose()) {
+      logVerbose(`trusted-html marker: ${matched ? "hit" : "miss"} (${resolvedFilePath})`);
+    }
+    return matched ? { sha256: row.sha256, size: row.size_bytes } : undefined;
+  } catch (err) {
+    logVerbose(
+      `trusted-html marker: lookup failed (${resolvedFilePath}): ${formatErrorMessage(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Records the trusted-generated-html provenance row for an outbound-staged HTML
+ * file. The row keys on the realpath of the staged file so a later host-read
+ * lookup can recognize it as a trusted source. Callers must have already
+ * verified the source was trusted before staging.
+ *
+ * Provenance rows are pruned in lockstep with the staged file by
+ * pruneStaleTrustedGeneratedHtmlMarkers, which runs from the media-store
+ * retention pass (src/media/store.ts cleanOldMedia).
+ */
+export async function markTrustedGeneratedHtmlPath(
+  filePath: string,
+  contents: Buffer,
+): Promise<void> {
+  const resolvedFilePath = await realpath(filePath);
+  const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
+  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    throw new Error(
+      `markTrustedGeneratedHtmlPath: refusing to mark path outside outbound staging dir: ${resolvedFilePath}`,
+    );
+  }
+  const now = Date.now();
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const sizeBytes = contents.length;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .insertInto("outbound_media_provenance")
+        .values({
+          realpath: resolvedFilePath,
+          kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+          version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+          sha256,
+          size_bytes: sizeBytes,
+          created_at_ms: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("realpath").doUpdateSet({
+            kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+            version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+            sha256,
+            size_bytes: sizeBytes,
+            created_at_ms: now,
+          }),
+        ),
+    );
+  });
+}
+
+/**
+ * Reconciles the outbound-media provenance table against the filesystem,
+ * deleting rows whose `realpath` no longer points to a regular file. Used by
+ * the media-store retention pass so trust metadata cannot outlive the staged
+ * file the row referred to.
+ */
+export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
+  const { db } = openOpenClawStateDatabase();
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+      .selectFrom("outbound_media_provenance")
+      .select("realpath"),
   );
+  const stale: string[] = [];
+  for (const row of result.rows) {
+    const info = await lstat(row.realpath).catch(() => undefined);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      stale.push(row.realpath);
+    }
+  }
+  if (stale.length === 0) {
+    return;
+  }
+  logVerbose(`trusted-html prune: removed ${stale.length} stale marker(s)`);
+  runOpenClawStateWriteTransaction(({ db: writeDb }) => {
+    executeSqliteQuerySync(
+      writeDb,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(writeDb)
+        .deleteFrom("outbound_media_provenance")
+        .where("realpath", "in", stale),
+    );
+  });
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
   filePath?: string;
   sniffedContentType?: string;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): boolean {
   const sniffedMime = normalizeMimeType(params.sniffedContentType);
   if (sniffedMime && sniffedMime !== "text/html") {
@@ -328,7 +479,19 @@ function isTrustedGeneratedHostReadHtml(params: {
     return false;
   }
   const text = getValidatedHostReadText(params.buffer);
-  return text !== undefined && hasHtmlDocumentShape(text);
+  if (text === undefined || !hasHtmlDocumentShape(text)) {
+    return false;
+  }
+  if (params.trustedGeneratedHtmlPath.source === "temp-root") {
+    return true;
+  }
+  if (params.buffer?.length !== params.trustedGeneratedHtmlPath.expectedSize) {
+    return false;
+  }
+  return (
+    createHash("sha256").update(params.buffer).digest("hex") ===
+    params.trustedGeneratedHtmlPath.expectedSha256
+  );
 }
 
 function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string): boolean {
@@ -371,7 +534,7 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
@@ -917,6 +1080,7 @@ async function loadWebMediaInternal(
     contentType?: string;
     kind: MediaKind | undefined;
     fileName?: string;
+    trustedGeneratedHtmlSource?: boolean;
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
@@ -966,6 +1130,7 @@ async function loadWebMediaInternal(
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
+      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
     };
   };
 
@@ -1031,11 +1196,11 @@ async function loadWebMediaInternal(
   const hostReadDeclaredMime = hostReadCapability
     ? normalizeMimeType(mimeTypeFromFilePath(mediaUrl))
     : undefined;
-  const trustedGeneratedHtmlPath =
+  const htmlTrust =
     hostReadDeclaredMime === "text/html"
       ? await isTrustedGeneratedHostReadHtmlPath(mediaUrl)
-      : false;
-  if (hostReadDeclaredMime === "text/html" && !trustedGeneratedHtmlPath) {
+      : undefined;
+  if (hostReadDeclaredMime === "text/html" && !htmlTrust) {
     throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
 
@@ -1079,7 +1244,7 @@ async function loadWebMediaInternal(
       filePath: mediaUrl,
       kind,
       buffer: data,
-      trustedGeneratedHtmlPath,
+      trustedGeneratedHtmlPath: htmlTrust,
     });
   }
   let fileName = resolveLocalMediaFileName(mediaUrl);
@@ -1094,6 +1259,7 @@ async function loadWebMediaInternal(
     contentType: mime,
     kind,
     fileName,
+    trustedGeneratedHtmlSource: Boolean(htmlTrust && hostReadDeclaredMime === "text/html"),
   });
 }
 
