@@ -17,6 +17,15 @@ const mocks = await vi.hoisted(async () => {
   return {
     callGatewayFromCli: vi.fn(),
     runSecretsAudit: vi.fn(),
+    parseSecretsAuditSeverity: vi.fn((value: string) => {
+      if (value === "warning") {
+        return "warn";
+      }
+      if (value === "info" || value === "warn" || value === "error") {
+        return value;
+      }
+      return null;
+    }),
     resolveSecretsAuditExitCode: vi.fn(),
     runSecretsConfigureInteractive: vi.fn(),
     runSecretsApply: vi.fn(),
@@ -28,6 +37,7 @@ const mocks = await vi.hoisted(async () => {
 const {
   callGatewayFromCli,
   runSecretsAudit,
+  parseSecretsAuditSeverity,
   resolveSecretsAuditExitCode,
   runSecretsConfigureInteractive,
   runSecretsApply,
@@ -49,8 +59,9 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../secrets/audit.js", () => ({
   runSecretsAudit: (options: unknown) => mocks.runSecretsAudit(options),
-  resolveSecretsAuditExitCode: (report: unknown, check: boolean) =>
-    mocks.resolveSecretsAuditExitCode(report, check),
+  parseSecretsAuditSeverity: (value: string) => mocks.parseSecretsAuditSeverity(value),
+  resolveSecretsAuditExitCode: (report: unknown, check: boolean, severityMin: unknown) =>
+    mocks.resolveSecretsAuditExitCode(report, check, severityMin),
 }));
 
 vi.mock("../secrets/configure.js", () => ({
@@ -151,6 +162,7 @@ describe("secrets CLI", () => {
     runtimeErrors.length = 0;
     callGatewayFromCli.mockReset();
     runSecretsAudit.mockReset();
+    parseSecretsAuditSeverity.mockClear();
     resolveSecretsAuditExitCode.mockReset();
     runSecretsConfigureInteractive.mockReset();
     runSecretsApply.mockReset();
@@ -230,6 +242,36 @@ describe("secrets CLI", () => {
       throw new Error("Expected secrets audit result for exit-code resolution");
     }
     expect(exitCodeCall[1]).toBe(true);
+    expect(exitCodeCall[2]).toBe("info");
+  });
+
+  it("forwards --severity-min to secrets audit check exit resolution", async () => {
+    runSecretsAudit.mockResolvedValue({
+      version: 1,
+      status: "findings",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 0,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 0,
+        legacyResidueCount: 1,
+      },
+      resolution: {
+        refsChecked: 0,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      },
+      findings: [],
+    });
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await createProgram().parseAsync(["secrets", "audit", "--check", "--severity-min", "warn"], {
+      from: "user",
+    });
+    expect(parseSecretsAuditSeverity).toHaveBeenCalledWith("warn");
+    const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
+    expect(exitCodeCall[1]).toBe(true);
+    expect(exitCodeCall[2]).toBe("warn");
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
