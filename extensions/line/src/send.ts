@@ -1,13 +1,15 @@
+import { randomUUID } from "node:crypto";
 // Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, retryAsync, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
+import { isRetryableError } from "./retry.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineSendResult } from "./types.js";
 
@@ -173,14 +175,18 @@ function logLineHttpError(err: unknown, context: string): void {
   if (!err || typeof err !== "object") {
     return;
   }
-  const { status, statusText, body } = err as {
+  const { status, statusText, body, statusCode, statusMessage } = err as {
     status?: number;
     statusText?: string;
     body?: string;
+    statusCode?: number;
+    statusMessage?: string;
   };
   if (typeof body === "string") {
-    const summary = status ? `${status} ${statusText ?? ""}`.trim() : "unknown status";
-    logVerbose(`line: ${context} failed (${summary}): ${body}`);
+    const code = status ?? statusCode;
+    const text = statusText ?? statusMessage ?? "";
+    const summary = code ? `${code} ${text}`.trim() : "unknown status";
+    warn(`line: ${context} failed (${summary}): ${body}`);
   }
 }
 
@@ -220,18 +226,32 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
-  const pushRequest = client.pushMessage({
-    to: chatId,
-    messages,
-  });
+  const xLineRetryKey = randomUUID();
 
-  if (behavior.errorContext) {
-    await pushRequest.catch((err: unknown) => {
-      logLineHttpError(err, behavior.errorContext!);
-      throw err;
-    });
-  } else {
-    await pushRequest;
+  try {
+    await retryAsync(
+      () =>
+        client.pushMessage(
+          {
+            to: chatId,
+            messages,
+          },
+          xLineRetryKey,
+        ),
+      {
+        attempts: 5,
+        minDelayMs: 1000,
+        maxDelayMs: 8000,
+        jitter: 0.3,
+        shouldRetry: isRetryableError,
+        label: "line:push",
+      },
+    );
+  } catch (err) {
+    if (behavior?.errorContext) {
+      logLineHttpError(err, behavior.errorContext);
+    }
+    throw err;
   }
 
   recordLineOutboundActivity(account.accountId);
@@ -349,7 +369,16 @@ export async function pushMessageLine(
   text: string,
   opts: LineSendOpts,
 ): Promise<LineSendResult> {
-  return sendMessageLine(to, text, { ...opts, replyToken: undefined });
+  const chatId = normalizeTarget(to);
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("Message text must be non-empty for LINE push");
+  }
+  const messages = [createTextMessage(trimmed)];
+  return pushLineMessages(chatId, messages, opts, {
+    errorContext: "push message",
+    verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
+  });
 }
 
 export async function replyMessageLine(
@@ -525,4 +554,28 @@ export async function getUserProfile(
 export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
+}
+
+export async function logLineChannelQuota(opts: LineClientOpts): Promise<void> {
+  try {
+    const { client } = createLineMessagingClient(opts);
+    const [quotaResponse, consumptionResponse] = await Promise.all([
+      client.getMessageQuota(),
+      client.getMessageQuotaConsumption(),
+    ]);
+
+    if (quotaResponse.type === "none") {
+      logVerbose("line: quota type=none (unlimited plan, no monthly cap)");
+    } else {
+      const used = consumptionResponse.totalUsage;
+      const limit = quotaResponse.value ?? 0;
+      const remaining = limit - used;
+      const pct = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      logVerbose(
+        `line: quota type=limited, ${used}/${limit} used (${remaining} remaining, ${pct}%)`,
+      );
+    }
+  } catch (err) {
+    logVerbose(`line: failed to query quota info (non-fatal): ${String(err)}`);
+  }
 }

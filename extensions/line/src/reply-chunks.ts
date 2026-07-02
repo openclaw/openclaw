@@ -22,6 +22,11 @@ export type SendLineReplyChunksParams = {
     text: string,
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
+  pushMessagesLine: (
+    to: string,
+    messages: messagingApi.Message[],
+    opts: { cfg: OpenClawConfig; accountId?: string },
+  ) => Promise<unknown>;
   pushTextMessageWithQuickReplies: (
     to: string,
     text: string,
@@ -66,20 +71,31 @@ export async function sendLineReplyChunks(
       });
       replyTokenUsed = true;
 
-      for (let i = 0; i < remaining.length; i += 1) {
-        const isLastChunk = i === remaining.length - 1;
-        if (isLastChunk && hasQuickReplies) {
+      for (let i = 0; i < remaining.length; i += 5) {
+        const batch = remaining.slice(i, Math.min(i + 5, remaining.length));
+        const isLastBatch = i + batch.length >= remaining.length;
+
+        if (isLastBatch && hasQuickReplies) {
+          const nonLast = batch.slice(0, -1);
+          if (nonLast.length > 0) {
+            await params.pushMessagesLine(
+              params.to,
+              nonLast.map((c) => ({ type: "text", text: c }) as messagingApi.Message),
+              { cfg: params.cfg, accountId: params.accountId },
+            );
+          }
           await params.pushTextMessageWithQuickReplies(
             params.to,
-            remaining[i],
+            batch[batch.length - 1],
             params.quickReplies!,
             { cfg: params.cfg, accountId: params.accountId },
           );
         } else {
-          await params.pushMessageLine(params.to, remaining[i], {
-            cfg: params.cfg,
-            accountId: params.accountId,
-          });
+          await params.pushMessagesLine(
+            params.to,
+            batch.map((c) => ({ type: "text", text: c }) as messagingApi.Message),
+            { cfg: params.cfg, accountId: params.accountId },
+          );
         }
       }
 
@@ -90,20 +106,31 @@ export async function sendLineReplyChunks(
     }
   }
 
-  for (let i = 0; i < params.chunks.length; i += 1) {
-    const isLastChunk = i === params.chunks.length - 1;
-    if (isLastChunk && hasQuickReplies) {
+  for (let i = 0; i < params.chunks.length; i += 5) {
+    const batch = params.chunks.slice(i, Math.min(i + 5, params.chunks.length));
+    const isLastBatch = i + batch.length >= params.chunks.length;
+
+    if (isLastBatch && hasQuickReplies) {
+      const nonLast = batch.slice(0, -1);
+      if (nonLast.length > 0) {
+        await params.pushMessagesLine(
+          params.to,
+          nonLast.map((c) => ({ type: "text", text: c }) as messagingApi.Message),
+          { cfg: params.cfg, accountId: params.accountId },
+        );
+      }
       await params.pushTextMessageWithQuickReplies(
         params.to,
-        params.chunks[i],
+        batch[batch.length - 1],
         params.quickReplies!,
         { cfg: params.cfg, accountId: params.accountId },
       );
     } else {
-      await params.pushMessageLine(params.to, params.chunks[i], {
-        cfg: params.cfg,
-        accountId: params.accountId,
-      });
+      await params.pushMessagesLine(
+        params.to,
+        batch.map((c) => ({ type: "text", text: c }) as messagingApi.Message),
+        { cfg: params.cfg, accountId: params.accountId },
+      );
     }
   }
 

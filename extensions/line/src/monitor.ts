@@ -40,6 +40,7 @@ import {
   pushTextMessageWithQuickReplies,
   replyMessageLine,
   showLoadingAnimation,
+  logLineChannelQuota,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
@@ -251,52 +252,58 @@ export async function monitorLineProvider(
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
-                  if (ctx.userId && !ctx.isGroup) {
-                    void showLoadingAnimation(ctx.userId, {
-                      cfg: config,
+                  const stopDeliveryLoading =
+                    ctx.userId && !ctx.isGroup
+                      ? startLineLoadingKeepalive({
+                          cfg: config,
+                          userId: ctx.userId,
+                          accountId: ctx.accountId,
+                        })
+                      : null;
+
+                  try {
+                    const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                      payload,
+                      lineData,
+                      to: ctxPayload.From,
+                      replyToken,
+                      replyTokenUsed,
                       accountId: ctx.accountId,
-                    }).catch(() => {});
-                  }
-
-                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                    payload,
-                    lineData,
-                    to: ctxPayload.From,
-                    replyToken,
-                    replyTokenUsed,
-                    accountId: ctx.accountId,
-                    cfg: config,
-                    textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      sendLineReplyChunks,
-                      replyMessageLine,
-                      pushMessageLine,
-                      pushTextMessageWithQuickReplies,
-                      createQuickReplyItems,
-                      createTextMessageWithQuickReplies,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      createImageMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
+                      cfg: config,
+                      textLimit,
+                      deps: {
+                        buildTemplateMessageFromPayload,
+                        processLineMessage,
+                        chunkMarkdownText,
+                        sendLineReplyChunks,
+                        replyMessageLine,
+                        pushMessageLine,
+                        pushTextMessageWithQuickReplies,
+                        createQuickReplyItems,
+                        createTextMessageWithQuickReplies,
+                        pushMessagesLine,
+                        createFlexMessage,
+                        createImageMessage,
+                        createLocationMessage,
+                        onReplyError: (replyErr) => {
+                          logVerbose(
+                            `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                          );
+                        },
                       },
-                    },
-                  });
-                  replyTokenUsed = nextReplyTokenUsed;
+                    });
+                    replyTokenUsed = nextReplyTokenUsed;
 
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
+                    recordChannelRuntimeState({
+                      channel: "line",
+                      accountId: resolvedAccountId,
+                      state: {
+                        lastOutboundAt: Date.now(),
+                      },
+                    });
+                  } finally {
+                    stopDeliveryLoading?.();
+                  }
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
@@ -474,6 +481,9 @@ export async function monitorLineProvider(
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
+
+  // One-time quota check on startup (non-blocking)
+  logLineChannelQuota({ cfg: config, accountId: resolvedAccountId }).catch(() => {});
 
   let stopped = false;
   const stopHandler = () => {
