@@ -711,6 +711,7 @@ struct RootTabsSourceGuardTests {
         let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
         let trustSource = try String(contentsOf: Self.gatewayTrustPromptAlertSourceURL(), encoding: .utf8)
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -728,8 +729,15 @@ struct RootTabsSourceGuardTests {
         #expect(sectionsSource.contains("Task { await self.applySetupCodeAndConnect() }"))
         #expect(sectionsSource.contains("Task { await self.connect(gateway) }"))
         #expect(sectionsSource.contains("tailnetWarningText"))
-        #expect(sectionsSource.contains("GatewayProblemBanner("))
-        #expect(sectionsSource.contains("Task { await self.handleGatewayProblemPrimaryAction(problem) }"))
+        // Gateway problems surface once, as the root toast; the settings page must not
+        // embed a second copy of the banner.
+        #expect(!sectionsSource.contains("GatewayProblemBanner("))
+        #expect(rootSource.contains("GatewayProblemBanner("))
+        #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
+        // Every problem report re-surfaces a swiped-away toast or shakes the
+        // visible one; value equality alone must not keep the toast hidden.
+        #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
+        #expect(rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
@@ -741,12 +749,16 @@ struct RootTabsSourceGuardTests {
         #expect(controllerSource.contains("Check Tailscale or LAN."))
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
         #expect(actionsSource.contains("Run /pair approve in your OpenClaw chat"))
-        #expect(actionsSource.contains("self.resetOnboarding()"))
-        #expect(actionsSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
-        #expect(actionsSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
-        #expect(actionsSource.contains("await self.retryGatewayConnectionFromProblem()"))
+        #expect(settingsSource.contains("self.resetOnboarding()"))
+        // The root toast is the only gateway problem surface outside covers, so it
+        // must keep the reset-onboarding primary action the settings banner had.
+        #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
+        #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
+        #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
+        #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
+        #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
-        #expect(settingsSource.contains("GatewayProblemDetailsSheet("))
+        #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(settingsSource.contains("QRScannerView("))
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
@@ -790,9 +802,6 @@ struct RootTabsSourceGuardTests {
         #expect(supportSource.contains("self.stateSection(\"Loading\")"))
         #expect(supportSource.contains("self.stateSection(\"Empty\")"))
         #expect(supportSource.contains("self.stateSection(\"Error\")"))
-        #expect(supportSource.contains("GatewayProblemBanner("))
-        #expect(supportSource.contains("kind: .pairingRequired"))
-        #expect(supportSource.contains("Run /pair approve in your OpenClaw chat"))
         #expect(supportSource.contains("Tailscale is off on this device. Turn it on, then try again."))
         #expect(supportSource.contains("self.previewButton(\"Scan QR\""))
         #expect(supportSource.contains("self.previewButton(\"Connect\""))
