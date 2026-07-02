@@ -1,9 +1,11 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 // Whatsapp tests cover socket timing plugin behavior.
+import type { AnyMessageContent, WAMessage } from "baileys";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
   WhatsAppSocketOperationTimeoutError,
+  createWhatsAppSocketOperationTimeoutAdapter,
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
@@ -113,5 +115,47 @@ describe("withWhatsAppSocketOperationTimeout", () => {
     );
     await expect(bounded).resolves.toBe("read");
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
+  it("serializes sendMessage calls across adapter instances for the same socket", async () => {
+    const started: string[] = [];
+    const resolves: Array<(value: WAMessage) => void> = [];
+    const sock = {
+      sendMessage: vi.fn(
+        async (jid: string, content: AnyMessageContent): Promise<WAMessage | undefined> =>
+          await new Promise((resolve) => {
+            const text =
+              typeof content === "object" && content && "text" in content ? content.text : "";
+            started.push(`${jid}:${text}`);
+            resolves.push(resolve);
+          }),
+      ),
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+
+    const first = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000).sendMessage(
+      "111@s.whatsapp.net",
+      { text: "first" },
+    );
+    await vi.waitFor(() => expect(started).toEqual(["111@s.whatsapp.net:first"]));
+
+    const second = createWhatsAppSocketOperationTimeoutAdapter(sock, 30_000).sendMessage(
+      "222@s.whatsapp.net",
+      { text: "second" },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["111@s.whatsapp.net:first"]);
+
+    resolves[0]?.({ key: { id: "msg-1" } } as WAMessage);
+    await expect(first).resolves.toMatchObject({ key: { id: "msg-1" } });
+    await vi.waitFor(() =>
+      expect(started).toEqual(["111@s.whatsapp.net:first", "222@s.whatsapp.net:second"]),
+    );
+
+    resolves[1]?.({ key: { id: "msg-2" } } as WAMessage);
+    await expect(second).resolves.toMatchObject({ key: { id: "msg-2" } });
   });
 });

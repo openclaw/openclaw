@@ -27,6 +27,8 @@ type WhatsAppSocketOperationTimeoutHooks = {
   onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
 };
 
+const socketSendMessageQueueTails = new WeakMap<WhatsAppSocketOperationAdapter, Promise<void>>();
+
 export const DEFAULT_WHATSAPP_SOCKET_TIMING: Required<WhatsAppSocketTimingOptions> = {
   keepAliveIntervalMs: 25_000,
   connectTimeoutMs: 60_000,
@@ -80,6 +82,27 @@ export function resolveWhatsAppSocketOperationTimeoutMs(timeoutMs: number): numb
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
 }
 
+async function runSerializedSocketSendMessage<T>(
+  sock: WhatsAppSocketOperationAdapter,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = socketSendMessageQueueTails.get(sock) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  socketSendMessageQueueTails.set(sock, current);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (socketSendMessageQueueTails.get(sock) === current) {
+      socketSendMessageQueueTails.delete(sock);
+    }
+  }
+}
+
 export async function withWhatsAppSocketOperationTimeout<T>(
   operation: string,
   promise: Promise<T>,
@@ -114,17 +137,19 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   return {
     sendMessage: (jid, content, options) => {
-      const send = options
-        ? sock.sendMessage(jid, content, options)
-        : sock.sendMessage(jid, content);
-      return withWhatsAppSocketOperationTimeout(
-        "sendMessage",
-        send,
-        operationTimeoutMs,
-        hooks?.onSendMessageTimeout
-          ? () => hooks.onSendMessageTimeout?.({ jid, promise: send })
-          : undefined,
-      );
+      return runSerializedSocketSendMessage(sock, () => {
+        const send = options
+          ? sock.sendMessage(jid, content, options)
+          : sock.sendMessage(jid, content);
+        return withWhatsAppSocketOperationTimeout(
+          "sendMessage",
+          send,
+          operationTimeoutMs,
+          hooks?.onSendMessageTimeout
+            ? () => hooks.onSendMessageTimeout?.({ jid, promise: send })
+            : undefined,
+        );
+      });
     },
     sendPresenceUpdate: (presence, jid) => {
       const send =
