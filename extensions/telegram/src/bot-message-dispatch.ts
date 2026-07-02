@@ -1951,27 +1951,22 @@ export const dispatchTelegramMessage = async ({
       }
       await sendPayload({ text: line }, { durable: true });
     };
-    // Collapse the progress window into the summary bar. ONE deterministic path
-    // for every mode (off-off, stream-off, on-off tool-progress-only): edit the
-    // live window message IN PLACE into the bar (no delete — deleting scroll-
-    // jumps the Telegram client). Only when there is genuinely no live window
-    // message (rv mode never rendered a message) is the bar posted durably, and
-    // even then NOTHING is deleted. Returns "edited" | "posted" | "none" so the
-    // caller resets lane state without ever falling back to a bare clear() when
-    // a bar exists. finalizeToPreview settles pending previews first, so a
-    // still-pending tool-progress window is materialized and edited rather than
-    // missed (the on-off inconsistency).
-    const collapseProgressWindowIntoSummary = async (): Promise<"edited" | "posted" | "none"> => {
-      const line = resolveProgressCollapseSummaryLine();
-      if (!line) {
-        return "none";
-      }
+    // Apply a pre-resolved bar line to the window: edit the live window message
+    // IN PLACE into the bar (no delete — deleting scroll-jumps the client), or
+    // post it durably when there is no live window message to edit. NOTHING is
+    // deleted. Returns "edited" | "posted". The line is snapshotted by the
+    // caller BEFORE the final answer is sent, so the final's own delivery cannot
+    // perturb the counts; the EDIT itself runs AFTER the final so shrinking the
+    // tall window bubble down to one line happens above the anchored viewport
+    // (the final already sits at the bottom) and never drops the final off
+    // screen (the edit-shrink anchor loss). finalizeToPreview settles pending
+    // previews so a still-pending tool-progress window is materialized and
+    // edited rather than missed.
+    const applyProgressCollapseSummary = async (line: string): Promise<"edited" | "posted"> => {
       const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line));
       if (typeof messageId === "number") {
         return "edited";
       }
-      // No live window message existed to edit; still surface the bar, but never
-      // delete (there is nothing on screen to remove).
       await sendPayload({ text: line }, { durable: true });
       return "posted";
     };
@@ -2005,21 +2000,37 @@ export const dispatchTelegramMessage = async ({
       text: string,
     ): Promise<LaneDeliveryResult> => {
       if (payload.isError === true) {
-        // Error finals get no collapse summary (Discord parity); tear down.
+        // Error finals get no collapse summary (Discord parity); tear down, then
+        // deliver the error below.
         progressSummaryDelivered = true;
         await teardownProgressWindow();
-      } else {
-        // Collapse BEFORE resetting lane state (which drops the stream's message
-        // id). "edited"/"posted" keep a bar on screen — reset without delete;
-        // "none" (nothing to summarize) tears the stale window down.
-        const outcome = await collapseProgressWindowIntoSummary();
-        if (outcome === "none") {
-          await teardownProgressWindow();
-        } else {
-          resetAnswerLaneAfterCollapse();
+        const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+        if (!delivered) {
+          return { kind: "skipped" };
         }
+        answerLane.finalized = true;
+        markProgressFinalDelivered();
+        return { kind: "sent" };
       }
+      // Snapshot the bar line BEFORE the final send so the final's own delivery
+      // cannot perturb the counts/timer (and the once-guard fires exactly once).
+      const barLine = resolveProgressCollapseSummaryLine();
+      // Send the final FIRST so it lands at the bottom of the anchored viewport;
+      // THEN collapse the window above it. Editing the tall window down to a
+      // one-line bar after the final is delivered keeps the shrink above the
+      // anchor, so the final never scrolls off screen (edit-shrink anchor loss).
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      // Collapse AFTER the final either way — don't leave a stale window even
+      // when the final skipped/failed. resetAnswerLaneAfterCollapse resets lane
+      // state (clearing `finalized`), so mark the final delivered LAST.
+      if (barLine) {
+        await applyProgressCollapseSummary(barLine);
+        resetAnswerLaneAfterCollapse();
+      } else {
+        // Nothing to summarize (window never rendered / empty counts): tear the
+        // stale window down rather than leaving it above the final.
+        await teardownProgressWindow();
+      }
       if (!delivered) {
         return { kind: "skipped" };
       }

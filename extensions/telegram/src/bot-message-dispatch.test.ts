@@ -2942,8 +2942,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // not delete + repost — Discord parity), so clear() is never called on it.
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    // The final answer then posts fresh below the collapsed bar.
     expectDeliveredReply(0, { text: "Branch is up to date" });
+    // The final answer is SENT before the window collapses into the bar: sending
+    // first keeps the final at the bottom of the anchored viewport, so shrinking
+    // the tall window above it never drops the final off screen.
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    );
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
@@ -2954,6 +2959,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
   }
+
+  it("sends the final answer before collapsing the window into the bar", async () => {
+    // Edit-shrink anchor loss: shrinking the tall window to a one-line bar BEFORE
+    // the final is sent breaks the client's at-bottom follow and drops the final
+    // off screen. The final must be sent FIRST, then the window edited down.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "All done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // Final delivered, then the window edited into the bar — final send precedes
+    // the collapse edit.
+    expectDeliveredReply(0, { text: "All done" });
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    );
+    // The bar counters are snapshotted before the final send, so the count is
+    // stable (one tool call — the final's own delivery does not perturb it).
+    expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("still collapses the window when the final answer send is skipped", async () => {
+    // Failure path: if the final send skips/fails, the window must not be left
+    // stale — it still collapses to the bar (once-guard already consumed).
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    deliverReplies.mockResolvedValue({ delivered: false });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Answer that fails to send" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // The bar still edits the window in place even though the final send failed.
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+  });
 
   it("tallies reasoning bursts and tool calls into the collapse summary", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
