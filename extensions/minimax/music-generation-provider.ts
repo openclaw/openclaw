@@ -68,6 +68,14 @@ function resolveMinimaxMusicBaseUrl(
   }
 }
 
+export function parseMinimaxMusicStreamFrame(json: string): MinimaxMusicStreamFrame {
+  try {
+    return JSON.parse(json) as MinimaxMusicStreamFrame;
+  } catch {
+    throw new Error("MiniMax music generation returned malformed SSE JSON frame.");
+  }
+}
+
 function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
   if (!baseResp || typeof baseResp.status_code !== "number" || baseResp.status_code === 0) {
     return;
@@ -265,7 +273,7 @@ async function readStreamingTrack(
     }
     let frame: MinimaxMusicStreamFrame;
     try {
-      frame = JSON.parse(json) as MinimaxMusicStreamFrame;
+      frame = parseMinimaxMusicStreamFrame(json);
     } catch {
       continue;
     }
