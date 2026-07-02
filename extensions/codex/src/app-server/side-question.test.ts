@@ -1886,6 +1886,33 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(90_000);
   });
 
+  it("uses per-call timeoutSeconds for generic side-thread dynamic tool calls", () => {
+    expect(
+      testing.resolveSideDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          callId: "tool-1",
+          tool: "session_status",
+          arguments: { sessionKey: "current", timeoutSeconds: 2 },
+        },
+        config: {} as never,
+      }),
+    ).toBe(12_000);
+    expect(
+      testing.resolveSideDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          callId: "tool-1",
+          tool: "session_status",
+          arguments: { sessionKey: "current", timeoutMs: 1_500, timeoutSeconds: 2 },
+        },
+        config: {} as never,
+      }),
+    ).toBe(1_500);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {

@@ -102,6 +102,7 @@ import {
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 10_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
@@ -898,7 +899,14 @@ function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number 
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+  const timeoutMs = readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+  if (timeoutMs !== undefined) {
+    return timeoutMs;
+  }
+  const timeoutSecondsMs = readSideTimeoutSecondsAsMs(value.timeoutSeconds);
+  return timeoutSecondsMs === undefined
+    ? undefined
+    : timeoutSecondsMs + CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS;
 }
 
 function readSideImageGenerationModelTimeoutMs(
