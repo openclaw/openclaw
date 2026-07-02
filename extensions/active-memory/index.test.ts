@@ -5401,6 +5401,40 @@ describe("active-memory plugin", () => {
     expect(prependContext).not.toContain("TAILWORD");
   });
 
+  it("keeps the old word boundary when an emoji follows whitespace at the cut", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      maxSummaryChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const retainedWords = `alpha beta ${"c".repeat(26)}`;
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "alpha beta");
+      return {
+        payloads: [
+          {
+            text: `${retainedWords} 🎉TAILWORD`,
+          },
+        ],
+      };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "recall the emoji note whitespace-boundary-check", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prependContext = requirePrependContext(result);
+    expect(prependContext).toContain(`${retainedWords}…`);
+    expect(prependContext).not.toContain("alpha beta…");
+    expect(prependContext).not.toContain("TAILWORD");
+  });
+
   it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {
     await hooks.before_prompt_build(
       { prompt: "is autonomous pickup running?", messages: [] },

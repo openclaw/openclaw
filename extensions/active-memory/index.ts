@@ -2571,18 +2571,20 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
     return ellipsis.slice(0, Math.max(0, maxSummaryChars));
   }
   const contentMaxChars = maxSummaryChars - ellipsis.length;
-  const bounded = sliceUtf16Safe(trimmed, 0, contentMaxChars).trimEnd();
+  const bounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const safeBounded = sliceUtf16Safe(trimmed, 0, contentMaxChars).trimEnd();
   const nextChar = trimmed.charAt(contentMaxChars);
   if (!nextChar || /\s/.test(nextChar)) {
-    return `${bounded}${ellipsis}`;
+    return `${safeBounded}${ellipsis}`;
   }
 
   const lastBoundary = bounded.search(/\s\S*$/);
   if (lastBoundary > 0) {
-    return `${bounded.slice(0, lastBoundary).trimEnd()}${ellipsis}`;
+    const wordBounded = bounded.slice(0, lastBoundary).trimEnd();
+    return `${sliceUtf16Safe(wordBounded, 0).trimEnd()}${ellipsis}`;
   }
 
-  return `${bounded}${ellipsis}`;
+  return `${safeBounded}${ellipsis}`;
 }
 
 function buildMetadata(summary: string | null): string | undefined {
