@@ -3,7 +3,7 @@
   "entries": [
     {
       "kind": "ui-named-argument",
-      "line": 203,
+      "line": 250,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
       "source": "OPENCLAW",
       "surface": "android",
