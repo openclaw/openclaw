@@ -678,15 +678,6 @@ extension SettingsProTab {
             })
     }
 
-    var talkSpeakerphoneBinding: Binding<Bool> {
-        Binding(
-            get: { self.talkSpeakerphoneEnabled },
-            set: { newValue in
-                self.talkSpeakerphoneEnabled = newValue
-                self.appModel.setTalkSpeakerphoneEnabled(newValue)
-            })
-    }
-
     var talkApiKeyStatus: String {
         guard self.appModel.talkMode.gatewayTalkConfigLoaded else { return "Not loaded" }
         return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
@@ -833,14 +824,6 @@ extension SettingsProTab {
         if self.talkEnabled { return "Talk on" }
         if self.voiceWakeEnabled { return "Wake on" }
         return "Off"
-    }
-
-    var talkInputMutedBinding: Binding<Bool> {
-        Binding(
-            get: { self.appModel.talkMode.isInputMuted },
-            set: { muted in
-                self.appModel.setTalkInputMuted(muted)
-            })
     }
 
     var diagnosticsDetail: String {

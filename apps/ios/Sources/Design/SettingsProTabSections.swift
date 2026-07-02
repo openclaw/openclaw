@@ -851,31 +851,11 @@ extension SettingsProTab {
 
     var talkExperienceSettingsCard: some View {
         settingsGroupedCard {
-            self.settingsGroupedRowPadding {
-                Toggle("Talk Mode", isOn: self.$talkEnabled)
-                    .disabled(self.appModel.isAppleReviewDemoModeEnabled)
-                    .onChange(of: self.talkEnabled) { _, enabled in
-                        guard !self.appModel.isAppleReviewDemoModeEnabled else {
-                            self.talkEnabled = false
-                            return
-                        }
-                        self.appModel.setTalkEnabled(enabled)
-                    }
-            }
-            self.settingsGroupedDivider()
             self.settingsNavigationLinkRow(
                 title: "Call Background",
                 value: TalkWallpaperStore.selection().label)
             {
                 TalkBackgroundSettingsView()
-            }
-            self.settingsGroupedDivider()
-            self.settingsGroupedRowPadding {
-                Toggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-            }
-            self.settingsGroupedDivider()
-            self.settingsGroupedRowPadding {
-                Toggle("Mute Microphone", isOn: self.talkInputMutedBinding)
             }
             self.settingsGroupedDivider()
             self.settingsGroupedPickerRow(label: "Languages", selection: self.$talkSpeechLocale) {
