@@ -149,6 +149,27 @@ describe("Discord model picker preference migration", () => {
     ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
   });
 
+  it("skips a malformed legacy thread bindings store instead of crashing doctor", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    // Partial write / editor save with a syntax error -> not valid JSON.
+    await fs.writeFile(sourcePath, '{ "version": 1, "bindings": { , }');
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+    // readEntries is what doctor runs at fix time. Before the guard it threw a
+    // raw SyntaxError that killed the whole bundled migration loop.
+    const entries = plans?.[0]?.readEntries?.() ?? [];
+    expect(entries).toEqual([]);
+  });
+
   it("plans legacy thread bindings JSON import into plugin state", async () => {
     const stateDir = await makeStateDir();
     const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
