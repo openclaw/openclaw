@@ -145,7 +145,7 @@ class WizardSessionPrompter implements WizardPrompter {
     return value;
   }
 
-  async confirm(params: { message: string; initialValue?: boolean }): Promise<boolean> {
+  async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
     const res = await this.prompt({
       type: "confirm",
       message: params.message,

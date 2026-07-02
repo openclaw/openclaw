@@ -21,15 +21,18 @@ struct IPadWorkboardScreen: View {
     @State private var dispatchSummaryText: String?
     @State private var presentedSheet: IPadWorkboardSheet?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void = {})
     {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
     }
@@ -39,6 +42,7 @@ struct IPadWorkboardScreen: View {
             title: "Workboard",
             subtitle: self.currentWorkboardSubtitle,
             headerLeadingAction: self.headerLeadingAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             if self.isCompactWidth {

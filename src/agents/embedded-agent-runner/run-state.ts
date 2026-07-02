@@ -24,6 +24,7 @@ export type EmbeddedAgentQueueHandle = {
   runId?: string;
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
+  isStopped?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;

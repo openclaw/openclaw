@@ -308,6 +308,147 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("treats an accepted child session spawn result as a successful dynamic tool call", async () => {
+    // An accepted sessions_spawn launch carries details.status "accepted" with a
+    // runId + childSessionKey. The launch succeeded (the child session was
+    // accepted), so Codex must see a successful tool call, not an error.
+    // Regression for #96833: "accepted" was missing from the non-error status
+    // allowlist, so the launch was classified as an error and persisted with
+    // isError: true (and reported to Codex as success: false).
+    const onAgentToolResult = vi.fn();
+    const bridge = createBridgeWithToolResult(
+      "sessions_spawn",
+      textToolResult("Accepted: launching child session to scan logs.", {
+        status: "accepted",
+        runId: "run_5f3a9c",
+        childSessionKey: "child-7b21",
+        mode: "run",
+      }),
+    );
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-accepted",
+        namespace: null,
+        tool: "sessions_spawn",
+        arguments: { task: "scan logs" },
+      },
+      { onAgentToolResult },
+    );
+
+    // success: true proves the accepted launch is not classified as an error;
+    // the content assertion proves the tool actually executed (not a denial path).
+    expect(result.success).toBe(true);
+    expect(result.contentItems).toEqual([
+      { type: "inputText", text: "Accepted: launching child session to scan logs." },
+    ]);
+    expect(onAgentToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
+    );
+  });
+
+  it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
+    // Deny symmetry: a genuinely rejected spawn (status "forbidden") must stay an
+    // error so the accepted-status allowlist entry does not over-correct.
+    const bridge = createBridgeWithToolResult(
+      "sessions_spawn",
+      textToolResult("Forbidden: spawn limit reached.", { status: "forbidden" }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-forbidden",
+      namespace: null,
+      tool: "sessions_spawn",
+      arguments: { task: "deploy" },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("treats accepted goal tool statuses (created / updated) as successful dynamic tool calls", async () => {
+    // Same classifier-completeness class as the accepted spawn fix: create_goal /
+    // update_goal return details.status "created" / "updated", reach codex agents
+    // through the dynamic-tool bridge, and must not be classified as errors (#96833).
+    const createdBridge = createBridgeWithToolResult(
+      "create_goal",
+      textToolResult("Goal created.", { status: "created" }),
+    );
+    const createdResult = await createdBridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-created",
+      namespace: null,
+      tool: "create_goal",
+      arguments: { text: "ship the fix" },
+    });
+    expect(createdResult.success).toBe(true);
+
+    const updatedBridge = createBridgeWithToolResult(
+      "update_goal",
+      textToolResult("Goal updated.", { status: "updated" }),
+    );
+    const updatedResult = await updatedBridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-updated",
+      namespace: null,
+      tool: "update_goal",
+      arguments: { status: "completed" },
+    });
+    expect(updatedResult.success).toBe(true);
+  });
+
+  it("treats get_goal read statuses (found / missing) as successful dynamic tool calls", async () => {
+    const onFoundResult = vi.fn();
+    const foundBridge = createBridgeWithToolResult(
+      "get_goal",
+      textToolResult('{\n  "status": "found"\n}', {
+        status: "found",
+        goal: { objective: "ship the fix", status: "active" },
+      }),
+    );
+    const foundResult = await foundBridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-found",
+        namespace: null,
+        tool: "get_goal",
+        arguments: {},
+      },
+      { onAgentToolResult: onFoundResult },
+    );
+    expect(foundResult.success).toBe(true);
+    expect(onFoundResult).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "get_goal", isError: false }),
+    );
+
+    const onMissingResult = vi.fn();
+    const missingBridge = createBridgeWithToolResult(
+      "get_goal",
+      textToolResult('{\n  "status": "missing"\n}', { status: "missing" }),
+    );
+    const missingResult = await missingBridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-missing",
+        namespace: null,
+        tool: "get_goal",
+        arguments: {},
+      },
+      { onAgentToolResult: onMissingResult },
+    );
+    expect(missingResult.success).toBe(true);
+    expect(onMissingResult).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "get_goal", isError: false }),
+    );
+  });
+
   it("keeps available and registered schemas paired with their tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [

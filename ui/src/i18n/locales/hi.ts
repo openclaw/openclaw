@@ -1315,6 +1315,8 @@ export const hi: TranslationMap = {
     settings: "चैट सेटिंग्स",
     thinkingToggle: "सहायक की सोच/कार्य आउटपुट टॉगल करें",
     toolCallsToggle: "टूल कॉल और टूल परिणाम टॉगल करें",
+    commentaryToggle: "Keep commentary after the final answer",
+    commentaryLabel: "Commentary",
     autoScrollMode: "ऑटो-स्क्रॉल मोड",
     autoScrollAlways: "हमेशा",
     autoScrollNearBottom: "नीचे के पास",
@@ -1359,6 +1361,11 @@ export const hi: TranslationMap = {
       retry: "पुनः प्रयास करें",
       retrySend: "भेजने का पुनः प्रयास करें",
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
+    },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
     },
     composer: {
       placeholder: "{name} को संदेश भेजें (भेजने के लिए Enter)",

@@ -95,6 +95,7 @@ import {
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
@@ -279,7 +280,7 @@ export class OpenClawApp extends LitElement {
   @state() activityExpandedIds = new Set<string>();
   @state() activityAutoFollow = true;
   @state() activityAtBottom = true;
-  @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
+  @state() chatStreamSegments: ChatStreamSegment[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
@@ -320,6 +321,11 @@ export class OpenClawApp extends LitElement {
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatMessagesBySession: ChatMessageCache = new Map();
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatReplyTarget: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+  } | null = null;
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
@@ -983,6 +989,10 @@ export class OpenClawApp extends LitElement {
       Boolean(opts?.smooth),
       { source: "manual" },
     );
+  }
+
+  scheduleChatScroll() {
+    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0]);
   }
 
   async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
