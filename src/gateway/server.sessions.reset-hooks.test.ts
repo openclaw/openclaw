@@ -16,6 +16,7 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  threadBindingMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
@@ -215,8 +216,12 @@ async function createFromMainSession(params: { emitCommandHooks?: boolean } = {}
 async function performSessionReset(params: {
   key: string;
   agentId?: string;
-  reason: "new" | "reset";
+  reason: "new" | "reset" | "daily";
   commandSource: string;
+  expectedDailySession?: {
+    sessionId: string;
+    updatedAt: number;
+  };
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
@@ -530,6 +535,50 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(startContext.agentId).toBe("main");
 });
 
+test("scheduled daily reset preserves daily session_end reason and reset before_reset reason", async () => {
+  const { dir } = await createSessionStoreDir();
+  const updatedAt = Date.now() - 86_400_000;
+  const transcriptPath = await writeMainTranscriptSession({
+    dir,
+    sessionId: "sess-daily",
+    content: "hello from daily reset",
+  });
+
+  await updateGatewaySessionStoreForKey("main", (store) => {
+    store["agent:main:main"] = sessionStoreEntry("sess-daily", {
+      sessionFile: transcriptPath,
+      updatedAt,
+      sessionStartedAt: updatedAt,
+    });
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+
+  const reset = await performSessionReset({
+    key: "main",
+    reason: "daily",
+    commandSource: "daily-session-reset-scheduler",
+    expectedDailySession: {
+      sessionId: "sess-daily",
+      updatedAt,
+    },
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+  const [beforeResetEvent] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+  expect(beforeResetEvent.reason).toBe("reset");
+
+  expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+  const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+  expect(endEvent.sessionId).toBe("sess-daily");
+  expect(endEvent.sessionKey).toBe("agent:main:main");
+  expect(endEvent.reason).toBe("daily");
+  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
+});
+
 test("sessions.reset returns unavailable when active run does not stop", async () => {
   const { dir, storePath } = await seedActiveMainSession();
   const waitCallCountAtSnapshotClear: number[] = [];
@@ -609,6 +658,59 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
   expectTranscriptResetEvent({ event, sessionFile: newTranscriptPath, content: "new transcript" });
   expectMainHookContext(context, "sess-new");
+});
+
+test("scheduled daily reset skips cleanup side effects when the row changes after command hooks", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const staleUpdatedAt = Date.now() - 86_400_000;
+  const freshUpdatedAt = Date.now();
+  await writeSingleLineSession(dir, "sess-stale", "stale transcript");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-stale", {
+        updatedAt: staleUpdatedAt,
+      }),
+    },
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-fresh", {
+          updatedAt: freshUpdatedAt,
+        }),
+      },
+    });
+  });
+
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "daily",
+    commandSource: "daily-session-reset-scheduler",
+    expectedDailySession: {
+      sessionId: "sess-stale",
+      updatedAt: staleUpdatedAt,
+    },
+  });
+
+  expect(reset.ok).toBe(false);
+  if (!reset.ok) {
+    expect(reset.error.details).toEqual({ skippedDailyReset: true });
+  }
+  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string; updatedAt?: number }
+  >;
+  expect(store["agent:main:main"]?.sessionId).toBe("sess-fresh");
+  expect(store["agent:main:main"]?.updatedAt).toBe(freshUpdatedAt);
 });
 
 test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {

@@ -166,9 +166,10 @@ Each `sessionKey` points at a current `sessionId` (the transcript file that cont
 Rules of thumb:
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
-- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
+- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **Control UI reconnect resume** can preserve the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. Ordinary stale sends still create a new `sessionId`.
+- **Daily expiry** can be applied by gateway maintenance shortly after the configured `session.reset.atHour` boundary, so stale daily sessions no longer have to wait for inbound traffic to roll over. Provider-owned CLI sessions keep their provider continuity under the implicit daily default; explicit `session.reset` policies and manual `/reset` still cut them.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 
