@@ -313,7 +313,10 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     const agentRequest = gatewayRequest("agent");
     const agentParams = requireRecord(agentRequest.params);
+    expect(agentRequest.scopes).toEqual(["operator.admin"]);
     expect(agentParams.sessionKey).toBe(childSessionKey);
+    expect(agentParams.provider).toBe("openai");
+    expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -349,6 +352,52 @@ describe("spawnSubagentDirect seam flow", () => {
         timeoutMs: expect.any(Number),
       }),
     );
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const agentParams = requireRecord(agentDispatch?.[1]);
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentParams.provider).toBeUndefined();
+    expect(agentParams.model).toBeUndefined();
+    expect(agentOptions.allowInternalModelOverride).toBeUndefined();
+    expect(agentOptions.forceSyntheticClient).toBeUndefined();
+  });
+
+  it("authorizes in-process spawned agent model overrides", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        return { runId: "run-in-process-model" };
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn with explicit model override",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.modelApplied).toBe(true);
+    expect(result.runId).toBe("run-in-process-model");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const agentParams = requireRecord(agentDispatch?.[1]);
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentParams.model).toBe("claude-haiku-4-5");
+    expect(agentParams.provider).toBe("anthropic");
+    expect(agentParams.sessionKey).toBe(result.childSessionKey);
+    expect(agentOptions.allowInternalModelOverride).toBe(true);
+    expect(agentOptions.forceSyntheticClient).toBeUndefined();
+    expect(agentOptions.syntheticScopes).toBeUndefined();
   });
 
   it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
@@ -944,7 +993,6 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
