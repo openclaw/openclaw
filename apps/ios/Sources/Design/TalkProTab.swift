@@ -3,6 +3,8 @@ import SwiftUI
 struct TalkProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
+        TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage(TalkDefaults.wallpaperSelectionKey) private var wallpaperSelectionRaw =
         TalkWallpaperSelection.default.rawValue
     @Environment(\.dismiss) private var dismiss
@@ -125,6 +127,8 @@ struct TalkProTab: View {
                     self.blockingAction
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
                         .padding(.bottom, 40)
+                } else if self.showsCallControls {
+                    self.callControls
                 }
             }
         }
@@ -211,6 +215,84 @@ struct TalkProTab: View {
         !self.isInActiveCall && !self.showsOfflineReconnect &&
             (self.state.primaryAction == .enablePermission || self.state.primaryAction == .waiting || self.state
                 .primaryAction == .openSettings)
+    }
+
+    private var showsCallControls: Bool {
+        self.isInActiveCall && !self.state.isConnecting
+    }
+
+    private var callControls: some View {
+        HStack(spacing: 36) {
+            self.callControlItem(
+                label: self.appModel.talkMode.isInputMuted ? "Mic off" : "Mic on",
+                accessibilityIdentifier: "talk-mute-control")
+            {
+                Button {
+                    self.appModel.setTalkInputMuted(!self.appModel.talkMode.isInputMuted)
+                } label: {
+                    Image(systemName: self.appModel.talkMode.isInputMuted ? "mic.slash.fill" : "mic.fill")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(self.chromeStyle.micButtonForeground)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(self.chromeStyle.micButtonFill))
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Microphone")
+                .accessibilityValue(self.appModel.talkMode.isInputMuted ? "Off" : "On")
+            }
+
+            self.callControlItem(label: "Hang up", accessibilityIdentifier: "talk-hangup-control") {
+                Button(action: self.handleHangUp) {
+                    Image(systemName: "phone.down.fill")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(self.chromeStyle.hangupButtonFill))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Hang up")
+            }
+
+            self.callControlItem(
+                label: self.talkSpeakerphoneEnabled ? "Speaker on" : "Speaker off",
+                accessibilityIdentifier: "talk-speakerphone-control")
+            {
+                Button {
+                    self.appModel.setTalkSpeakerphoneEnabled(!self.talkSpeakerphoneEnabled)
+                } label: {
+                    Image(systemName: self.talkSpeakerphoneEnabled ? "speaker.wave.2.fill" : "speaker.fill")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(self.chromeStyle.speakerButtonFill))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Speakerphone")
+                .accessibilityValue(self.talkSpeakerphoneEnabled ? "On" : "Off")
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 20)
+        .padding(.bottom, 44)
+    }
+
+    private func callControlItem(
+        label: String,
+        accessibilityIdentifier: String,
+        @ViewBuilder control: () -> some View) -> some View
+    {
+        VStack(spacing: 10) {
+            control()
+                .accessibilityIdentifier(accessibilityIdentifier)
+            Text(label)
+                .font(OpenClawProFont.minimum.weight(.medium))
+                .foregroundStyle(self.chromeStyle.dockLabel)
+        }
+        .frame(width: 72)
     }
 
     private var showsWaveform: Bool {
