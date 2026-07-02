@@ -815,6 +815,12 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
+    // Overloaded 429 bodies (e.g. z.ai code 1305, "temporarily overloaded")
+    // are transient server-side overloads, not per-account rate limits.
+    // 503/499 already check overloaded before defaulting; 429 should too.
+    if (messageReason === "overloaded") {
+      return messageClassification;
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -1058,11 +1064,14 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  if (isRateLimitErrorMessage(raw)) {
-    return toReasonClassification("rate_limit");
-  }
+  // Check overloaded BEFORE rate limit: isRateLimitErrorMessage matches the
+  // bare "429" token, so an overloaded-worded 429 body (z.ai code 1305 etc.)
+  // would be misclassified as rate_limit if rate-limit runs first.
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return toReasonClassification("rate_limit");
   }
   if (
     isStructuredServerErrorMessage(raw) &&
