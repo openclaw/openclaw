@@ -988,7 +988,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("does not recover stale model calls without active embedded-run ownership", async () => {
+  it("classifies but does not recover stalled model calls without active embedded run (blocked on #90750)", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
@@ -1008,6 +1008,8 @@ describe("stuck session diagnostics threshold", () => {
         { recoverStuckSession },
       );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      // Only record a model call — no embedded-run marker, simulating a
+      // CLI harness session (e.g. Codex-backed provider).
       markDiagnosticModelStartedForTest({
         sessionId: "s1",
         sessionKey: "main",
@@ -1021,6 +1023,10 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
+    // hasActiveModelCall surfaces the model call for classification, so the
+    // session is visible to diagnostics.  Active-abort recovery still requires
+    // hasActiveEmbeddedRun (live-owner signal) — CLI sessions are classified
+    // but not force-recovered until #90750 cleanup lands.
     expectRecordFields(
       requireRecord(
         events.findLast((event) => event.type === "session.stalled"),

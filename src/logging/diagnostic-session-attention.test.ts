@@ -78,6 +78,7 @@ describe("classifySessionAttention", () => {
       activity: {
         activeWorkKind: "model_call" as const,
         hasActiveEmbeddedRun: true,
+        hasActiveModelCall: true,
         lastProgressAgeMs: 31_000,
       },
       expected: {
@@ -94,6 +95,7 @@ describe("classifySessionAttention", () => {
       activity: {
         activeWorkKind: "model_call" as const,
         hasActiveEmbeddedRun: true,
+        hasActiveModelCall: true,
         lastProgressAgeMs: 60_000,
       },
       expected: {
@@ -127,6 +129,7 @@ describe("classifySessionAttention", () => {
       activity: {
         activeWorkKind: "model_call" as const,
         hasActiveEmbeddedRun: false,
+        hasActiveModelCall: true,
         lastProgressAgeMs: 31_000,
         lastProgressReason: "model_call:started",
       },
@@ -156,12 +159,13 @@ describe("classifySessionAttention", () => {
       },
     },
     {
-      name: "processing session with orphaned activity is not recoverable",
+      name: "processing session with orphaned model activity stays on stalled path (blocked on #90750)",
       state: "processing" as const,
       queueDepth: 1,
       activity: {
         activeWorkKind: "model_call" as const,
         hasActiveEmbeddedRun: false,
+        hasActiveModelCall: true,
         lastProgressAgeMs: 31_000,
       },
       expected: {
