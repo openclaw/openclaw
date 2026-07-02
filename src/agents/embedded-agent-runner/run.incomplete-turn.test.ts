@@ -2756,7 +2756,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("does not retry errored thinking-only turns after side effects", () => {
+  it("retries errored thinking-only turns regardless of static replay metadata (#97877)", () => {
+    // A model call that produced only redacted thinking + zero visible output
+    // must still be retry-eligible even when the agent has side-effect-prone
+    // tool definitions.  The emptiness of the current attempt means no concrete
+    // side effects were produced — the retry is a model resubmission, not a
+    // transcript replay.
     const assistant = {
       role: "assistant",
       stopReason: "error",
@@ -2782,7 +2787,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }),
         assistant,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
