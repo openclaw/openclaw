@@ -15,77 +15,46 @@ struct TalkBackgroundSettingsView: View {
         ZStack {
             OpenClawProBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    ProSectionHeader(title: "Wallpapers", uppercase: false)
+                ProCard(radius: SettingsLayout.cardRadius) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12),
+                        ],
+                        spacing: 12)
+                    {
+                        self.wallpaperOption(
+                            isSelected: self.selection == .default,
+                            preview: AnyView(self.defaultPreview))
+                        {
+                            self.select(.default)
+                        }
 
-                    ProCard(radius: SettingsLayout.cardRadius) {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Choose a wallpaper for the Talk screen. Default gray matches the app background.")
-                                .font(OpenClawProFont.minimum)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            LazyVGrid(
-                                columns: [
-                                    GridItem(.flexible(), spacing: 12),
-                                    GridItem(.flexible(), spacing: 12),
-                                    GridItem(.flexible(), spacing: 12),
-                                ],
-                                spacing: 12)
-                            {
-                                self.wallpaperOption(
-                                    title: TalkWallpaperSelection.default.label,
-                                    isSelected: self.selection == .default,
-                                    preview: AnyView(self.defaultPreview))
-                                {
-                                    self.select(.default)
-                                }
-
-                                self.wallpaperOption(
-                                    title: TalkWallpaperSelection.ocean.label,
-                                    isSelected: self.selection == .ocean,
-                                    preview: AnyView(self.oceanPreview))
-                                {
-                                    self.select(.ocean)
-                                }
-
-                                self.wallpaperOption(
-                                    title: TalkWallpaperSelection.custom.label,
-                                    isSelected: self.selection == .custom,
-                                    preview: AnyView(self.customPreviewView))
-                                {
-                                    if TalkWallpaperStore.hasCustomImage() {
-                                        self.select(.custom)
-                                    } else {
-                                        // Selecting the tile opens the album picker when empty.
-                                    }
-                                }
-                            }
-
-                            HStack(spacing: 12) {
-                                PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
-                                    Label("Choose from album", systemImage: "photo.on.rectangle")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-
-                                Button("Reset to default") {
-                                    self.resetToDefault()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                        self.wallpaperOption(
+                            isSelected: self.selection == .custom,
+                            preview: AnyView(self.customPreviewView))
+                        {
+                            if TalkWallpaperStore.hasCustomImage() {
+                                self.select(.custom)
                             }
                         }
                     }
-                    .padding(.horizontal, OpenClawProMetric.pagePadding)
                 }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
                 .padding(.top, 18)
                 .padding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
         }
         .navigationTitle("Call Background")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Add background")
+            }
+        }
         .toolbar(.hidden, for: .tabBar)
         .onAppear {
             self.customPreview = TalkWallpaperStore.customImage()
@@ -114,19 +83,6 @@ struct TalkBackgroundSettingsView: View {
             .fill(TalkDefaults.defaultWallpaperColor)
     }
 
-    private var oceanPreview: some View {
-        Group {
-            if let image = TalkWallpaperStore.oceanImage() {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Color.secondary.opacity(0.2)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     @ViewBuilder
     private var customPreviewView: some View {
         if let customPreview {
@@ -146,25 +102,18 @@ struct TalkBackgroundSettingsView: View {
     }
 
     private func wallpaperOption(
-        title: String,
         isSelected: Bool,
         preview: AnyView,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
-                preview
-                    .frame(height: 72)
-                    .frame(maxWidth: .infinity)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-                    }
-                Text(title)
-                    .font(OpenClawProFont.minimum.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            preview
+                .frame(height: 72)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                }
         }
         .buttonStyle(.plain)
     }
@@ -172,11 +121,5 @@ struct TalkBackgroundSettingsView: View {
     private func select(_ selection: TalkWallpaperSelection) {
         TalkWallpaperStore.setSelection(selection)
         self.wallpaperSelectionRaw = selection.rawValue
-    }
-
-    private func resetToDefault() {
-        TalkWallpaperStore.clearCustomImage()
-        self.customPreview = nil
-        self.select(.default)
     }
 }
