@@ -73,7 +73,7 @@ describe("ensureCustomApiRegistered", () => {
 
     const provider = getRegisteredTestProvider();
     const stream = provider.stream(
-      { api: "test-custom-api", provider: "custom", id: "m" },
+      { api: "test-custom-api", provider: "custom", id: "m" } as never,
       { messages: [] },
       {},
     );
@@ -90,7 +90,7 @@ describe("ensureCustomApiRegistered", () => {
 
     const provider = getRegisteredTestProvider();
     const stream = provider.stream(
-      { api: "test-custom-api", provider: "custom", id: "m" },
+      { api: "test-custom-api", provider: "custom", id: "m" } as never,
       { messages: [] },
       {},
     );
