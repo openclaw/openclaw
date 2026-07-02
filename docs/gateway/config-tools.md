@@ -546,7 +546,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.timeoutSeconds`: optional per-provider model HTTP request timeout in seconds, including connect, headers, body, and total request abort handling.
     - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
     - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
-    - `models.providers.*.baseUrl`: upstream API base URL.
+    - `models.providers.*.baseUrl`: upstream API base URL. `baseURL` is accepted as a compatibility alias and normalized to `baseUrl`; do not set both spellings.
     - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 
   </Accordion>

@@ -60,7 +60,7 @@ export function isSensitiveUrlQueryParamName(name: string): boolean {
 
 /** True for config paths whose URL values may contain credentials or secret query params. */
 export function isSensitiveUrlConfigPath(path: string): boolean {
-  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
+  if (path.endsWith(".baseUrl") || path.endsWith(".baseURL") || path.endsWith(".httpUrl")) {
     return true;
   }
   if (path.endsWith(".cdpUrl")) {

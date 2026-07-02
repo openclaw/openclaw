@@ -187,6 +187,36 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).not.toContain("alice:secret@");
   });
 
+  it("removes embedded credentials from the baseURL provider alias", () => {
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseURL: "https://alice:secret@example.test/v1",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseURL: "https://alice:secret@example.test/v1",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.baseURL).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
+  });
+
   it("redacts and restores MCP SSE header values from schema hints", () => {
     const hints = buildConfigSchema().uiHints;
     const snapshot = makeSnapshot({

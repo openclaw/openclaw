@@ -519,6 +519,7 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
 const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1).optional(),
+    baseURL: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -538,7 +539,23 @@ const ModelProviderSchema = z
     request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((provider, ctx) => {
+    if (provider.baseUrl !== undefined && provider.baseURL !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["baseURL"],
+        message: "use either baseUrl or baseURL, not both",
+      });
+    }
+  })
+  .transform((provider) => {
+    const { baseURL, ...canonical } = provider;
+    if (baseURL !== undefined && canonical.baseUrl === undefined) {
+      return { ...canonical, baseUrl: baseURL };
+    }
+    return canonical;
+  });
 
 const ModelProvidersSchema = z
   .record(z.string(), ModelProviderSchema)

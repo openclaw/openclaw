@@ -122,6 +122,7 @@ describe("config schema", () => {
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["models.providers.*.baseURL"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
       expect.arrayContaining(["security", "network", "storage"]),
     );
@@ -868,6 +869,47 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
+  });
+
+  it("normalizes models.providers.*.baseURL to baseUrl", () => {
+    const result = OpenClawSchema.parse({
+      models: {
+        providers: {
+          openai: { baseURL: "http://127.0.0.1:11434/v1" },
+        },
+      },
+    });
+    const openai = result.models?.providers?.openai;
+    expect(openai?.baseUrl).toBe("http://127.0.0.1:11434/v1");
+    expect((openai as Record<string, unknown>)?.baseURL).toBeUndefined();
+  });
+
+  it("rejects providers that set both baseUrl and baseURL", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        defaults: {
+          memorySearch: { provider: "openai" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://my-proxy.example.com/v1",
+            baseURL: "http://127.0.0.1:11434/v1",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected config with both baseUrl and baseURL to be rejected");
+    }
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        path: ["models", "providers", "openai", "baseURL"],
+        message: "use either baseUrl or baseURL, not both",
+      }),
+    );
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {

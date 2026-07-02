@@ -239,6 +239,9 @@ export function collectMatchingSchemaPaths(
   } else if (currentSchema instanceof z.ZodIntersection) {
     collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
     collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
+  } else if (currentSchema instanceof z.ZodPipe) {
+    collectMatchingSchemaPaths(currentSchema["_def"].in as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema["_def"].out as z.ZodType, path, matchesPath, paths);
   }
 
   return paths;
@@ -317,6 +320,9 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
   } else if (currentSchema instanceof z.ZodIntersection) {
     mapSensitivePathsMut(currentSchema["_def"].left as z.ZodType, path, hints);
     mapSensitivePathsMut(currentSchema["_def"].right as z.ZodType, path, hints);
+  } else if (currentSchema instanceof z.ZodPipe) {
+    mapSensitivePathsMut(currentSchema["_def"].in as z.ZodType, path, hints);
+    mapSensitivePathsMut(currentSchema["_def"].out as z.ZodType, path, hints);
   }
 }
 
