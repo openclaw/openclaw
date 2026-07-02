@@ -1204,6 +1204,22 @@ export const dispatchTelegramMessage = async ({
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
     return true;
   };
+  // Clears the prior Telegram reasoning preview before rotating the draft stream
+  // onto a new message. Without this, forceNewMessage() drops the previous
+  // streamMessageId before the old preview is deleted, leaving stale reasoning
+  // messages in chat when /reasoning stream splits across segments (issue #80862).
+  const clearReasoningLaneForNewMessage = async () => {
+    if (
+      !reasoningLane.hasStreamedMessage &&
+      typeof reasoningLane.stream?.messageId() !== "number"
+    ) {
+      resetDraftLaneState(reasoningLane);
+      return;
+    }
+    await reasoningLane.stream?.clear();
+    reasoningLane.stream?.forceNewMessage();
+    resetDraftLaneState(reasoningLane);
+  };
   const rotateAnswerLaneAfterQueuedBlocksSettle = async () => {
     if (!rotateAnswerLaneWhenQueuedBlocksSettle || queuedAnswerBlockRotations.length > 0) {
       return false;
@@ -2372,8 +2388,7 @@ export const dispatchTelegramMessage = async ({
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
-                            reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
+                            await clearReasoningLaneForNewMessage();
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload, true);
