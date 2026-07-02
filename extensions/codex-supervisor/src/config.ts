@@ -167,7 +167,12 @@ export function loadCodexSupervisorEndpoints(
     ]);
   }
   if (raw.startsWith("[")) {
-    const parsed = JSON.parse(raw) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${ENDPOINTS_ENV} must be a valid JSON array.`);
+    }
     if (!Array.isArray(parsed)) {
       throw new Error(`${ENDPOINTS_ENV} must be a JSON array`);
     }
