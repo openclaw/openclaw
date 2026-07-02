@@ -195,6 +195,49 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back for explicitly retryable assistant format failures after rotation is exhausted", () => {
+    const assistantError = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "Anthropic",
+      model: "claude-haiku-4-5-20251001",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: `{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking or redacted_thinking blocks in the latest assistant message cannot be modified."}}`,
+      content: [],
+      timestamp: 0,
+    };
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBe("format");
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        allowFormatRetry: true,
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "format",
+    });
+  });
+
   it("falls back after assistant rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({

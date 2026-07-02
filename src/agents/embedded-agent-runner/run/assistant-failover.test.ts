@@ -707,6 +707,28 @@ describe("handleAssistantFailover", () => {
       expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 408 });
     });
 
+    it("throws format FailoverError for structured invalid-request fallback handoff", async () => {
+      const logDecision = vi.fn();
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "fallback_model", reason: "format" },
+          fallbackConfigured: true,
+          failoverReason: "format",
+          billingFailure: false,
+          cloudCodeAssistFormatError: true,
+          lastAssistant: {
+            errorMessage: `{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking or redacted_thinking blocks in the latest assistant message cannot be modified."}}`,
+          } as Params["lastAssistant"],
+          logAssistantFailoverDecision: logDecision,
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("format");
+      expect(err.status).toBe(400);
+      expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 400 });
+    });
+
     it("still throws a FailoverError after the surface_error refactor", async () => {
       const logDecision = vi.fn();
       const outcome = await handleAssistantFailover(

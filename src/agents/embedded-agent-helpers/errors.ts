@@ -595,7 +595,12 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
 }
 
 function isSchemaErrorMessage(raw: string): boolean {
-  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+  if (
+    !raw ||
+    isReplayInvalidErrorMessage(raw) ||
+    isContextOverflowError(raw) ||
+    isStructuredInvalidRequestApiError(raw)
+  ) {
     return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
@@ -1024,6 +1029,11 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
+function isStructuredInvalidRequestApiError(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  return Boolean(type && type.includes("invalid_request"));
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1111,6 +1121,9 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   if (isCloudCodeAssistFormatError(raw)) {
+    return toReasonClassification("format");
+  }
+  if (isStructuredInvalidRequestApiError(raw)) {
     return toReasonClassification("format");
   }
   if (isExactUnknownNoDetailsError(raw)) {
@@ -1765,7 +1778,10 @@ export function isImageSizeError(errorMessage?: string): boolean {
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
+  return (
+    !isImageDimensionErrorMessage(raw) &&
+    (matchesFormatErrorPattern(raw) || isStructuredInvalidRequestApiError(raw))
+  );
 }
 
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {

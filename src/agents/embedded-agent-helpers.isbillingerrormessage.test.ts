@@ -1289,6 +1289,11 @@ describe("classifyFailoverReason provider messages", () => {
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(
       classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking or redacted_thinking blocks in the latest assistant message cannot be modified."}}',
+      ),
+    ).toBe("format");
+    expect(
+      classifyFailoverReason(
         "This model does not support assistant message prefill. The conversation must end with a user message.",
       ),
     ).toBe("format");
@@ -1302,6 +1307,21 @@ describe("classifyFailoverReason provider messages", () => {
         "messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels",
       ),
     ).toBeNull();
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      ),
+    ).toBe("context_overflow");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"invalid api key"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Your account has insufficient quota balance to run this request."}}',
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason("image exceeds 5 MB maximum")).toBeNull();
   });
   it("classifies OpenAI usage limit errors as rate_limit", () => {
