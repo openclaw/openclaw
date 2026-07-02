@@ -42,6 +42,13 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import {
+  hasNonzeroUsage,
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type NormalizedUsage,
+  type UsageLike,
+} from "./usage.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -78,6 +85,67 @@ function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined):
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function preservePendingAssistantUsage(
+  message: AssistantMessage,
+  pendingUsage: NormalizedUsage | undefined,
+): AssistantMessage {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message) || !hasNonzeroUsage(pendingUsage)) {
+    return message;
+  }
+  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
+  if (hasNonzeroUsage(messageUsage)) {
+    return message;
+  }
+
+  // Pending usage resets at each assistant-message boundary, so it belongs to
+  // this final snapshot. Only replace missing/zero usage; provider totals win.
+  const input = pendingUsage.input ?? 0;
+  const output = pendingUsage.output ?? 0;
+  const cacheRead = pendingUsage.cacheRead ?? 0;
+  const cacheWrite = pendingUsage.cacheWrite ?? 0;
+  message.usage = {
+    ...makeZeroUsageSnapshot(),
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
+    ...(pendingUsage.reasoningTokens !== undefined
+      ? { reasoningTokens: pendingUsage.reasoningTokens }
+      : {}),
+  };
+  return message;
+}
+
+export function capturePendingAssistantUsage(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
+): void {
+  const msg = evt.message;
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
+    return;
+  }
+  const assistantRecord =
+    evt.assistantMessageEvent && typeof evt.assistantMessageEvent === "object"
+      ? (evt.assistantMessageEvent as Record<string, unknown>)
+      : undefined;
+  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
+    ctx.recordAssistantUsage(assistantRecord);
+  }
+}
+
+export function resetPendingAssistantUsage(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AgentMessage,
+): void {
+  if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return;
+  }
+  ctx.state.pendingAssistantUsage = undefined;
+  ctx.state.assistantUsageCommitted = false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -627,7 +695,7 @@ export function handleMessageUpdate(
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    ctx.recordAssistantUsage(assistantRecord);
+    capturePendingAssistantUsage(ctx, evt);
     if (evtType === "done" || evtType === "error") {
       ctx.commitAssistantUsage();
     }
@@ -964,7 +1032,7 @@ export function handleMessageEnd(
     return;
   }
 
-  const assistantMessage = msg;
+  const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);

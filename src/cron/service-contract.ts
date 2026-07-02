@@ -12,12 +12,15 @@ import type {
   CronUpdateResult,
   CronWakeMode,
 } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronPayload } from "./types.js";
 
 type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
 /** Result shape for direct/queued cron runs. */
 export type CronServiceRunResult = CronRunResult;
+export type CronServiceRunOptions = {
+  payload?: CronPayload;
+};
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
@@ -29,7 +32,7 @@ export interface CronServiceContract {
   add(input: CronAddInput): Promise<CronAddResult>;
   update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
   remove(id: string): Promise<CronRemoveResult>;
-  run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
+  run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
   readJob(id: string): Promise<CronJob | undefined>;

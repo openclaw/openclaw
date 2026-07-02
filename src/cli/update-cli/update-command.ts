@@ -141,6 +141,11 @@ import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import {
+  hasNativePackageInstallPayload,
+  resolveBundleInstallRecordPayload,
+  validateBundleInstallRecordPayload,
+} from "./plugin-payload-validation.js";
+import {
   convergenceWarningsToOutcomes,
   runPostCorePluginConvergence,
 } from "./post-core-plugin-convergence.js";
@@ -572,6 +577,22 @@ export async function collectMissingPluginInstallPayloads(params: {
     const installPath = resolveUserPath(rawInstallPath, env);
     if (!(await pathExists(installPath))) {
       missing.push({ pluginId, installPath, reason: "missing-package-dir" });
+      continue;
+    }
+    const bundlePayload = resolveBundleInstallRecordPayload({ record, installPath });
+    if (bundlePayload.isBundlePayload) {
+      if (await hasNativePackageInstallPayload(installPath)) {
+        continue;
+      }
+      const bundleFailure = validateBundleInstallRecordPayload({
+        pluginId,
+        installPath,
+        record,
+        bundleFormat: bundlePayload.bundleFormat,
+      });
+      if (bundleFailure) {
+        missing.push({ pluginId, installPath, reason: "missing-package-json" });
+      }
       continue;
     }
     const packageJsonPath = path.join(installPath, "package.json");
