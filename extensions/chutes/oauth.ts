@@ -48,7 +48,7 @@ type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
 
-function parseRedirectUri(redirectUri: string): {
+export function parseRedirectUri(redirectUri: string): {
   hostname: string;
   port: number;
   pathname: string;
@@ -63,9 +63,13 @@ function parseRedirectUri(redirectUri: string): {
       `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
     );
   }
+  const rawPort = url.port ? Number.parseInt(url.port, 10) : 80;
+  if (!Number.isFinite(rawPort) || rawPort < 1 || rawPort > 65535) {
+    throw new Error(`Chutes OAuth redirect URI port must be 1-65535 (got ${url.port ?? "none"})`);
+  }
   return {
     hostname,
-    port: url.port ? Number.parseInt(url.port, 10) : 80,
+    port: rawPort,
     pathname: url.pathname || "/",
   };
 }

@@ -1,6 +1,6 @@
 // Chutes tests cover oauth plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { loginChutes } from "./oauth.js";
+import { loginChutes, parseRedirectUri } from "./oauth.js";
 
 function boundedErrorResponse(
   body: string,
@@ -174,5 +174,37 @@ describe("chutes plugin OAuth", () => {
 
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
+});
+
+describe("parseRedirectUri port bounds", () => {
+  it("accepts default port 80 when no port is specified", () => {
+    const result = parseRedirectUri("http://127.0.0.1/oauth-callback");
+    expect(result.port).toBe(80);
+  });
+
+  it("accepts valid port in range 1-65535", () => {
+    const result = parseRedirectUri("http://127.0.0.1:1456/oauth-callback");
+    expect(result.port).toBe(1456);
+  });
+
+  it("accepts port 65535 (upper bound)", () => {
+    const result = parseRedirectUri("http://127.0.0.1:65535/callback");
+    expect(result.port).toBe(65535);
+  });
+
+  it("accepts port 1 (lower bound)", () => {
+    const result = parseRedirectUri("http://127.0.0.1:1/callback");
+    expect(result.port).toBe(1);
+  });
+
+  it("rejects port 0", () => {
+    expect(() => parseRedirectUri("http://127.0.0.1:0/callback")).toThrow("port must be 1-65535");
+  });
+
+  it("defaults stripped invalid port to 80", () => {
+    // Ports > 65535 are stripped by the WHATWG URL parser
+    const result = parseRedirectUri("http://127.0.0.1:65536/callback");
+    expect(result.port).toBe(80);
   });
 });
