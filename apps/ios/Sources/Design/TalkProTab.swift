@@ -3,6 +3,7 @@ import SwiftUI
 struct TalkProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
         TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
@@ -84,130 +85,110 @@ struct TalkProTab: View {
     }
 
     private var content: some View {
-        ZStack {
-            CommandControlBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    self.header
-                    if let fallbackIssue = self.fallbackIssue {
-                        TalkRuntimeIssueBanner(
-                            issue: fallbackIssue,
-                            onOpenSettings: self.openVoiceSettings,
-                            onShowDetails: {
-                                self.showTalkIssueDetails = true
-                            })
-                            .padding(.horizontal, OpenClawProMetric.pagePadding)
-                    }
-                    self.voiceHeroCard
-                    self.controlBar
+        List {
+            if let fallbackIssue = self.fallbackIssue {
+                Section {
+                    TalkRuntimeIssueBanner(
+                        issue: fallbackIssue,
+                        onOpenSettings: self.openVoiceSettings,
+                        onShowDetails: {
+                            self.showTalkIssueDetails = true
+                        })
                 }
-                .padding(.top, 16)
-                .padding(.bottom, 18)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
+            self.heroSection
+            self.conversationSection
+            self.voiceModeSection
+            self.controlsSection
         }
-        .navigationBarHidden(true)
-    }
-
-    private var header: some View {
-        OpenClawAdaptiveHeaderRow(
-            title: "Talk",
-            subtitle: self.headerSubtitle,
-            titleFont: OpenClawType.display(size: 30, weight: 750, relativeTo: .title1),
-            subtitleFont: OpenClawType.captionMedium,
-            subtitleLineLimit: 1)
-        {
+        .navigationTitle("Talk")
+        .toolbar {
             if let headerLeadingAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
+                }
             }
-        } accessory: {
-            EmptyView()
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var voiceHeroCard: some View {
-        CommandPanel(isProminent: true, padding: 16) {
-            VStack(alignment: .center, spacing: 14) {
-                TalkProOrb(
-                    mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel),
-                    color: self.state.color,
-                    systemImage: self.state.icon)
-                    .frame(height: 132)
+    private var heroSection: some View {
+        Section {
+            VStack(spacing: 16) {
+                TalkSiriWaveView(mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel))
+                    .frame(height: 130)
                     .accessibilityHidden(true)
 
-                VStack(spacing: 5) {
+                VStack(spacing: 4) {
                     Text(self.state.title)
-                        .font(OpenClawType.title3)
+                        .font(.title3.weight(.semibold))
                         .multilineTextAlignment(.center)
                     Text(self.heroSubtitle)
-                        .font(OpenClawType.subheadMedium)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .font(OpenClawType.subheadBold)
+                        .fontWeight(.semibold)
+                        // Match the icon to the label; otherwise the symbol picks up the tint color.
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
                 }
-                .buttonBorderShape(.capsule)
-                .openClawGlassButton(prominent: true, tint: self.state.primaryButtonFill)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(self.state.color)
                 .disabled(self.state.primaryAction == .waiting)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .listRowBackground(Color.clear)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var controlBar: some View {
-        OpenClawGlassControlGroup {
-            HStack(spacing: 12) {
-                self.iconToggle(
-                    title: "Speakerphone",
-                    systemImage: self.talkSpeakerphoneEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                    isOn: self.talkSpeakerphoneBinding,
-                    accessibilityIdentifier: "talk-speakerphone-control")
-                self.iconToggle(
-                    title: "Background listening",
-                    systemImage: self.talkBackgroundEnabled ? "waveform" : "waveform.slash",
-                    isOn: self.$talkBackgroundEnabled,
-                    accessibilityIdentifier: "talk-background-listening-control")
-                Button(action: self.openVoiceSettings) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(OpenClawType.headline)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonBorderShape(.circle)
-                .openClawGlassButton()
-                .accessibilityLabel("Voice & Talk settings")
-                .accessibilityIdentifier("talk-voice-settings-control")
+    private var conversationSection: some View {
+        Section("Conversation") {
+            LabeledContent("Agent", value: self.appModel.chatAgentName)
+            LabeledContent("Session", value: self.appModel.chatSessionKey)
+            LabeledContent("Runtime", value: self.appModel.talkMode.statusText)
+        }
+    }
+
+    private var voiceModeSection: some View {
+        Section("Voice Mode") {
+            LabeledContent("Configured", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+            LabeledContent("Active", value: self.activeModeText)
+            LabeledContent("Transport", value: self.transportText)
+            if let issueText = self.talkIssueText {
+                LabeledContent("Last issue", value: issueText)
             }
+            LabeledContent("Permission", value: self.permissionText)
+            LabeledContent("Speech language", value: self.speechLocaleText)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private func iconToggle(
-        title: String,
-        systemImage: String,
-        isOn: Binding<Bool>,
-        accessibilityIdentifier: String) -> some View
-    {
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            Image(systemName: systemImage)
-                .font(OpenClawType.headline)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 44, height: 44)
+    private var controlsSection: some View {
+        Section("Controls") {
+            Toggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
+                .accessibilityIdentifier("talk-speakerphone-control")
+            Toggle("Background listening", isOn: self.$talkBackgroundEnabled)
+                .accessibilityIdentifier("talk-background-listening-control")
+            Button(action: self.openVoiceSettings) {
+                HStack {
+                    Label("Voice & Talk Settings", systemImage: "slider.horizontal.3")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.forward")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("talk-voice-settings-control")
         }
-        .buttonBorderShape(.circle)
-        .openClawGlassButton(
-            prominent: isOn.wrappedValue,
-            tint: isOn.wrappedValue ? OpenClawBrand.accent : nil)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var gatewayConnected: Bool {
@@ -218,14 +199,6 @@ struct TalkProTab: View {
     private var fallbackIssue: TalkRuntimeIssue? {
         guard self.gatewayConnected else { return nil }
         return self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
-    }
-
-    private var headerSubtitle: String {
-        let mode = self.appModel.talkMode.gatewayTalkVoiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let agent = self.appModel.chatAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if mode.isEmpty || mode == "Not loaded" { return agent.isEmpty ? "Realtime voice" : agent }
-        if agent.isEmpty { return mode }
-        return "\(agent) • \(mode)"
     }
 
     private var heroSubtitle: String {
@@ -240,6 +213,41 @@ struct TalkProTab: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !subtitle.isEmpty { return subtitle }
         return "Routes voice to \(self.appModel.chatAgentName)."
+    }
+
+    private var transportText: String {
+        let provider = self.appModel.talkMode.gatewayTalkProviderLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transport = self.appModel.talkMode.gatewayTalkTransportLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if provider.isEmpty || provider == "Not loaded" { return transport.isEmpty ? "Not loaded" : transport }
+        if transport.isEmpty || transport == "Not loaded" { return provider }
+        return "\(provider) • \(transport)"
+    }
+
+    private var activeModeText: String {
+        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
+        return "\(title) • \(subtitle)"
+    }
+
+    private var talkIssueText: String? {
+        let text = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private var permissionText: String {
+        if let failure = self.appModel.talkMode.gatewayTalkPermissionState.failureMessage {
+            return failure
+        }
+        return self.appModel.talkMode.gatewayTalkPermissionState.statusLabel
+    }
+
+    private var speechLocaleText: String {
+        if self.talkSpeechLocale == TalkSpeechLocale.automaticID { return "Automatic" }
+        return self.talkSpeechLocale
     }
 
     private func alignPersistedTalkState() {
@@ -414,7 +422,7 @@ struct TalkProState: Equatable {
             return OpenClawBrand.warn
         default:
             if !self.isConfigLoaded { return OpenClawBrand.warn }
-            return self.isEnabled ? OpenClawBrand.ok : .secondary
+            return self.isEnabled ? OpenClawBrand.ok : OpenClawBrand.accentHot
         }
     }
 
@@ -453,17 +461,6 @@ struct TalkProState: Equatable {
         }
     }
 
-    var primaryButtonFill: Color {
-        switch self.primaryAction {
-        case .stop:
-            OpenClawBrand.danger
-        case .waiting:
-            OpenClawBrand.warn.opacity(0.72)
-        default:
-            OpenClawBrand.accent
-        }
-    }
-
     var prefersPermissionCopy: Bool {
         switch self.permissionState {
         case .missingScope, .requestingUpgrade, .upgradeRequested, .requestFailed:
@@ -492,137 +489,5 @@ struct TalkProState: Equatable {
             return .indeterminate
         }
         return self.isEnabled ? .indeterminate : .still
-    }
-}
-
-private struct TalkProOrb: View {
-    let mode: TalkProWaveformMode
-    let color: Color
-    let systemImage: String
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
-            ZStack {
-                ForEach(0..<self.ringCount, id: \.self) { ring in
-                    Circle()
-                        .strokeBorder(self.color.opacity(self.ringOpacity(ring)), lineWidth: 1.4)
-                        .scaleEffect(self.ringScale(ring, date: timeline.date))
-                }
-                Circle()
-                    .fill(self.color.opacity(0.13))
-                    .frame(width: 104, height: 104)
-                    .overlay {
-                        Circle()
-                            .strokeBorder(self.color.opacity(0.30), lineWidth: 1)
-                    }
-                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 12)
-                    .frame(width: 92, height: 44)
-                    .opacity(self.showsWaveform ? 1 : 0)
-                Image(systemName: self.systemImage)
-                    .font(OpenClawType.title1)
-                    .foregroundStyle(self.color)
-                    .opacity(self.showsWaveform ? 0.20 : 1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-        }
-    }
-
-    private var ringCount: Int {
-        self.mode == .still ? 0 : 3
-    }
-
-    private var showsWaveform: Bool {
-        self.systemImage == "waveform" || self.systemImage == "mic.fill"
-    }
-
-    private func ringScale(_ ring: Int, date: Date) -> CGFloat {
-        guard !self.reduceMotion else { return CGFloat(1.0 + (Double(ring) * 0.12)) }
-        let base = 0.88 + (Double(ring) * 0.18)
-        let speed = self.mode == .still ? 0.8 : 1.8
-        let phase = date.timeIntervalSinceReferenceDate * speed + Double(ring) * 0.9
-        return CGFloat(base + (sin(phase) * 0.035))
-    }
-
-    private func ringOpacity(_ ring: Int) -> Double {
-        switch self.mode {
-        case .still:
-            0.10 - (Double(ring) * 0.018)
-        default:
-            0.24 - (Double(ring) * 0.045)
-        }
-    }
-}
-
-private struct TalkProWaveform: View {
-    let mode: TalkProWaveformMode
-    let tint: Color
-    let barCount: Int
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
-            HStack(alignment: .center, spacing: 4) {
-                ForEach(0..<self.barCount, id: \.self) { index in
-                    Capsule(style: .continuous)
-                        .fill(self.tint.opacity(self.opacity(for: index)))
-                        .frame(width: 4, height: self.height(for: index, date: timeline.date))
-                }
-            }
-            .frame(maxHeight: .infinity)
-        }
-    }
-
-    private func height(for index: Int, date: Date) -> CGFloat {
-        let minimum = 6.0
-        let maximum = 48.0
-        return CGFloat(minimum + ((maximum - minimum) * self.amplitude(for: index, date: date)))
-    }
-
-    private func opacity(for index: Int) -> Double {
-        switch self.mode {
-        case .still:
-            index == self.barCount / 2 ? 0.64 : 0.30
-        default:
-            0.82
-        }
-    }
-
-    private func amplitude(for index: Int, date: Date) -> Double {
-        if self.reduceMotion {
-            switch self.mode {
-            case let .level(level): return min(max(level, 0.10), 1.0)
-            case .inputSpeech: return 0.72
-            case .speaking: return 0.62
-            case .indeterminate: return 0.34
-            case .still: return 0.18
-            }
-        }
-
-        let t = date.timeIntervalSinceReferenceDate
-        let phase = Double(index) * 0.52
-        switch self.mode {
-        case let .level(level):
-            let clamped = min(max(level, 0), 1)
-            let shaped = 0.12 + (0.88 * clamped)
-            let variation = 0.72 + (0.28 * sin((t * 12.0) + phase))
-            return min(max(shaped * variation, 0.10), 1.0)
-        case .inputSpeech:
-            let primary = 0.5 + (0.5 * sin((t * 14.0) + phase))
-            let secondary = 0.5 + (0.5 * sin((t * 5.0) + (phase * 1.35)))
-            return min(max(0.16 + (0.60 * primary) + (0.24 * secondary), 0.14), 1.0)
-        case .speaking:
-            let wave = 0.5 + (0.5 * sin((t * 7.5) + phase))
-            let secondary = 0.5 + (0.5 * sin((t * 3.0) + (phase * 0.7)))
-            return min(max(0.18 + (0.58 * wave) + (0.24 * secondary), 0.12), 1.0)
-        case .indeterminate:
-            let center = (sin((t * 3.2) + phase) + 1) / 2
-            return 0.16 + (0.42 * center)
-        case .still:
-            return index == self.barCount / 2 ? 0.32 : 0.16
-        }
     }
 }

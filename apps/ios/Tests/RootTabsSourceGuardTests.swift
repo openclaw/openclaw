@@ -280,7 +280,7 @@ struct RootTabsSourceGuardTests {
         let aboutDestination = try Self.extract(
             settingsSource,
             from: "var aboutDestination: some View",
-            to: "func gatewayActionButton(")
+            to: "func toggleCard(")
         let diagnosticsDestination = try Self.extract(
             settingsSource,
             from: "var diagnosticsDestination: some View",

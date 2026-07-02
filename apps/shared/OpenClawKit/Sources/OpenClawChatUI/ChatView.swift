@@ -308,18 +308,6 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let error = self.inlineCleanErrorText {
-            let presentation = self.errorPresentation(for: error)
-            ChatNoticeCard(
-                systemImage: presentation.systemImage,
-                title: presentation.title,
-                message: error,
-                tint: presentation.tint,
-                actionTitle: "Refresh",
-                action: { self.viewModel.refresh() })
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
         ForEach(self.visibleMessages) { msg in
             ChatMessageBubble(
                 message: msg,
@@ -435,8 +423,6 @@ public struct OpenClawChatView: View {
             EmptyView()
         } else if self.showsCleanLoadingPlaceholder {
             EmptyView()
-        } else if self.inlineCleanErrorText != nil {
-            EmptyView()
         } else if let error = self.activeErrorText {
             if self.hasVisibleMessageListContent {
                 EmptyView()
@@ -445,7 +431,7 @@ public struct OpenClawChatView: View {
                 ChatNoticeCard(
                     systemImage: presentation.systemImage,
                     title: presentation.title,
-                    message: error,
+                    message: presentation.message,
                     tint: presentation.tint,
                     actionTitle: "Refresh",
                     action: { self.viewModel.refresh() })
@@ -569,15 +555,18 @@ public struct OpenClawChatView: View {
         #endif
     }
 
-    private func errorPresentation(for error: String) -> (title: String, systemImage: String, tint: Color) {
+    private func errorPresentation(
+        for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
+    {
         let lower = error.lowercased()
         if lower.contains("not connected") || lower.contains("socket") {
-            return ("Disconnected", "wifi.slash", .orange)
+            return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
         }
         if lower.contains("timed out") {
-            return ("Timed out", "clock.badge.exclamationmark", .orange)
+            return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
         }
-        return ("Error", "exclamationmark.triangle.fill", .orange)
+        // Unknown errors: keep the raw text as the description so it stays actionable.
+        return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
     }
 
     private func restoreInitialScrollPosition() {
@@ -827,21 +816,20 @@ private struct ChatAssistantIntroCard: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(OpenClawChatTypography.title3)
-                .foregroundStyle(OpenClawChatTheme.accent)
-                .accessibilityHidden(true)
-
-            Text(self.text)
-                .font(OpenClawChatTypography.title3SemiBold)
-                .foregroundStyle(OpenClawChatTheme.assistantText)
-                .multilineTextAlignment(.leading)
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 4)
-        .frame(maxWidth: 320, alignment: .leading)
-        .padding(.top, 8)
+        // Rendered as a grey assistant bubble so the greeting reads like the
+        // agent's first message, matching the in-conversation bubble style.
+        Text(self.text)
+            .font(.body)
+            .foregroundStyle(OpenClawChatTheme.assistantText)
+            .multilineTextAlignment(.leading)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(OpenClawChatTheme.assistantBubble))
+            .frame(maxWidth: 320, alignment: .leading)
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -872,40 +860,18 @@ private struct ChatNoticeCard: View {
     let action: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Image(systemName: self.systemImage)
-                .font(OpenClawChatTypography.display(size: 19, weight: .semibold, relativeTo: .headline))
-                .foregroundStyle(self.tint)
-                .frame(width: 42, height: 42)
-                .background(self.tint.opacity(0.14), in: Circle())
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(self.title)
-                    .font(OpenClawChatTypography.headline)
-
-                Text(self.message)
-                    .font(OpenClawChatTypography.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
-            }
-
-            Spacer(minLength: 8)
-
+        // Native empty/error state: SwiftUI's standard ContentUnavailableView, not a custom card.
+        ContentUnavailableView {
+            Label(self.title, systemImage: self.systemImage)
+        } description: {
+            Text(self.message)
+        } actions: {
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .controlSize(.large)
             }
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)))
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 7)
     }
 }
 

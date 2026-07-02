@@ -379,25 +379,23 @@ struct OpenClawChatComposer: View {
 
     private var cleanEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 2) {
+            // Bottom-aligned so the paperclip and send/mic stay on the last
+            // text line when the field grows to multiple lines, like iMessage.
+            HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
+                    .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
+                    .padding(.horizontal, 14)
                     .frame(minHeight: self.cleanEditorMinHeight)
+                    .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-composer-surface")
 
-                if let talkControl {
-                    self.compactTalkButton(talkControl)
-                }
-
-                self.sendButton
-                    .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+                self.cleanTrailingControl
+                    .frame(height: self.cleanEditorMinHeight, alignment: .bottom)
             }
-            .padding(.horizontal, 4)
-            .frame(minHeight: self.cleanEditorMinHeight)
-            .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat-composer-surface")
 
             if self.showsConnectionPill {
                 self.connectionPill
@@ -406,6 +404,18 @@ struct OpenClawChatComposer: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
+    }
+
+    /// iMessage-style trailing control: the talk (mic) affordance while the
+    /// draft is empty, swapping to the send button once the user types.
+    @ViewBuilder
+    private var cleanTrailingControl: some View {
+        if !self.viewModel.hasDraftToSend, self.viewModel.pendingRunCount == 0, let talkControl {
+            self.compactTalkButton(talkControl)
+        } else {
+            self.sendButton
+                .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+        }
     }
 
     private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
@@ -444,20 +454,17 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                .font(OpenClawChatTypography.display(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(talkControl.isEnabled ? .white : .secondary)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
+                // Prominent filled circle so the mic reads as the primary action,
+                // mirroring the send button it swaps with once a draft exists.
                 .background {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .fill(self.talkButtonFill(talkControl))
-                    }
-                }
-                .overlay {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
-                    }
+                    Circle()
+                        .fill(talkControl.isEnabled
+                            ? self.talkButtonFill(talkControl)
+                            : AnyShapeStyle(OpenClawChatTheme.accent))
+                        .opacity(talkControl.isGatewayConnected || talkControl.isEnabled ? 1 : 0.4)
                 }
                 .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
                 .contentShape(Rectangle())
@@ -560,10 +567,9 @@ struct OpenClawChatComposer: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .fixedSize(horizontal: false, vertical: true)
-                .submitLabel(.send)
-                .onSubmit {
-                    self.sendDraftIfEnabled()
-                }
+                // iMessage-style: return inserts a newline; sending is the
+                // circle button's job, so keep the standard return key.
+                .submitLabel(.return)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)

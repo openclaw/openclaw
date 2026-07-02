@@ -34,6 +34,7 @@ struct SettingsProTab: View {
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0
+    @State var isShowingAppearanceDialog = false
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
@@ -64,7 +65,6 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
-    @State var isShowingAppearanceDialog = false
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
@@ -119,19 +119,16 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
-        .font(OpenClawType.body)
-        .listStyle(.insetGrouped)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
                 }
             }
-        }
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
         }
     }
 
@@ -304,8 +301,8 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(OpenClawType.title2SemiBold)
-                        .foregroundStyle(OpenClawBrand.accentForeground)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(Color(uiColor: .systemBlue))
                     Text("Enable OpenClaw Hosted Push Relay?")
                         .font(OpenClawType.title3SemiBold)
                     Text(self.message)
@@ -335,7 +332,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .tint(OpenClawBrand.accent)
+        .tint(Color(uiColor: .systemBlue))
         .padding(24)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
