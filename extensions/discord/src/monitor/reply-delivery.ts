@@ -36,7 +36,9 @@ function hasOversizedAttachmentError(error: unknown): boolean {
     const message =
       typeof record.message === "string"
         ? record.message.toLowerCase()
-        : String(record).toLowerCase();
+        : current instanceof Error
+          ? current.message.toLowerCase()
+          : "";
     if (
       message.includes("request entity too large") ||
       (message.includes("payload") && message.includes("too large")) ||

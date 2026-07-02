@@ -4,9 +4,18 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
+type DurableBatchSendResult =
+  | { status: "sent"; results: Array<{ messageId: string; channelId: string }> }
+  | { status: "failed"; error: unknown }
+  | {
+      status: "partial_failed";
+      error: unknown;
+      results: Array<{ messageId: string; channelId: string }>;
+    };
+
 const sendDurableMessageBatchMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    status: "sent" as const,
+  vi.fn<() => Promise<DurableBatchSendResult>>(async () => ({
+    status: "sent",
     results: [{ messageId: "msg-1", channelId: "channel-1" }],
   })),
 );
