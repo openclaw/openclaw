@@ -10,6 +10,24 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
+  it("requires operator.admin for system.execApprovals commands", () => {
+    expect(resolveNodePairApprovalScopes(["system.execApprovals.get"])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+    expect(resolveNodePairApprovalScopes(["system.execApprovals.set"])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+    expect(
+      resolveNodePairApprovalScopes([
+        "system.run",
+        "system.execApprovals.get",
+        "system.execApprovals.set",
+      ]),
+    ).toEqual(["operator.pairing", "operator.admin"]);
+  });
+
   it("requires operator.write for non-exec commands", () => {
     expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual([
       "operator.pairing",
