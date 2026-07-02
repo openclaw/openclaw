@@ -119,7 +119,7 @@ struct ChatProTab: View {
                 self.headerIdentityBadge
             }
         } accessory: {
-            self.connectionPillButton
+            self.connectionStatusButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
         .padding(.bottom, 4)
@@ -197,32 +197,40 @@ struct ChatProTab: View {
     }
 
     @ViewBuilder
-    private var connectionPillButton: some View {
+    private var connectionStatusButton: some View {
         if let openSettings {
             Button(action: openSettings) {
-                self.connectionPill
+                self.connectionStatusIcon
             }
-            .buttonBorderShape(.capsule)
-            .openClawGlassButton()
+            .buttonStyle(.plain)
+            .contentShape(Circle())
             .accessibilityLabel(self.gatewayAccessibilityLabel)
             .accessibilityHint("Opens Settings / Gateway")
             .accessibilityIdentifier("chat-gateway-status")
         } else {
-            self.connectionPill
+            self.connectionStatusIcon
                 .accessibilityLabel(self.gatewayAccessibilityLabel)
         }
     }
 
-    private var connectionPill: some View {
-        HStack(spacing: 6) {
-            ProStatusDot(color: self.gatewayPillColor)
-            Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
-                .font(OpenClawType.captionSemiBold)
-                .lineLimit(1)
+    private var connectionStatusIcon: some View {
+        Image(systemName: self.gatewayStatusSymbol)
+            .font(OpenClawType.subheadSemiBold)
+            .foregroundStyle(self.gatewayPillColor)
+            .frame(width: 44, height: 44)
+    }
+
+    private var gatewayStatusSymbol: String {
+        switch self.gatewayDisplayState {
+        case .connected:
+            self.gatewayConnected ? "checkmark.circle.fill" : "exclamationmark.circle"
+        case .connecting:
+            "arrow.trianglehead.2.clockwise.rotate.90"
+        case .error:
+            "exclamationmark.triangle.fill"
+        case .disconnected:
+            "wifi.slash"
         }
-        .foregroundStyle(self.gatewayPillColor)
-        .padding(.horizontal, 4)
-        .frame(height: 30)
     }
 
     private var gatewayConnected: Bool {

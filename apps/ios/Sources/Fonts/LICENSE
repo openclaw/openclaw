@@ -12,6 +12,15 @@ Copyright 2020 The Plus Jakarta Sans Project Authors
 License: SIL Open Font License 1.1
 Source: https://github.com/tokotype/PlusJakartaSans
 Version: 2.7.1
+Download: https://github.com/tokotype/PlusJakartaSans/releases/tag/v2.7.1
+
+SHA-256 checksums:
+  PlusJakartaSans-Light.ttf:     930b92c1dac0da70cdf90448558ac041cd97daeebc952965ae8b71b8473b7198
+  PlusJakartaSans-Regular.ttf:   6bcfbb10639b8a206b4f8a0a1a29459e7255b1481c95e20d587dd1f1a4b24646
+  PlusJakartaSans-Medium.ttf:    8e60a920af7fcc9d9e2768aaa51c8595a1c72a9ff3da87c216a319023158ebf2
+  PlusJakartaSans-SemiBold.ttf:  de75ddb3917c5a3f2b7d0cd65fcf63795710f2e1fd944199a73a01731e66fd43
+  PlusJakartaSans-Bold.ttf:      14972f80fb151f32fb7129c6ad1893f6dd2a9d8bac30c40508c99e7f289b6682
+  PlusJakartaSans-ExtraBold.ttf: 37f9ae473fd96337e942de37ae34042016853ec2c6fdf2d87e1d93e737041d49
 
 DM Sans
 -------
@@ -20,6 +29,15 @@ Copyright 2014-2022 Jonny Pinhorn
   (https://github.com/googlefonts/dm-fonts)
 License: SIL Open Font License 1.1
 Source: https://github.com/googlefonts/dm-fonts
+Version: 2.100 (variable; static instances extracted)
+Download: https://github.com/googlefonts/dm-fonts/tree/main/ofl/dmsans
+
+SHA-256 checksums:
+  DMSans-Light.ttf:    5c5184ec4b159b71ec6cc8caf304cb0e1e5cfa6d15153738311098d55ee4f3fb
+  DMSans-Regular.ttf:  a95a338942aa357145427be7c963ff691f9fe859c3512d9c0483e1914d57a208
+  DMSans-Italic.ttf:   42d8646461572da4dba94e08372b94c4e4b5fd934508ba567f43d29b905fa51f
+  DMSans-Medium.ttf:   26af1a05d62906ffc3316ee6b4cbaf7ae86a1e607c5b9d89c64ec37f85063fbf
+  DMSans-SemiBold.ttf: 52897fabe96fa9dfe59b52681b57493f6bdce268ca3add5b82d701460ecc100d
 
 JetBrains Mono
 --------------
@@ -28,6 +46,12 @@ Copyright 2020 The JetBrains Mono Project Authors
 License: SIL Open Font License 1.1
 Source: https://github.com/JetBrains/JetBrainsMono
 Version: 2.304
+Download: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304
+
+SHA-256 checksums:
+  JetBrainsMono-Regular.ttf:  a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f
+  JetBrainsMono-Medium.ttf:   31c92d01a8a08528b718a43addf0ad3df0af2ca4b7b3290a452f70f358e14d3d
+  JetBrainsMono-SemiBold.ttf: 1b3bfa1ed5665a4ce3f9feb68d2d4e40e70bf8b4b7d9a3edd418f321b4e166a0
 
 ---
 

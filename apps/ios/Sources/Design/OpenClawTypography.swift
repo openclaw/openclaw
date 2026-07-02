@@ -2,33 +2,103 @@ import SwiftUI
 import UIKit
 
 enum OpenClawType {
-    // Display — Plus Jakarta Sans
-    static let title1 = scaledDisplay(name: Display.extraBold, size: 34, relativeTo: .largeTitle)
-    static let title2 = scaledDisplay(name: Display.bold, size: 28, relativeTo: .title1)
-    static let title3 = scaledDisplay(name: Display.bold, size: 22, relativeTo: .title2)
-    static let headline = scaledDisplay(name: Display.semiBold, size: 17, relativeTo: .headline)
-    // Body — DM Sans
-    static let body = scaledBody(name: Body.regular, size: 17, relativeTo: .body)
-    static let callout = scaledBody(name: Body.regular, size: 16, relativeTo: .callout)
-    static let subhead = scaledBody(name: Body.medium, size: 15, relativeTo: .subheadline)
-    static let subheadSemiBold = scaledDisplay(name: Display.semiBold, size: 15, relativeTo: .subheadline)
-    static let footnote = scaledBody(name: Body.regular, size: 13, relativeTo: .footnote)
-    static let footnoteMedium = scaledBody(name: Body.medium, size: 13, relativeTo: .footnote)
-    static let footnoteSemiBold = scaledBody(name: Body.semiBold, size: 13, relativeTo: .footnote)
-    static let caption = scaledBody(name: Body.regular, size: 12, relativeTo: .caption1)
-    static let captionMedium = scaledBody(name: Body.medium, size: 12, relativeTo: .caption1)
-    static let captionSemiBold = scaledBody(name: Body.semiBold, size: 12, relativeTo: .caption1)
-    static let caption2 = scaledBody(name: Body.regular, size: 11, relativeTo: .caption2)
-    static let caption2Medium = scaledBody(name: Body.medium, size: 11, relativeTo: .caption2)
-    static let caption2SemiBold = scaledBody(name: Body.semiBold, size: 11, relativeTo: .caption2)
-    static let caption2Bold = scaledDisplay(name: Display.bold, size: 11, relativeTo: .caption2)
-    static let title2SemiBold = scaledDisplay(name: Display.semiBold, size: 28, relativeTo: .title1)
+    // MARK: - Display — Plus Jakarta Sans
 
-    // Mono — JetBrains Mono
-    static let mono = scaledMono(name: Mono.regular, size: 14, relativeTo: .body)
-    static let monoSmall = scaledMono(name: Mono.regular, size: 12, relativeTo: .caption1)
-    static let monoFootnote = scaledMono(name: Mono.regular, size: 13, relativeTo: .footnote)
-    static let monoHeadline = scaledMono(name: Mono.medium, size: 17, relativeTo: .headline)
+    static var title1: Font {
+        scaledDisplay(name: Display.extraBold, size: 34, relativeTo: .largeTitle)
+    }
+
+    static var title2: Font {
+        scaledDisplay(name: Display.bold, size: 28, relativeTo: .title1)
+    }
+
+    static var title3: Font {
+        scaledDisplay(name: Display.bold, size: 22, relativeTo: .title2)
+    }
+
+    static var headline: Font {
+        scaledDisplay(name: Display.semiBold, size: 17, relativeTo: .headline)
+    }
+
+    // MARK: - Body — DM Sans
+
+    static var body: Font {
+        scaledBody(name: Body.regular, size: 17, relativeTo: .body)
+    }
+
+    static var callout: Font {
+        scaledBody(name: Body.regular, size: 16, relativeTo: .callout)
+    }
+
+    static var subhead: Font {
+        scaledBody(name: Body.medium, size: 15, relativeTo: .subheadline)
+    }
+
+    static var subheadSemiBold: Font {
+        scaledDisplay(name: Display.semiBold, size: 15, relativeTo: .subheadline)
+    }
+
+    static var footnote: Font {
+        scaledBody(name: Body.regular, size: 13, relativeTo: .footnote)
+    }
+
+    static var footnoteMedium: Font {
+        scaledBody(name: Body.medium, size: 13, relativeTo: .footnote)
+    }
+
+    static var footnoteSemiBold: Font {
+        scaledBody(name: Body.semiBold, size: 13, relativeTo: .footnote)
+    }
+
+    static var caption: Font {
+        scaledBody(name: Body.regular, size: 12, relativeTo: .caption1)
+    }
+
+    static var captionMedium: Font {
+        scaledBody(name: Body.medium, size: 12, relativeTo: .caption1)
+    }
+
+    static var captionSemiBold: Font {
+        scaledBody(name: Body.semiBold, size: 12, relativeTo: .caption1)
+    }
+
+    static var caption2: Font {
+        scaledBody(name: Body.regular, size: 11, relativeTo: .caption2)
+    }
+
+    static var caption2Medium: Font {
+        scaledBody(name: Body.medium, size: 11, relativeTo: .caption2)
+    }
+
+    static var caption2SemiBold: Font {
+        scaledBody(name: Body.semiBold, size: 11, relativeTo: .caption2)
+    }
+
+    static var caption2Bold: Font {
+        scaledDisplay(name: Display.bold, size: 11, relativeTo: .caption2)
+    }
+
+    static var title2SemiBold: Font {
+        scaledDisplay(name: Display.semiBold, size: 28, relativeTo: .title1)
+    }
+
+    // MARK: - Mono — JetBrains Mono
+
+    static var mono: Font {
+        scaledMono(name: Mono.regular, size: 14, relativeTo: .body)
+    }
+
+    static var monoSmall: Font {
+        scaledMono(name: Mono.regular, size: 12, relativeTo: .caption1)
+    }
+
+    static var monoFootnote: Font {
+        scaledMono(name: Mono.regular, size: 13, relativeTo: .footnote)
+    }
+
+    static var monoHeadline: Font {
+        scaledMono(name: Mono.medium, size: 17, relativeTo: .headline)
+    }
 
     /// PostScript names for bundled fonts. Keep aligned with `UIAppFonts` in `project.yml`.
     static let registeredPostScriptNames: [String] = [
