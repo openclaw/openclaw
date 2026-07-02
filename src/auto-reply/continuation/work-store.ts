@@ -382,7 +382,11 @@ function buildFallbackWorkState(work: PendingContinuationWork): PendingWorkState
   };
 }
 
-export function finalizeAnchorPendingWork(sessionKey: string, anchorFinalizedAt: number): number {
+export function finalizeAnchorPendingWork(
+  sessionKey: string,
+  anchorFinalizedAt: number,
+  options: { activeSessionId?: string } = {},
+): number {
   let anchored = 0;
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
     if (
@@ -394,6 +398,12 @@ export function finalizeAnchorPendingWork(sessionKey: string, anchorFinalizedAt:
     }
     const state = decodeWorkState(flow);
     if (!state || state.succeeded || state.anchorPending !== true) {
+      continue;
+    }
+    if (
+      options.activeSessionId !== undefined &&
+      (state.originTurnId === undefined || state.originTurnId === options.activeSessionId)
+    ) {
       continue;
     }
     const {

@@ -2958,6 +2958,35 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     });
   });
 
+  it("anchors pending work from a finalized origin turn even when a later turn is active", async () => {
+    const sessionKey = "agent:main:fold-anchor-successor-active";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now() - 1_000,
+      dueAt: Date.now() + 60_000,
+      maxChainLength: 8,
+      reason: "successor active fold proof",
+      anchorPending: true,
+      originRunId: "run-origin-A",
+      originTurnId: "turn-origin-A",
+    });
+    activeSessions.add(sessionKey);
+
+    await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+
+    expect(activeQueueDeliveries).toHaveLength(1);
+    expect(turnGrants).toHaveLength(0);
+    expect([...mockFlows.values()][0]?.stateJson).toMatchObject({
+      anchorFinalizedAt: 1_000_000,
+      dueAt: 1_000_000,
+      disposition: "folded-active",
+      originTurnId: "turn-origin-A",
+    });
+  });
+
   it("folds Cael-style active body plus +20/+21/+22 delayed rows instead of sequential later turns", async () => {
     const sessionKey = "agent:main:cael-active-overlap";
     mockSessionStore[sessionKey] = { sessionKey };

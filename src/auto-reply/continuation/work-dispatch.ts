@@ -799,8 +799,13 @@ export async function dispatchPendingContinuationWork(params: {
   const recoverRunning = params.recoverRunning === true;
   const { replyRunRegistry } = await importReplyRunRegistry();
   const sessionActive = replyRunRegistry.isActive(params.sessionKey);
+  const activeSessionId = sessionActive
+    ? replyRunRegistry.resolveSessionId(params.sessionKey)
+    : undefined;
   const runningRecoveryBlockedByActiveReply = recoverRunning && sessionActive;
-  if (!sessionActive) {
+  if (activeSessionId) {
+    finalizeAnchorPendingWork(params.sessionKey, Date.now(), { activeSessionId });
+  } else {
     finalizeAnchorPendingWork(params.sessionKey, Date.now());
   }
   const works = consumePendingWork(params.sessionKey, {
