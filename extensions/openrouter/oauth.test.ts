@@ -1,4 +1,6 @@
-// Openrouter OAuth tests cover PKCE exchange and auth profile output.
+// Openrouter OAuth tests cover PKCE exchange and auth profile output,
+// including bounded response enforcement via real HTTP server loopback.
+import * as http from "node:http";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -24,7 +26,10 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
-function boundedTextErrorResponse(body: string, status = 502): {
+function boundedTextErrorResponse(
+  body: string,
+  status = 502,
+): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;
@@ -312,4 +317,95 @@ describe("OpenRouter OAuth", () => {
   it("exposes stable auth choice metadata", () => {
     expect(OPENROUTER_OAUTH_CHOICE_ID).toBe("openrouter-oauth");
   });
+
+  it("rejects oversized API key responses through the default fetch path", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedOAuthResponse()),
+    );
+
+    await expect(
+      exchangeOpenRouterOAuthCode({ code: "AUTHCODE", codeVerifier: "verifier" }),
+    ).rejects.toThrow("OpenRouter OAuth key response exceeds");
+  });
+
+  it("rejects oversized OAuth responses from a real HTTP server (behavior proof)", async () => {
+    // Real TCP server proof: an oversized JSON response is cancelled
+    // mid-flight by the bounded reader before the full body is buffered.
+    let bytesWritten = 0;
+    let socketDestroyed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const ONE_MIB = 1024 * 1024;
+      const chunk = Buffer.alloc(ONE_MIB, 0x41);
+      const writeMore = () => {
+        if (socketDestroyed) {
+          return;
+        }
+        for (let i = 0; i < 4; i++) {
+          if (socketDestroyed) {
+            return;
+          }
+          bytesWritten += chunk.length;
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        if (!socketDestroyed) {
+          setImmediate(writeMore);
+        }
+      };
+      writeMore();
+    });
+    server.on("connection", (socket) => {
+      socket.on("close", () => {
+        socketDestroyed = true;
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as { port: number }).port;
+
+    // Point the OAuth exchange at our local server
+    const realFetch = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        // Rewrite https://openrouter.ai/... → http://127.0.0.1:port/...
+        const parsed = new URL(url);
+        return realFetch(`http://127.0.0.1:${port}${parsed.pathname}`);
+      }),
+    );
+
+    try {
+      await expect(
+        exchangeOpenRouterOAuthCode({ code: "AUTHCODE", codeVerifier: "verifier" }),
+      ).rejects.toThrow("OpenRouter OAuth key response exceeds");
+    } finally {
+      vi.unstubAllGlobals();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 });
+
+function makeOversizedOAuthResponse(): Response {
+  const ONE_MIB = 1024 * 1024;
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= 18) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(chunk);
+      pulled += 1;
+    },
+  });
+  return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+}
