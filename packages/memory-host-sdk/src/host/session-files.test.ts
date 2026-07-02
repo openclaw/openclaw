@@ -824,6 +824,42 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
+  it("does not wipe archive content when [cron:...] appears mid-transcript", async () => {
+    const archivePath = path.join(
+      tmpDir,
+      "agent-cron-reset-98241.jsonl.reset.2026-07-01T00-00-00.000Z",
+    );
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "What is the weather today?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "It is sunny." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] why does the archive vanish?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "This should not be wiped." },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    expect(entry.content).toContain("What is the weather today?");
+    expect(entry.content).toContain("It is sunny.");
+    expect(entry.content).toContain("This should not be wiped.");
+    expect(entry.generatedByCronRun).toBeUndefined();
+  });
+
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
     const jsonlLines = [
       "",
