@@ -1284,14 +1284,17 @@ export async function runSubagentAnnounceFlow(params: {
             if (chainDelayMs && chainDelayMs > 0) {
               const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
               // #1144: route the delayed bracket delegate through the durable
-              // pending-delegate store — same durability class as the
-              // tool-dispatched delayed path — instead of a volatile setTimeout
-              // that a gateway restart before `clampedDelay` elapses would drop.
-              // Enqueue under the requester session (bracket delegates spawn with
-              // agentSessionKey=requester), then drain that session so the shared
-              // hedge timer is armed for the unmatured entry; restart recovery
-              // re-drives it if the process dies first.
-              enqueuePendingDelegate(targetRequesterSessionKey, {
+              // pending-delegate store — the SAME queue and chain-state owner as
+              // the tool-dispatched delayed path — instead of a volatile
+              // setTimeout that a gateway restart before `clampedDelay` elapses
+              // would drop. Enqueue under the CHILD session that emitted the
+              // continuation so the later drain derives hop/cost from the child's
+              // chain state (enqueuing under the requester would reset the hop to
+              // the requester's chain count and bypass maxChainLength /
+              // costCapTokens). The child-queue drain arms the shared hedge timer
+              // for the unmatured entry; restart recovery re-drives it if the
+              // process dies first.
+              enqueuePendingDelegate(params.childSessionKey, {
                 task: chainTask,
                 delayMs: clampedDelay,
                 ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
@@ -1305,11 +1308,12 @@ export async function runSubagentAnnounceFlow(params: {
                 ...(chainSignal.model ? { model: chainSignal.model } : {}),
               });
               void drainChildContinuationQueue({
-                childSessionKey: targetRequesterSessionKey,
+                childSessionKey: params.childSessionKey,
                 requesterOrigin: targetRequesterOrigin,
+                additionalChainTokens: accumulatedChildTokens,
               }).catch((err: unknown) => {
                 defaultRuntime.log(
-                  `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${targetRequesterSessionKey}: ${String(err)}`,
+                  `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
                 );
               });
             } else {

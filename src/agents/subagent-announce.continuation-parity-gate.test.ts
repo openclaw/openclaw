@@ -240,7 +240,9 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
       string,
       { task: string; delayMs?: number },
     ];
-    expect(enqueueSession).toBe(requesterSessionKey);
+    // Enqueued under the CHILD session so the later drain uses the child's chain
+    // state (hop/cost), not reset to the requester's (#1144).
+    expect(enqueueSession).toBe(childSessionKey);
     expect(enqueued.task).toBe("continue after delay");
     // +30s is consumed by the parser, not included in the task body
     expect(enqueued.task).not.toContain("+30s");

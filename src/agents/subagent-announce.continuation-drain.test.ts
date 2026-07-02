@@ -968,15 +968,15 @@ describe("subagent-announce continuation drain (F7)", () => {
       roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
     });
 
-    // The delayed bracket delegate is persisted under the requester session
-    // (bracket delegates spawn with agentSessionKey=requester) with its delay —
-    // it survives a restart before the delay elapses.
+    // The delayed bracket delegate is persisted under the CHILD session (same
+    // queue + chain-state owner as tool delegates) with its delay — it survives
+    // a restart before the delay elapses and preserves the child's hop/cost.
     expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
     const [enqueueSessionKey, enqueued] = enqueuePendingDelegateMock.mock.calls[0] as [
       string,
       { task: string; delayMs?: number },
     ];
-    expect(enqueueSessionKey).toBe("agent:main:main");
+    expect(enqueueSessionKey).toBe("agent:main:subagent:bracket");
     expect(enqueued.task).toBe("keep working");
     expect(enqueued.delayMs).toBe(30_000);
 
