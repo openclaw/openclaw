@@ -93,7 +93,7 @@ deepinfra/zai-org/GLM-5.1
 - Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/Qwen/Qwen3-Max`).
 - Default model: `deepinfra/deepseek-ai/DeepSeek-V4-Flash`
 - Base URL: `https://api.deepinfra.com/v1/openai`
-- Native video generation uses `https://api.deepinfra.com/v1/inference/<model>`.
+- Video generation uses the OpenAI-compatible async endpoint `https://api.deepinfra.com/v1/openai/videos` (submit, then poll). A configured `baseUrl` (or legacy `nativeBaseUrl`) is honored; a legacy `/v1/inference` base is remapped to the OpenAI surface.
 
 ## Related
 

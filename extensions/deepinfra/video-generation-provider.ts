@@ -5,12 +5,14 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
+  pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  resolveProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  asFiniteNumber,
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,7 +22,7 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
-  DEEPINFRA_NATIVE_BASE_URL,
+  DEEPINFRA_BASE_URL,
   DEEPINFRA_VIDEO_ASPECT_RATIOS,
   DEEPINFRA_VIDEO_DURATIONS,
   DEEPINFRA_VIDEO_FALLBACK_MODELS,
@@ -30,39 +32,22 @@ import {
 import type { DeepInfraSurfaceModel } from "./provider-models.js";
 import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
-type DeepInfraVideoStatus = {
-  status?: string;
-  runtime_ms?: number;
+// Per-poll request budget; the total operation budget comes from req.timeoutMs.
+const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
+const POLL_INTERVAL_MS = 5_000;
+const MAX_POLL_ATTEMPTS = 120;
+
+// /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
+// job leaves the queue. Mirrors the OpenAI Sora surface (extensions/openai).
+type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
+
+type DeepInfraVideoJob = {
+  id?: string;
+  status?: DeepInfraVideoStatus;
+  model?: string | null;
+  data?: Array<{ url?: unknown } | null> | null;
+  error?: string | null;
 };
-
-type DeepInfraVideoResponse = {
-  video_url?: string;
-  video?: string;
-  videos?: Array<string | { url?: string; video_url?: string }>;
-  status?: string;
-  seed?: number;
-  request_id?: string;
-  inference_status?: DeepInfraVideoStatus;
-};
-
-function encodeDeepInfraModelPath(model: string): string {
-  return model.split("/").map(encodeURIComponent).join("/");
-}
-
-function resolveDeepInfraNativeBaseUrl(req: VideoGenerationRequest): string {
-  const providerConfig = req.cfg?.models?.providers?.deepinfra as
-    | (Record<string, unknown> & { baseUrl?: unknown })
-    | undefined;
-  const nativeBaseUrl = normalizeOptionalString(providerConfig?.nativeBaseUrl);
-  if (nativeBaseUrl) {
-    return normalizeDeepInfraBaseUrl(nativeBaseUrl, DEEPINFRA_NATIVE_BASE_URL);
-  }
-  const configuredBaseUrl = normalizeOptionalString(providerConfig?.baseUrl);
-  if (configuredBaseUrl?.includes("/v1/inference")) {
-    return normalizeDeepInfraBaseUrl(configuredBaseUrl, DEEPINFRA_NATIVE_BASE_URL);
-  }
-  return DEEPINFRA_NATIVE_BASE_URL;
-}
 
 function normalizeDeepInfraVideoUrl(url: string): string {
   if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
@@ -106,6 +91,7 @@ function buildDeepInfraVideoBody(
 ): Record<string, unknown> {
   const options = req.providerOptions ?? {};
   const body: Record<string, unknown> = {
+    model,
     prompt: req.prompt,
   };
   const aspectRatio = normalizeOptionalString(req.aspectRatio);
@@ -114,7 +100,8 @@ function buildDeepInfraVideoBody(
   }
   const duration = resolveDurationSeconds(req.durationSeconds);
   if (duration) {
-    body.duration = duration;
+    // /v1/openai/videos names the duration field `seconds` (VideoGenerationIn).
+    body.seconds = duration;
   }
   const seed = resolveSeed(options.seed);
   if (seed != null) {
@@ -130,25 +117,12 @@ function buildDeepInfraVideoBody(
   if (style) {
     body.style = style;
   }
-  const guidanceScale =
-    asFiniteNumber(options.guidance_scale) ?? asFiniteNumber(options.guidanceScale);
-  if (guidanceScale != null && model.startsWith("Wan-AI/")) {
-    body.guidance_scale = guidanceScale;
-  }
   return body;
 }
 
-function firstDeepInfraVideoUrl(payload: DeepInfraVideoResponse): string | undefined {
-  const direct =
-    normalizeOptionalString(payload.video_url) ?? normalizeOptionalString(payload.video);
-  if (direct) {
-    return direct;
-  }
-  for (const entry of payload.videos ?? []) {
-    const videoUrl =
-      typeof entry === "string"
-        ? normalizeOptionalString(entry)
-        : (normalizeOptionalString(entry.url) ?? normalizeOptionalString(entry.video_url));
+function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
+  for (const entry of job.data ?? []) {
+    const videoUrl = entry ? normalizeOptionalString((entry as { url?: unknown }).url) : undefined;
     if (videoUrl) {
       return videoUrl;
     }
@@ -156,12 +130,13 @@ function firstDeepInfraVideoUrl(payload: DeepInfraVideoResponse): string | undef
   return undefined;
 }
 
-function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedVideoAsset {
-  const videoUrl = firstDeepInfraVideoUrl(payload);
+function extractDeepInfraVideoAsset(job: DeepInfraVideoJob): GeneratedVideoAsset {
+  const videoUrl = firstDeepInfraVideoUrl(job);
   if (!videoUrl) {
     throw new Error("DeepInfra video response missing video URL");
   }
   const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl);
+  // Some models return the MP4 inline as a data: URL, others a hosted https URL.
   const dataAsset = parseVideoDataUrl(normalizedUrl);
   if (dataAsset) {
     return dataAsset;
@@ -173,15 +148,19 @@ function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedV
   };
 }
 
-function failureMessage(payload: DeepInfraVideoResponse): string | undefined {
-  const status = (
-    normalizeOptionalString(payload.inference_status?.status) ??
-    normalizeOptionalString(payload.status)
-  )?.toLowerCase();
-  if (status === "failed" || status === "error") {
-    return "DeepInfra video generation failed";
-  }
-  return undefined;
+function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
+  const providerConfig = req.cfg?.models?.providers?.deepinfra as
+    | (Record<string, unknown> & { baseUrl?: unknown })
+    | undefined;
+  // Honor a shipped override (`nativeBaseUrl`/`baseUrl`); the videos endpoint is
+  // OpenAI-based, so a legacy `/v1/inference` override is remapped to `/v1/openai`.
+  const override =
+    normalizeOptionalString(providerConfig?.nativeBaseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  return normalizeDeepInfraBaseUrl(override, DEEPINFRA_BASE_URL).replace(
+    /\/v1\/inference\b/u,
+    "/v1/openai",
+  );
 }
 
 // First entry of videoGenModels is the default; rest fill the allowlist.
@@ -216,8 +195,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           negative_prompt: "string",
           negativePrompt: "string",
           style: "string",
-          guidance_scale: "number",
-          guidanceScale: "number",
         },
       },
       imageToVideo: {
@@ -245,11 +222,14 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       }
 
       const model = normalizeDeepInfraModelRef(req.model, defaultModel);
-      const resolvedBaseUrl = resolveDeepInfraNativeBaseUrl(req);
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "DeepInfra video generation",
+      });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolvedBaseUrl,
-          defaultBaseUrl: DEEPINFRA_NATIVE_BASE_URL,
+          baseUrl: resolveDeepInfraVideoBaseUrl(req),
+          defaultBaseUrl: DEEPINFRA_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
@@ -261,37 +241,68 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         });
 
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/${encodeDeepInfraModelPath(model)}`,
+        url: `${baseUrl}/videos`,
         headers,
         body: buildDeepInfraVideoBody(req, model),
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        }),
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
       });
+      let submitted: DeepInfraVideoJob;
       try {
         await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        const payload = await readProviderJsonResponse<DeepInfraVideoResponse>(
+        submitted = await readProviderJsonResponse<DeepInfraVideoJob>(
           response,
           "DeepInfra video generation failed",
         );
-        const failed = failureMessage(payload);
-        if (failed) {
-          throw new Error(failed);
-        }
-        const video = extractDeepInfraVideoAsset(payload);
-        return {
-          videos: [video],
-          model,
-          metadata: {
-            requestId: normalizeOptionalString(payload.request_id),
-            seed: resolveSeed(payload.seed),
-            status: payload.inference_status?.status ?? payload.status,
-          },
-        };
       } finally {
         await release();
       }
+
+      const jobId = normalizeOptionalString(submitted.id);
+      if (!jobId) {
+        throw new Error("DeepInfra video generation response missing job id");
+      }
+      if (submitted.status === "failed") {
+        throw new Error(normalizeOptionalString(submitted.error) ?? "DeepInfra video generation failed");
+      }
+
+      const completed =
+        submitted.status === "succeeded"
+          ? submitted
+          : await pollProviderOperationJson<DeepInfraVideoJob>({
+              url: `${baseUrl}/videos/${encodeURIComponent(jobId)}`,
+              headers,
+              deadline,
+              defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+              fetchFn: fetch,
+              maxAttempts: MAX_POLL_ATTEMPTS,
+              pollIntervalMs: POLL_INTERVAL_MS,
+              requestFailedMessage: "DeepInfra video status request failed",
+              timeoutMessage: `DeepInfra video generation job ${jobId} did not finish in time`,
+              allowPrivateNetwork,
+              dispatcherPolicy,
+              auditContext: "deepinfra-video-status",
+              isComplete: (payload) => payload.status === "succeeded",
+              getFailureMessage: (payload) =>
+                payload.status === "failed"
+                  ? (normalizeOptionalString(payload.error) ?? "DeepInfra video generation failed")
+                  : undefined,
+            });
+
+      const video = extractDeepInfraVideoAsset(completed);
+      return {
+        videos: [video],
+        model: normalizeOptionalString(completed.model) ?? model,
+        metadata: {
+          jobId,
+          status: completed.status,
+        },
+      };
     },
   };
 }
