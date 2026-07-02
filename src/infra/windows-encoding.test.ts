@@ -14,6 +14,34 @@ describe("windows output encoding", () => {
     expect(parseWindowsCodePage("no code page")).toBeNull();
   });
 
+  describe("parseWindowsCodePage", () => {
+    it("returns null for empty or whitespace-only input", () => {
+      expect(parseWindowsCodePage("")).toBeNull();
+      expect(parseWindowsCodePage("   ")).toBeNull();
+    });
+
+    it("rejects 1-2 digit numbers that are too short for a valid code page", () => {
+      expect(parseWindowsCodePage("Active code page: 0")).toBeNull();
+      expect(parseWindowsCodePage("Active code page: 12")).toBeNull();
+    });
+
+    it("accepts valid 3-5 digit code pages at the boundaries", () => {
+      expect(parseWindowsCodePage("Active code page: 437")).toBe(437);
+      expect(parseWindowsCodePage("Active code page: 54936")).toBe(54936);
+    });
+
+    it("extracts the first 3-5 digit number from multi-line text", () => {
+      expect(parseWindowsCodePage("line1\nActive code page: 936\nline3")).toBe(936);
+      expect(parseWindowsCodePage("error line\nActive code page: 1252\nsome error")).toBe(1252);
+    });
+
+    it("returns null when no 3-5 digit number is present", () => {
+      expect(parseWindowsCodePage("Active code page:")).toBeNull();
+      expect(parseWindowsCodePage("some text without numbers")).toBeNull();
+      expect(parseWindowsCodePage("1234567")).toBeNull(); // 6+ digits won't match
+    });
+  });
+
   it("decodes GBK output on Windows when UTF-8 is invalid and code page is known", () => {
     const raw = Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]);
 
