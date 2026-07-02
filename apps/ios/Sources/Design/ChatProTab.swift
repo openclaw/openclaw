@@ -79,7 +79,6 @@ struct ChatProTab: View {
                         composerChrome: .clean,
                         isComposerEnabled: self.gatewayConnected,
                         messagePlaceholder: self.messagePlaceholder,
-                        emptyAssistantIntro: "What would you like to work on?",
                         talkControl: self.talkControl)
                         .id(ObjectIdentifier(viewModel))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -87,9 +86,9 @@ struct ChatProTab: View {
                     ProCard {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Chat is preparing")
-                                .font(.headline)
+                                .font(OpenClawType.headline)
                             Text("The operator session will attach when the gateway is ready.")
-                                .font(.subheadline)
+                                .font(OpenClawType.subhead)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -108,8 +107,8 @@ struct ChatProTab: View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerDisplayTitle,
             subtitle: self.headerDisplaySubtitle,
-            titleFont: .headline.weight(.semibold),
-            subtitleFont: .caption,
+            titleFont: OpenClawType.headline,
+            subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
             HStack(spacing: 11) {
@@ -119,25 +118,26 @@ struct ChatProTab: View {
                 self.headerIdentityBadge
             }
         } accessory: {
-            self.connectionStatusButton
+            self.connectionPillButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.bottom, 2)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
     private var headerIdentityBadge: some View {
         if self.showsAgentBadge {
             Text(self.agentBadge)
-                .font(.system(size: self.agentBadge.count > 2 ? 11 : 14, weight: .bold, design: .rounded))
+                .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
-                .frame(width: 32, height: 32)
+                .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(OpenClawBrand.accent))
+                        .fill(OpenClawBrand.accent.gradient))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                .shadow(color: OpenClawBrand.accent.opacity(0.14), radius: 5, y: 2)
         } else {
             ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
@@ -196,44 +196,29 @@ struct ChatProTab: View {
     }
 
     @ViewBuilder
-    private var connectionStatusButton: some View {
+    private var connectionPillButton: some View {
         if let openSettings {
             Button(action: openSettings) {
-                self.connectionStatusIcon
+                self.connectionPill
             }
-            .buttonStyle(.plain)
-            .contentShape(Circle())
-            .accessibilityLabel(self.gatewayAccessibilityLabel)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
-            .accessibilityIdentifier("chat-gateway-status")
         } else {
-            self.connectionStatusIcon
-                .accessibilityLabel(self.gatewayAccessibilityLabel)
+            self.connectionPill
         }
     }
 
-    private var connectionStatusIcon: some View {
-        Image(systemName: self.gatewayStatusSymbol)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(self.gatewayPillColor)
-            .frame(width: 44, height: 44)
-    }
-
-    private var gatewayStatusSymbol: String {
-        switch self.gatewayDisplayState {
-        case .connected:
-            self.gatewayConnected ? "checkmark.circle.fill" : "exclamationmark.circle"
-        case .connecting:
-            "arrow.trianglehead.2.clockwise.rotate.90"
-        case .error:
-            "exclamationmark.triangle.fill"
-        case .disconnected:
-            "wifi.slash"
+    private var connectionPill: some View {
+        HStack(spacing: 6) {
+            ProStatusDot(color: self.gatewayPillColor)
+            Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
+                .font(OpenClawType.captionSemiBold)
+                .lineLimit(1)
         }
-    }
-
-    private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+        .foregroundStyle(self.gatewayPillColor)
+        .padding(.horizontal, 4)
+        .frame(height: 30)
     }
 
     private var gatewayConnected: Bool {

@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 
@@ -76,10 +77,10 @@ extension SettingsProTab {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Gateway")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.gatewaySummaryDetail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -190,10 +191,10 @@ extension SettingsProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     if let detail, !detail.isEmpty {
                         Text(detail)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -315,12 +316,12 @@ extension SettingsProTab {
                     ProIconBadge(systemName: "bell.slash.fill", color: OpenClawBrand.warn)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Notifications are off")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text(
                             """
                             Enable Notifications to receive approval notifications while OpenClaw is not open.
                             """)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -356,7 +357,7 @@ extension SettingsProTab {
 
                     if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
                         Text(errorText)
-                            .font(.caption2.weight(.medium))
+                            .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawBrand.danger)
                     }
 
@@ -397,9 +398,9 @@ extension SettingsProTab {
                         ProIconBadge(systemName: "checkmark.shield.fill", color: OpenClawBrand.ok)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("No approvals waiting")
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                             Text(self.approvalEmptyDetail)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -533,7 +534,7 @@ extension SettingsProTab {
                     .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
 
                     Text(self.notificationStatusDetail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -541,11 +542,11 @@ extension SettingsProTab {
 
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "network")
-                            .font(.caption.weight(.semibold))
+                            .font(OpenClawType.captionSemiBold)
                             .foregroundStyle(OpenClawBrand.accent)
                             .frame(width: 22, height: 22)
                         Text(self.notificationRelayDetail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -641,9 +642,9 @@ extension SettingsProTab {
         Button(action: action) {
             HStack(spacing: 7) {
                 Image(systemName: isBusy ? "hourglass" : icon)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
             }
@@ -669,9 +670,9 @@ extension SettingsProTab {
                     ProIconBadge(systemName: icon, color: isOn.wrappedValue ? OpenClawBrand.accent : .secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text(detail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -692,9 +693,9 @@ extension SettingsProTab {
                             .accent)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Location")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         Text("Controls whether location can be shared with gateway tools.")
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -714,13 +715,17 @@ extension SettingsProTab {
                 .disabled(self.isChangingLocationMode)
 
                 Text(self.locationPermissionDetailText)
-                    .font(.caption2)
+                    .font(OpenClawType.caption2)
                     .foregroundStyle(
                         self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
 
+                if self.locationModeRaw == OpenClawLocationMode.always.rawValue {
+                    self.locationAlwaysGuidance
+                }
+
                 if let locationPermissionWarningText {
                     Text(locationPermissionWarningText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -728,11 +733,62 @@ extension SettingsProTab {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    @ViewBuilder
+    private var locationAlwaysGuidance: some View {
+        let osStatus = CLLocationManager().authorizationStatus
+        switch osStatus {
+        case .authorizedAlways:
+            Label {
+                Text("Always Allow is active.")
+            } icon: {
+                Image(systemName: "checkmark.circle")
+            }
+            .font(OpenClawType.caption)
+            .foregroundStyle(OpenClawBrand.ok)
+        case .authorizedWhenInUse:
+            VStack(alignment: .leading, spacing: 6) {
+                Label {
+                    Text("iOS is set to While Using.")
+                        + Text(" Change to Always in Settings for reliable background automations.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                .font(OpenClawType.caption)
+                .foregroundStyle(OpenClawBrand.warn)
+                self.openSettingsButton
+            }
+        case .denied, .restricted:
+            VStack(alignment: .leading, spacing: 6) {
+                Label {
+                    Text("Location access is denied.")
+                        + Text(" Enable it in Settings.")
+                } icon: {
+                    Image(systemName: "xmark.circle")
+                }
+                .font(OpenClawType.caption)
+                .foregroundStyle(OpenClawBrand.danger)
+                self.openSettingsButton
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private var openSettingsButton: some View {
+        Button("Open Settings") {
+            guard let url = URL(
+                string: UIApplication.openSettingsURLString) else { return }
+            UIApplication.shared.open(url)
+        }
+        .font(OpenClawType.caption)
+        .buttonStyle(.bordered)
+    }
+
     var agentSelectionCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Default Agent")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Picker("Agent", selection: self.$selectedAgentPickerId) {
                     Text("Default").tag("")
                     let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
@@ -743,7 +799,7 @@ extension SettingsProTab {
                     }
                 }
                 Text("Used for new Chat and Talk sessions.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -754,7 +810,7 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Setup Code")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 TextField("Paste setup code", text: self.$setupCode)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -780,13 +836,13 @@ extension SettingsProTab {
                 }
                 if let status = self.setupStatusLine {
                     Text(status)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 if let warning = self.tailnetWarningText {
                     Text(warning)
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -798,10 +854,10 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Discovered Gateways")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 if self.gatewayController.gateways.isEmpty {
                     Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
@@ -820,9 +876,9 @@ extension SettingsProTab {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: gateway.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -983,7 +1039,7 @@ extension SettingsProTab {
                 }
                 .buttonStyle(.bordered)
                 Text(self.appModel.lastShareEventText)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1050,7 +1106,7 @@ extension SettingsProTab {
                 Spacer(minLength: 8)
                 self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
             }
-            .font(.subheadline)
+            .font(OpenClawType.subhead)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1083,9 +1139,9 @@ extension SettingsProTab {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
         }
-        .font(.subheadline)
+        .font(OpenClawType.subhead)
     }
 }

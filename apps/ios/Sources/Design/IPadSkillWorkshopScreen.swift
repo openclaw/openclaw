@@ -64,7 +64,7 @@ struct IPadSkillWorkshopScreen: View {
                 ScrollView {
                     self.presentedProposalDetail(proposalID: route.proposalID)
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, OpenClawSpacing.space4)
                 }
                 .background(OpenClawProBackground())
                 .navigationTitle("Proposal")
@@ -130,12 +130,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -149,9 +149,9 @@ struct IPadSkillWorkshopScreen: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(self.filteredProposals.count) proposals")
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -186,12 +186,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -202,12 +202,12 @@ struct IPadSkillWorkshopScreen: View {
     private var proposalSearchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             TextField("Search proposals", text: self.$query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
             if !self.query.isEmpty {
                 Button {
                     self.query = ""
@@ -223,7 +223,7 @@ struct IPadSkillWorkshopScreen: View {
     private var agentScopeMenu: some View {
         HStack(spacing: 8) {
             Text("Agent")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
                 Button("Default agent") {
@@ -237,10 +237,10 @@ struct IPadSkillWorkshopScreen: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(self.agentScopeLabel)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(OpenClawType.caption2Bold)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -416,9 +416,9 @@ struct IPadSkillWorkshopScreen: View {
                     ProIconBadge(systemName: "hammer", color: proposal.statusColor)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(proposal.title)
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(proposal.description)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -432,23 +432,23 @@ struct IPadSkillWorkshopScreen: View {
 
                 if let content = proposal.content, !content.isEmpty {
                     Text(content)
-                        .font(.caption.monospaced())
+                        .font(OpenClawType.monoSmall)
                         .foregroundStyle(.secondary)
                         .lineLimit(16)
                         .textSelection(.enabled)
                 } else {
                     Text("Select refresh to load the proposal body.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 if !proposal.supportFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Support files")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         ForEach(proposal.supportFiles, id: \.path) { file in
                             Text(file.path)
-                                .font(.caption2.monospaced())
+                                .font(OpenClawType.monoSmall)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -579,7 +579,7 @@ struct IPadSkillWorkshopScreen: View {
             Image(systemName: "lock.shield")
                 .foregroundStyle(OpenClawBrand.warn)
             Text("Admin scope required.")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
         }
@@ -951,11 +951,11 @@ private struct IPadSkillProposalKanbanCard: View {
                             color: self.proposal.statusColor)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(self.proposal.title)
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                                 .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                                 .lineLimit(2)
                             Text(self.proposal.description)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                         }
@@ -964,7 +964,7 @@ private struct IPadSkillProposalKanbanCard: View {
                         ProValuePill(value: self.proposal.status, color: self.proposal.statusColor)
                         Spacer(minLength: 4)
                         Text(self.proposal.ageLabel)
-                            .font(.caption2.weight(.semibold))
+                            .font(OpenClawType.caption2SemiBold)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1000,10 +1000,10 @@ private struct IPadSkillProposalKanbanCard: View {
                 .disabled(self.isInspecting)
             }
         }
-        .padding(12)
+        .padding(OpenClawSpacing.space3)
         .background(
             self.isSelected ? OpenClawBrand.accent.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
         .contentShape(Rectangle())
         .contextMenu {
             Button("Inspect", action: self.inspect)
@@ -1027,24 +1027,24 @@ struct IPadSkillProposalRow: View {
             ProIconBadge(systemName: self.isBusy ? "hourglass" : "hammer", color: self.proposal.statusColor)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.proposal.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                     .lineLimit(1)
                 Text(self.proposal.description)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
             Text(self.proposal.ageLabel)
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             self.isSelected ? OpenClawBrand.danger.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
     }
 }
 

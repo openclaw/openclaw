@@ -43,12 +43,12 @@ struct TalkRuntimeIssueDetailsSheet: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(self.issue.fallbackBannerTitle)
-                            .font(.title3.weight(.semibold))
+                            .font(OpenClawType.title3)
                         Text(self.issue.fallbackBannerMessage)
-                            .font(.body)
+                            .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
                         Text(self.issue.displayMessage)
-                            .font(.footnote.weight(.semibold))
+                            .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -57,7 +57,7 @@ struct TalkRuntimeIssueDetailsSheet: View {
 
                 Section("Technical details") {
                     Text(verbatim: self.issue.technicalDetails)
-                        .font(.system(.footnote, design: .monospaced))
+                        .font(OpenClawType.monoFootnote)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     Button("Copy diagnostics") {
@@ -69,7 +69,7 @@ struct TalkRuntimeIssueDetailsSheet: View {
                 if let copyFeedback {
                     Section {
                         Text(copyFeedback)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }

@@ -285,12 +285,12 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
+                        .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3)
                     Text(self.message)
-                        .font(.body)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

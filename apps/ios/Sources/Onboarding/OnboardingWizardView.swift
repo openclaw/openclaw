@@ -129,9 +129,9 @@ struct OnboardingWizardView: View {
                     ToolbarItem(placement: .principal) {
                         VStack(spacing: 2) {
                             Text(self.step.title)
-                                .font(.headline)
+                                .font(OpenClawType.headline)
                             Text(self.step.manualProgressTitle)
-                                .font(.caption2)
+                                .font(OpenClawType.caption2)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -374,26 +374,13 @@ struct OnboardingWizardView: View {
             HStack {
                 Text(title)
                 Spacer(minLength: 8)
-                self.onboardingSwitchIndicator(isOn: isOn.wrappedValue)
+                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-    }
-
-    private func onboardingSwitchIndicator(isOn: Bool) -> some View {
-        Capsule()
-            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
-            .overlay(alignment: isOn ? .trailing : .leading) {
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 28, height: 28)
-                    .padding(2)
-                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
-            }
     }
 
     @ViewBuilder
@@ -445,7 +432,7 @@ struct OnboardingWizardView: View {
                                 Text(gateway.name)
                                 if let host = gateway.lanHost ?? gateway.tailnetDns {
                                     Text(host)
-                                        .font(.footnote)
+                                        .font(OpenClawType.footnote)
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -517,11 +504,11 @@ struct OnboardingWizardView: View {
                         })
                 } else if self.issue.needsAuthToken {
                     Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Auth token looks valid.")
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -586,18 +573,19 @@ struct OnboardingWizardView: View {
                 .padding(.bottom, 20)
 
             Text("Connected")
-                .font(.largeTitle.weight(.bold))
+                .font(OpenClawType.title1)
+                .foregroundStyle(OpenClawBrand.textPrimary)
                 .padding(.bottom, 8)
 
             let server = self.appModel.gatewayServerName ?? "gateway"
             Text(server)
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 4)
 
             if let addr = self.appModel.gatewayRemoteAddress {
                 Text(addr)
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
             }
 
@@ -607,11 +595,9 @@ struct OnboardingWizardView: View {
                 self.onClose()
             } label: {
                 Text("Open OpenClaw")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 24)
+            .openClawPrimaryButton()
+            .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 48)
         }
     }
@@ -646,7 +632,7 @@ extension OnboardingWizardView {
 
             if let setupCodeStatus, !setupCodeStatus.isEmpty {
                 Text(setupCodeStatus)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             }
         } header: {
