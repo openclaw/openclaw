@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistAbortTargetEntry, persistSessionEntry } from "./commands-session-store.js";
 
@@ -29,14 +29,8 @@ describe("commands session store persistence", () => {
         sessionId: "other-session",
         updatedAt: 2,
       };
-      await saveSessionStore(
-        storePath,
-        {
-          [sessionKey]: { ...entry },
-          [otherKey]: { ...otherEntry },
-        },
-        { skipMaintenance: true },
-      );
+      await replaceSessionEntry({ storePath, sessionKey }, { ...entry });
+      await replaceSessionEntry({ storePath, sessionKey: otherKey }, { ...otherEntry });
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
 
       await expect(
@@ -48,15 +42,16 @@ describe("commands session store persistence", () => {
         }),
       ).resolves.toBe(true);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true });
+      const persisted = loadSessionEntry({ storePath, sessionKey });
+      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
       expect(sessionStore[sessionKey]).toBe(entry);
       expect(entry.updatedAt).not.toBe(1);
-      expect(persisted[sessionKey]).toMatchObject({
+      expect(persisted).toMatchObject({
         sessionId: "command-session",
         model: "gpt-5.5",
         updatedAt: entry.updatedAt,
       });
-      expect(persisted[otherKey]).toStrictEqual(otherEntry);
+      expect(persistedOther).toStrictEqual(otherEntry);
     });
   });
 
@@ -69,7 +64,6 @@ describe("commands session store persistence", () => {
         model: "gpt-5.5",
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf8");
 
       await expect(
         persistAbortTargetEntry({
@@ -81,7 +75,7 @@ describe("commands session store persistence", () => {
         }),
       ).resolves.toBe(true);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionEntry({ storePath, sessionKey });
       expect(sessionStore[sessionKey]).toBe(entry);
       expect(entry.abortedLastRun).toBe(true);
       expect(entry.abortCutoffMessageSid).toBe("42");
@@ -106,21 +100,15 @@ describe("commands session store persistence", () => {
       };
       const persistedEntry: SessionEntry = {
         sessionId: "persisted-session",
-        updatedAt: 2,
+        updatedAt: Date.now(),
         model: "sonnet-4.6",
       };
       const otherEntry: SessionEntry = {
         sessionId: "other-session",
         updatedAt: 3,
       };
-      await saveSessionStore(
-        storePath,
-        {
-          [sessionKey]: persistedEntry,
-          [otherKey]: otherEntry,
-        },
-        { skipMaintenance: true },
-      );
+      await replaceSessionEntry({ storePath, sessionKey }, persistedEntry);
+      await replaceSessionEntry({ storePath, sessionKey: otherKey }, otherEntry);
 
       await expect(
         persistAbortTargetEntry({
@@ -131,14 +119,15 @@ describe("commands session store persistence", () => {
         }),
       ).resolves.toBe(true);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true });
+      const persisted = loadSessionEntry({ storePath, sessionKey });
+      const persistedOther = loadSessionEntry({ storePath, sessionKey: otherKey });
       expect(entry.abortedLastRun).toBe(true);
-      expect(persisted[sessionKey]).toMatchObject({
+      expect(persisted).toMatchObject({
         sessionId: "persisted-session",
         model: "sonnet-4.6",
         abortedLastRun: true,
       });
-      expect(persisted[otherKey]).toStrictEqual(otherEntry);
+      expect(persistedOther).toStrictEqual(otherEntry);
     });
   });
 });

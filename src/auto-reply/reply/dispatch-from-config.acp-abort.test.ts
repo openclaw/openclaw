@@ -196,6 +196,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionStoreEntry.mockReset();
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -503,7 +507,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         conversationId: "C1",
       },
     };
-    const sessionStore = {
+    const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {
       [sourceSessionKey]: {
         sessionId: "source-session-id",
         updatedAt: Date.now(),
@@ -514,17 +518,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
     };
     sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversation);
-    sessionStoreMocks.loadSessionStore.mockReturnValue(sessionStore);
-    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as { store?: Record<string, unknown>; sessionKey?: string };
-      const existing =
-        params.store && params.sessionKey ? params.store[params.sessionKey] : undefined;
-      return {
-        existing:
-          existing && typeof existing === "object"
-            ? (existing as Record<string, unknown>)
-            : undefined,
-      };
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey?: string };
+      const existing = params.sessionKey ? sessionStore[params.sessionKey] : undefined;
+      return existing && typeof existing === "object"
+        ? (existing as Record<string, unknown>)
+        : undefined;
     });
     acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
       params.sessionKey === boundAcpSessionKey

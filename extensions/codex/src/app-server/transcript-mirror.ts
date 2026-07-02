@@ -9,9 +9,9 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  publishSessionTranscriptUpdateByIdentity,
   withSessionTranscriptWriteLock,
   type SessionTranscriptTargetParams,
+  type SessionTranscriptWriteLockContext,
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -115,10 +115,10 @@ export async function mirrorTranscriptBestEffort(params: {
       turnId: params.turnId,
     });
     const mirrorResult = await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      storePath: params.params.sessionTarget?.storePath,
       cwd: params.cwd,
       messages,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
@@ -200,10 +200,10 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         `${params.turnId}:prompt`,
       );
       const mirrorResult = await mirrorCodexAppServerTranscript({
-        sessionFile: params.params.sessionFile,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,
+        storePath: params.params.sessionTarget?.storePath,
         cwd: params.cwd,
         messages: [userPromptMessage],
         idempotencyScope: `codex-app-server:${params.threadId}`,
@@ -272,11 +272,11 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export async function mirrorCodexAppServerTranscript(params: {
-  sessionFile: string;
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
   config?: SessionTranscriptWriteLockParams["config"];
@@ -290,7 +290,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   }
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const { appendedUpdates, userMessagesPresent } = await withSessionTranscriptWriteLock(
+  const { userMessagesPresent } = await withCodexMirrorTranscriptWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{
@@ -358,38 +358,46 @@ export async function mirrorCodexAppServerTranscript(params: {
           mirrorState.idempotencyKeys.add(idempotencyKey);
         }
       }
+      for (const update of nextAppendedUpdates) {
+        await transcript.publishUpdate({
+          sessionKey: transcriptTarget.sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          message: update.message,
+          messageId: update.messageId,
+          messageSeq: update.messageSeq,
+        });
+      }
       return { appendedUpdates: nextAppendedUpdates, userMessagesPresent: nextUserMessagesPresent };
     },
   );
-
-  for (const update of appendedUpdates) {
-    await publishSessionTranscriptUpdateByIdentity({
-      ...transcriptTarget,
-      update: {
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        message: update.message,
-        messageId: update.messageId,
-        messageSeq: update.messageSeq,
-      },
-    });
-  }
 
   return { userMessagesPresent };
 }
 
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  storePath?: string;
 }): SessionTranscriptTargetParams {
+  const sessionKey = params.sessionKey?.trim();
+  const storePath = params.storePath?.trim();
+  if (!sessionKey || !storePath) {
+    throw new Error("Codex transcript mirror requires a runtime session identity");
+  }
   return {
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? "",
+    sessionKey,
+    storePath,
   };
+}
+
+function withCodexMirrorTranscriptWriteLock<T>(
+  params: SessionTranscriptTargetParams & { config?: SessionTranscriptWriteLockParams["config"] },
+  run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
+): Promise<T> {
+  return withSessionTranscriptWriteLock(params, run);
 }
 
 function readTranscriptMirrorState(events: unknown[]): {

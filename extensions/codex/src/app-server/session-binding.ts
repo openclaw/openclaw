@@ -4,6 +4,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -12,6 +13,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
@@ -100,8 +102,25 @@ export type CodexAppServerContextEngineProjectionBinding = {
   fingerprint?: string;
 };
 
-/** Returns the JSON sidecar path for the Codex app-server binding beside a session file. */
+function resolveSqliteCodexAppServerBindingPath(sessionFile: string): string | undefined {
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  if (!marker) {
+    return undefined;
+  }
+  const safeAgentId = encodeURIComponent(marker.agentId);
+  const safeSessionId = encodeURIComponent(marker.sessionId);
+  return path.join(
+    path.dirname(path.resolve(marker.storePath)),
+    `.codex-app-server.${safeAgentId}.${safeSessionId}.json`,
+  );
+}
+
+/** Returns the JSON sidecar path for the Codex app-server binding. */
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
+  const sqliteBindingPath = resolveSqliteCodexAppServerBindingPath(sessionFile);
+  if (sqliteBindingPath) {
+    return sqliteBindingPath;
+  }
   return `${sessionFile}.codex-app-server.json`;
 }
 
@@ -149,15 +168,15 @@ export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  const path = resolveCodexAppServerBindingPath(sessionFile);
+  const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
   let raw: string;
   try {
-    raw = await fs.readFile(path, "utf8");
+    raw = await fs.readFile(bindingPath, "utf8");
   } catch (error) {
     if (isNotFound(error)) {
       return undefined;
     }
-    embeddedAgentLog.warn("failed to read codex app-server binding", { path, error });
+    embeddedAgentLog.warn("failed to read codex app-server binding", { path: bindingPath, error });
     return undefined;
   }
   try {
@@ -239,7 +258,10 @@ export async function readCodexAppServerBinding(
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
   } catch (error) {
-    embeddedAgentLog.warn("failed to parse codex app-server binding", { path, error });
+    embeddedAgentLog.warn("failed to parse codex app-server binding", {
+      path: bindingPath,
+      error,
+    });
     return undefined;
   }
 }

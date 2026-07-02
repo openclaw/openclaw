@@ -35,6 +35,7 @@ import {
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
@@ -72,9 +73,10 @@ import {
   resolveSessionResetType,
   type SessionEntry,
   type SessionFreshness,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -116,6 +118,7 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import {
@@ -154,9 +157,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
   resolveSessionModelRef,
@@ -1080,6 +1081,29 @@ function shouldSuppressAgentPromptPersistence(params: {
   );
 }
 
+function withSqliteSessionFileMarker(params: {
+  agentId: string | undefined;
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): SessionEntry {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!agentId) {
+    return params.entry;
+  }
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: params.entry.sessionId,
+    storePath: params.storePath,
+  });
+  return params.entry.sessionFile === sessionFile
+    ? params.entry
+    : {
+        ...params.entry,
+        sessionFile,
+      };
+}
+
 function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
@@ -1550,7 +1574,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
 
     try {
-      let message = (request.message ?? "").trim();
+      const transcriptInputText = (request.message ?? "").trim();
+      let effectiveTranscriptInputText = transcriptInputText;
+      let message = effectiveTranscriptInputText;
       if (!isRawModelRun) {
         message = annotateInterSessionPromptText(message, inputProvenance);
       }
@@ -1782,6 +1808,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (abortForLifecycleRotation({ sessionKey: resetResult.key, agentId })) {
             return;
           }
+          effectiveTranscriptInputText = postResetMessage;
           message = postResetMessage;
         } else {
           let resetAckResult: Awaited<ReturnType<typeof resolveBareSessionResetResult>>;
@@ -1856,6 +1883,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           entry,
           canonicalKey,
           legacyKey,
+          storeKeys,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
         if (
@@ -2233,81 +2261,61 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
             return;
           }
-          const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
-          let singleEntryPersistence:
-            | {
-                sessionKey: string;
-                entry: SessionEntry;
-              }
-            | undefined;
+          let deniedSessionEntry: SessionEntry | undefined;
           let persisted: SessionEntry | undefined;
           try {
-            persisted = await updateSessionStore(
-              storePath,
-              (store) => {
-                // The writer lock may outlive this request's lifecycle. Check at
-                // transaction admission; once admitted, let the atomic write finish.
-                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                const storeKeysBeforeMigration = new Set(Object.keys(store));
-                const preMigrationTarget = resolveGatewaySessionStoreTarget({
-                  cfg: cfgLocal,
-                  key: requestedStoreKey,
-                  store,
-                  ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-                });
-                const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
-                  (storeKey) =>
-                    storeKey !== preMigrationTarget.canonicalKey && Object.hasOwn(store, storeKey),
-                );
-                const { target, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-                  cfg: cfgLocal,
-                  key: requestedStoreKey,
-                  store,
-                });
-                const prunedStoreKey = [...storeKeysBeforeMigration].some(
-                  (storeKey) => !Object.hasOwn(store, storeKey),
-                );
-                const freshEntry = store[primaryKey];
-                patchBuild = buildSessionPatch(freshEntry);
-                const effectivePatch =
-                  recoveredSessionStartedAt !== undefined &&
-                  freshEntry?.sessionStartedAt === undefined &&
-                  freshEntry?.sessionId === entry?.sessionId
-                    ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                    : patchBuild.patch;
-                const merged = mergeSessionEntry(freshEntry, effectivePatch);
-                const sendPolicy =
-                  request.deliver === true
-                    ? resolveSendPolicy({
-                        cfg: cfgLocal,
-                        entry: merged,
-                        sessionKey: canonicalKey,
-                        channel: merged?.channel,
-                        chatType: merged?.chatType,
-                      })
-                    : "allow";
-                if (sendPolicy === "deny") {
-                  deniedBySendPolicy = true;
+            persisted =
+              (await patchSessionEntryTarget(
+                {
+                  storePath,
+                  target: {
+                    canonicalKey: canonicalSessionKey,
+                    storeKeys: storeKeys ?? [canonicalSessionKey],
+                  },
+                },
+                (_currentEntry, patchContext) => {
+                  // The writer lock may outlive this request's lifecycle. Check at
+                  // transaction admission; once admitted, let the atomic write finish.
+                  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+                  const freshEntry = patchContext.existingEntry;
+                  patchBuild = buildSessionPatch(freshEntry);
+                  const effectivePatch =
+                    recoveredSessionStartedAt !== undefined &&
+                    freshEntry?.sessionStartedAt === undefined &&
+                    freshEntry?.sessionId === entry?.sessionId
+                      ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
+                      : patchBuild.patch;
+                  const merged = withSqliteSessionFileMarker({
+                    agentId: sessionAgentId,
+                    entry: mergeSessionEntry(freshEntry, effectivePatch),
+                    sessionKey: canonicalSessionKey,
+                    storePath,
+                  });
+                  const sendPolicy =
+                    request.deliver === true
+                      ? resolveSendPolicy({
+                          cfg: cfgLocal,
+                          entry: merged,
+                          sessionKey: canonicalKey,
+                          channel: merged?.channel,
+                          chatType: merged?.chatType,
+                        })
+                      : "allow";
+                  if (sendPolicy === "deny") {
+                    deniedBySendPolicy = true;
+                    deniedSessionEntry = merged;
+                    return null;
+                  }
                   return merged;
-                }
-                store[primaryKey] = merged;
-                const canonicalKeyChanged = target.canonicalKey !== preMigrationTarget.canonicalKey;
-                singleEntryPersistence =
-                  freshEntry && !hadLegacyStoreKey && !canonicalKeyChanged && !prunedStoreKey
-                    ? {
-                        sessionKey: primaryKey,
-                        entry: merged,
-                      }
-                    : undefined;
-                return merged;
-              },
-              {
-                takeCacheOwnership: true,
-                maintenanceConfig: sessionMaintenanceConfig,
-                resolveSingleEntryPersistence: () => singleEntryPersistence,
-              },
-            );
+                },
+                {
+                  fallbackEntry: entry ?? mergeSessionEntry(undefined, patchBuild.patch),
+                  replaceEntry: true,
+                  takeCacheOwnership: true,
+                  maintenanceConfig: sessionMaintenanceConfig,
+                },
+              )) ?? undefined;
           } catch (err) {
             if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
               return;
@@ -2317,7 +2325,10 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
             return;
           }
-          if (persisted) {
+          if (deniedBySendPolicy && deniedSessionEntry) {
+            sessionEntry = deniedSessionEntry;
+            resolvedSessionId = sessionEntry.sessionId;
+          } else if (persisted) {
             sessionEntry = persisted;
             resolvedSessionId = sessionEntry.sessionId;
           }
@@ -2790,6 +2801,67 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (!isRawModelRun) {
             message = annotateInterSessionPromptText(message, inputProvenance);
           }
+          const userTurnTranscriptRecorder =
+            resolvedSessionKey &&
+            resolvedSessionId &&
+            !suppressVisibleSessionEffects &&
+            images.length === 0 &&
+            imageOrder.length === 0
+              ? createUserTurnTranscriptRecorder({
+                  input: {
+                    text: effectiveTranscriptInputText,
+                    timestamp: Date.now(),
+                    idempotencyKey: `${runId}:user`,
+                    ...(inputProvenance ? { provenance: inputProvenance } : {}),
+                  },
+                  target: () => {
+                    const loaded = loadSessionEntry(resolvedSessionKey, {
+                      ...(resolvedSessionKey === "global" && activeSessionAgentId
+                        ? { agentId: activeSessionAgentId }
+                        : {}),
+                      clone: false,
+                    });
+                    const loadedEntry = loaded.entry;
+                    const loadedSessionId = loadedEntry?.sessionId?.trim();
+                    if (loadedSessionId && loadedSessionId !== resolvedSessionId) {
+                      return undefined;
+                    }
+                    const latestEntry = loadedSessionId
+                      ? loadedEntry
+                      : sessionEntry?.sessionId?.trim() === resolvedSessionId
+                        ? sessionEntry
+                        : {
+                            sessionId: resolvedSessionId,
+                            updatedAt: Date.now(),
+                            sessionFile: sessionEntry?.sessionFile,
+                          };
+                    if (!latestEntry) {
+                      return undefined;
+                    }
+                    return {
+                      sessionId: latestEntry.sessionId,
+                      sessionKey: resolvedSessionKey,
+                      sessionEntry: latestEntry,
+                      sessionStore: loaded.store,
+                      storePath: loaded.storePath,
+                      agentId: activeSessionAgentId,
+                      cwd: resolveSessionRuntimeCwd({
+                        spawnedBy: spawnedByValue,
+                        sessionEntry: latestEntry,
+                      }),
+                      ...(resolvedThreadId != null ? { threadId: resolvedThreadId } : {}),
+                      config: cfgForAgent ?? cfg,
+                    };
+                  },
+                  errorContext: "gateway agent user turn transcript",
+                  beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+                  onPersistenceError: (error) => {
+                    context.logGateway.warn(
+                      `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
+                    );
+                  },
+                })
+              : undefined;
 
           const ingressAgentId =
             resolvedSessionKey === "global"
@@ -2882,6 +2954,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                   inputProvenance,
                   internalEvents: request.internalEvents,
                 }),
+              userTurnTranscriptRecorder,
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
               abortSignal: activeRunAbort.controller.signal,
               lifecycleGeneration,

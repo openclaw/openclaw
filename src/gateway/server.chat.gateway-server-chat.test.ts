@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -88,9 +89,9 @@ describe("gateway server chat", () => {
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
   ): Promise<unknown[]> => {
-    return withMainSessionStore(async (dir) => {
+    return withMainSessionStore(async () => {
       const lines = messages.map((message) => JSON.stringify({ message }));
-      await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+      await writeMainSessionTranscriptLines(lines);
 
       const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -112,7 +113,6 @@ describe("gateway server chat", () => {
         entries: {
           main: {
             sessionId,
-            sessionFile: path.join(dir, `${sessionId}.jsonl`),
             updatedAt: Date.now(),
           },
         },
@@ -121,6 +121,30 @@ describe("gateway server chat", () => {
     } finally {
       testState.sessionStorePath = undefined;
       await removeTempDir(dir);
+    }
+  };
+
+  const writeMainSessionTranscriptLines = async (
+    lines: readonly string[],
+    sessionId = "sess-main",
+  ): Promise<void> => {
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("session store path was not initialized");
+    }
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      await appendTranscriptEvent(
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:main",
+          storePath,
+        },
+        JSON.parse(line) as unknown,
+      );
     }
   };
 
@@ -271,13 +295,13 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-orion");
 
-      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-        string,
-        {
-          sessionId?: string;
-        }
-      >;
-      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+      expect(
+        loadSessionEntry({
+          agentId: "orion",
+          sessionKey: "agent:orion:main",
+          storePath: testState.sessionStorePath,
+        })?.sessionId,
+      ).toBeTypeOf("string");
     } finally {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -650,7 +674,7 @@ describe("gateway server chat", () => {
           }),
         );
       }
-      await fs.writeFile(path.join(historyDir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+      await writeMainSessionTranscriptLines(lines);
 
       const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
         sessionKey: "main",
@@ -694,21 +718,18 @@ describe("gateway server chat", () => {
   });
 
   test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
-    await withMainSessionStore(async (dir) => {
+    await withMainSessionStore(async () => {
       await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
-            sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
-            status: "running",
-            startedAt: 900,
           },
         },
       });
       const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
       expect(subscribeRes.ok).toBe(true);
-      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
+      dispatchInboundMessageMock.mockRejectedValue(new Error("provider rejected request"));
 
       const errorPromise = onceMessage(
         ws,
@@ -734,6 +755,9 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-dispatch-error-1",
       });
       expect(res.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
       await errorPromise;
       const sessionChanged = await sessionChangedPromise;
       expectRecordFields(sessionChanged.payload, {
@@ -1375,18 +1399,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await writeMainSessionTranscriptLines([
+        JSON.stringify({
           message: {
             role: "user",
             content: [{ type: "text", text: "main thread context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
@@ -1463,18 +1485,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await writeMainSessionTranscriptLines([
+        JSON.stringify({
           message: {
             role: "assistant",
             content: [{ type: "text", text: "existing context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
@@ -1727,13 +1747,13 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const raw = await fs.readFile(sessionStorePath, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              verboseLevel?: string;
-            };
-          };
-          expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
+          expect(
+            loadSessionEntry({
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              storePath: sessionStorePath,
+            })?.verboseLevel,
+          ).toBeUndefined();
         } finally {
           scopedWs?.close();
         }
@@ -1774,13 +1794,13 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const raw = await fs.readFile(sessionStorePath, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              sessionId?: string;
-            };
-          };
-          expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
+          expect(
+            loadSessionEntry({
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              storePath: sessionStorePath,
+            })?.sessionId,
+          ).toBe("sess-main");
         } finally {
           scopedWs?.close();
         }

@@ -13,12 +13,11 @@
 import crypto from "node:crypto";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -65,6 +64,38 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
   runRecord.endedAt = undefined;
   runRecord.endedReason = undefined;
   runRecord.outcome = undefined;
+}
+
+function loadRecoverySessionEntry(params: {
+  childSessionKey: string;
+  storePath: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry({
+    storePath: params.storePath,
+    sessionKey: params.childSessionKey,
+    clone: false,
+  });
+}
+
+async function patchRecoverySessionEntry(params: {
+  childSessionKey: string;
+  storePath: string;
+  update: (entry: SessionEntry) => void;
+}): Promise<SessionEntry | null> {
+  return await patchSessionEntry(
+    {
+      storePath: params.storePath,
+      sessionKey: params.childSessionKey,
+    },
+    (entry) => {
+      params.update(entry);
+      return entry;
+    },
+    {
+      replaceEntry: true,
+      skipMaintenance: true,
+    },
+  );
 }
 
 /**
@@ -211,7 +242,6 @@ export async function recoverOrphanedSubagentSessions(params: {
     }
 
     const cfg = getRuntimeConfig();
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
       const childSessionKey = runRecord.childSessionKey?.trim();
@@ -227,14 +257,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       try {
         const agentId = resolveAgentIdFromSessionKey(childSessionKey);
         const storePath = resolveStorePath(cfg.session?.store, { agentId });
-
-        let store = storeCache.get(storePath);
-        if (!store) {
-          store = loadSessionStore(storePath);
-          storeCache.set(storePath, store);
-        }
-
-        const entry = store[childSessionKey];
+        const entry = loadRecoverySessionEntry({ storePath, childSessionKey });
         if (!entry) {
           result.skipped++;
           continue;
@@ -262,24 +285,21 @@ export async function recoverOrphanedSubagentSessions(params: {
         if (!recoveryGate.allowed) {
           if (recoveryGate.shouldMarkWedged) {
             try {
-              await updateSessionStore(storePath, (currentStore) => {
-                const current = currentStore[childSessionKey];
-                if (current) {
+              const updated = await patchRecoverySessionEntry({
+                storePath,
+                childSessionKey,
+                update: (current) => {
                   markSubagentRecoveryWedged({
                     entry: current,
                     now,
                     runId,
                     reason: recoveryGate.reason,
                   });
-                  currentStore[childSessionKey] = current;
-                }
+                },
               });
-              markSubagentRecoveryWedged({
-                entry,
-                now,
-                runId,
-                reason: recoveryGate.reason,
-              });
+              if (updated) {
+                Object.assign(entry, updated);
+              }
             } catch (err) {
               log.warn(
                 `failed to persist wedged subagent recovery marker for ${childSessionKey}: ${String(err)}`,
@@ -342,9 +362,10 @@ export async function recoverOrphanedSubagentSessions(params: {
           resumedSessionKeys.add(childSessionKey);
           // Only clear the aborted flag after confirmed successful resume.
           try {
-            await updateSessionStore(storePath, (currentStore) => {
-              const current = currentStore[childSessionKey];
-              if (current) {
+            await patchRecoverySessionEntry({
+              storePath,
+              childSessionKey,
+              update: (current) => {
                 current.abortedLastRun = false;
                 markSubagentRecoveryAttempt({
                   entry: current,
@@ -353,8 +374,7 @@ export async function recoverOrphanedSubagentSessions(params: {
                   attempt: recoveryGate.nextAttempt,
                 });
                 current.updatedAt = Date.now();
-                currentStore[childSessionKey] = current;
-              }
+              },
             });
           } catch (err) {
             log.warn(

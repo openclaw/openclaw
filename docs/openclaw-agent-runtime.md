@@ -65,12 +65,17 @@ To reset everything:
 - `openclaw.json` for config
 - `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
 - `credentials/` for provider/channel state that still lives outside the auth profile store
-- `agents/<agentId>/sessions/` for agent session history
-- `agents/<agentId>/sessions/sessions.json` for the session index
+- `agents/<agentId>/agent/openclaw-agent.sqlite` for per-agent runtime state, including session rows
+- `agents/<agentId>/sessions/` for transcript history and legacy session migration sources
 - `sessions/` if legacy paths exist
 - `workspace/` if you want a blank workspace
 
-If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that agent. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
+Do not delete `openclaw-agent.sqlite` for a session-only reset; that database
+also contains other per-agent state. Use `/new` or `/reset` to start a fresh
+session for one chat, and use `openclaw sessions cleanup` for session
+maintenance. If you want to keep auth, leave
+`agents/<agentId>/agent/auth-profiles.json`, `openclaw-agent.sqlite`, and any
+provider state under `credentials/` in place.
 
 ## References
 

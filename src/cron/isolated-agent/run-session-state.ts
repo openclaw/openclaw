@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { resolveCronSession } from "./session.js";
@@ -18,16 +19,20 @@ export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
 /** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
 
-type UpdateSessionStore = (
-  storePath: string,
-  update: (store: MutableSessionStore) => void,
-) => Promise<void>;
+type PersistSessionEntry = (params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}) => Promise<void>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = () => Promise<void>;
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
   const sessionFile = entry.sessionFile?.trim();
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return true;
+  }
   return Boolean(sessionFile && fs.existsSync(sessionFile));
 }
 
@@ -40,7 +45,6 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
   // If the transcript never materialized, do not persist stale resume handles
   // that would make the next cron run believe a resumable CLI session exists.
-  delete next.sessionId;
   delete next.sessionFile;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;
@@ -55,7 +59,7 @@ export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
-  updateSessionStore: UpdateSessionStore;
+  persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
     if (params.isFastTestEnv) {
@@ -67,11 +71,13 @@ export function createPersistCronSessionEntry(params: {
       !cronTranscriptExists(params.cronSession.sessionEntry)
         ? toNonResumableCronSessionEntry(params.cronSession.sessionEntry)
         : params.cronSession.sessionEntry;
-    // Update both the in-memory store and persisted JSON so later operations in
-    // this process observe the same session entry that hit disk.
+    // Keep the active process mirror aligned with the accessor-backed row so
+    // later cron steps see the same session entry that was persisted.
     params.cronSession.store[params.agentSessionKey] = persistedEntry;
-    await params.updateSessionStore(params.cronSession.storePath, (store) => {
-      store[params.agentSessionKey] = persistedEntry;
+    await params.persistSessionEntry({
+      storePath: params.cronSession.storePath,
+      sessionKey: params.agentSessionKey,
+      entry: persistedEntry,
     });
   };
 }

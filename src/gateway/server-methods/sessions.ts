@@ -1,7 +1,6 @@
 // Sessions gateway methods implement list/create/patch/delete/reset/compact/
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -54,12 +53,15 @@ import {
   listConfiguredSessionStoreAgentIds,
   deleteSessionEntryLifecycle,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
   applySessionPatchProjection,
+  canonicalizeSessionEntryAliases,
   createSessionEntryWithTranscript,
+  loadTranscriptEvents,
+  patchSessionEntry as patchAccessorSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
@@ -114,7 +116,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -260,6 +261,49 @@ function resolveGatewaySessionTargetFromKey(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   return { cfg, target, storePath: target.storePath };
+}
+
+function loadAccessorSessionEntryForGatewayTarget(params: {
+  key: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+}) {
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.cfg,
+    key: params.key,
+    clone: false,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  let best:
+    | {
+        entry: SessionEntry;
+        sessionStoreKey: string;
+      }
+    | undefined;
+  for (const sessionStoreKey of target.storeKeys) {
+    const entry = target.store[sessionStoreKey];
+    if (entry) {
+      if (!best || (entry.updatedAt ?? 0) > (best.entry.updatedAt ?? 0)) {
+        best = { entry, sessionStoreKey };
+      }
+    }
+  }
+  if (best) {
+    return {
+      target,
+      storePath: target.storePath,
+      entry: best.entry,
+      canonicalKey: target.canonicalKey,
+      sessionStoreKey: best.sessionStoreKey,
+    };
+  }
+  return {
+    target,
+    storePath: target.storePath,
+    entry: undefined,
+    canonicalKey: target.canonicalKey,
+    sessionStoreKey: target.canonicalKey,
+  };
 }
 
 function loadSessionEntriesForTarget(params: {
@@ -1193,7 +1237,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { entry, canonicalKey } = loadSessionEntry(key, {
+    const { entry, canonicalKey } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
     respond(
@@ -1233,7 +1279,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { entry, canonicalKey } = loadSessionEntry(key, {
+    const { entry, canonicalKey } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
@@ -1593,13 +1641,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { cfg: loadedCfg, entry, canonicalKey, legacyKey } = loaded;
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: loadedCfg,
-      key: canonicalKey,
-      agentId: requestedAgent.agentId,
-    });
+    const { entry, canonicalKey, sessionStoreKey, target, storePath } =
+      loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgent.agentId,
+      });
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1619,9 +1666,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const nextKey = buildDashboardSessionKey(target.agentId);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
-      storePath: target.storePath,
+      agentId: target.agentId,
+      storePath,
       sourceKey: canonicalKey,
-      sourceStoreKey: legacyKey,
+      sourceStoreKey: sessionStoreKey,
       nextKey,
       checkpointId,
     });
@@ -1715,8 +1763,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { entry, canonicalKey, legacyKey, storePath } = loaded;
+    const { entry, canonicalKey, sessionStoreKey, storePath } =
+      loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgent.agentId,
+      });
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1750,9 +1802,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
+      agentId: requestedAgent.agentId,
       storePath,
       sessionKey: canonicalKey,
-      sessionStoreKey: legacyKey,
+      sessionStoreKey,
       checkpointId,
     });
     if (
@@ -2020,6 +2073,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     const applied = await applySessionPatchProjection({
+      agentId: target.agentId,
       storePath,
       resolveTarget: ({ entries }) => {
         const store = Object.fromEntries(
@@ -2203,7 +2257,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason,
     });
   },
-  "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({ req, params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -2251,6 +2305,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     if (rejectPluginRuntimeDeleteMismatch({ client, key: canonicalKey ?? key, entry, respond })) {
+      return;
+    }
+    let abortResult:
+      | {
+          ok: boolean;
+          error?: ReturnType<typeof errorShape>;
+        }
+      | undefined;
+    const abortSessionKey = canonicalKey ?? key;
+    await chatHandlers["chat.abort"]({
+      req,
+      params: {
+        sessionKey: abortSessionKey,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      },
+      respond: (ok, _payload, error) => {
+        abortResult = { ok, ...(error ? { error } : {}) };
+      },
+      context,
+      client,
+      isWebchatConnect,
+    });
+    if (abortResult?.ok === false) {
+      respond(false, undefined, abortResult.error);
       return;
     }
     const mutationCleanupError = await cleanupSessionBeforeMutation({
@@ -2386,20 +2464,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+    const { entry, target, storePath } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgentId,
     });
-    // Lock + read in a short critical section; transcript work happens outside.
-    const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return { entry, primaryKey };
-    });
-    const entry = compactTarget.entry;
+    const hasAliasRows = target.storeKeys.some(
+      (storeKey) => storeKey !== target.canonicalKey && target.store[storeKey],
+    );
+    if (entry && hasAliasRows) {
+      await canonicalizeSessionEntryAliases({ agentId: target.agentId, storePath, target });
+    }
+    const compactSessionScope = {
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      storePath,
+    };
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(
@@ -2416,13 +2496,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     if (maxLines === undefined) {
-      const filePath = resolveSessionTranscriptCandidates(
+      const transcriptEvents = await loadTranscriptEvents({
+        agentId: target.agentId,
         sessionId,
+        sessionKey: target.canonicalKey,
         storePath,
-        entry?.sessionFile,
-        target.agentId,
-      ).find((candidate) => fs.existsSync(candidate));
-      if (!filePath) {
+      }).catch(() => []);
+      if (transcriptEvents.length === 0) {
         respond(
           true,
           {
@@ -2435,6 +2515,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const compactionTranscriptTarget = await resolveSessionTranscriptRuntimeTarget({
+        agentId: target.agentId,
+        sessionId,
+        sessionKey: target.canonicalKey,
+        storePath,
+      });
 
       const interruptResult = await interruptSessionRunIfActive({
         req,
@@ -2470,8 +2556,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           sessionId,
           sessionKey: target.canonicalKey,
           agentId: target.agentId,
+          sessionTarget: {
+            agentId: target.agentId,
+            sessionId,
+            sessionKey: target.canonicalKey,
+            storePath,
+          },
           allowGatewaySubagentBinding: true,
-          sessionFile: filePath,
+          sessionFile: compactionTranscriptTarget.sessionFile,
           workspaceDir,
           cwd,
           config: cfg,
@@ -2513,34 +2605,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
 
       if (result.ok && result.compacted) {
-        await updateSessionStore(storePath, (store) => {
-          const entryKey = compactTarget.primaryKey;
-          const entryToUpdate = store[entryKey];
-          if (!entryToUpdate) {
-            return;
-          }
-          entryToUpdate.updatedAt = Date.now();
-          entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-          if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
-            entryToUpdate.sessionId = result.result.sessionId;
-          }
-          if (result.result?.sessionFile) {
-            entryToUpdate.sessionFile = result.result.sessionFile;
-          }
-          delete entryToUpdate.inputTokens;
-          delete entryToUpdate.outputTokens;
-          delete entryToUpdate.contextBudgetStatus;
-          if (
-            typeof result.result?.tokensAfter === "number" &&
-            Number.isFinite(result.result.tokensAfter)
-          ) {
-            entryToUpdate.totalTokens = result.result.tokensAfter;
-            entryToUpdate.totalTokensFresh = true;
-          } else {
-            delete entryToUpdate.totalTokens;
-            delete entryToUpdate.totalTokensFresh;
-          }
-        });
+        await patchAccessorSessionEntry(
+          compactSessionScope,
+          (entryToUpdate) => {
+            if (entryToUpdate.sessionId !== sessionId) {
+              return null;
+            }
+            entryToUpdate.updatedAt = Date.now();
+            entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+            if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
+              entryToUpdate.sessionId = result.result.sessionId;
+            }
+            delete entryToUpdate.inputTokens;
+            delete entryToUpdate.outputTokens;
+            delete entryToUpdate.contextBudgetStatus;
+            if (
+              typeof result.result?.tokensAfter === "number" &&
+              Number.isFinite(result.result.tokensAfter)
+            ) {
+              entryToUpdate.totalTokens = result.result.tokensAfter;
+              entryToUpdate.totalTokensFresh = true;
+            } else {
+              delete entryToUpdate.totalTokens;
+              delete entryToUpdate.totalTokensFresh;
+            }
+            return entryToUpdate;
+          },
+          { replaceEntry: true },
+        );
       }
 
       respond(
@@ -2571,7 +2663,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: compactTarget.primaryKey,
+        sessionKey: target.canonicalKey,
         agentId: target.agentId,
       },
       {
@@ -2628,7 +2720,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: compactTarget.primaryKey,
+        sessionKey: target.canonicalKey,
         agentId: target.agentId,
       },
       {

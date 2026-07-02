@@ -48,7 +48,6 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -850,7 +849,6 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
     sessionFile: activeSessionFile,
@@ -861,6 +859,7 @@ export async function runCodexAppServerAttempt(
     !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
       ? []
       : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hadSessionTranscriptState = historyMessages.length > 0;
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -901,11 +900,12 @@ export async function runCodexAppServerAttempt(
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadSessionFile,
+      hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
+      sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: params.provider,
@@ -1367,6 +1367,7 @@ export async function runCodexAppServerAttempt(
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
+    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
   });
   let client: CodexAppServerClient;
@@ -3117,6 +3118,7 @@ export async function runCodexAppServerAttempt(
         sessionIdUsed: activeSessionId,
         sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
+        sessionTarget: params.sessionTarget,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,

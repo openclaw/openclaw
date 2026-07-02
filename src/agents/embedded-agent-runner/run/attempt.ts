@@ -15,8 +15,11 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
+  resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -25,6 +28,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -499,6 +503,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
+  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -508,6 +513,22 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+type PreflightRecoveryBudgetSnapshot = Pick<
+  MidTurnPrecheckRequest,
+  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
+>;
+
+// Carries the measured prompt budget into the outer recovery loop. The synthetic
+// precheck error is only a routing signal, so compaction engines need these
+// fields to compact against the prompt OpenClaw actually rendered.
+function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetSnapshot) {
+  return {
+    estimatedPromptTokens: snapshot.estimatedPromptTokens,
+    promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
+    overflowTokens: snapshot.overflowTokens,
+  };
+}
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -637,8 +658,14 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
-function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(
+  sessionManager: ReturnType<typeof guardSessionManager>,
+): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
 }
 
 function repairAttemptToolUseResultPairing(
@@ -823,6 +850,91 @@ async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
     },
   );
   return updated ?? entry;
+}
+
+async function resolveAttemptTrajectorySessionFile(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<string> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  if (!storePath || !params.sessionKey) {
+    return params.sessionFile;
+  }
+  return (
+    await resolveSessionTranscriptRuntimeReadTarget({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    })
+  ).sessionFile;
+}
+
+type ExistingAttemptTranscriptState = {
+  hasBootstrapTranscriptState: boolean;
+  hasFileTranscriptState: boolean;
+};
+
+function isTranscriptMessageEvent(event: unknown): boolean {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    "type" in event &&
+    (event as { type?: unknown }).type === "message"
+  );
+}
+
+async function resolveExistingAttemptTranscriptState(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+}): Promise<ExistingAttemptTranscriptState> {
+  const storePath =
+    params.sessionTarget?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  let hasBootstrapTranscriptState = false;
+  if (storePath && params.sessionKey) {
+    try {
+      const sqliteEvents = await loadTranscriptEvents({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      });
+      hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState,
+          hasFileTranscriptState: false,
+        };
+      }
+    } catch {
+      if (sqliteMarker) {
+        return {
+          hasBootstrapTranscriptState: false,
+          hasFileTranscriptState: false,
+        };
+      }
+    }
+  }
+  const hasFileTranscriptState = await fs
+    .stat(params.sessionFile)
+    .then(() => true)
+    .catch(() => false);
+  return {
+    hasBootstrapTranscriptState: hasBootstrapTranscriptState || hasFileTranscriptState,
+    hasFileTranscriptState,
+  };
 }
 
 export async function runEmbeddedAttempt(
@@ -2204,10 +2316,14 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const transcriptState = await resolveExistingAttemptTranscriptState({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
 
       const transcriptPolicy = resolveAttemptTranscriptPolicy({
         runtimePlan: params.runtimePlan,
@@ -2259,10 +2375,11 @@ export async function runEmbeddedAttempt(
 
       await withOwnedSessionWriteLock(async () => {
         await runAttemptContextEngineBootstrap({
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasBootstrapTranscriptState,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           sessionManager,
           runtimeContext: buildAfterTurnRuntimeContext({
@@ -2285,6 +2402,7 @@ export async function runEmbeddedAttempt(
               contextEngine: contextParams.contextEngine as never,
               sessionId: contextParams.sessionId,
               sessionKey: contextParams.sessionKey,
+              sessionTarget: contextParams.sessionTarget,
               sessionFile: contextParams.sessionFile,
               reason: contextParams.reason,
               sessionManager: contextParams.sessionManager as never,
@@ -2299,7 +2417,7 @@ export async function runEmbeddedAttempt(
         await prepareSessionManagerForRun({
           sessionManager,
           sessionFile: params.sessionFile,
-          hadSessionFile,
+          hadSessionFile: transcriptState.hasFileTranscriptState,
           sessionId: params.sessionId,
           cwd: effectiveCwd,
         });
@@ -2710,6 +2828,7 @@ export async function runEmbeddedAttempt(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
@@ -2790,13 +2909,21 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const trajectorySessionFile = await resolveAttemptTrajectorySessionFile({
+        agentId: sessionAgentId,
+        config: params.config,
+        sessionFile: params.sessionFile,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      });
       trajectoryRecorder = createTrajectoryRuntimeRecorder({
         cfg: params.config,
         env: process.env,
         runId: params.runId,
         sessionId: activeSession.sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        sessionFile: trajectorySessionFile,
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.model.api,
@@ -3385,15 +3512,42 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            const contextEngineAssembleReserveTokens = Math.max(
+              0,
+              Math.floor(settingsManager.getCompactionReserveTokens()),
+            );
+            const contextEngineAssembleContextTokenBudget = Math.max(
+              1,
+              Math.floor(
+                params.contextTokenBudget ??
+                  params.model.contextWindow ??
+                  params.model.maxTokens ??
+                  DEFAULT_CONTEXT_TOKENS,
+              ),
+            );
+            const contextEngineAssemblePromptBudget = Math.max(
+              1,
+              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
+            );
+            const contextEngineAssembleRenderedPromptTokens =
+              estimateRenderedLlmBoundaryTokenPressure({
+                systemPrompt: systemPromptText,
+                prompt: params.prompt ?? "",
+              });
+            const contextEngineAssembleMessageBudget = Math.max(
+              1,
+              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
+            );
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
-              tokenBudget: params.contextTokenBudget,
+              tokenBudget: contextEngineAssembleMessageBudget,
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              maxOutputTokens: contextEngineAssembleReserveTokens,
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,
               requestedModelId: params.requestedModelId,
@@ -3957,6 +4111,7 @@ export async function runEmbeddedAttempt(
             preflightRecovery = {
               route: "truncate_tool_results_only",
               source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -3967,7 +4122,11 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only", source: "mid-turn" };
+            preflightRecovery = {
+              route: "compact_only",
+              source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
+            };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -3976,7 +4135,11 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route, source: "mid-turn" };
+          preflightRecovery = {
+            route: request.route,
+            source: "mid-turn",
+            ...buildPreflightRecoveryBudgetSnapshot(request),
+          };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);
@@ -4383,7 +4546,7 @@ export async function runEmbeddedAttempt(
                 activeSessionManager.appendMessage(
                   redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
                 );
-                flushSessionManagerFile(activeSessionManager);
+                flushSessionManagerTranscript(activeSessionManager);
               });
               activeSession.agent.state.messages =
                 activeSessionManager.buildSessionContext().messages;
@@ -4772,6 +4935,7 @@ export async function runEmbeddedAttempt(
             if (truncationResult.truncated) {
               preflightRecovery = {
                 route: "truncate_tool_results_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
                 handled: true,
                 truncatedCount: truncationResult.truncatedCount,
               };
@@ -4794,7 +4958,10 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
                   `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
               );
-              preflightRecovery = { route: "compact_only" };
+              preflightRecovery = {
+                route: "compact_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+              };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
               promptErrorSource = "precheck";
               skipPromptSubmission = true;
@@ -4803,8 +4970,14 @@ export async function runEmbeddedAttempt(
           if (preemptiveCompaction?.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
-                ? { route: "compact_then_truncate" }
-                : { route: "compact_only" };
+                ? {
+                    route: "compact_then_truncate",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  }
+                : {
+                    route: "compact_only",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             log.warn(
@@ -5215,9 +5388,9 @@ export async function runEmbeddedAttempt(
           }
 
           if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
-            // Context-engine afterTurn hooks may reconcile against the jsonl, so
-            // materialize the active turn before finalization reads from disk.
-            flushSessionManagerFile(activeSessionManager);
+            // Context-engine afterTurn hooks may reconcile against persisted
+            // transcript state, so materialize the active turn first.
+            flushSessionManagerTranscript(activeSessionManager);
           }
         });
 
@@ -5242,6 +5415,7 @@ export async function runEmbeddedAttempt(
             yieldAborted,
             sessionIdUsed,
             sessionKey: params.sessionKey,
+            sessionTarget: params.sessionTarget,
             sessionFile: params.sessionFile,
             messagesSnapshot,
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
@@ -5258,6 +5432,7 @@ export async function runEmbeddedAttempt(
                 contextEngine: contextParams.contextEngine as never,
                 sessionId: contextParams.sessionId,
                 sessionKey: contextParams.sessionKey,
+                sessionTarget: contextParams.sessionTarget,
                 sessionFile: contextParams.sessionFile,
                 reason: contextParams.reason,
                 sessionManager: contextParams.sessionManager as never,

@@ -1284,7 +1284,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
                   source: "env",
                   provider: "default",
                   id: "TELEGRAM_DEFAULT_BOTTOKEN",
-                },
+                } as never,
               },
             },
           },

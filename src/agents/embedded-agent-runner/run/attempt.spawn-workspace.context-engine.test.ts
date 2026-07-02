@@ -5,6 +5,10 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import {
+  appendTranscriptMessage,
+  createSessionEntryWithTranscript,
+} from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
@@ -66,6 +70,18 @@ type MockCallSource = {
     calls: ArrayLike<ReadonlyArray<unknown>>;
   };
 };
+
+async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEvent[]> {
+  const workspaceDir = tempPaths[0];
+  if (!workspaceDir) {
+    throw new Error("missing trajectory workspace path");
+  }
+  return (await fs.readFile(path.join(workspaceDir, "embedded-session.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as TrajectoryEvent);
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -877,12 +893,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(seen.systemPrompt).not.toContain("secret runtime context");
     expect(JSON.stringify(seen.messages)).not.toContain("visible ask");
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
@@ -1648,12 +1659,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
     );
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
@@ -1789,12 +1795,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           message.role === "user" && String(message.content).includes("internal heartbeat event"),
       ),
     ).toBe(false);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
     expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
@@ -1836,12 +1837,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("orphaned ask");
     expect(seenPrompt).not.toContain("internal heartbeat event");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const runtimeContext = findRecord(
       requireRecords(seenMessages, "seen messages"),
@@ -1891,12 +1887,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
@@ -1964,12 +1955,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("visible_reply_contract: message_tool_only");
     expect(contextCompiled?.data?.prompt).toContain("[OpenClaw room event]");
@@ -2000,12 +1986,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       role: "user",
       content: "seed",
     });
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
     const skipped = findRecord(
       trajectoryEvents as Array<Record<string, unknown>>,
@@ -2485,7 +2466,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {
       events.push("afterTurn");
     });
-    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+    hoisted.sessionManager.replacePersistedTranscript.mockImplementation(() => {
       events.push("flush");
     });
 
@@ -2526,6 +2507,69 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
+  });
+
+  it("uses SQLite transcript messages for bootstrap without treating the marker as a file", async () => {
+    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-sqlite-"));
+    tempPaths.push(storeDir);
+    const storePath = path.join(storeDir, "sessions.json");
+    const created = await createSessionEntryWithTranscript(
+      {
+        agentId: "main",
+        sessionKey,
+        storePath,
+      },
+      () => ({
+        ok: true,
+        entry: {
+          sessionId: embeddedSessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    if (!created.ok) {
+      throw new Error(`failed to create SQLite session entry: ${created.error}`);
+    }
+    await appendTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId: embeddedSessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        message: { role: "user", content: "persisted SQLite prompt" },
+        now: Date.now(),
+      },
+    );
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ bootstrap, assemble }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sessionFile: created.sessionFile,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: embeddedSessionId,
+          sessionKey,
+          storePath,
+        },
+      },
+    });
+
+    expect(bootstrap).toHaveBeenCalled();
+    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: created.sessionFile,
+        hadSessionFile: false,
+      }),
+    );
   });
 
   it("resolves bootstrap context before acquiring the session write lock", async () => {
@@ -3022,7 +3066,13 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     });
 
     expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only", source: "mid-turn" });
+    expect(result.preflightRecovery).toEqual({
+      route: "compact_only",
+      source: "mid-turn",
+      estimatedPromptTokens: 9000,
+      promptBudgetBeforeReserve: 7000,
+      overflowTokens: 2000,
+    });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
@@ -3063,6 +3113,34 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    hoisted.compactionReserveTokens = 20_000;
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 100_000,
+        prompt: "current prompt",
+        transcriptPrompt: "current prompt",
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    expect(assembleParams.tokenBudget).toBeLessThan(80_000);
+    expect(assembleParams.runtimeSettings).toMatchObject({
+      limits: {
+        maxOutputTokens: 20_000,
+      },
+    });
   });
 
   it("preserves the cacheable prefix while bounding current prompt results", async () => {

@@ -43,6 +43,7 @@ export type SessionFilePathOptions = {
 };
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
@@ -285,6 +286,9 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
+    if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
+      return candidate;
+    }
     try {
       return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
     } catch {

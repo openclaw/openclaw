@@ -2,7 +2,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -34,16 +33,6 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
-
-const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
-
-vi.mock("../../config/sessions/store.runtime.js", () => {
-  storeRuntimeLoads();
-  return {
-    updateSessionStore,
-  };
-});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -142,19 +131,11 @@ let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInbou
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").testing;
-let loadScopeCounter = 0;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
   error.name = "GatewayDrainingError";
   return error;
-}
-
-async function loadFreshGetReplyRunModuleForTest() {
-  return await importFreshModule<typeof import("./get-reply-run.js")>(
-    import.meta.url,
-    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
-  );
 }
 
 function baseParams(
@@ -291,8 +272,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
   });
@@ -301,12 +280,6 @@ describe("runPreparedReply media-only handling", () => {
     vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
-  });
-
-  it("does not load session store runtime on module import", async () => {
-    await loadFreshGetReplyRunModuleForTest();
-
-    expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -419,7 +392,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.thinkLevel).toBe("off");
     expect(sessionEntry.thinkingLevel).toBe("high");
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
-    expect(updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {

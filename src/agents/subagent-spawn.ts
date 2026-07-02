@@ -5,7 +5,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -93,11 +92,8 @@ import {
   getSessionBindingService,
   getRuntimeConfig,
   hasInProcessGatewayContext,
-  loadSessionStore,
-  mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
   resolveAgentConfig,
   resolveContextEngine,
@@ -105,7 +101,8 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
-  updateSessionStore,
+  loadSessionEntry,
+  upsertSessionEntry,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
@@ -138,7 +135,6 @@ type SubagentSpawnDeps = {
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
-  updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -150,7 +146,6 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   resolveContextEngine,
-  updateSessionStore,
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
@@ -224,13 +219,6 @@ export type SpawnSubagentResult = {
 };
 
 export { splitModelRef } from "./subagent-spawn-plan.js";
-
-async function updateSubagentSessionStore(
-  storePath: string,
-  mutator: Parameters<typeof updateSessionStore>[1],
-) {
-  return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
-}
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
@@ -377,34 +365,20 @@ async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSubagentSessionStore(target.storePath, (store) => {
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: target.canonicalKey,
-        candidates: target.storeKeys,
-      });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+    await upsertSessionEntry(
+      {
+        storePath: target.storePath,
+        sessionKey: target.canonicalKey,
+      },
+      {
         model,
         ...(provider ? { modelProvider: provider } : {}),
-      });
-    });
+      },
+    );
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
-}
-
-function resolveStoreEntryByKeys(
-  store: Record<string, SessionEntry>,
-  keys: readonly string[],
-): SessionEntry | undefined {
-  for (const key of keys) {
-    const entry = store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function readRequesterThinkingLevel(params: {
@@ -418,8 +392,11 @@ function readRequesterThinkingLevel(params: {
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
-    const store = loadSessionStore(target.storePath, { clone: false });
-    entry = resolveStoreEntryByKeys(store, target.storeKeys);
+    entry = loadSessionEntry({
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      clone: false,
+    });
   } catch {
     entry = undefined;
   }
@@ -504,7 +481,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -521,7 +497,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(
@@ -1307,17 +1282,13 @@ export async function spawnSubagentDirect(
         cfg,
         key: childSessionKey,
       });
-      await updateSubagentSessionStore(target.storePath, (store) => {
-        pruneLegacyStoreKeys({
-          store,
-          canonicalKey: target.canonicalKey,
-          candidates: target.storeKeys,
-        });
-        store[target.canonicalKey] = mergeSessionEntry(
-          store[target.canonicalKey],
-          buildDirectChildSessionPatch(patch),
-        );
-      });
+      await upsertSessionEntry(
+        {
+          storePath: target.storePath,
+          sessionKey: target.canonicalKey,
+        },
+        buildDirectChildSessionPatch(patch),
+      );
       return undefined;
     } catch (err) {
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";

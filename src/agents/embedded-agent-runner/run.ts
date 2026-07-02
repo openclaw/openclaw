@@ -10,7 +10,11 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSessionTranscriptRuntimeReadTarget,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -18,6 +22,7 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -236,7 +241,7 @@ import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInSession,
+  truncateOversizedToolResultsInActiveTarget,
 } from "./tool-result-truncation.js";
 import type {
   EmbeddedAgentMeta,
@@ -261,6 +266,32 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+
+function buildContextEngineCompactionSessionTarget(params: {
+  agentId: string;
+  config?: RunEmbeddedAgentParams["config"];
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
+}): ContextEngineSessionTarget {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const storePath =
+    params.sessionTarget?.storePath ??
+    sqliteMarker?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId });
+  return {
+    agentId,
+    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -992,7 +1023,8 @@ async function runEmbeddedAgentInternal(
         sessionKey: normalizedSessionKey,
         modelFallbacksOverride: params.modelFallbacksOverride,
       });
-      const resolvedSessionKey = normalizedSessionKey;
+      const resolvedSessionKey =
+        normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -1656,6 +1688,15 @@ async function runEmbeddedAgentInternal(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      let activeSessionTarget: ContextEngineSessionTarget | undefined =
+        buildContextEngineCompactionSessionTarget({
+          agentId: params.agentId ?? sessionAgentId,
+          config: params.config,
+          sessionFile: activeSessionFile,
+          sessionId: activeSessionId,
+          sessionKey: resolvedSessionKey,
+          sessionTarget: params.sessionTarget,
+        });
       const adoptActiveSessionId = (nextSessionId: string | undefined) => {
         if (!nextSessionId || nextSessionId === activeSessionId) {
           return;
@@ -1670,6 +1711,23 @@ async function runEmbeddedAgentInternal(
           lifecycleGeneration,
         });
       };
+      const adoptActiveSessionTarget = async (
+        nextSessionTarget: ContextEngineSessionTarget | undefined,
+      ) => {
+        if (!nextSessionTarget) {
+          return;
+        }
+        const resolvedTarget = await resolveAgentRunSessionTarget({
+          agentId: nextSessionTarget.agentId ?? sessionAgentId,
+          config: params.config,
+          sessionId: nextSessionTarget.sessionId ?? activeSessionId,
+          sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
+          sessionTarget: nextSessionTarget,
+        });
+        activeSessionTarget = nextSessionTarget;
+        activeSessionFile = resolvedTarget.sessionFile;
+        adoptActiveSessionId(resolvedTarget.sessionId);
+      };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // The embedded agent owns JSONL persistence; this marker lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1677,15 +1735,60 @@ async function runEmbeddedAgentInternal(
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
       ) => {
-        if (params.currentMessageId !== undefined) {
-          lastPersistedCurrentMessageId = params.currentMessageId;
+        const messageMetadata = message as {
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+        const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
+        const markCurrentUserMessagePersisted = () => {
+          if (params.currentMessageId !== undefined) {
+            lastPersistedCurrentMessageId = params.currentMessageId;
+          }
+          params.onUserMessagePersisted?.(message);
+        };
+        const recorder = params.userTurnTranscriptRecorder;
+        if (!recorder) {
+          markCurrentUserMessagePersisted();
+          return;
         }
-        params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
-        params.onUserMessagePersisted?.(message);
+        const markWhenPersisted = (persisted: { message?: unknown } | undefined) => {
+          if (persisted?.message || recorder.hasPersisted()) {
+            markCurrentUserMessagePersisted();
+          }
+        };
+        if (blockedBeforeAgentRun !== undefined) {
+          const canonicalPersistence = recorder
+            .persistBlocked(message)
+            .then(markWhenPersisted)
+            .catch((persistError: unknown) => {
+              log.warn(
+                `failed to persist canonical blocked embedded user turn transcript: ${formatErrorMessage(
+                  persistError,
+                )}`,
+              );
+            });
+          recorder.markRuntimePersistencePending(canonicalPersistence);
+          return;
+        }
+        const canonicalPersistence = recorder
+          .persistApproved()
+          .then(markWhenPersisted)
+          .catch((persistError: unknown) => {
+            log.warn(
+              `failed to persist canonical embedded user turn transcript: ${formatErrorMessage(
+                persistError,
+              )}`,
+            );
+          });
+        recorder.markRuntimePersistencePending(canonicalPersistence);
       };
       const continueFromCurrentTranscript = () => {
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
+      };
+      const waitForCurrentUserMessagePersistence = async () => {
+        if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
+          await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
+        }
       };
       const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
@@ -1854,15 +1957,22 @@ async function runEmbeddedAgentInternal(
           ...hookCtx,
           sessionId: activeSessionId,
         });
-        const adoptCompactionTranscript = (
+        const adoptCompactionTranscript = async (
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
-          const nextSessionFile = compactResult.result?.sessionFile;
-          adoptActiveSessionId(nextSessionId);
-          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
+          const nextSessionTarget = compactResult.result?.sessionTarget;
+          const nextSessionFile = (compactResult.result as { sessionFile?: string } | undefined)
+            ?.sessionFile;
+          await adoptActiveSessionTarget(
+            nextSessionTarget && nextSessionId
+              ? { ...nextSessionTarget, sessionId: nextSessionTarget.sessionId ?? nextSessionId }
+              : nextSessionTarget,
+          );
+          if (!nextSessionTarget && nextSessionFile) {
             activeSessionFile = nextSessionFile;
           }
+          adoptActiveSessionId(nextSessionId);
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1919,7 +2029,7 @@ async function runEmbeddedAgentInternal(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
+                sessionFile: activeSessionFile,
               },
               resolveActiveHookContext(),
             );
@@ -1996,6 +2106,18 @@ async function runEmbeddedAgentInternal(
             runtimeAuthState,
           });
           const attemptFastMode = resolveAttemptFastModeParam();
+          const trajectorySessionFile = resolvedSessionKey
+            ? (
+                await resolveSessionTranscriptRuntimeReadTarget({
+                  agentId: workspaceResolution.agentId,
+                  sessionId: activeSessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: resolveStorePath(params.config?.session?.store, {
+                    agentId: workspaceResolution.agentId,
+                  }),
+                })
+              ).sessionFile
+            : activeSessionFile;
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -2124,6 +2246,8 @@ async function runEmbeddedAgentInternal(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
+            sessionTarget: activeSessionTarget,
+            trajectorySessionFile,
             workspaceDir: resolvedWorkspace,
             cwd: params.cwd,
             agentDir,
@@ -2283,6 +2407,7 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          await waitForCurrentUserMessagePersistence();
 
           const {
             aborted,
@@ -2304,9 +2429,25 @@ async function runEmbeddedAgentInternal(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          const previousActiveSessionId = activeSessionId;
+          const previousActiveSessionFile = activeSessionFile;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
+          }
+          if (
+            (sessionIdUsed && sessionIdUsed !== previousActiveSessionId) ||
+            (sessionFileUsed && sessionFileUsed !== previousActiveSessionFile)
+          ) {
+            const activeSqliteMarker = parseSqliteSessionFileMarker(activeSessionFile);
+            activeSessionTarget = activeSqliteMarker
+              ? {
+                  agentId: activeSqliteMarker.agentId,
+                  sessionId: activeSqliteMarker.sessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: activeSqliteMarker.storePath,
+                }
+              : undefined;
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -2554,8 +2695,16 @@ async function runEmbeddedAgentInternal(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    sessionKey: resolvedSessionKey,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: resolvedSessionKey,
+                      sessionTarget: activeSessionTarget,
+                    }),
                     tokenBudget: ctxInfo.tokens,
                     force: true,
                     compactionTarget: "budget",
@@ -2578,7 +2727,7 @@ async function runEmbeddedAgentInternal(
                 };
               }
               if (timeoutCompactResult.compacted) {
-                adoptCompactionTranscript(timeoutCompactResult);
+                await adoptCompactionTranscript(timeoutCompactResult);
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
@@ -2594,6 +2743,7 @@ async function runEmbeddedAgentInternal(
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
+                    sessionId: activeSessionId,
                     agentId: sessionAgentId,
                     sessionFile: activeSessionFile,
                   });
@@ -2637,8 +2787,15 @@ async function runEmbeddedAgentInternal(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const preflightEstimatedPromptTokens =
+              typeof preflightRecovery?.estimatedPromptTokens === "number" &&
+              Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
+              preflightRecovery.estimatedPromptTokens > 0
+                ? Math.ceil(preflightRecovery.estimatedPromptTokens)
+                : undefined;
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
+              preflightEstimatedPromptTokens ??
               (ctxInfo.tokens > 0
                 ? // Confirmed overflow with an unparseable provider message still carries a
                   // minimally over-budget count for compaction engines and diagnostics.
@@ -2650,6 +2807,7 @@ async function runEmbeddedAgentInternal(
                 `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
@@ -2758,8 +2916,16 @@ async function runEmbeddedAgentInternal(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    sessionKey: resolvedSessionKey,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: resolvedSessionKey,
+                      sessionTarget: activeSessionTarget,
+                    }),
                     tokenBudget: ctxInfo.tokens,
                     ...(overflowTokenCountForCompaction !== undefined
                       ? { currentTokenCount: overflowTokenCountForCompaction }
@@ -2773,11 +2939,12 @@ async function runEmbeddedAgentInternal(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  adoptCompactionTranscript(compactResult);
+                  await adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    sessionTarget: activeSessionTarget,
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
@@ -2815,7 +2982,7 @@ async function runEmbeddedAgentInternal(
                 continue;
               }
               if (compactResult.compacted) {
-                adoptCompactionTranscript(compactResult);
+                await adoptCompactionTranscript(compactResult);
                 if (
                   typeof compactResult.result?.tokensAfter === "number" &&
                   Number.isFinite(compactResult.result.tokensAfter) &&
@@ -2824,17 +2991,19 @@ async function runEmbeddedAgentInternal(
                   lastCompactionTokensAfter = Math.floor(compactResult.result.tokensAfter);
                 }
                 if (preflightRecovery?.route === "compact_then_truncate") {
-                  const truncResult = await truncateOversizedToolResultsInSession({
-                    sessionFile: activeSessionFile,
+                  const truncResult = await truncateOversizedToolResultsInActiveTarget({
+                    scope: {
+                      sessionId: activeSessionId,
+                      sessionKey: params.sessionKey ?? activeSessionId,
+                      sessionFile: activeSessionFile,
+                      agentId: sessionAgentId,
+                    },
                     contextWindowTokens: ctxInfo.tokens,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
                       contextWindowTokens: ctxInfo.tokens,
                       cfg: params.config,
                       agentId: sessionAgentId,
                     }),
-                    sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    agentId: sessionAgentId,
                     config: params.config,
                   });
                   if (truncResult.truncated) {
@@ -2854,15 +3023,18 @@ async function runEmbeddedAgentInternal(
                 postCompactionGuard.armPostCompaction();
                 if (preflightRecovery?.source === "mid-turn") {
                   continueFromCurrentTranscript();
-                } else if (
-                  params.currentMessageId !== undefined &&
-                  params.currentMessageId === lastPersistedCurrentMessageId
-                ) {
-                  // The first attempt reached the embedded agent far enough to persist this user turn.
-                  // Retrying the original prompt would replay it, so resume from the
-                  // compacted transcript and suppress the next user append.
-                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-                  suppressNextUserMessagePersistence = true;
+                } else {
+                  await waitForCurrentUserMessagePersistence();
+                  if (
+                    params.currentMessageId !== undefined &&
+                    params.currentMessageId === lastPersistedCurrentMessageId
+                  ) {
+                    // The first attempt reached the embedded agent far enough to persist this user turn.
+                    // Retrying the original prompt would replay it, so resume from the
+                    // compacted transcript and suppress the next user append.
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    suppressNextUserMessagePersistence = true;
+                  }
                 }
                 continue;
               }
@@ -2891,13 +3063,15 @@ async function runEmbeddedAgentInternal(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
-                const truncResult = await truncateOversizedToolResultsInSession({
-                  sessionFile: activeSessionFile,
+                const truncResult = await truncateOversizedToolResultsInActiveTarget({
+                  scope: {
+                    sessionId: activeSessionId,
+                    sessionKey: params.sessionKey ?? activeSessionId,
+                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                  },
                   contextWindowTokens,
                   maxCharsOverride: toolResultMaxChars,
-                  sessionId: activeSessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: sessionAgentId,
                   config: params.config,
                 });
                 if (truncResult.truncated) {

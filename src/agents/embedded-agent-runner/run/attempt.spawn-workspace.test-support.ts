@@ -13,6 +13,7 @@ import type {
   CompactResult,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineSessionTarget,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
@@ -57,7 +58,7 @@ type SessionManagerMocks = {
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendCustomEntry: UnknownMock;
-  rewriteFile: UnknownMock;
+  replacePersistedTranscript: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
   removeTrailingEntries: UnknownMock;
@@ -89,12 +90,14 @@ type AttemptSpawnWorkspaceHoisted = {
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
+  prepareSessionManagerForRunMock: AsyncUnknownMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
+  compactionReserveTokens: number;
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
   sessionManager: SessionManagerMocks;
@@ -187,6 +190,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
+  const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
     detectedRefs: [],
@@ -200,6 +204,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     (messages) => messages,
   );
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
+  const compactionReserveTokens = 0;
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
@@ -208,7 +213,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendCustomEntry: vi.fn(),
-    rewriteFile: vi.fn(),
+    replacePersistedTranscript: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
@@ -240,10 +245,12 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
+    prepareSessionManagerForRunMock,
     detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
+    compactionReserveTokens,
     systemPromptTexts,
     embeddedSystemPromptInputs,
     sessionManager,
@@ -427,7 +434,7 @@ vi.mock("../../docs-path.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
-    getCompactionReserveTokens: () => 0,
+    getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultProvider: () => undefined,
     getDefaultModel: () => undefined,
@@ -486,7 +493,7 @@ vi.mock("../session-manager-cache.js", () => ({
 }));
 
 vi.mock("../session-manager-init.js", () => ({
-  prepareSessionManagerForRun: async () => {},
+  prepareSessionManagerForRun: (params: unknown) => hoisted.prepareSessionManagerForRunMock(params),
 }));
 
 vi.mock("../../session-write-lock.js", () => ({
@@ -1023,9 +1030,11 @@ export function resetEmbeddedAttemptHarness(
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+  hoisted.prepareSessionManagerForRunMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
+  hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
@@ -1035,7 +1044,7 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendCustomEntry.mockReset();
-  hoisted.sessionManager.rewriteFile.mockReset();
+  hoisted.sessionManager.replacePersistedTranscript.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }
@@ -1214,8 +1223,9 @@ export async function createContextEngineAttemptRunner(params: {
     }) => Promise<IngestResult>;
     compact?: (params: {
       sessionId: string;
-      sessionKey?: string;
-      sessionFile: string;
+      sessionKey: string;
+      agentId?: string;
+      sessionTarget?: ContextEngineSessionTarget;
       tokenBudget?: number;
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
@@ -1265,8 +1275,13 @@ export async function createContextEngineAttemptRunner(params: {
   }));
 
   const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;
+  const previousTrajectoryDirEnv = process.env.OPENCLAW_TRAJECTORY_DIR;
   if (params.trajectory !== true) {
     process.env.OPENCLAW_TRAJECTORY = "0";
+    delete process.env.OPENCLAW_TRAJECTORY_DIR;
+  } else {
+    delete process.env.OPENCLAW_TRAJECTORY;
+    process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
     return await (
@@ -1320,6 +1335,11 @@ export async function createContextEngineAttemptRunner(params: {
       delete process.env.OPENCLAW_TRAJECTORY;
     } else {
       process.env.OPENCLAW_TRAJECTORY = previousTrajectoryEnv;
+    }
+    if (previousTrajectoryDirEnv === undefined) {
+      delete process.env.OPENCLAW_TRAJECTORY_DIR;
+    } else {
+      process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDirEnv;
     }
   }
 }

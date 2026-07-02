@@ -436,9 +436,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolveStorePath: vi.fn(
           () => "/tmp/agent-sessions.json",
         ) as unknown as PluginRuntime["agent"]["session"]["resolveStorePath"],
-        loadSessionStore: vi.fn(
-          () => ({}),
-        ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
         getSessionEntry: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["agent"]["session"]["getSessionEntry"],
@@ -455,24 +452,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
-        saveSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["saveSessionStore"],
-        updateSessionStore: vi
-          .fn()
-          .mockResolvedValue(
-            undefined,
-          ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStore"],
         updateSessionStoreEntry: vi
           .fn()
           .mockResolvedValue(
             null,
           ) as unknown as PluginRuntime["agent"]["session"]["updateSessionStoreEntry"],
-        resolveSessionFilePath: vi.fn(
-          (sessionId: string) => `/tmp/${sessionId}.json`,
-        ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
       },
     },
     system: {

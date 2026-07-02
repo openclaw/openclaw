@@ -25,6 +25,10 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
@@ -882,7 +886,7 @@ export async function runPreparedReply(
             skillFilter: opts?.skillFilter,
           });
         });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+  sessionEntry = skillResult.sessionEntry;
   if (sessionEntry) {
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
@@ -985,14 +989,22 @@ export async function runPreparedReply(
       sessionId: latestSessionId,
       storePath,
     });
+    const existingSessionFile = latestSessionEntry?.sessionFile;
+    const sessionFile =
+      existingSessionFile &&
+      sqliteSessionFileMarkerMatchesSession(existingSessionFile, latestSessionId)
+        ? existingSessionFile
+        : storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: latestSessionId,
+              storePath,
+            })
+          : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
-      sessionFile: resolveSessionFilePath(
-        latestSessionId,
-        latestSessionEntry,
-        sessionFilePathOptions,
-      ),
+      sessionFile,
     };
   };
   let preparedSessionState = resolvePreparedSessionState();

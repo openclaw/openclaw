@@ -93,6 +93,13 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
+  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+    const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+      string,
+      SessionEntry
+    >;
+    return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
   patchSessionEntry: vi.fn(
     async (
@@ -177,6 +184,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: mocks.listSessionEntries,
   loadSessionEntry: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));

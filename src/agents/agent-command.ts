@@ -15,6 +15,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -596,6 +597,22 @@ function createAgentCommandSessionWorkingCopy(params: {
   return result;
 }
 
+function resolveInternalSessionEffectsSource(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath?: string;
+}): string | undefined {
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
+}
+
 function resolveExplicitAgentCommandSessionKey(params: {
   rawExplicitSessionKey?: string;
   agentIdOverride?: string;
@@ -955,7 +972,7 @@ async function agentCommandInternal(
             allowCreateRestartRecoveryEntry,
           ),
       });
-      sessionEntry = persisted ?? sessionEntry;
+      sessionEntry = persisted;
       trackedRestartRecoveryDeliveryContext =
         Boolean(persisted?.restartRecoveryDeliveryContext) &&
         persisted?.restartRecoveryDeliveryRunId === runId;
@@ -1079,17 +1096,24 @@ async function agentCommandInternal(
           loadTranscriptResolveRuntime(),
         ]);
         const internalSource = suppressVisibleSessionEffects
-          ? await resolveSessionTranscriptFile({
-              sessionId,
-              sessionKey,
-              sessionEntry,
+          ? resolveInternalSessionEffectsSource({
               agentId: sessionAgentId,
-              threadId: opts.threadId,
+              sessionId,
+              sessionFile: (
+                await resolveSessionTranscriptFile({
+                  sessionId,
+                  sessionKey,
+                  sessionEntry,
+                  agentId: sessionAgentId,
+                  threadId: opts.threadId,
+                })
+              ).sessionFile,
+              storePath,
             })
           : undefined;
         const internalSessionFile = suppressVisibleSessionEffects
           ? await prepareInternalSessionEffectsTranscript({
-              sessionFile: internalSource?.sessionFile,
+              sessionFile: internalSource,
               runId,
             })
           : undefined;
@@ -1231,13 +1255,13 @@ async function agentCommandInternal(
         sessionStartedAt: current.sessionStartedAt ?? now,
         skillsSnapshot,
       };
-      await persistSessionEntry({
+      const persisted = await persistSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
         entry: next,
       });
-      sessionEntry = next;
+      sessionEntry = persisted;
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
@@ -1264,13 +1288,13 @@ async function agentCommandInternal(
         next.thinkingLevel = thinkOverride;
       }
       applyVerboseOverride(next, verboseOverride);
-      await persistSessionEntry({
+      const persisted = await persistSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
         entry: next,
       });
-      sessionEntry = next;
+      sessionEntry = persisted;
     }
 
     const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -1354,29 +1378,33 @@ async function agentCommandInternal(
         });
         if (updated) {
           storedModelOverrideSource = undefined;
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry,
           });
+          sessionEntry = persisted;
         }
       }
-      const repaired = repairProviderWrappedModelOverride({
-        entry,
-        defaultProvider,
-        defaultModel,
-      });
+      const repaired = sessionEntry
+        ? repairProviderWrappedModelOverride({
+            entry,
+            defaultProvider,
+            defaultModel,
+          })
+        : { updated: false };
       if (repaired.updated) {
-        await persistSessionEntry({
+        const persisted = await persistSessionEntry({
           sessionStore,
           sessionKey,
           storePath,
           entry,
         });
+        sessionEntry = persisted;
       }
-      const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
-      const overrideModel = sessionEntry.modelOverride?.trim();
+      const overrideProvider = sessionEntry?.providerOverride?.trim() || defaultProvider;
+      const overrideModel = sessionEntry?.modelOverride?.trim();
       if (overrideModel) {
         const normalizedOverride = normalizeAgentCommandModelRef(
           cfg,
@@ -1391,12 +1419,13 @@ async function agentCommandInternal(
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
           });
           if (updated) {
-            await persistSessionEntry({
+            const persisted = await persistSessionEntry({
               sessionStore,
               sessionKey,
               storePath,
               entry,
             });
+            sessionEntry = persisted;
           }
         }
       }
@@ -1678,9 +1707,18 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
+    const sessionEffectsSource = resolveInternalSessionEffectsSource({
+      agentId: sessionAgentId,
+      sessionId,
+      sessionFile,
+      storePath,
+    });
     const attemptSessionFile = suppressVisibleSessionEffects
-      ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
-      : sessionFile;
+      ? await prepareInternalSessionEffectsTranscript({
+          sessionFile: sessionEffectsSource,
+          runId,
+        })
+      : (sessionEffectsSource ?? sessionFile);
 
     const startedAt = Date.now();
     const attemptLifecycleState: AgentAttemptLifecycleState = {
@@ -1815,12 +1853,18 @@ async function agentCommandInternal(
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
     const fastModeStartedAtMs = Date.now();
+    const trajectorySessionFile = resolveInternalSessionEffectsSource({
+      agentId: sessionAgentId,
+      sessionId,
+      sessionFile,
+      storePath,
+    });
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
       sessionId,
       sessionKey,
-      sessionFile,
+      sessionFile: suppressVisibleSessionEffects ? attemptSessionFile : trajectorySessionFile,
       provider,
       modelId: model,
       workspaceDir,
@@ -2019,7 +2063,7 @@ async function agentCommandInternal(
                 current && entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
               ),
           });
-          sessionEntry = persistedEntry ?? sessionEntry;
+          sessionEntry = persistedEntry;
         }
         if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
           result = {
@@ -2181,13 +2225,19 @@ async function agentCommandInternal(
       }
 
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
-      const embeddedAssistantGapFill =
+      const embeddedRunnerNeedsTranscriptPersistence =
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
+      const canonicalUserTurnAlreadyPersisted =
+        attemptLifecycleState.currentTurnUserMessagePersisted &&
+        Boolean(opts.userTurnTranscriptRecorder);
+      const assistantOnlyTranscriptPersistence =
+        canonicalUserTurnAlreadyPersisted &&
+        (transcriptPersistenceRunner === "cli" || embeddedRunnerNeedsTranscriptPersistence);
       if (
         !sessionReboundDuringRun &&
-        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+        (transcriptPersistenceRunner === "cli" || embeddedRunnerNeedsTranscriptPersistence)
       ) {
         let persistedCliTurnTranscript = false;
         try {
@@ -2215,7 +2265,7 @@ async function agentCommandInternal(
             threadId: opts.threadId,
             sessionCwd: effectiveCwd,
             config: cfg,
-            embeddedAssistantGapFill,
+            embeddedAssistantGapFill: assistantOnlyTranscriptPersistence,
           });
           sessionEntry = transcriptResult.sessionEntry;
           sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
@@ -2279,22 +2329,24 @@ async function agentCommandInternal(
 
         if (combinedPayload) {
           const entry = sessionStore[sessionKey] ?? sessionEntry;
-          const next: SessionEntry = {
-            ...entry,
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: combinedPayload,
-            pendingFinalDeliveryContext: currentRunDeliveryContext,
-            pendingFinalDeliveryCreatedAt: now,
-            updatedAt: now,
-          };
-          const persisted = await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry: next,
-            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
-          });
-          sessionEntry = persisted ?? sessionEntry;
+          if (entry) {
+            const next: SessionEntry = {
+              ...entry,
+              pendingFinalDelivery: true,
+              pendingFinalDeliveryText: combinedPayload,
+              pendingFinalDeliveryContext: currentRunDeliveryContext,
+              pendingFinalDeliveryCreatedAt: now,
+              updatedAt: now,
+            };
+            const persisted = await persistSessionEntry({
+              sessionStore,
+              sessionKey,
+              storePath,
+              entry: next,
+              shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
+            });
+            sessionEntry = persisted;
+          }
         }
       }
 
@@ -2302,12 +2354,13 @@ async function agentCommandInternal(
       const resolveFreshSessionEntryForDelivery =
         sessionStore && sessionKey && !suppressVisibleSessionEffects
           ? async (): Promise<SessionEntry | undefined> => {
-              const { loadSessionStore } = await loadSessionStoreRuntime();
-              const freshStore = loadSessionStore(storePath, {
-                skipCache: true,
+              const { loadSessionEntry } = await loadSessionStoreRuntime();
+              const freshEntry = loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
                 clone: false,
               });
-              const freshEntry = freshStore[sessionKey];
               if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
                 return undefined;
               }
@@ -2348,9 +2401,9 @@ async function agentCommandInternal(
         const noPendingTextForThisRun =
           opts.deliver === true &&
           pendingFinalDeliveryTextForThisRun === undefined &&
-          entry.pendingFinalDelivery === true &&
+          entry?.pendingFinalDelivery === true &&
           !entry.pendingFinalDeliveryText;
-        if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+        if (entry && (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun)) {
           const next = clearPendingFinalDeliveryFields(entry, Date.now());
           const persisted = await persistSessionEntry({
             sessionStore,
@@ -2359,7 +2412,7 @@ async function agentCommandInternal(
             entry: next,
             shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
         }
       }
 
@@ -2397,7 +2450,7 @@ async function agentCommandInternal(
             shouldPersist: (current) =>
               shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
         }
       } catch (error) {
         log.warn(

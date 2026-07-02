@@ -5,11 +5,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getSessionEntry } from "../../config/sessions.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
+import { getSessionEntry, type SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import {
   buildFastReplyCommandContext,
@@ -108,11 +105,13 @@ async function seedFastPathSessionStore(
   storePath: string,
   entries: Record<string, Record<string, unknown>>,
 ): Promise<void> {
-  await writeSessionStoreForTestAsync(storePath, entries);
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ storePath, sessionKey }, entry as SessionEntry);
+  }
 }
 
 function readFastPathSessionEntry(storePath: string, sessionKey: string): Record<string, unknown> {
-  return readSessionStoreForTest<Record<string, unknown>>(storePath)[sessionKey] ?? {};
+  return (loadSessionEntry({ storePath, sessionKey }) as Record<string, unknown> | undefined) ?? {};
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {

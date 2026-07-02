@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -22,32 +22,47 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
 async function persistSessionEntryUpdate(params: {
+  expectedSessionId: string | undefined;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
-}) {
-  if (params.sessionEntryHandle) {
-    params.sessionEntryHandle.replaceCurrent(params.nextEntry);
-  } else if (params.sessionStore && params.sessionKey) {
-    params.sessionStore[params.sessionKey] = {
-      ...params.sessionStore[params.sessionKey],
-      ...params.nextEntry,
-    };
-  } else {
-    return;
+}): Promise<SessionEntry | undefined> {
+  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
+    return undefined;
   }
   if (!params.storePath || !params.sessionKey) {
-    return;
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(params.nextEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = {
+        ...params.sessionStore[params.sessionKey],
+        ...params.nextEntry,
+      };
+    }
+    return params.nextEntry;
   }
-  await upsertSessionEntry(
+  const persistedEntry = await updateSessionEntry(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    params.nextEntry,
+    (entry) => (entry.sessionId === params.expectedSessionId ? params.nextEntry : null),
   );
+  if (persistedEntry) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(persistedEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = persistedEntry;
+    }
+    return persistedEntry;
+  }
+  params.sessionEntryHandle?.clearCurrent();
+  if (params.sessionStore && params.sessionKey) {
+    delete params.sessionStore[params.sessionKey];
+  }
+  return undefined;
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -198,14 +213,16 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    await persistSessionEntryUpdate({
+    const persistedEntry = await persistSessionEntryUpdate({
+      expectedSessionId: current.sessionId,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
       nextEntry,
     });
-    systemSent = true;
+    nextEntry = persistedEntry;
+    systemSent = persistedEntry?.systemSent ?? systemSent;
   }
 
   const hasFreshSnapshotInEntry =
@@ -234,7 +251,8 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    await persistSessionEntryUpdate({
+    nextEntry = await persistSessionEntryUpdate({
+      expectedSessionId: current.sessionId,
       sessionEntryHandle,
       sessionStore,
       sessionKey,

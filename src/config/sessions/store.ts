@@ -228,6 +228,8 @@ type SessionEntryWorkflowOptions = {
 };
 
 export type SessionLifecycleArtifactCleanupParams = {
+  /** Agent owner used by SQLite-backed cleanup when the store path is custom. */
+  agentId?: string;
   /** Session store to clean. */
   storePath: string;
   /** Archive exact transcripts referenced by removed entries before the orphan marker scan. */
@@ -1184,7 +1186,6 @@ export async function resetSessionEntryLifecycle(params: {
     if (previousSessionId) {
       mutation.previousSessionId = previousSessionId;
     }
-    await params.afterEntryMutation?.(mutation);
     const archivedTranscripts = await archiveLifecycleSessionTranscripts({
       sessionId: previousSessionId,
       storePath: params.storePath,
@@ -1192,6 +1193,7 @@ export async function resetSessionEntryLifecycle(params: {
       agentId: params.agentId,
       reason: "reset",
     });
+    await params.afterEntryMutation?.(mutation);
     ensureLifecycleTranscriptHeader({
       sessionFile: nextSessionFile,
       sessionId: nextEntry.sessionId,

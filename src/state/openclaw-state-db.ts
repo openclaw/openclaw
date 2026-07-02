@@ -32,8 +32,9 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * migrations/backups that operate on local state.
  */
 const OPENCLAW_STATE_SCHEMA_VERSION = 1;
-/** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
-export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
+/** Per SQLite call busy wait cap; transactions enforce a separate cumulative cap. */
+export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
+export const OPENCLAW_SQLITE_TRANSACTION_BUSY_WAIT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
 
@@ -287,8 +288,14 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   try {
     assertSupportedSchemaVersion(db, pathname);
-    const repaired = runSqliteImmediateTransactionSync(db, () =>
-      repairAgentDatabasesCompositePrimaryKey(db),
+    const repaired = runSqliteImmediateTransactionSync(
+      db,
+      () => repairAgentDatabasesCompositePrimaryKey(db),
+      {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: pathname,
+        maxBusyWaitMs: OPENCLAW_SQLITE_TRANSACTION_BUSY_WAIT_MS,
+      },
     );
     return repaired
       ? {
@@ -662,7 +669,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
   }
 }
 
-function ensureAdditiveStateColumns(db: DatabaseSync): void {
+function ensureAdditiveStateColumns(db: DatabaseSync, pathname: string): void {
   ensureColumn(db, "node_pairing_pending", "client_id TEXT");
   ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
   ensureColumn(db, "node_pairing_paired", "client_id TEXT");
@@ -811,21 +818,29 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
-  runSqliteImmediateTransactionSync(db, () => {
-    const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
-    if (addedTaskRequesterAgentId) {
-      repairLegacyTaskAgentAttribution(db);
-    }
-  });
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
+      if (addedTaskRequesterAgentId) {
+        repairLegacyTaskAgentAttribution(db);
+      }
+    },
+    {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: pathname,
+      maxBusyWaitMs: OPENCLAW_SQLITE_TRANSACTION_BUSY_WAIT_MS,
+    },
+  );
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   assertSupportedSchemaVersion(db, pathname);
-  ensureAdditiveStateColumns(db);
+  ensureAdditiveStateColumns(db, pathname);
   assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-  ensureAdditiveStateColumns(db);
+  ensureAdditiveStateColumns(db, pathname);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
@@ -908,7 +923,11 @@ export function runOpenClawStateWriteTransaction<T>(
   options: OpenClawStateDatabaseOptions = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
-  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
+  const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    databaseLabel: database.path,
+    maxBusyWaitMs: OPENCLAW_SQLITE_TRANSACTION_BUSY_WAIT_MS,
+  });
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);
   } catch {

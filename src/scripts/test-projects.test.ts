@@ -933,7 +933,6 @@ describe("test-projects args", () => {
         forwardedArgs: [],
         includePatterns: [
           "src/gateway/hooks-mapping.test.ts",
-          "src/gateway/server-methods/chat.abort-persistence.test.ts",
           "src/gateway/server.agent.gateway-server-agent-b.test.ts",
           "src/gateway/server.sessions.permissions-hooks.test.ts",
         ],

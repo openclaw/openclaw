@@ -1214,5 +1214,13 @@
   {
     "source": "Docs map",
     "target": "文档地图"
+  },
+  {
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
+  },
+  {
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
   }
 ]

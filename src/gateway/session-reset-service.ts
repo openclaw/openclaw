@@ -1,7 +1,6 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -32,12 +31,8 @@ import {
   type SessionEntry,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import {
-  canonicalizeAbsoluteSessionFilePath,
-  rewriteSessionFileForNewSessionId,
-} from "../config/sessions/session-file-rotation.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -59,7 +54,6 @@ import {
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
-  extractGeneratedTranscriptSessionId,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
@@ -72,41 +66,6 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-
-function resolveResetSessionFile(params: {
-  nextSessionId: string;
-  currentEntry?: SessionEntry;
-  storePath: string;
-  agentId: string;
-}): string {
-  const currentEntry = params.currentEntry;
-  // Rotate generated transcript names by the file's *embedded* id, not the logical
-  // session id: a post-upgrade sessionFile can embed a stale id, so keying off
-  // currentEntry.sessionId would orphan the reset session on the old file. Explicit
-  // custom placements have no embedded id and stay preserved.
-  const rotationPreviousSessionId =
-    extractGeneratedTranscriptSessionId(currentEntry?.sessionFile) ?? currentEntry?.sessionId;
-  const rewrittenSessionFile = rotationPreviousSessionId
-    ? rewriteSessionFileForNewSessionId({
-        sessionFile: currentEntry?.sessionFile,
-        previousSessionId: rotationPreviousSessionId,
-        nextSessionId: params.nextSessionId,
-      })
-    : undefined;
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
-  return resolveSessionFilePath(
-    params.nextSessionId,
-    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
-    resolveSessionFilePathOptions({
-      storePath: params.storePath,
-      agentId: params.agentId,
-    }),
-  );
-}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -779,6 +738,7 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
+  messages?: unknown[];
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
@@ -794,28 +754,15 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  let messages: unknown[] = [];
-  try {
-    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId,
-          sessionEntry: params.entry,
-          sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        },
-        {
-          mode: "full",
-          reason: "before_reset hook payload",
-        },
-      );
-    }
-  } catch (err) {
-    logVerbose(
-      `before_reset: failed to read session messages for ${sessionId ?? "(none)"}; firing hook with empty messages (${String(err)})`,
-    );
-  }
+  const messages =
+    params.messages ??
+    (await readGatewayBeforeResetPluginHookMessages({
+      agentId,
+      entry: params.entry,
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }));
 
   void hookRunner
     .runBeforeReset(
@@ -834,6 +781,38 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     .catch((err: unknown) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
+}
+
+async function readGatewayBeforeResetPluginHookMessages(params: {
+  agentId: string;
+  entry?: SessionEntry;
+  sessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  if (typeof params.sessionId !== "string" || params.sessionId.trim().length === 0) {
+    return [];
+  }
+  try {
+    return await readSessionMessagesAsync(
+      {
+        agentId: params.agentId,
+        sessionEntry: params.entry,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      {
+        mode: "full",
+        reason: "before_reset hook payload",
+      },
+    );
+  } catch (err) {
+    logVerbose(
+      `before_reset: failed to read session messages for ${params.sessionId}; firing hook with empty messages (${String(err)})`,
+    );
+    return [];
+  }
 }
 
 export async function performGatewaySessionReset(params: {
@@ -960,6 +939,15 @@ export async function performGatewaySessionReset(params: {
     parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
     reason: "session-reset",
   });
+  const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
+    ? await readGatewayBeforeResetPluginHookMessages({
+        agentId: normalizeAgentId(target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg)),
+        entry,
+        sessionId: entry?.sessionId,
+        sessionKey: target.canonicalKey ?? params.key,
+        storePath,
+      })
+    : undefined;
 
   const lifecycle = await resetSessionEntryLifecycle({
     agentId: target.agentId,
@@ -994,11 +982,10 @@ export async function performGatewaySessionReset(params: {
       const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
       const now = Date.now();
       const nextSessionId = randomUUID();
-      const sessionFile = resolveResetSessionFile({
-        nextSessionId,
-        currentEntry,
-        storePath,
+      const sessionFile = formatSqliteSessionFileMarker({
         agentId: sessionAgentId,
+        sessionId: nextSessionId,
+        storePath,
       });
       const nextEntry: SessionEntry = {
         sessionId: nextSessionId,
@@ -1087,7 +1074,7 @@ export async function performGatewaySessionReset(params: {
             sessionKey: deferredAcpResetState.sessionKey,
             meta: buildPendingAcpMeta(deferredAcpResetState.meta, Date.now()),
           };
-          // The JSON session rotation and SQLite metadata cannot share a transaction.
+          // Session row rotation and ACP metadata cannot share a transaction.
           // Bind captured ACP state before acknowledging the committed reset so the
           // new session never observes an unreadable old-session row.
           writeAcpSessionMetaForMigration({
@@ -1117,6 +1104,7 @@ export async function performGatewaySessionReset(params: {
       await emitGatewayBeforeResetPluginHook({
         cfg,
         key: params.key,
+        messages: beforeResetMessages,
         target,
         storePath,
         entry: mutation.previousEntry,

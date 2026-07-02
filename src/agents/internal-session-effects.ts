@@ -4,6 +4,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { serializeJsonlEntries } from "../config/sessions/transcript-jsonl.js";
 
 /** Resolves the private transcript path for an internal session-effect run. */
 export function resolveInternalSessionEffectsTranscriptPath(runId: string): string {
@@ -22,6 +25,13 @@ export async function prepareInternalSessionEffectsTranscript(params: {
   await fs.mkdir(path.dirname(sessionFile), { recursive: true, mode: 0o700 });
   if (!params.sessionFile) {
     await fs.writeFile(sessionFile, "", { mode: 0o600 });
+    await fs.chmod(sessionFile, 0o600);
+    return sessionFile;
+  }
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (marker) {
+    const events = await loadTranscriptEvents(marker);
+    await fs.writeFile(sessionFile, serializeJsonlEntries(events), { mode: 0o600 });
     await fs.chmod(sessionFile, 0o600);
     return sessionFile;
   }
