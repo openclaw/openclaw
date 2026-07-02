@@ -1,7 +1,12 @@
 // Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+  UpdateAvailable,
+} from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
 import {
@@ -42,6 +47,7 @@ export type ConfigState = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
   chatError?: string | null;
+  updateAvailable?: UpdateAvailable | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
@@ -223,6 +229,8 @@ function resolveUpdateStatusBanner(params: {
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+      "managed-service-handoff-started":
+        "The update was handed off to the host service. The gateway will restart automatically when the update completes.",
     }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
   return {
     tone,
@@ -307,12 +315,14 @@ export async function runUpdate(state: ConfigState) {
       res.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
       res.handoff?.status === "started";
     if (handoffStarted) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateExpectedVersion =
+        res.result?.after?.version ?? state.updateAvailable?.latestVersion ?? null;
       state.pendingUpdateHandoff = true;
       return;
     }
     if (status === "ok" && res.ok === true) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateExpectedVersion =
+        res.result?.after?.version ?? state.updateAvailable?.latestVersion ?? null;
       state.pendingUpdateHandoff = false;
       return;
     }
