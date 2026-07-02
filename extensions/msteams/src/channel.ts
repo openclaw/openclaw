@@ -266,13 +266,17 @@ function isMSTeamsDmReadTargetAllowed(params: {
   if (dmPolicy === "disabled") {
     return false;
   }
-  if (params.targetTrusted || dmPolicy === "open") {
+  if (dmPolicy === "open") {
     return true;
   }
-  return matchesMSTeamsDmAllowFrom({
+  const allowedByDmAllowlist = matchesMSTeamsDmAllowFrom({
     allowFrom: params.cfg.allowFrom,
     userId: params.userId,
   });
+  if (dmPolicy === "allowlist") {
+    return allowedByDmAllowlist;
+  }
+  return params.targetTrusted || allowedByDmAllowlist;
 }
 
 function hasMatchingMSTeamsChannelRoute(params: {

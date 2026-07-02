@@ -708,6 +708,64 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("blocks implicit current-DM read targets outside the Teams DM allowlist", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:allowed-aad"],
+            },
+          },
+        },
+        params: {
+          messageId: "msg-1",
+        },
+        toolContext: {
+          currentChannelId: "user:cached-aad",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows implicit current-DM read targets inside the Teams DM allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:cached-aad",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
   it("blocks implicit current-DM read targets when Teams DMs are disabled", async () => {
     await expect(
       runAction({
