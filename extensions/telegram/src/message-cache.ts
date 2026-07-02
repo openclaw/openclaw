@@ -66,6 +66,9 @@ export type TelegramMessageCache = {
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
+type MessageWithPromptContextTimestamp = Message & {
+  openclaw_prompt_context_timestamp_ms?: unknown;
+};
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
@@ -159,6 +162,15 @@ function resolveMediaType(placeholder?: string): string | undefined {
   return placeholder?.match(/^<media:([^>]+)>$/)?.[1];
 }
 
+function resolveMessageTimestamp(msg: Message): number | undefined {
+  const promptContextTimestamp = (msg as MessageWithPromptContextTimestamp)
+    .openclaw_prompt_context_timestamp_ms;
+  if (typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)) {
+    return promptContextTimestamp;
+  }
+  return msg.date ? msg.date * 1000 : undefined;
+}
+
 function normalizeMessageNode(
   msg: Message,
   params: { threadId?: number },
@@ -172,13 +184,14 @@ function normalizeMessageNode(
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
   const threadId = normalizeTelegramCacheThreadId(params.threadId);
+  const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
     sender: buildSenderName(msg) ?? "unknown sender",
     ...(msg.from?.id != null ? { senderId: String(msg.from.id) } : {}),
     ...(msg.from?.username ? { senderUsername: msg.from.username } : {}),
-    ...(msg.date ? { timestamp: msg.date * 1000 } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     ...(body ? { body } : {}),
     ...(media ? { mediaType: resolveMediaType(media.placeholder) ?? media.placeholder } : {}),
     ...(fileId ? { mediaRef: `telegram:file/${fileId}` } : {}),

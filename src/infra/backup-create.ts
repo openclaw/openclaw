@@ -1,6 +1,6 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +41,40 @@ class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
   override set(_key: BackupLinkCacheKey, _value: string): this {
     return this;
   }
+}
+
+type VolatileFilterPlan = Parameters<typeof isVolatileBackupPath>[1];
+
+const VOLATILE_BACKUP_SYNTHETIC_STAT = {
+  isBlockDevice: () => false,
+  isCharacterDevice: () => false,
+  isDirectory: () => false,
+  isFIFO: () => false,
+  isFile: () => false,
+  isSocket: () => false,
+  isSymbolicLink: () => false,
+} as unknown as Stats;
+
+class BackupVolatileStatCache extends Map<string, Stats> {
+  constructor(private readonly volatilePlan: VolatileFilterPlan) {
+    super();
+  }
+
+  override get(key: string): Stats | undefined {
+    const cached = super.get(key);
+    if (cached) {
+      return cached;
+    }
+    // node-tar checks this cache before lstat and applies the filter to a hit.
+    // A synthetic hit lets known volatile paths disappear without aborting the archive.
+    return isVolatileBackupPath(key, this.volatilePlan)
+      ? VOLATILE_BACKUP_SYNTHETIC_STAT
+      : undefined;
+  }
+}
+
+function createBackupVolatileStatCache(volatilePlan: VolatileFilterPlan): Map<string, Stats> {
+  return new BackupVolatileStatCache(volatilePlan);
 }
 
 export type BackupCreateOptions = {
@@ -192,7 +226,11 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = {
+  writeTarArchiveWithRetry,
+  isTarEofRaceError,
+  createBackupVolatileStatCache,
+};
 export { testApi as __test };
 
 async function resolveOutputPath(params: {
@@ -844,6 +882,7 @@ export async function createBackupArchive(
             portable: true,
             preservePaths: true,
             linkCache: new BackupLinkCache(),
+            statCache: createBackupVolatileStatCache(volatilePlan),
             filter: tarFilter,
             onWriteEntry: (entry) => {
               entry.path = remapArchiveEntryPath({

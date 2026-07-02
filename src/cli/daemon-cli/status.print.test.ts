@@ -866,4 +866,162 @@ describe("printDaemonStatus", () => {
     expect(errors).toContain("Service is loaded but not running (likely exited immediately).");
     expect(errors).not.toContain("systemd stopped restarting the gateway");
   });
+
+  it("steers a failed RPC probe to credentials/config when the gateway process owns the port", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1008 policy violation: invalid token)",
+          url: "ws://127.0.0.1:18789",
+        },
+        health: {
+          healthy: true,
+          staleGatewayPids: [],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(
+      runtime.log,
+      "Gateway process is running and owns the gateway port, so this is not a warm-up delay",
+    );
+    expectMockLineContains(runtime.log, "Check the probe credentials/config");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Warm-up: launch agents");
+  });
+
+  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
+    // inspectGatewayRestart can set healthy from reachability after ownership failed,
+    // while still returning non-empty staleGatewayPids. That must not be treated as
+    // owns-port proof, or this message would contradict the stale-PID diagnostic below.
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1008 policy violation: invalid token)",
+          url: "ws://127.0.0.1:18789",
+        },
+        health: {
+          healthy: true,
+          staleGatewayPids: [9000],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
+    expect(logged).not.toContain("Gateway process is running and owns the gateway port");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Gateway runtime PID does not own the listening port");
+  });
+
+  it("keeps the warm-up hint for an unhealthy gateway, even with the port held", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1006 abnormal closure (no close frame))",
+          url: "ws://127.0.0.1:18789",
+        },
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        health: {
+          healthy: false,
+          staleGatewayPids: [],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    // health.healthy === false is ambiguous (not-yet-bound / foreign port conflict / stale
+    // PID), so it keeps the warm-up hint rather than steering to a restart; the dedicated
+    // stale-PID / port-not-listening / port-conflict blocks own those cases.
+    expectMockLineContains(runtime.log, "Warm-up: launch agents can take a few seconds");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Gateway process is");
+  });
+
+  it("keeps the warm-up hint when gateway health is unknown", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1006 abnormal closure (no close frame))",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Warm-up: launch agents can take a few seconds");
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).not.toContain("Gateway process is");
+  });
 });

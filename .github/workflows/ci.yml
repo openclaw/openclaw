@@ -1181,8 +1181,6 @@ jobs:
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
-              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             shrinkwrap)
               pnpm deps:shrinkwrap:check
@@ -1732,12 +1730,25 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
+            ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-
+
+      - name: Validate Swift build cache
+        id: validate-swift-build-cache
+        run: |
+          set -euo pipefail
+          cache_valid=true
+          sparkle_info="apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          if [[ -d apps/macos/.build && ! -f "$sparkle_info" ]]; then
+            echo "::warning::Swift build cache is missing Sparkle; resetting the local SwiftPM build directory."
+            swift package --package-path apps/macos reset
+            cache_valid=false
+          fi
+          echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
 
       - name: Preserve Swift build cache hit
-        if: steps.swift-build-cache.outputs.cache-hit == 'true'
+        if: steps.swift-build-cache.outputs.cache-hit == 'true' && steps.validate-swift-build-cache.outputs.cache-valid == 'true'
         run: |
           set -euo pipefail
           # Exact source-hash cache hits already match these inputs; checkout
@@ -1771,7 +1782,13 @@ jobs:
             if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
+            if [[ "$attempt" -eq 3 ]]; then
+              break
+            fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
+            # SwiftPM can invalidate a restored binary artifact while planning.
+            # Reset so the next attempt downloads a complete dependency graph.
+            swift package --package-path apps/macos reset
             sleep $((attempt * 20))
           done
           exit 1

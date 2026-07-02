@@ -11,42 +11,11 @@ import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
 const BUILD_CACHE_VERSION = 3;
-const PLUGIN_SDK_DTS_CACHE_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "npm-shrinkwrap.json",
-  "packages/plugin-sdk/package.json",
-  "packages/llm-core/package.json",
-  "packages/markdown-core/package.json",
-  "packages/media-core/package.json",
-  "packages/media-understanding-common/package.json",
-  "packages/terminal-core/package.json",
-  "packages/acp-core/package.json",
-  "packages/model-catalog-core/package.json",
-  "packages/normalization-core/package.json",
-  "packages/web-content-core/package.json",
-  "packages/memory-host-sdk/package.json",
-  "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  "src/plugin-sdk",
-  "packages/llm-core/src",
-  "packages/markdown-core/src",
-  "packages/media-core/src",
-  "packages/media-generation-core/src",
-  "packages/model-catalog-core/src",
-  "packages/memory-host-sdk/src",
-  "packages/normalization-core/src",
-  "packages/acp-core/src",
-  "packages/media-understanding-common/src",
-  "packages/terminal-core/src",
-  "packages/web-content-core/src",
-  "src/types",
-  "src/video-generation/dashscope-compatible.ts",
-  "src/video-generation/types.ts",
+const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
+  "OPENCLAW_BUILD_PRIVATE_QA",
+  "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
 ];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = ["OPENCLAW_BUILD_PRIVATE_QA"];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entries.mjs",
@@ -54,20 +23,14 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  ...PLUGIN_SDK_DTS_CACHE_INPUTS,
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
   "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
 ];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
-  [
-    "build:plugin-sdk:dts",
-    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
-  ],
   ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
   ["ui:build", ["scripts/ui.js", "build"]],
 ]);
@@ -87,19 +50,12 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/runtime-postbuild-stamp.mjs"],
   },
   {
-    label: "build:plugin-sdk:dts",
-    kind: "pnpm",
-    pnpmArgs: ["build:plugin-sdk:dts"],
-    windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
-    cache: {
-      inputs: PLUGIN_SDK_DTS_CACHE_INPUTS,
-      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/packages", "dist/plugin-sdk/src"],
-    },
-  },
-  {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+    env: {
+      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1",
+    },
     cache: {
       env: PLUGIN_SDK_ENTRY_DTS_CACHE_ENV,
       inputs: PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS,
@@ -171,7 +127,6 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
-    "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
     "plugins:assets:copy",
@@ -216,7 +171,6 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   },
   ciArtifacts: {
     tsdown: {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },

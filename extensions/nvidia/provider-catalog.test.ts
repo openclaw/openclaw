@@ -28,6 +28,7 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   const release = vi.fn();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
+    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release,
   });
   return release;
