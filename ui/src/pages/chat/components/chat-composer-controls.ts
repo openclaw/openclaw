@@ -4,15 +4,28 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { CompactionStatus, FallbackStatus } from "../../../ui/app-tool-stream.ts";
+import {
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "../attachment-payload-store.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
+export const CHAT_ATTACHMENT_ACCEPT =
+  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
+  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
+
+export type ChatAttachmentControlsProps = {
+  attachments?: ChatAttachment[];
+  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+};
 
 export type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -110,6 +123,211 @@ export function renderChatQueue(props: ChatQueueProps) {
           `;
         })}
       </div>
+    </div>
+  `;
+}
+
+function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
+  if (file.type.startsWith("video/")) {
+    return false;
+  }
+  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
+}
+
+export function clickComposerFileInput(event: MouseEvent) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  target
+    .closest(".agent-chat__input")
+    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
+    ?.click();
+}
+
+function generateAttachmentId(): string {
+  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+  const attachment = {
+    id: generateAttachmentId(),
+    mimeType: file.type || "application/octet-stream",
+    fileName: file.name || undefined,
+    sizeBytes: file.size,
+  };
+  return registerChatAttachmentPayload({ attachment, dataUrl, file });
+}
+
+function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
+  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const mimeType = match[1].toLowerCase();
+  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
+    return null;
+  }
+  const base64 = match[2].replace(/\s+/g, "");
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
+    return {
+      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
+      dataUrl: `data:${mimeType};base64,${base64}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isImageAttachment(att: ChatAttachment): boolean {
+  return att.mimeType.startsWith("image/");
+}
+
+export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
+  const items = e.clipboardData?.items;
+  if (!items || !props.onAttachmentsChange) {
+    return;
+  }
+  const imageItems: DataTransferItem[] = [];
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith("image/")) {
+      imageItems.push(item);
+    }
+  }
+  if (imageItems.length === 0) {
+    const text = e.clipboardData?.getData("text/plain");
+    const pasted = text ? dataImageClipboardFile(text) : null;
+    if (!pasted) {
+      return;
+    }
+    e.preventDefault();
+    props.onAttachmentsChange([
+      ...(props.attachments ?? []),
+      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
+    ]);
+    return;
+  }
+  e.preventDefault();
+  for (const item of imageItems) {
+    const file = item.getAsFile();
+    if (!file) {
+      continue;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment = chatAttachmentFromFile(file, dataUrl);
+      const current = props.attachments ?? [];
+      props.onAttachmentsChange?.([...current, newAttachment]);
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
+export function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
+  const input = e.target as HTMLInputElement;
+  if (!input.files || !props.onAttachmentsChange) {
+    return;
+  }
+  const current = props.attachments ?? [];
+  const additions: ChatAttachment[] = [];
+  let pending = 0;
+  for (const file of input.files) {
+    if (!isSupportedChatAttachmentFile(file)) {
+      continue;
+    }
+    pending++;
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
+      pending--;
+      if (pending === 0) {
+        props.onAttachmentsChange?.([...current, ...additions]);
+      }
+    });
+    reader.readAsDataURL(file);
+  }
+  input.value = "";
+}
+
+export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
+  e.preventDefault();
+  const files = e.dataTransfer?.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+  const current = props.attachments ?? [];
+  const additions: ChatAttachment[] = [];
+  let pending = 0;
+  for (const file of files) {
+    if (!isSupportedChatAttachmentFile(file)) {
+      continue;
+    }
+    pending++;
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      additions.push(chatAttachmentFromFile(file, reader.result as string));
+      pending--;
+      if (pending === 0) {
+        props.onAttachmentsChange?.([...current, ...additions]);
+      }
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
+export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
+  const attachments = props.attachments ?? [];
+  if (attachments.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-attachments-preview">
+      ${attachments.map(
+        (att) => html`
+          <div
+            class=${[
+              "chat-attachment-thumb",
+              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
+              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
+              : html`
+                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                    <div class="chat-attachment-file">
+                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                      <span class="chat-attachment-file__name"
+                        >${att.fileName ?? "Attached file"}</span
+                      >
+                    </div>
+                  </openclaw-tooltip>
+                `}
+            <openclaw-tooltip content="Remove attachment">
+              <button
+                class="chat-attachment-remove"
+                type="button"
+                aria-label="Remove attachment"
+                @click=${() => {
+                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                  releaseChatAttachmentPayload(att.id);
+                  props.onAttachmentsChange?.(next);
+                }}
+              >
+                &times;
+              </button>
+            </openclaw-tooltip>
+          </div>
+        `,
+      )}
     </div>
   `;
 }
@@ -303,12 +521,12 @@ export function getContextNoticeViewModel(
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
   const [wr, wg, wb] = warnRgb;
   const [dr, dg, db] = dangerRgb;
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * t);
-  const g = Math.round(wg + (dg - wg) * t);
-  const b = Math.round(wb + (db - wb) * t);
+  const mix = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
+  const r = Math.round(wr + (dr - wr) * mix);
+  const g = Math.round(wg + (dg - wg) * mix);
+  const b = Math.round(wb + (db - wb) * mix);
   const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
+  const bgOpacity = 0.08 + 0.08 * mix;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
   return {
     pct,

@@ -28,11 +28,6 @@ import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import {
-  getChatAttachmentPreviewUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
-import {
   buildCachedChatItems,
   coalesceStreamRuns,
   deletedChatItemsSignature,
@@ -43,6 +38,12 @@ import {
 } from "./chat-thread.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import {
+  CHAT_ATTACHMENT_ACCEPT,
+  clickComposerFileInput,
+  handleChatAttachmentDrop,
+  handleChatAttachmentFileSelect,
+  handleChatAttachmentPaste,
+  renderAttachmentPreview,
   renderChatQueue,
   renderChatRunControls,
   renderChatRunStatusIndicator,
@@ -95,17 +96,6 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "[role='listbox']",
   "[role='option']",
 ].join(",");
-
-const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
-
-function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
-  if (file.type.startsWith("video/")) {
-    return false;
-  }
-  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
-}
 
 function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
   return status?.phase === "done" || status?.phase === "interrupted";
@@ -545,17 +535,6 @@ function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
     ?.focus({ preventScroll: true });
 }
 
-function clickComposerFileInput(event: MouseEvent) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  target
-    .closest(".agent-chat__input")
-    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
-    ?.click();
-}
-
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
   requestAnimationFrame(() => {
     if (document.activeElement !== target) {
@@ -566,193 +545,6 @@ function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "dow
     target.selectionStart = caret;
     target.selectionEnd = caret;
   });
-}
-
-function generateAttachmentId(): string {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  const attachment = {
-    id: generateAttachmentId(),
-    mimeType: file.type || "application/octet-stream",
-    fileName: file.name || undefined,
-    sizeBytes: file.size,
-  };
-  return registerChatAttachmentPayload({ attachment, dataUrl, file });
-}
-
-function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const mimeType = match[1].toLowerCase();
-  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
-    return null;
-  }
-  const base64 = match[2].replace(/\s+/g, "");
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
-    return {
-      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
-      dataUrl: `data:${mimeType};base64,${base64}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isImageAttachment(att: ChatAttachment): boolean {
-  return att.mimeType.startsWith("image/");
-}
-
-function handlePaste(e: ClipboardEvent, props: ChatProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
-    return;
-  }
-  const imageItems: DataTransferItem[] = [];
-  for (const item of Array.from(items)) {
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-  if (imageItems.length === 0) {
-    const text = e.clipboardData?.getData("text/plain");
-    const pasted = text ? dataImageClipboardFile(text) : null;
-    if (!pasted) {
-      return;
-    }
-    e.preventDefault();
-    props.onAttachmentsChange([
-      ...(props.attachments ?? []),
-      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
-    ]);
-    return;
-  }
-  e.preventDefault();
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment = chatAttachmentFromFile(file, dataUrl);
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-function handleFileSelect(e: Event, props: ChatProps) {
-  const input = e.target as HTMLInputElement;
-  if (!input.files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of input.files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-  input.value = "";
-}
-
-function handleDrop(e: DragEvent, props: ChatProps) {
-  e.preventDefault();
-  const files = e.dataTransfer?.files;
-  if (!files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof nothing {
-  const attachments = props.attachments ?? [];
-  if (attachments.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="chat-attachments-preview">
-      ${attachments.map(
-        (att) => html`
-          <div
-            class=${[
-              "chat-attachment-thumb",
-              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
-              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
-                    <div class="chat-attachment-file">
-                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                      <span class="chat-attachment-file__name"
-                        >${att.fileName ?? "Attached file"}</span
-                      >
-                    </div>
-                  </openclaw-tooltip>
-                `}
-            <openclaw-tooltip content="Remove attachment">
-              <button
-                class="chat-attachment-remove"
-                type="button"
-                aria-label="Remove attachment"
-                @click=${() => {
-                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
-                  releaseChatAttachmentPayload(att.id);
-                  props.onAttachmentsChange?.(next);
-                }}
-              >
-                &times;
-              </button>
-            </openclaw-tooltip>
-          </div>
-        `,
-      )}
-    </div>
-  `;
 }
 
 function renderChatGoal(goal: SessionGoal | undefined): TemplateResult | typeof nothing {
@@ -1943,7 +1735,7 @@ export function renderChat(props: ChatProps) {
         ?disabled=${!canCompose}
         @change=${(e: Event) => {
           if (canCompose) {
-            handleFileSelect(e, props);
+            handleChatAttachmentFileSelect(e, props);
           }
         }}
       />
@@ -2009,7 +1801,7 @@ export function renderChat(props: ChatProps) {
           @blur=${handleBlur}
           @paste=${(e: ClipboardEvent) => {
             if (canCompose) {
-              handlePaste(e, props);
+              handleChatAttachmentPaste(e, props);
             }
           }}
           placeholder=${placeholder}
@@ -2124,7 +1916,7 @@ export function renderChat(props: ChatProps) {
       @drop=${(e: DragEvent) => {
         e.preventDefault();
         if (canCompose) {
-          handleDrop(e, props);
+          handleChatAttachmentDrop(e, props);
         }
       }}
       @dragover=${(e: DragEvent) => e.preventDefault()}
