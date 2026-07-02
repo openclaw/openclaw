@@ -800,6 +800,7 @@ Automatic fast mode starts short conversations quickly, then returns longer or f
 - Dashboard and mobile: add a session workspace rail, plugin health in status, compact cron lists, and iOS Watch controls. (#92856, #91952, #93395, #93387) Thanks @Solvely-Colin, @jalehman, @yu-xin-c, @centralpc, @joshavant, and @vincentkoc.
 - Codex, observability, and skills: add automatic plugin approvals and SecretRefs, preserve ClawHub skill provenance, add OpenTelemetry log export, and expose remote-node execution to Codex when a node is connected. (#92625, #94324, #93283, #94561, #93654) Thanks @kevinslin, @kevinlin-openai, @momothemage, @nmccready-tars, @jesse-merhi, @vincentkoc, and @JPKay-AI.
 - QA and release engineering: QA scenarios now use YAML, with broader profile evidence and release coverage for the plugin and channel matrix. Thanks @vincentkoc.
+- Plugins/Hugging Face: add text-to-image generation through the `hf-inference` Inference Providers route, reusing the existing `HUGGINGFACE_HUB_TOKEN`/`HF_TOKEN` credentials and routing requests through the shared SSRF-guarded provider HTTP helpers; defaults to `black-forest-labs/FLUX.1-schnell` with width/height forwarded from `--size`. Thanks @lyfuci.
 
 ### Fixes
 
