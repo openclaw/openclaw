@@ -22,6 +22,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.lastRunCommit": "Wizard Last Run Commit",
   "wizard.lastRunCommand": "Wizard Last Run Command",
   "wizard.lastRunMode": "Wizard Last Run Mode",
+  "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   diagnostics: "Diagnostics",
   "diagnostics.otel": "OpenTelemetry",
   "diagnostics.cacheTrace": "Cache Trace",

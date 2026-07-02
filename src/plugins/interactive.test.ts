@@ -10,11 +10,14 @@ import type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
 } from "./interactive-contract.test-helpers.js";
+import { registerRegistryPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   clearPluginInteractiveHandlers,
   dispatchPluginInteractiveHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 let requestPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.requestPluginConversationBinding
@@ -483,6 +486,7 @@ describe("plugin interactive handlers", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
   it("hydrates legacy interactive state shapes before clearing handlers", async () => {
@@ -643,6 +647,66 @@ describe("plugin interactive handlers", () => {
     expect(ctx.callback.payload).toBe("resume:thread-1");
 
     second.clearPluginInteractiveHandlers();
+  });
+
+  it("resolves active registry handlers without retaining them after retirement", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "openclaw-code-agent",
+      name: "OpenClaw Code Agent",
+      status: "loaded",
+    } as never);
+    registry.interactiveHandlers = [
+      {
+        channel: "telegram",
+        namespace: "code-agent",
+        pluginId: "openclaw-code-agent",
+        pluginName: "OpenClaw Code Agent",
+        pluginRoot: "/plugins/openclaw-code-agent",
+        handler: handler as never,
+      },
+    ];
+    expect(
+      registerRegistryPluginInteractiveHandler(
+        "openclaw-code-agent",
+        {
+          channel: "telegram",
+          namespace: "code-agent",
+          handler: handler as never,
+        },
+        {
+          pluginName: "OpenClaw Code Agent",
+          pluginRoot: "/plugins/openclaw-code-agent",
+        },
+      ),
+    ).toEqual({ ok: true });
+    setActivePluginRegistry(registry);
+
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+          callbackId: "cb-code-agent-restored",
+        }),
+      ),
+    ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const ctx = requireHandlerCall(handler) as TelegramInteractiveHandlerContext;
+    expect(ctx.callback.namespace).toBe("code-agent");
+    expect(ctx.callback.payload).toBe("7506a349-84c8-4c56-8558-ce315bed2588");
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
+          callbackId: "cb-code-agent-retired",
+        }),
+      ),
+    ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("rejects duplicate namespace registrations", () => {

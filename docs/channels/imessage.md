@@ -1,5 +1,5 @@
 ---
-summary: "Native iMessage support via imsg (JSON-RPC over stdio), with private API actions for replies, tapbacks, effects, attachments, and group management. Preferred for new OpenClaw iMessage setups when host requirements fit."
+summary: "Native iMessage support via imsg (JSON-RPC over stdio), with private API actions for replies, tapbacks, effects, polls, attachments, and group management. Preferred for new OpenClaw iMessage setups when host requirements fit."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
@@ -20,7 +20,7 @@ Status: native external CLI integration. Gateway spawns `imsg rpc` and communica
 
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
-    Replies, tapbacks, effects, attachments, and group management.
+    Replies, tapbacks, effects, polls, attachments, and group management.
   </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
@@ -138,7 +138,7 @@ A wrapper that buffers stdin until a large block fills will produce symptoms tha
 - Messages must be signed in on the Mac running `imsg`.
 - Full Disk Access is required for the process context running OpenClaw/`imsg` (Messages DB access).
 - Automation permission is required to send messages through Messages.app.
-- For advanced actions (react / edit / unsend / threaded reply / effects / group ops), System Integrity Protection must be disabled — see [Enabling the imsg private API](#enabling-the-imsg-private-api) below. Basic text and media send/receive work without it.
+- For advanced actions (react / edit / unsend / threaded reply / effects / polls / group ops), System Integrity Protection must be disabled — see [Enabling the imsg private API](#enabling-the-imsg-private-api) below. Basic text and media send/receive work without it.
 
 <Tip>
 Permissions are granted per process context. If gateway runs headless (LaunchAgent/SSH), run a one-time interactive command in that same context to trigger prompts:
@@ -179,7 +179,7 @@ Use one of the supported `imsg` process contexts instead:
 `imsg` ships in two operational modes:
 
 - **Basic mode** (default, no SIP changes needed): outbound text and media via `send`, inbound watch/history, chat list. This is what you get out of the box from a fresh `brew install steipete/tap/imsg` plus the standard macOS permissions above.
-- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
+- **Private API mode**: `imsg` injects a helper dylib into `Messages.app` to call internal `IMCore` functions. This is what unlocks `react`, `edit`, `unsend`, `reply` (threaded), `sendWithEffect`, `poll` and `poll-vote` (native Messages polls), `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, plus typing indicators and read receipts.
 
 To reach the advanced action surface that this channel page documents, you need Private API mode. The `imsg` README is explicit about the requirement:
 
@@ -240,7 +240,7 @@ Treat this as a deliberate operational choice, not a default. If your threat mod
    openclaw channels status --probe
    ```
 
-   The iMessage entry should report `works`, and `imsg status --json | jq '.selectors'` should show `retractMessagePart: true` plus whichever edit / typing / read selectors your macOS build exposes. The OpenClaw plugin per-method gating in `actions.ts` only advertises actions whose underlying selector is `true`, so the action surface you see in the agent's tool list reflects what the bridge can actually do on this host.
+   The iMessage entry should report `works`, and `imsg status --json | jq '{rpc_methods, selectors}'` should show the capabilities exposed by your macOS build. Poll creation requires `selectors.pollPayloadMessage`; voting requires both `selectors.pollVoteMessage` and the `poll.vote` RPC method. The OpenClaw plugin advertises only actions supported by the cached probe, while an empty cache stays optimistic and probes on first dispatch.
 
 If `openclaw channels status --probe` reports the channel as `works` but specific actions throw "iMessage `<action>` requires the imsg private API bridge" at dispatch time, run `imsg launch` again — the helper can fall out (Messages.app restart, OS update, etc.) and the cached `available: true` status will keep advertising actions until the next probe refreshes.
 
@@ -550,6 +550,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
         addParticipant: true,
         removeParticipant: true,
         leaveGroup: true,
+        polls: true,
       },
     },
   },
@@ -565,6 +566,10 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`).
     - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
     - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation.
+    - **poll**: Create a native Apple Messages poll (`pollQuestion`, `pollOption` repeated 2 to 12 times, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Recipients on iOS/iPadOS/macOS 26+ see and vote on it natively; older OS versions get a "Sent a poll" text fallback. Requires `selectors.pollPayloadMessage`.
+    - **poll-vote**: Vote on an existing poll (`pollId` or `messageId`, plus exactly one of `pollOptionIndex`, `pollOptionId`, or `pollOptionText`). Requires `selectors.pollVoteMessage` and the `poll.vote` RPC method.
+
+    Accepted inbound polls are rendered for the agent with the question, numbered option labels, vote counts, and the poll message ID needed by `poll-vote`.
 
   </Accordion>
 

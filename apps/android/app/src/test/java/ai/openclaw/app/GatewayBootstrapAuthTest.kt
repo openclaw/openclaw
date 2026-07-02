@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
@@ -11,6 +12,8 @@ import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -30,6 +33,94 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
+  @Test
+  fun standaloneStatusPreservesLiveOperatorConnection() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    writeField(runtime, "operatorConnected", true)
+    val method = runtime.javaClass.getDeclaredMethod("setStandaloneGatewayStatus", String::class.java)
+    method.isAccessible = true
+
+    method.invoke(runtime, "Verify gateway TLS fingerprint…")
+
+    assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+    assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun unstructuredRetryClearsEarlierOperatorAuthProblem() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: unauthorized")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "UNAUTHORIZED",
+        message = "unauthorized",
+        details =
+          GatewayConnectErrorDetails(
+            code = "AUTH_TOKEN_MISSING",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "provide_token",
+          ),
+      ),
+      true,
+    )
+    val problemCode =
+      runtime.gatewayConnectionDisplay.value.problem
+        ?.code
+    assertEquals(
+      "AUTH_TOKEN_MISSING",
+      problemCode,
+    )
+
+    onDisconnected("Reconnecting…")
+    assertEquals("Reconnecting…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+
+    onDisconnected("Gateway error: timeout")
+    assertEquals("Gateway error: timeout", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun retryableNodePairingProblemSurvivesReconnectStatus() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "nodeSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: pairing required")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "NOT_PAIRED",
+        message = "pairing required",
+        details =
+          GatewayConnectErrorDetails(
+            code = "PAIRING_REQUIRED",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "wait_then_retry",
+            reason = "not-paired",
+            requestId = "request-1",
+            retryable = true,
+          ),
+      ),
+      false,
+    )
+
+    onDisconnected("Reconnecting…")
+
+    val reconnectDisplay = runtime.gatewayConnectionDisplay.value
+    assertEquals("Reconnecting…", reconnectDisplay.statusText)
+    assertEquals("PAIRING_REQUIRED", reconnectDisplay.problem?.code)
+    assertEquals("request-1", reconnectDisplay.problem?.requestId)
+
+    onDisconnected("Gateway error: timeout")
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
   @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(
@@ -278,16 +369,28 @@ class GatewayBootstrapAuthTest {
             probeResult.await()
           },
         )
+      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
+      val existingJobs =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.toSet()
+          .orEmpty()
 
       runtime.connect(
         endpoint,
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       )
       probeStarted.await()
+      val probeJob =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.singleOrNull { it !in existingJobs }
+          ?: error("Expected one TLS probe job")
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aaaaaaaa"))
-      Thread.sleep(100)
+      // Join the owning coroutine so assertions run after its stale-attempt guard.
+      probeJob.join()
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))
@@ -344,6 +447,29 @@ class GatewayBootstrapAuthTest {
 
     assertEquals(
       "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+      waitForStatusText(runtime),
+    )
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
+  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime =
+      NodeRuntime(
+        app,
+        tlsFingerprintProbe = { _, _ ->
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+        },
+      )
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+    )
+
+    assertEquals(
+      "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       waitForStatusText(runtime),
     )
     assertNull(runtime.pendingGatewayTrust.value)
@@ -410,6 +536,23 @@ class GatewayBootstrapAuthTest {
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
       val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
       assertFalse(talkMode.ttsOnAllResponses)
+    }
+
+  @Test
+  fun talkPttStart_rejectsNewCaptureWhenBackgrounded() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      runtime.setForeground(false)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", result.error?.message)
+      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     }
 
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {

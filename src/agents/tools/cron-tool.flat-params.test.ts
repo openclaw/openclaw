@@ -119,6 +119,64 @@ describe("cron tool flat-params", () => {
     });
   });
 
+  it("rejects flat on-exit schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-add", {
+        action: "add",
+        name: "rebuild on exit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+        message: "rebuilt",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-infer", {
+        action: "add",
+        name: "watch build",
+        command: "make",
+        message: "done",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat on-exit schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update", {
+        action: "update",
+        jobId: "job-onexit",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects flat command schedule shorthand for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-flat-onexit-update-infer", {
+        action: "update",
+        jobId: "job-infer",
+        command: "make",
+      }),
+    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
   it("passes local cron wall-clock expression and timezone through add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 

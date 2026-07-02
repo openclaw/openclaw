@@ -90,8 +90,13 @@ data class GatewayConnectionProblem(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean,
   val retryable: Boolean,
+  val clientMinProtocol: Int? = null,
+  val clientMaxProtocol: Int? = null,
+  val expectedProtocol: Int? = null,
+  val minimumProbeProtocol: Int? = null,
 ) {
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
+  val isProtocolMismatch: Boolean = code == "PROTOCOL_MISMATCH"
   val canAutoRetry: Boolean =
     isPairingRequired &&
       (
@@ -99,6 +104,48 @@ data class GatewayConnectionProblem(
           !pauseReconnect ||
           recommendedNextStep == "wait_then_retry"
       )
+}
+
+data class GatewayConnectionDisplay(
+  val isConnected: Boolean,
+  val statusText: String,
+  val problem: GatewayConnectionProblem?,
+)
+
+private fun gatewayProblemAfterDisconnect(
+  problem: GatewayConnectionProblem?,
+  statusText: String,
+): GatewayConnectionProblem? =
+  // Automatic bootstrap pairing retries need their approval guidance until success or a different failure.
+  problem?.takeIf { statusText == "Reconnecting…" && it.canAutoRetry }
+
+internal fun gatewayConnectionDisplay(
+  operatorConnected: Boolean,
+  nodeConnected: Boolean,
+  operatorStatusText: String,
+  nodeStatusText: String,
+  operatorProblem: GatewayConnectionProblem?,
+  nodeProblem: GatewayConnectionProblem?,
+): GatewayConnectionDisplay {
+  val operator = operatorStatusText.trim()
+  val node = nodeStatusText.trim()
+  return when {
+    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, "Connected", null)
+    operatorConnected -> GatewayConnectionDisplay(true, "Connected (node offline)", nodeProblem)
+    nodeConnected ->
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText =
+          if (operator.isNotEmpty() && operator != "Offline") {
+            "Connected (operator: $operator)"
+          } else {
+            "Connected (operator offline)"
+          },
+        problem = operatorProblem,
+      )
+    operator.isNotBlank() && operator != "Offline" -> GatewayConnectionDisplay(false, operator, operatorProblem)
+    else -> GatewayConnectionDisplay(false, node, nodeProblem)
+  }
 }
 
 class NodeRuntime(
@@ -308,6 +355,8 @@ class NodeRuntime(
   private val _nodeCapabilityApprovalState = MutableStateFlow(GatewayNodeApprovalState.Loading)
   val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> = _nodeCapabilityApprovalState.asStateFlow()
 
+  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, "Offline", null))
+  val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
@@ -440,6 +489,9 @@ class NodeRuntime(
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
+  private var operatorConnectionProblem: GatewayConnectionProblem? = null
+  private var nodeConnectionProblem: GatewayConnectionProblem? = null
+  private val gatewayStatusLock = Any()
 
   private val operatorSession =
     GatewaySession(
@@ -447,16 +499,17 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { hello ->
-        _gatewayConnectionProblem.value = null
-        operatorConnected = true
-        operatorStatusText = "Connected"
         _serverName.value = hello.serverName
         _remoteAddress.value = hello.remoteAddress
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        updateStatus()
+        updateStatus {
+          operatorConnectionProblem = null
+          operatorConnected = true
+          operatorStatusText = "Connected"
+        }
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
           subscribeOperatorSessionEvents()
@@ -468,9 +521,7 @@ class NodeRuntime(
         }
       },
       onDisconnected = { message ->
-        operatorConnected = false
         invalidateNodeCapabilityApprovalState()
-        operatorStatusText = message
         _serverName.value = null
         _remoteAddress.value = null
         _gatewayVersion.value = null
@@ -500,10 +551,18 @@ class NodeRuntime(
         _healthLogsSummary.value = GatewayHealthLogsSummary()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
-        updateStatus()
+        updateStatus {
+          operatorConnected = false
+          operatorStatusText = message
+          operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
+        }
         micCapture.onGatewayConnectionChanged(false)
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+      },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
@@ -523,14 +582,15 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = {
-        _gatewayConnectionProblem.value = null
-        _nodeConnected.value = true
-        nodeStatusText = "Connected"
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          nodeConnectionProblem = null
+          _nodeConnected.value = true
+          nodeStatusText = "Connected"
+        }
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
@@ -542,17 +602,23 @@ class NodeRuntime(
         }
       },
       onDisconnected = { message ->
-        _nodeConnected.value = false
         invalidateNodeCapabilityApprovalState()
-        nodeStatusText = message
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          _nodeConnected.value = false
+          nodeStatusText = message
+          nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
+        }
         showLocalCanvasOnDisconnect()
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+      },
       onEvent = { _, _ -> },
       onInvoke = { req ->
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
@@ -586,7 +652,7 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        isConnected = { _isConnected.value },
+        isConnected = { gatewayConnectionDisplay.value.isConnected },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -697,7 +763,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      isConnected = { _isConnected.value },
+      isConnected = { gatewayConnectionDisplay.value.isConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -731,41 +797,56 @@ class NodeRuntime(
     updateHomeCanvasState()
   }
 
-  private fun updateStatus() {
-    _isConnected.value = operatorConnected
-    val operator = operatorStatusText.trim()
-    val node = nodeStatusText.trim()
-    _statusText.value =
-      when {
-        operatorConnected && _nodeConnected.value -> "Connected"
-        operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
-        !operatorConnected && _nodeConnected.value ->
-          if (operator.isNotEmpty() && operator != "Offline") {
-            "Connected (operator: $operator)"
-          } else {
-            "Connected (operator offline)"
-          }
-        operator.isNotBlank() && operator != "Offline" -> operator
-        else -> node
-      }
+  private fun updateStatus(update: () -> Unit = {}) {
+    synchronized(gatewayStatusLock) {
+      update()
+      // Select and publish text plus diagnostics atomically; operator and node callbacks run concurrently.
+      val display =
+        gatewayConnectionDisplay(
+          operatorConnected = operatorConnected,
+          nodeConnected = _nodeConnected.value,
+          operatorStatusText = operatorStatusText,
+          nodeStatusText = nodeStatusText,
+          operatorProblem = operatorConnectionProblem,
+          nodeProblem = nodeConnectionProblem,
+        )
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
     updateHomeCanvasState()
   }
 
-  private fun handleGatewayConnectFailure(
+  private fun setStandaloneGatewayStatus(statusText: String) {
+    synchronized(gatewayStatusLock) {
+      val display = GatewayConnectionDisplay(operatorConnected, statusText, null)
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
+    updateHomeCanvasState()
+  }
+
+  private fun gatewayConnectionProblem(
     error: GatewaySession.ErrorShape,
     pauseReconnect: Boolean,
-  ) {
+  ): GatewayConnectionProblem {
     val details = error.details
-    _gatewayConnectionProblem.value =
-      GatewayConnectionProblem(
-        code = details?.code ?: error.code,
-        message = error.message,
-        reason = details?.reason,
-        requestId = details?.requestId,
-        recommendedNextStep = details?.recommendedNextStep,
-        pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
-        retryable = details?.retryable == true,
-      )
+    return GatewayConnectionProblem(
+      code = details?.code ?: error.code,
+      message = error.message,
+      reason = details?.reason,
+      requestId = details?.requestId,
+      recommendedNextStep = details?.recommendedNextStep,
+      pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
+      retryable = details?.retryable == true,
+      clientMinProtocol = details?.clientMinProtocol,
+      clientMaxProtocol = details?.clientMaxProtocol,
+      expectedProtocol = details?.expectedProtocol,
+      minimumProbeProtocol = details?.minimumProbeProtocol,
+    )
   }
 
   private fun resolveMainSessionKey(): String {
@@ -1121,7 +1202,7 @@ class NodeRuntime(
 
   private fun autoConnectIfNeeded() {
     if (didAutoConnect) return
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
@@ -1130,7 +1211,7 @@ class NodeRuntime(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
       refreshGatewayConnection()
@@ -1233,9 +1314,15 @@ class NodeRuntime(
   }
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.beginPushToTalk()
-      GatewaySession.InvokeResult.ok(payload.toJson())
+    runTalkPttCommand {
+      if (!_isForeground.value) {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = false)
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      }
+      runPreparedTalkPttCommand {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = true)
+        GatewaySession.InvokeResult.ok(payload.toJson())
+      }
     }
 
   private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
@@ -1279,6 +1366,9 @@ class NodeRuntime(
     }
 
   private suspend fun prepareTalkCapture() {
+    if (!_isForeground.value) {
+      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!hasRecordAudioPermission()) {
       throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
     }
@@ -1335,7 +1425,7 @@ class NodeRuntime(
     if (!BuildConfig.DEBUG) {
       throw IllegalStateException("voice e2e is debug-only")
     }
-    if (!_isConnected.value) {
+    if (!gatewayConnectionDisplay.value.isConnected) {
       throw IllegalStateException("gateway not connected")
     }
     if (!hasRecordAudioPermission()) {
@@ -1520,12 +1610,14 @@ class NodeRuntime(
     if (endpoint == null) {
       resolvePreferredGatewayEndpoint()?.let(::connect)
         ?: run {
-          _statusText.value = "Failed: no saved gateway endpoint"
+          setStandaloneGatewayStatus("Failed: no saved gateway endpoint")
         }
       return
     }
-    operatorStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorStatusText = "Connecting…"
+      operatorConnectionProblem = null
+    }
     connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
   }
 
@@ -1547,10 +1639,12 @@ class NodeRuntime(
         storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       )
     if (operatorAuth == null) {
-      operatorConnected = false
-      operatorStatusText = "Offline"
+      updateStatus {
+        operatorConnected = false
+        operatorStatusText = "Offline"
+        operatorConnectionProblem = null
+      }
       operatorSession.disconnect()
-      updateStatus()
     } else {
       operatorSession.connect(
         endpoint,
@@ -1589,14 +1683,14 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      _statusText.value = "Verify gateway TLS fingerprint…"
+      setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
             if (expectedFingerprint == null) {
-              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+              setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(tlsProbe.failure))
             } else {
               connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
             }
@@ -1633,11 +1727,13 @@ class NodeRuntime(
     connectAttemptId: Long,
   ) {
     if (!isCurrentConnectAttempt(connectAttemptId)) return
-    _gatewayConnectionProblem.value = null
     connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+      operatorStatusText = "Connecting…"
+      nodeStatusText = "Connecting…"
+    }
     connectWithAuth(endpoint = endpoint, auth = auth)
   }
 
@@ -1669,13 +1765,15 @@ class NodeRuntime(
 
   fun declineGatewayTrustPrompt() {
     _pendingGatewayTrust.value = null
-    _statusText.value = "Offline"
+    setStandaloneGatewayStatus("Offline")
   }
 
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
         "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
         "Failed: couldn't reach the secure gateway endpoint for this host."
     }
@@ -1690,7 +1788,7 @@ class NodeRuntime(
     val host = manualHost.value.trim()
     val port = manualPort.value
     if (host.isEmpty() || port <= 0 || port > 65535) {
-      _statusText.value = "Failed: invalid manual host/port"
+      setStandaloneGatewayStatus("Failed: invalid manual host/port")
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
@@ -1713,8 +1811,10 @@ class NodeRuntime(
         auth = auth,
         storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       ) ?: return
-    operatorStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorStatusText = "Connecting…"
+      operatorConnectionProblem = null
+    }
     operatorSession.connect(
       endpoint,
       operatorAuth.token,
@@ -1730,7 +1830,10 @@ class NodeRuntime(
     stopActiveVoiceSession()
     connectedEndpoint = null
     activeGatewayAuth = null
-    _gatewayConnectionProblem.value = null
+    updateStatus {
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+    }
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -1934,7 +2037,7 @@ class NodeRuntime(
   }
 
   private suspend fun refreshBrandingFromGateway() {
-    if (!_isConnected.value) return
+    if (!gatewayConnectionDisplay.value.isConnected) return
     try {
       val res = operatorSession.request("config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
@@ -2906,9 +3009,10 @@ class NodeRuntime(
   }
 
   private fun resolveHomeCanvasGatewayState(): HomeCanvasGatewayState {
-    val lower = _statusText.value.trim().lowercase()
+    val display = gatewayConnectionDisplay.value
+    val lower = display.statusText.trim().lowercase()
     return when {
-      _isConnected.value -> HomeCanvasGatewayState.Connected
+      display.isConnected -> HomeCanvasGatewayState.Connected
       lower.contains("connecting") || lower.contains("reconnecting") -> HomeCanvasGatewayState.Connecting
       lower.contains("error") || lower.contains("failed") -> HomeCanvasGatewayState.Error
       else -> HomeCanvasGatewayState.Offline

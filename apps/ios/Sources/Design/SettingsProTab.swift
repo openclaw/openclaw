@@ -46,7 +46,6 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var defaultShareInstruction = ""
-    @State var showGatewayProblemDetails = false
     @State var showQRScanner = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
@@ -109,20 +108,23 @@ struct SettingsProTab: View {
     }
 
     private var settingsNavigationContent: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    self.settingsHeader
-                    self.appearanceSection
-                    self.gatewaySection
-                    self.settingsListSection
+        List {
+            self.gatewaySection
+            self.settingsListSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
-                .padding(.top, 18)
-                .padding(.bottom, 18)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                self.appearanceMenu
             }
         }
-        .navigationBarHidden(true)
         .navigationDestination(for: SettingsRoute.self) { route in
             self.destination(for: route)
         }
@@ -173,6 +175,11 @@ struct SettingsProTab: View {
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
+            .onChange(of: self.onboardingRequestID) { _, _ in
+                // Root-owned resets leave Settings mounted behind onboarding.
+                // Reload cleared credentials before the view can persist stale state.
+                self.syncAfterOnboardingReset()
+            }
             .onChange(of: self.navigationPath) { _, _ in
                 self.notifyRouteChange()
             }
@@ -180,16 +187,6 @@ struct SettingsProTab: View {
 
     private func settingsModalPresentation(_ content: some View) -> some View {
         content
-            .sheet(isPresented: self.$showGatewayProblemDetails) {
-                if let gatewayProblem = self.appModel.lastGatewayProblem {
-                    GatewayProblemDetailsSheet(
-                        problem: gatewayProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
-                        })
-                }
-            }
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
@@ -222,6 +219,11 @@ struct SettingsProTab: View {
                         }
                 }
             }
+            .sheet(isPresented: self.$showNotificationRelayDisclosure) {
+                HostedPushRelayDisclosureSheet(
+                    message: self.notificationRelayDisclosureMessage,
+                    onContinue: self.requestNotificationAuthorizationFromSettings)
+            }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button("Reset", role: .destructive) {
                     self.resetOnboarding()
@@ -240,14 +242,6 @@ struct SettingsProTab: View {
             } message: {
                 Text(self.scannerError ?? "")
             }
-            .alert("Enable OpenClaw Hosted Push Relay?", isPresented: self.$showNotificationRelayDisclosure) {
-                    Button("Continue") {
-                        self.requestNotificationAuthorizationFromSettings()
-                    }
-                    Button("Not Now", role: .cancel) {}
-                } message: {
-                    Text(self.notificationRelayDisclosureMessage)
-                }
     }
 
     func openNotificationsRouteFromApprovals() {
@@ -256,7 +250,9 @@ struct SettingsProTab: View {
             navigateToRoute(.notifications)
             return
         }
-        self.navigationPath = [.notifications]
+        // Push, don't replace: Back from Notifications must return to the
+        // Approvals screen the user came from, not reset to the Settings root.
+        self.navigationPath.append(.notifications)
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -272,5 +268,47 @@ struct SettingsProTab: View {
             return
         }
         self.onRouteChange?(self.navigationPath.last)
+    }
+}
+
+struct HostedPushRelayDisclosureSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let message: String
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Image(systemName: "network")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(OpenClawBrand.accentForeground)
+                    Text("Enable OpenClaw Hosted Push Relay?")
+                        .font(.title3.weight(.semibold))
+                    Text(self.message)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            VStack(spacing: 10) {
+                Button {
+                    self.dismiss()
+                    self.onContinue()
+                } label: {
+                    Text("Continue").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Not Now", role: .cancel) {
+                    self.dismiss()
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .tint(OpenClawBrand.accent)
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }

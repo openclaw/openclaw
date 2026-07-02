@@ -56,6 +56,7 @@ function resolveProviderChoiceOptions(params?: {
     Object.assign(
       {},
       { value: contribution.option.value as AuthChoice, label: contribution.option.label },
+      { providerId: contribution.providerId },
       contribution.option.hint ? { hint: contribution.option.hint } : {},
       contribution.option.assistantPriority !== undefined
         ? { assistantPriority: contribution.option.assistantPriority }
@@ -156,12 +157,17 @@ export function buildAuthChoiceGroups(params: {
     const existing = groupsById.get(option.groupId);
     if (existing) {
       existing.options.push(option);
+      if (option.providerId) {
+        existing.providerIds = uniqueStrings([...(existing.providerIds ?? []), option.providerId]);
+      }
       continue;
     }
+    const providerIds = option.providerId ? [option.providerId] : [];
     groupsById.set(option.groupId, {
       value: option.groupId,
       label: option.groupLabel,
       ...(option.groupHint ? { hint: option.groupHint } : {}),
+      ...(providerIds.length > 0 ? { providerIds } : {}),
       options: [option],
     });
   }

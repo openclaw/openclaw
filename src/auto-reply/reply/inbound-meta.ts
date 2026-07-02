@@ -12,7 +12,7 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
@@ -552,7 +552,11 @@ export function buildInboundUserContextPrefix(
 ): string {
   const blocks: string[] = [];
   if (options?.sourceReplyDeliveryMode === "message_tool_only") {
-    blocks.push(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    blocks.push(
+      ctx.InboundEventKind === "room_event"
+        ? ROOM_EVENT_DELIVERY_HINT
+        : MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+    );
   }
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";

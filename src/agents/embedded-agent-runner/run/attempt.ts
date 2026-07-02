@@ -116,12 +116,6 @@ import {
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agent-tools.policy.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -139,6 +133,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   getChannelAgentToolMeta,
@@ -154,6 +149,10 @@ import {
   createCodeModeTools,
   resolveCodeModeConfig,
 } from "../../code-mode.js";
+import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../../conversation-capability-profile.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
@@ -207,10 +206,6 @@ import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
 import {
   ackPendingAgentSteeringItems,
   leasePendingAgentSteeringItems,
@@ -493,7 +488,11 @@ import {
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstEventTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
@@ -744,49 +743,40 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   senderE164?: string | null;
   sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
   toolsAllow?: string[];
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }) {
-  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
+  const capabilityProfile =
+    params.conversationCapabilityProfile ??
+    resolveConversationCapabilityProfile({
       config: params.config,
       sessionKey: params.sessionKey,
+      sandboxSessionKey: params.sandboxSessionKey,
       agentId: params.agentId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      sandboxToolPolicy: params.sandboxToolPolicy,
+      runtimeToolAllowlist: params.toolsAllow,
     });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sandboxSessionKey &&
-    isSubagentEnvelopeSession(params.sandboxSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sandboxSessionKey,
-    {
-      store: subagentStore,
-    },
-  );
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  } = capabilityProfile.policy;
   return collectExplicitToolAllowlistSources([
     { label: "tools.allow", allow: globalPolicy?.allow },
     { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
@@ -1255,6 +1245,58 @@ export async function runEmbeddedAttempt(
         : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
     const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: toolSearchRuntimeConfig,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: sessionAgentId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+      messageChannel: params.messageChannel,
+      chatType: params.chatType,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      modelHasVision: params.model.input?.includes("image") ?? false,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+      promptMode: params.promptMode,
+      skillsSnapshot: skillsSnapshotForRun,
+      sandboxToolPolicy: sandbox?.tools,
+      runtimeToolAllowlist: effectiveToolsAllow,
+    });
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -1262,6 +1304,7 @@ export async function runEmbeddedAttempt(
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
+            chatType: params.chatType,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -1302,13 +1345,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             // Runtime cwd can point at a task repo while bootstrap/persona files stay in the
             // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd.
-            spawnWorkspaceDir:
-              effectiveCwd !== effectiveWorkspace
-                ? resolvedWorkspace
-                : resolveAttemptSpawnWorkspaceDir({
-                    sandbox,
-                    resolvedWorkspace,
-                  }),
+            spawnWorkspaceDir,
             config: toolSearchRuntimeConfig,
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
@@ -1351,6 +1388,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -1395,7 +1433,7 @@ export async function runEmbeddedAttempt(
     const shouldProbeContinuationSkip =
       !isRawModelRun &&
       contextInjectionMode === "continuation-skip" &&
-      (params.bootstrapContextRunKind ?? "default") !== "heartbeat" &&
+      !isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind) &&
       (await hasCompletedBootstrapTurnForAttempt(params.sessionFile));
     let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
     let bootstrapRouting =
@@ -1609,6 +1647,8 @@ export async function runEmbeddedAttempt(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -1966,6 +2006,7 @@ export async function runEmbeddedAttempt(
       defaultAgentId,
       isDefaultAgent,
       trigger: params.trigger,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
     })
       ? resolveHeartbeatPromptForSystemPrompt({
           config: params.config,
@@ -1973,6 +2014,8 @@ export async function runEmbeddedAttempt(
           defaultAgentId,
         })
       : undefined;
+    const promptContributionTrigger =
+      params.bootstrapContextRunKind === "commitment-only" ? undefined : params.trigger;
     const promptContributionContext = {
       config: params.config,
       agentDir: params.agentDir,
@@ -1983,7 +2026,7 @@ export async function runEmbeddedAttempt(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-      trigger: params.trigger,
+      trigger: promptContributionTrigger,
     };
     const promptContribution =
       params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
@@ -2605,6 +2648,7 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      let contextEngineAssemblySucceeded = false;
       const inFlightPromptSettlePromises = new Set<Promise<void>>();
       const inFlightAbortSettlePromises = new Set<Promise<void>>();
       const trackSettlePromise = (
@@ -2727,7 +2771,7 @@ export async function runEmbeddedAttempt(
                 }),
             }),
           runtimeSettings: contextEngineLoopRuntimeSettings,
-          isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+          isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         });
         const removeGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -2899,11 +2943,10 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
         runtimeHandle: getProviderRuntimeHandle(),
       });
-      if (providerTextTransforms) {
+      if (providerTextTransforms?.input?.length) {
         activeSession.agent.streamFn = wrapStreamFnTextTransforms({
           streamFn: activeSession.agent.streamFn,
           input: providerTextTransforms.input,
-          output: providerTextTransforms.output,
           transformSystemPrompt: false,
         });
       }
@@ -3128,6 +3171,15 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Tool-call repair can replace structured arguments from fragmented deltas.
+      // Restore provider-masked text afterward so executable args stay canonical.
+      if (providerTextTransforms?.output?.length) {
+        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
+          streamFn: activeSession.agent.streamFn,
+          output: providerTextTransforms.output,
+        });
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -3170,6 +3222,31 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+      const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
+        cfg: params.config,
+        runTimeoutMs: resolvedRunTimeoutMs,
+        modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+        model: {
+          baseUrl: params.model.baseUrl,
+          id: params.modelId,
+          provider: params.provider,
+        },
+      });
+      if (firstEventTimeoutMs > 0) {
+        const baseStreamFn = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          type FirstEventStreamOptions = {
+            firstEventTimeoutMs?: number;
+            onFirstEventTimeout?: (error: Error) => void;
+          };
+          const optionsWithFirstEvent = options as FirstEventStreamOptions | undefined;
+          return baseStreamFn(model, context, {
+            ...options,
+            firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+            onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? idleTimeoutTrigger,
+          } as typeof options);
+        };
       }
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
@@ -3362,6 +3439,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            contextEngineAssemblySucceeded = true;
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
                 preassemblyContextEngineMessagesForPrecheck;
@@ -3599,6 +3677,7 @@ export async function runEmbeddedAttempt(
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
+          streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,
           onBlockReplyFlush,
@@ -3743,6 +3822,7 @@ export async function runEmbeddedAttempt(
         params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
+      let acceptingSteerMessages = true;
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3755,6 +3835,7 @@ export async function runEmbeddedAttempt(
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
         isStreaming: () => activeSession.isStreaming,
+        isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -3988,6 +4069,7 @@ export async function runEmbeddedAttempt(
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
+              bootstrapContextRunKind: params.bootstrapContextRunKind,
             });
         const promptBeforePromptBuildHooks = effectivePrompt;
         const promptBuildPrependContext = hookResult?.prependContext;
@@ -4151,7 +4233,13 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
-        if (params.sessionKey && !isRawModelRun) {
+        // Commitment fan-out must leave parent-turn steering queued for the
+        // next normal turn instead of consuming it as commitment context.
+        if (
+          params.sessionKey &&
+          !isRawModelRun &&
+          params.bootstrapContextRunKind !== "commitment-only"
+        ) {
           const leaseId = `${params.runId}:agent-steering`;
           const leased = leasePendingAgentSteeringItems({
             requesterSessionKey: params.sessionKey,
@@ -4629,24 +4717,37 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
-          const preemptiveCompaction = skipPromptSubmission
-            ? null
-            : shouldPreemptivelyCompactBeforePrompt({
-                messages: hookMessagesForCurrentPrompt,
-                ...(unwindowedLlmBoundaryMessagesForPrecheck
-                  ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
-                  : {}),
-                systemPrompt: systemPromptForHook,
-                prompt: llmBoundaryPromptForPrecheck,
-                contextTokenBudget,
-                reserveTokens,
-                toolResultMaxChars: promptToolResultMaxChars,
-                llmBoundaryTokenPressure: {
-                  estimatedPromptTokens: llmBoundaryTokenPressure,
-                  source: "llm_boundary_normalized_prompt",
-                  renderedChars: llmBoundaryPromptForPrecheck.length,
-                },
-              });
+          let preemptiveCompaction = null;
+          const shouldSkipPrecheck =
+            skipPromptSubmission ||
+            (contextEngineAssemblySucceeded &&
+              activeContextEngine?.info.ownsCompaction &&
+              contextEnginePromptAuthority !== "preassembly_may_overflow");
+
+          if (shouldSkipPrecheck && !skipPromptSubmission) {
+            log.info(
+              `[context-overflow-precheck] skipped: context engine "${activeContextEngine!.info.id}" owns compaction`,
+            );
+          }
+
+          if (!shouldSkipPrecheck) {
+            preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+              messages: hookMessagesForCurrentPrompt,
+              ...(unwindowedLlmBoundaryMessagesForPrecheck
+                ? { unwindowedMessages: unwindowedLlmBoundaryMessagesForPrecheck }
+                : {}),
+              systemPrompt: systemPromptForHook,
+              prompt: llmBoundaryPromptForPrecheck,
+              contextTokenBudget,
+              reserveTokens,
+              toolResultMaxChars: promptToolResultMaxChars,
+              llmBoundaryTokenPressure: {
+                estimatedPromptTokens: llmBoundaryTokenPressure,
+                source: "llm_boundary_normalized_prompt",
+                renderedChars: llmBoundaryPromptForPrecheck.length,
+              },
+            });
+          }
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({
               result: preemptiveCompaction,
@@ -4882,6 +4983,7 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
+          acceptingSteerMessages = false;
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
@@ -5197,7 +5299,7 @@ export async function runEmbeddedAttempt(
             sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
-            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+            isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
           });
         }
 

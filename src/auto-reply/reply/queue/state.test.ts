@@ -53,6 +53,7 @@ describe("refreshQueuedFollowupSession", () => {
         run: makeRun(),
       },
       sourceRefs: new WeakSet(),
+      allRoomEvents: false,
     });
 
     refreshQueuedFollowupSession({
@@ -136,6 +137,7 @@ describe("getFollowupQueue", () => {
           run: makeRun(),
         },
         sourceRefs: new WeakSet(),
+        allRoomEvents: false,
       });
     }
     queue.evictedSummaryCount = 5;

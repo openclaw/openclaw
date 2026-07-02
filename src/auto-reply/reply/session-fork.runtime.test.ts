@@ -439,7 +439,7 @@ describe("forkSessionFromParentRuntime", () => {
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: "plugin-metadata" });
     expect(records.at(-1)).not.toHaveProperty("appendMode");
     expect(reopened.buildSessionContext().messages).toMatchObject([
-      { role: "assistant", content: "active root" },
+      { role: "assistant", content: [{ type: "text", text: "active root" }] },
       { role: "user", content: "continued" },
     ]);
   });

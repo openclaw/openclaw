@@ -26,6 +26,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import { resolveTelegramPromptContextTimestampMs } from "./outbound-message-context.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
@@ -156,6 +157,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    promptContextTimestampMs: resolveTelegramPromptContextTimestampMs(params.payload),
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =

@@ -51,6 +51,8 @@ const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const NATIVE_I18N_SCOPE_RE =
+  /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
@@ -163,6 +165,14 @@ export function detectChangedScope(changedPaths) {
     runChangedSmoke,
     runControlUiI18n,
   };
+}
+
+export function shouldRunNativeI18n(changedPaths) {
+  return (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+  );
 }
 
 /**
@@ -294,6 +304,7 @@ export function writeGitHubOutput(
     runFullInstallSmoke: scope.runChangedSmoke,
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
+  runNativeI18n = true,
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
@@ -323,6 +334,7 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -369,7 +381,7 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE);
+      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false);
       process.exit(0);
     }
     writeGitHubOutput(
@@ -377,8 +389,9 @@ if (isDirectRun()) {
       process.env.GITHUB_OUTPUT,
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
+      shouldRunNativeI18n(changedPaths),
     );
   } catch {
-    writeGitHubOutput(FULL_SCOPE);
+    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true);
   }
 }

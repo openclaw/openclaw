@@ -1,6 +1,7 @@
 /** Public cron store load/save API backed by SQLite plus quarantine sidecars. */
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
@@ -130,6 +131,24 @@ export async function saveCronJobsStore(
   assertCronStoreCanPersist(store);
   runOpenClawStateWriteTransaction(({ db }) => {
     replaceCronRows(db, storeKey, store);
+  });
+}
+
+/** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
+export async function saveCronJobsStoreWithMetadata(
+  storePath: string,
+  store: CronStoreFile,
+  acquireMetadata: (db: DatabaseSync) => boolean,
+): Promise<boolean> {
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  assertCronStoreCanPersist(store);
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    if (!acquireMetadata(db)) {
+      return false;
+    }
+    replaceCronRows(db, storeKey, store);
+    return true;
   });
 }
 

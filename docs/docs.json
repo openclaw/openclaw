@@ -1745,7 +1745,7 @@
                   },
                   {
                     "group": "Interfaces",
-                    "pages": ["cli/dashboard", "cli/tui"]
+                    "pages": ["cli/attach", "cli/dashboard", "cli/tui"]
                   },
                   {
                     "group": "Utility",
@@ -1860,7 +1860,10 @@
               {
                 "group": "Release and CI",
                 "pages": [
-                  "releases/index",
+                  {
+                    "group": "Release notes",
+                    "pages": ["releases/index", "releases/2026.6.11"]
+                  },
                   "maturity/scorecard",
                   "maturity/taxonomy",
                   "reference/RELEASING",

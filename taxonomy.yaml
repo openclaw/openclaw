@@ -5670,9 +5670,9 @@ surfaces:
   - id: android-app
     name: Android app
     family: platform-app
-    level: alpha
-    level_code: M2
-    rationale: Public Google Play path exists, but app docs still describe the rebuild as extremely alpha and call out release hardening work.
+    level: stable
+    level_code: M4
+    rationale: Official Google Play distribution exists, source build/run docs are maintained, and the Android app is documented as a normal companion node for users.
     completeness_instructions: references/completeness/android-app.md
     categories:
       - name: Media Capture
@@ -5800,9 +5800,9 @@ surfaces:
   - id: ios-app
     name: iOS app
     family: platform-app
-    level: experimental
-    level_code: M1
-    rationale: Internal preview / super-alpha. TestFlight and relay-backed push flows exist, but no public distribution yet.
+    level: stable
+    level_code: M4
+    rationale: Official App Store distribution exists, relay-backed push is documented, and the iOS app is documented as a normal companion node for users.
     completeness_instructions: references/completeness/ios-app.md
     categories:
       - name: Media and Sharing
@@ -5893,13 +5893,13 @@ surfaces:
       - name: Distribution
         id: distribution
         features:
-          - name: Internal preview status
+          - name: App distribution
             coverageIds: [ios.internal-preview-status]
-            description: Internal preview status, source/Xcode manual deploy, local signing, XcodeGen project generation, Fastlane TestFlight archive/upload, versioning/changelog/metadata, release artifacts, and official-vs-local build flags
+            description: App Store distribution, source/Xcode manual deploy, local signing, XcodeGen project generation, Fastlane App Store archive/upload, versioning/changelog/metadata, release artifacts, and official-vs-local build flags
         docs:
           - docs/platforms/ios.md
         search_anchors:
-          - TestFlight
+          - App Store
           - Xcode manual deploy
           - signing
         category_note: install-signing-and-testflight-distribution.md
@@ -6033,7 +6033,7 @@ surfaces:
             description: Watch app and WatchKit extension targets
           - name: Signing/profile variables
             coverageIds: [watchos.signing-profile-variables]
-            description: Signing/profile variables, bundle identifiers, icon assets, and iOS beta release flow
+            description: Signing/profile variables, bundle identifiers, icon assets, and iOS App Store release flow
           - name: Public/support status
             coverageIds: [watchos.public-support-status]
             description: Public/support status for the watch companion as distributed through the iOS app
@@ -6042,7 +6042,7 @@ surfaces:
             description: Changelog and repo-history evidence for watchOS companion maturity
           - name: Release metadata
             coverageIds: [watchos.release-metadata]
-            description: Release metadata and app-store/TestFlight preparation evidence
+            description: Release metadata and App Store preparation evidence
           - name: Historical bug/regression themes relevant to scoring
             coverageIds: [watchos.historical-bug-regression-themes-relevant-to-scoring]
             description: Historical bug/regression themes relevant to scoring current source quality

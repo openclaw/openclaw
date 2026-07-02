@@ -30,6 +30,7 @@ export type IMessageActionConfig = {
   removeParticipant?: boolean;
   leaveGroup?: boolean;
   sendAttachment?: boolean;
+  polls?: boolean;
 };
 
 /** Inbound tapback notification policy. */

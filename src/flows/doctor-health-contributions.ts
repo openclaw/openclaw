@@ -16,6 +16,8 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
+type PluginVersionDriftReport =
+  import("../plugins/plugin-version-drift.js").PluginVersionDriftReport;
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
@@ -784,14 +786,122 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+type ToolResultCapTarget = {
+  agentId?: string;
+  configuredCap?: number;
+  path?: string;
+  scopeLabel: string;
+  target?: string;
+};
+
+async function collectToolResultCapFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const { resolveAgentContextLimits } = await loadAgentScopeModule();
+  const { normalizeAgentId } = await import("../routing/session-key.js");
+  const targets: ToolResultCapTarget[] = [];
+  const defaultsConfiguredCap = cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
+  if (defaultsConfiguredCap !== undefined) {
+    targets.push({
+      configuredCap: defaultsConfiguredCap,
+      path: "agents.defaults.contextLimits.toolResultMaxChars",
+      scopeLabel: "defaults",
+      target: "agents.defaults",
+    });
+  }
+  for (const entry of cfg.agents?.list ?? []) {
+    const normalizedAgentId = normalizeAgentId(entry.id);
+    if (
+      !normalizedAgentId ||
+      (defaultsConfiguredCap === undefined && entry.contextLimits?.toolResultMaxChars === undefined)
+    ) {
+      continue;
+    }
+    targets.push({
+      agentId: normalizedAgentId,
+      configuredCap: resolveAgentContextLimits(cfg, normalizedAgentId)?.toolResultMaxChars,
+      path:
+        entry.contextLimits?.toolResultMaxChars === undefined
+          ? "agents.defaults.contextLimits.toolResultMaxChars"
+          : `agents.list.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
+      scopeLabel: `agent "${normalizedAgentId}"`,
+      target: `agents.list.${normalizedAgentId}`,
+    });
+  }
+  if (targets.length === 0) {
+    return [];
+  }
+
+  const { collectToolResultCapDoctorIssues, toolResultCapDoctorIssueToHealthFinding } =
+    await import("./doctor-tool-result-cap-advice.js");
+
+  return collectToolResultCapTargetAdvice({
+    cfg,
+    readOnlyCatalog: true,
+    targets,
+  }).then((entries) =>
+    entries.flatMap((entry) =>
+      collectToolResultCapDoctorIssues(entry).map(toolResultCapDoctorIssueToHealthFinding),
+    ),
+  );
+}
+
+async function collectToolResultCapTargetAdvice(params: {
+  cfg: OpenClawConfig;
+  readOnlyCatalog?: boolean;
+  targets: readonly ToolResultCapTarget[];
+}): Promise<
+  Array<{
+    contextWindowTokens: number;
+    modelKey: string;
+    configuredCap?: number;
+    deep?: boolean;
+    path?: string;
+    scopeLabel?: string;
+    target?: string;
+  }>
+> {
+  const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
+  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
+  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
+  const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
+  const catalog = await loadModelCatalog({
+    config: params.cfg,
+    ...(params.readOnlyCatalog ? { readOnly: true } : {}),
+  });
+
+  return params.targets.map((target) => {
+    const modelRef = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: target.agentId,
+    });
+    const entry = findModelCatalogEntry(catalog, {
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+    });
+    const contextWindow = resolveContextWindowInfo({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      modelContextTokens: entry?.contextTokens,
+      modelContextWindow: entry?.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    return {
+      contextWindowTokens: contextWindow.tokens,
+      modelKey: modelKey(modelRef.provider, modelRef.model),
+      configuredCap: target.configuredCap,
+      path: target.path,
+      scopeLabel: target.scopeLabel,
+      target: target.target,
+    };
+  });
+}
+
 async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveAgentContextLimits } = await loadAgentScopeModule();
   const { normalizeAgentId } = await import("../routing/session-key.js");
-  const targets: Array<{
-    agentId?: string;
-    configuredCap?: number;
-    scopeLabel: string;
-  }> = [];
+  const targets: ToolResultCapTarget[] = [];
   const defaultsConfiguredCap = ctx.cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
   if (ctx.options.deep === true || defaultsConfiguredCap !== undefined) {
     targets.push({
@@ -819,39 +929,18 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
     return;
   }
 
-  const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
-  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
-  const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
   const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
   const { note } = await loadNoteModule();
-
-  const catalog = await loadModelCatalog({ config: ctx.cfg });
-  const lines = targets.flatMap((target) => {
-    const modelRef = resolveDefaultModelForAgent({
-      cfg: ctx.cfg,
-      agentId: target.agentId,
-    });
-    const entry = findModelCatalogEntry(catalog, {
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-    });
-    const contextWindow = resolveContextWindowInfo({
-      cfg: ctx.cfg,
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-      modelContextTokens: entry?.contextTokens,
-      modelContextWindow: entry?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
-    return buildToolResultCapDoctorAdvice({
-      contextWindowTokens: contextWindow.tokens,
-      modelKey: modelKey(modelRef.provider, modelRef.model),
-      configuredCap: target.configuredCap,
-      deep: ctx.options.deep === true,
-      scopeLabel: target.scopeLabel,
-    });
+  const entries = await collectToolResultCapTargetAdvice({
+    cfg: ctx.cfg,
+    targets,
   });
+  const lines = entries.flatMap((entry) =>
+    buildToolResultCapDoctorAdvice({
+      ...entry,
+      deep: ctx.options.deep === true,
+    }),
+  );
   if (lines.length > 0) {
     note(lines.join("\n"), "Tool result cap");
   }
@@ -917,33 +1006,41 @@ async function hasActiveGatewayExecCredential(
   });
 }
 
-async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  let pluginVersionDrift:
-    | import("../plugins/plugin-version-drift.js").PluginVersionDriftReport
-    | undefined;
-  if (ctx.cfg.gateway?.mode !== "remote") {
+async function collectWorkspaceStatusPluginVersionDrift(params: {
+  cfg: OpenClawConfig;
+  options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
+}): Promise<PluginVersionDriftReport | undefined> {
+  if (params.cfg.gateway?.mode !== "remote") {
     try {
       const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
-      const allowExecSecretRefs = ctx.options.allowExec === true;
+      const allowExecSecretRefs = params.options?.allowExec === true;
       const status = await gatherDaemonStatus({
         rpc: {
-          timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
+          timeout: params.options?.nonInteractive === true ? "3000" : "10000",
           json: true,
         },
         probe: true,
         requireRpc: false,
-        deep: ctx.options.deep === true,
+        deep: params.options?.deep === true,
         allowExecSecretRefs,
       });
       const hasProbedGatewayVersion =
         typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
       if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
-        pluginVersionDrift = status.pluginVersionDrift;
+        return status.pluginVersionDrift;
       }
     } catch {
       // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
     }
   }
+  return undefined;
+}
+
+async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+    cfg: ctx.cfg,
+    options: ctx.options,
+  });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
   noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
 }
@@ -1032,6 +1129,66 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
   if (ctx.options.deep === true) {
     await noteMemoryRecallHealth(ctx.cfg);
   }
+}
+
+function memorySearchNoteToFinding(message: string): HealthFinding | null {
+  const lines = message.split("\n");
+  const firstLine = (lines[0] ?? message).trim();
+  if (firstLine === "Memory search is explicitly disabled (enabled: false).") {
+    return null;
+  }
+  const fixHint = lines
+    .slice(1)
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+  return {
+    checkId: "core/doctor/memory-search",
+    severity: "warning",
+    message: firstLine,
+    path: inferMemorySearchFindingPath(firstLine),
+    ...(fixHint ? { fixHint } : {}),
+  };
+}
+
+function inferMemorySearchFindingPath(message: string): string {
+  if (message.includes("No active memory plugin")) {
+    return "plugins.slots.memory";
+  }
+  if (message.includes("QMD memory backend")) {
+    return "memory.backend";
+  }
+  if (message.includes("OpenAI-compatible embeddings endpoint")) {
+    return "agents.defaults.memorySearch.remote.baseUrl";
+  }
+  if (message.includes("OpenAI-compatible embedding model")) {
+    return "agents.defaults.memorySearch.model";
+  }
+  return "agents.defaults.memorySearch.provider";
+}
+
+async function collectMemorySearchHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const { noteMemorySearchHealth } = await import("../commands/doctor-memory-search.js");
+  const notes: string[] = [];
+  await noteMemorySearchHealth(ctx.cfg, {
+    includeWorkspaceMemoryHealth: false,
+    skipQmdBinaryProbe: true,
+    skipAuthProfileResolution: true,
+    gatewayMemoryProbe: {
+      checked: false,
+      ready: false,
+      skipped: true,
+    },
+    noteFn: (message) => {
+      notes.push(String(message));
+    },
+  });
+  return notes.flatMap((message) => {
+    const finding = memorySearchNoteToFinding(message);
+    return finding ? [finding] : [];
+  });
 }
 
 async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1222,6 +1379,19 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
+      healthChecks: {
+        id: "core/doctor/auth-profiles",
+        kind: "core",
+        description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectAuthProfileHealthFindings } = await import("../commands/doctor-auth.js");
+          return collectAuthProfileHealthFindings({
+            cfg: ctx.cfg,
+            allowKeychainPrompt: false,
+          });
+        },
+      },
       run: runAuthProfileHealth,
     }),
     createDoctorHealthContribution({
@@ -1351,6 +1521,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:disk-space",
       label: "Disk space",
+      healthChecks: {
+        id: "core/doctor/disk-space",
+        description: "Low disk space around the OpenClaw state directory is a finding.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectDiskSpaceHealthFindings } =
+            await import("../commands/doctor-disk-space.js");
+          return collectDiskSpaceHealthFindings(ctx.cfg);
+        },
+      },
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
@@ -1555,6 +1735,18 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
+      healthChecks: {
+        id: "core/doctor/channel-plugin-blockers",
+        description: "Configured channels must have loadable backing channel plugins.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
+            await import("../commands/doctor/shared/channel-plugin-blockers.js");
+          return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+            channelPluginBlockerHitToHealthFinding,
+          );
+        },
+      },
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
@@ -1584,6 +1776,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
+      healthChecks: {
+        id: "core/doctor/tool-result-cap",
+        description:
+          "Detect explicit toolResultMaxChars settings that fight model-window defaults.",
+        defaultEnabled: false,
+        detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
+      },
       run: runToolResultCapHealth,
     }),
     createDoctorHealthContribution({
@@ -1606,6 +1805,23 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+      healthChecks: {
+        id: "core/doctor/workspace-status",
+        description: "Workspace plugin/status diagnostics are exposed as findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectWorkspaceStatusHealthFindings } =
+            await import("../commands/doctor-workspace-status.js");
+          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+            cfg: ctx.cfg,
+            options: {
+              nonInteractive: true,
+              allowExec: ctx.allowExecSecretRefs === true,
+            },
+          });
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+        },
+      },
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
@@ -1645,11 +1861,26 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      healthChecks: {
+        description: "Memory search provider and backend readiness are captured as findings.",
+        defaultEnabled: false,
+        detect: collectMemorySearchHealthFindings,
+      },
       run: runMemorySearchHealthContribution,
     }),
     createDoctorHealthContribution({
       id: "doctor:device-pairing",
       label: "Device pairing",
+      healthChecks: {
+        id: "core/doctor/device-pairing",
+        description: "Device pairing requests and stale device-auth records are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectDevicePairingHealthFindings } =
+            await import("../commands/doctor-device-pairing.js");
+          return await collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+        },
+      },
       run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
