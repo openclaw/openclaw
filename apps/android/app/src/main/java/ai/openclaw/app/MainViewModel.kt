@@ -115,6 +115,7 @@ class MainViewModel(
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
     runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
+  val nodeCapabilityConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeCapabilityConnected }
   val nodeCapabilityApprovalRequestId: StateFlow<String?> = runtimeState(initial = null) { it.nodeCapabilityApprovalRequestId }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }

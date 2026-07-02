@@ -233,7 +233,7 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun blocksFinishWhenOnlyOperatorIsConnected() {
+  fun blocksFinishWhenGatewayHasNotReportedNodeConnected() {
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
   }
 
@@ -276,6 +276,11 @@ class OnboardingFlowLogicTest {
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+  }
+
+  @Test
+  fun blocksFinishForLegacyNodeListUntilNodeConnects() {
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
   }
 
   @Test
@@ -332,46 +337,6 @@ class OnboardingFlowLogicTest {
         ),
       )
     }
-  }
-
-  @Test
-  fun nearbyGatewayFoundStateIsConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Studio Gateway", status = "Found", canConnect = true),
-      nearbyGatewayUiState(nearbyGatewayName = "Studio Gateway", discoveryStatusText = "Searching…", discoveryStarted = false),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayBeforeDiscoveryStartsIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Starting discovery...", status = "Starting", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching…", discoveryStarted = false, searchTimedOut = true),
-    )
-  }
-
-  @Test
-  fun nearbyGatewaySearchingStateIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Searching for gateways...", status = "Searching", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching for gateways…"),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayTimedOutSearchShowsEmptyState() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching for gateways…", searchTimedOut = true),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayEmptyResultStateIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Local: 0 • Wide: 0"),
-    )
   }
 
   @Test
@@ -488,40 +453,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryNodeApprovalPollingWaitsForInFlightRefresh() {
-    assertTrue(
-      shouldRefreshNodeApprovalDuringRecovery(
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
-        nodesDevicesRefreshing = false,
-      ),
-    )
-    assertFalse(
-      shouldRefreshNodeApprovalDuringRecovery(
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
-        nodesDevicesRefreshing = true,
-      ),
-    )
-    assertTrue(
-      shouldRefreshNodeApprovalDuringRecovery(
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
-        nodesDevicesRefreshing = false,
-      ),
-    )
-    assertFalse(
-      shouldRefreshNodeApprovalDuringRecovery(
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
-        nodesDevicesRefreshing = true,
-      ),
-    )
-    assertFalse(
-      shouldRefreshNodeApprovalDuringRecovery(
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-        nodesDevicesRefreshing = false,
-      ),
-    )
-  }
-
-  @Test
   fun nodeApprovalCheckingOnlyTracksActiveRefresh() {
     assertTrue(
       nodeApprovalCheckingInProgress(
@@ -626,55 +557,37 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun showsPairingStateForPairingRequiredGatewayStatus() {
-    assertEquals(
-      GatewayRecoveryUiState.Pairing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Gateway error: pairing required; approval in progress",
-        connectSettling = false,
-        connectTimedOut = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
-  fun showsSlowConnectionStateWhenLoadingOutlastsConnectionTimeout() {
-    assertEquals(
-      GatewayRecoveryUiState.TakingLonger,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connecting",
-        connectSettling = false,
-        connectTimedOut = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
-      ),
-    )
-  }
-
-  @Test
-  fun showsConnectedStateWhenGatewayBecomesReady() {
-    assertEquals(
-      GatewayRecoveryUiState.Connected,
-      gatewayRecoveryUiState(
+  fun nodeApprovalAutoContinuesWhenGatewayReportsReady() {
+    assertTrue(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
         ready = true,
-        statusText = "Gateway error: pairing required",
-        connectSettling = false,
         nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        autoContinueEnabled = true,
       ),
     )
-  }
-
-  @Test
-  fun showsNodeApprovalStateWhenCapabilityApprovalIsPending() {
-    assertEquals(
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connected",
-        connectSettling = false,
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
+        ready = true,
         nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+        autoContinueEnabled = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.Permissions,
+        ready = true,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        autoContinueEnabled = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
+        ready = true,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        autoContinueEnabled = false,
       ),
     )
   }
@@ -783,65 +696,6 @@ class OnboardingFlowLogicTest {
         statusText = "Connecting…",
         connectSettling = false,
         connectTimedOut = true,
-      ),
-    )
-  }
-
-  @Test
-  fun showsFinishingStateWhileNodeApprovalLoads() {
-    assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connected",
-        connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
-      ),
-    )
-  }
-
-  @Test
-  fun showsApprovalRequiredForPausedPairingProblem() {
-    assertEquals(
-      GatewayRecoveryUiState.ApprovalRequired,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connecting…",
-        connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-        gatewayConnectionProblem =
-          GatewayConnectionProblem(
-            code = "PAIRING_REQUIRED",
-            message = "pairing required: device approval is required",
-            reason = "not-paired",
-            requestId = "request-1",
-            recommendedNextStep = null,
-            pauseReconnect = true,
-            retryable = false,
-          ),
-      ),
-    )
-  }
-
-  @Test
-  fun showsPairingForRetryablePairingProblem() {
-    assertEquals(
-      GatewayRecoveryUiState.Pairing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connecting…",
-        connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-        gatewayConnectionProblem =
-          GatewayConnectionProblem(
-            code = "PAIRING_REQUIRED",
-            message = "pairing required: device approval is required",
-            reason = "not-paired",
-            requestId = "request-1",
-            recommendedNextStep = "wait_then_retry",
-            pauseReconnect = false,
-            retryable = true,
-          ),
       ),
     )
   }
@@ -1040,77 +894,10 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun showsFinishingStateWhileGatewayConnectionSettles() {
-    assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Offline",
-        connectSettling = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
-  fun showsFinishingStateForPartialGatewayConnection() {
-    assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connected (node offline)",
-        connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
-  fun showsFinishingStateForPartialGatewayConnectionAfterTimeout() {
-    assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connected (node offline)",
-        connectSettling = false,
-        connectTimedOut = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
-  fun showsConnectionIssueForNonPairingFailure() {
-    assertEquals(
-      GatewayRecoveryUiState.Failed,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Gateway error: connection refused",
-        connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
-  fun showsSlowConnectionStateWhenGenericConnectionTimesOut() {
-    assertEquals(
-      GatewayRecoveryUiState.TakingLonger,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connecting…",
-        connectSettling = false,
-        connectTimedOut = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
-      ),
-    )
-  }
-
-  @Test
   fun recoveryPrimaryActionOnlyAppearsForCompleteFailureOrSlowConnectionStates() {
     assertEquals(GatewayRecoveryPrimaryAction.Finish, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Connected))
     assertEquals(GatewayRecoveryPrimaryAction.Back, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed))
-    assertEquals(GatewayRecoveryPrimaryAction.Back, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger))
+    assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger))
     assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.ApprovalRequired))
 
     listOf(

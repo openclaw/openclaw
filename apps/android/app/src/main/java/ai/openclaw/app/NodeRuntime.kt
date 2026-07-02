@@ -490,6 +490,8 @@ class NodeRuntime(
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApprovalState = MutableStateFlow(GatewayNodeApprovalState.Loading)
   val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> = _nodeCapabilityApprovalState.asStateFlow()
+  private val _nodeCapabilityConnected = MutableStateFlow(false)
+  val nodeCapabilityConnected: StateFlow<Boolean> = _nodeCapabilityConnected.asStateFlow()
   private val _nodeCapabilityApprovalRequestId = MutableStateFlow<String?>(null)
   val nodeCapabilityApprovalRequestId: StateFlow<String?> = _nodeCapabilityApprovalRequestId.asStateFlow()
 
@@ -759,6 +761,9 @@ class NodeRuntime(
       onConnectFailure = { error, pauseReconnect ->
         updateStatus {
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+        if (operatorConnected && nodeConnectFailureNeedsApprovalRefresh(error)) {
+          scope.launch { refreshNodesDevicesFromGateway() }
         }
       },
       onEvent = { _, _ -> },
@@ -2429,12 +2434,14 @@ class NodeRuntime(
         _nodesDevicesRefreshing.value = true
         _nodesDevicesErrorText.value = null
         _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Loading
+        _nodeCapabilityConnected.value = false
         _nodeCapabilityApprovalRequestId.value = null
       }
     if (!refreshStarted) return
     if (!operatorConnected) {
       nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
         _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Loading
+        _nodeCapabilityConnected.value = false
         _nodeCapabilityApprovalRequestId.value = null
         _nodesDevicesSummary.value =
           GatewayNodesDevicesSummary(
@@ -2449,7 +2456,7 @@ class NodeRuntime(
     try {
       val nodesRes = operatorSession.request("node.list", "{}")
       val nodesRoot = json.parseToJsonElement(nodesRes).asObjectOrNull()
-      val nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray)
+      val nodes = parseGatewayNodeList(nodesRoot)
       val approvalStatus =
         currentNodeCapabilityApprovalStatus(
           nodes = nodes,
@@ -2458,10 +2465,18 @@ class NodeRuntime(
       val publishedApproval =
         nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
           _nodeCapabilityApprovalState.value = approvalStatus.state
+          _nodeCapabilityConnected.value = approvalStatus.connected
           _nodeCapabilityApprovalRequestId.value = approvalStatus.pendingRequestId
         }
       if (!publishedApproval) {
         return
+      }
+      if (approvalStatus.connected && !_nodeConnected.value) {
+        updateStatus {
+          nodeConnectionProblem = null
+          _nodeConnected.value = true
+          nodeStatusText = "Connected"
+        }
       }
       val devicesRoot =
         try {
@@ -2684,6 +2699,7 @@ class NodeRuntime(
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
       _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Loading
+      _nodeCapabilityConnected.value = false
       _nodeCapabilityApprovalRequestId.value = null
       _nodesDevicesRefreshing.value = false
     }
@@ -2939,11 +2955,6 @@ class NodeRuntime(
       }.orEmpty()
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
-
-  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
-    nodes
-      ?.mapNotNull(::parseGatewayNodeSummary)
-      .orEmpty()
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -3511,6 +3522,8 @@ internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalSta
 
 internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
 
+internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
+
 internal fun currentNodeCapabilityApprovalState(
   nodes: List<GatewayNodeSummary>,
   selfNodeId: String,
@@ -3518,6 +3531,7 @@ internal fun currentNodeCapabilityApprovalState(
 
 internal data class GatewayNodeApprovalStatus(
   val state: GatewayNodeApprovalState,
+  val connected: Boolean,
   val pendingRequestId: String?,
 )
 
@@ -3528,8 +3542,32 @@ internal fun currentNodeCapabilityApprovalStatus(
   val node = nodes.firstOrNull { it.id == selfNodeId }
   return GatewayNodeApprovalStatus(
     state = node?.approvalState ?: GatewayNodeApprovalState.Loading,
+    connected = node?.connected == true,
     pendingRequestId = node?.pendingRequestId,
   )
+}
+
+private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
+  nodes
+    ?.mapNotNull(::parseGatewayNodeSummary)
+    .orEmpty()
+
+internal fun parseGatewayNodeList(root: JsonObject?): List<GatewayNodeSummary> {
+  if (root == null) return emptyList()
+  val seen = mutableSetOf<String>()
+  val result = mutableListOf<GatewayNodeSummary>()
+
+  fun append(nodes: List<GatewayNodeSummary>) {
+    for (node in nodes) {
+      if (seen.add(node.id)) {
+        result.add(node)
+      }
+    }
+  }
+  append(parseGatewayNodes(root["nodes"] as? JsonArray))
+  append(parseGatewayNodes(root["pending"] as? JsonArray))
+  append(parseGatewayNodes(root["paired"] as? JsonArray))
+  return result
 }
 
 internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {

@@ -92,7 +92,7 @@ internal fun resolveGatewayConnectConfig(
   passwordInput: String,
 ): GatewayConnectConfig? {
   if (useSetupCode) {
-    val setup = decodeGatewaySetupCode(setupCode) ?: return null
+    val setup = resolveSetupCodeCandidate(setupCode)?.let(::decodeGatewaySetupCode) ?: return null
     val parsed = parseGatewayEndpointResult(setup.url).config ?: return null
     val setupBootstrapToken =
       setup.bootstrapToken

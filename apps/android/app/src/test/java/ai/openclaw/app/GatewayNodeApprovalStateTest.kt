@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -27,6 +30,40 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
+  fun nodePairingFailuresRefreshNodeDeviceState() {
+    assertTrue(
+      nodeConnectFailureNeedsApprovalRefresh(
+        GatewaySession.ErrorShape(
+          code = "NOT_PAIRED",
+          message = "pairing required",
+          details =
+            GatewayConnectErrorDetails(
+              code = "PAIRING_REQUIRED",
+              canRetryWithDeviceToken = false,
+              recommendedNextStep = "wait_then_retry",
+              pauseReconnect = false,
+              reason = "not-paired",
+            ),
+        ),
+      ),
+    )
+    assertFalse(
+      nodeConnectFailureNeedsApprovalRefresh(
+        GatewaySession.ErrorShape(
+          code = "UNAUTHORIZED",
+          message = "token mismatch",
+          details =
+            GatewayConnectErrorDetails(
+              code = "AUTH_TOKEN_MISMATCH",
+              canRetryWithDeviceToken = false,
+              recommendedNextStep = null,
+            ),
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun parsesNodeListApprovalFields() {
     val node =
       parseGatewayNodeSummary(
@@ -50,6 +87,49 @@ class GatewayNodeApprovalStateTest {
     assertEquals("request-1", node.pendingRequestId)
     assertEquals(listOf("device"), node.capabilities)
     assertEquals(listOf("device.status"), node.commands)
+  }
+
+  @Test
+  fun parsesSplitNodeListShapeFromGateway() {
+    val root =
+      Json
+        .parseToJsonElement(
+          """
+          {
+            "pending": [
+              {
+                "nodeId": "pending-node",
+                "paired": false,
+                "connected": false,
+                "approvalState": "pending-approval",
+                "pendingRequestId": "request-pending"
+              }
+            ],
+            "paired": [
+              {
+                "nodeId": "self",
+                "paired": true,
+                "connected": true,
+                "approvalState": "approved",
+                "caps": ["device"],
+                "commands": ["device.status"]
+              }
+            ]
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    val nodes = parseGatewayNodeList(root)
+
+    assertEquals(2, nodes.size)
+    assertEquals(
+      GatewayNodeApprovalStatus(
+        state = GatewayNodeApprovalState.Approved,
+        connected = true,
+        pendingRequestId = null,
+      ),
+      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "self"),
+    )
   }
 
   @Test
@@ -107,6 +187,7 @@ class GatewayNodeApprovalStateTest {
     assertEquals(
       GatewayNodeApprovalStatus(
         state = GatewayNodeApprovalState.PendingApproval,
+        connected = true,
         pendingRequestId = "request-self",
       ),
       currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "self"),
@@ -118,6 +199,7 @@ class GatewayNodeApprovalStateTest {
     assertEquals(
       GatewayNodeApprovalStatus(
         state = GatewayNodeApprovalState.Loading,
+        connected = false,
         pendingRequestId = null,
       ),
       currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "missing"),
