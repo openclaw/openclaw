@@ -712,6 +712,8 @@ function dispatchGeminiCliStreamingToolEvent(params: {
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
 const GEMINI_CLI_RESULT_ERROR_FALLBACK = "Gemini CLI result status was error.";
+const CLAUDE_CLI_JSONL_MAX_PENDING_LINE_CHARS = 8 * 1024 * 1024;
+export const CLAUDE_CLI_JSONL_LINE_EXCEEDED_ERROR = "Claude CLI JSONL line exceeded output limit.";
 
 function isFallbackGeminiCliStreamJsonError(errorText: string): boolean {
   return (
@@ -747,6 +749,7 @@ export function createCliJsonlStreamingParser(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
+  maxPendingLineChars?: number;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -760,6 +763,19 @@ export function createCliJsonlStreamingParser(params: {
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+  const maxPendingLineChars =
+    params.maxPendingLineChars ??
+    (supportsCliJsonlToolEvents(params) ? CLAUDE_CLI_JSONL_MAX_PENDING_LINE_CHARS : undefined);
+
+  const markLineBufferExceeded = () => {
+    output = {
+      text: "",
+      sessionId,
+      usage,
+      errorText: CLAUDE_CLI_JSONL_LINE_EXCEEDED_ERROR,
+    };
+    lineBuffer = "";
+  };
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -947,10 +963,14 @@ export function createCliJsonlStreamingParser(params: {
 
   return {
     push(chunk: string) {
-      if (!chunk) {
+      if (!chunk || output?.errorText) {
         return;
       }
       lineBuffer += chunk;
+      if (maxPendingLineChars !== undefined && lineBuffer.length > maxPendingLineChars) {
+        markLineBufferExceeded();
+        return;
+      }
       flushLines(false);
     },
     finish() {

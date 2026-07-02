@@ -6,6 +6,7 @@ import {
   parseCliJson,
   parseCliJsonl,
   supportsCliJsonlToolEvents,
+  CLAUDE_CLI_JSONL_LINE_EXCEEDED_ERROR,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
@@ -974,6 +975,28 @@ describe("createCliJsonlStreamingParser", () => {
         total: 1,
       },
       errorText: "Invalid stream payload",
+    });
+  });
+
+  it("caps pending JSONL line buffer to match Claude live session limits (#98896)", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      maxPendingLineChars: 1024,
+    });
+
+    parser.push("x".repeat(1025));
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: CLAUDE_CLI_JSONL_LINE_EXCEEDED_ERROR,
     });
   });
 
