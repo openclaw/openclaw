@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
 
@@ -16,6 +16,20 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 const { SessionManager } = await import("./session-manager.js");
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-session-migrate-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("temp");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 function writeV1File(dir: string): string {
   const file = join(dir, "2026-01-01T00-00-00-000Z_sess-v1.jsonl");
@@ -41,8 +55,8 @@ function writeV1File(dir: string): string {
 }
 
 describe("v1 session migration id assignment", () => {
-  it("keeps migrated entry ids unique even when the id generator first collides", () => {
-    const dir = mkdtempSync(join(tmpdir(), "oc-v1mig-"));
+  it("keeps migrated entry ids unique even when the id generator first collides", async () => {
+    const dir = await makeTempDir();
     const file = writeV1File(dir);
 
     uuidQueue.length = 0;
@@ -69,8 +83,8 @@ describe("v1 session migration id assignment", () => {
     expect(messages[1].parentId).not.toBe(messages[1].id);
   });
 
-  it("preserves compaction indexes across opaque rows", () => {
-    const dir = mkdtempSync(join(tmpdir(), "oc-v1mig-compaction-"));
+  it("preserves compaction indexes across opaque rows", async () => {
+    const dir = await makeTempDir();
     const file = join(dir, "session.jsonl");
     const keptMessage = {
       type: "message",

@@ -1,9 +1,23 @@
 /** Tests agent model discovery registry refresh and lookup cache behavior. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agent-models-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("temp");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 function writeModelsJson(agentDir: string, modelId: string): void {
   fs.writeFileSync(
@@ -22,8 +36,8 @@ function writeModelsJson(agentDir: string, modelId: string): void {
 }
 
 describe("discoverModels", () => {
-  it("clears cached find results when the agent model registry refreshes", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
+  it("clears cached find results when the agent model registry refreshes", async () => {
+    const agentDir = await makeTempDir();
     writeModelsJson(agentDir, "old-model");
     const authStorage = discoverAuthStorage(agentDir, { skipCredentials: true });
     const registry = discoverModels(authStorage, agentDir, { normalizeModels: false });

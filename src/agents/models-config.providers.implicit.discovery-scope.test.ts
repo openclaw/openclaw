@@ -1,11 +1,11 @@
 // Exercises startup provider discovery scoping without loading real plugin manifests.
-import { mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +14,20 @@ const mocks = vi.hoisted(() => ({
   runProviderStaticCatalog: vi.fn(),
 }));
 const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-discovery-scope-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("temp");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
@@ -212,7 +226,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("fills missing static catalog apiKey from Google Vertex ADC auth evidence", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-"));
+    const tempDir = await makeTempDir();
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
     await writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }));
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([

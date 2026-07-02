@@ -1,14 +1,28 @@
 // Covers config include-file permission audit findings.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-include-perms-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("temp");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 describe("security audit config include permissions", () => {
   it("flags group/world-readable config include files", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-include-perms-"));
+    const tmp = await makeTempDir();
     const stateDir = path.join(tmp, "state");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 

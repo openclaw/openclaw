@@ -1,9 +1,7 @@
 // Verifies StepFun standard and Step Plan catalog pairing across regions.
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
 
@@ -15,6 +13,20 @@ const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
 const STEPFUN_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1";
 
 installModelsConfigTestHooks();
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-stepfun-" });
+
+async function makeAgentDir(): Promise<string> {
+  return suiteTempDirs.make("agent");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
@@ -128,8 +140,8 @@ describe("StepFun provider catalog", () => {
     expect(planProvider.models?.map((model) => model.id)).toEqual(EXPECTED_PLAN_MODELS);
   });
 
-  it("falls back to global endpoints for untagged StepFun auth profiles", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  it("falls back to global endpoints for untagged StepFun auth profiles", async () => {
+    const agentDir = await makeAgentDir();
 
     upsertAuthProfile({
       profileId: "stepfun:default",
@@ -199,8 +211,8 @@ describe("StepFun provider catalog", () => {
     expect(providers["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.com/step_plan/v1");
   });
 
-  it("discovers both providers from shared regional auth profiles", () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  it("discovers both providers from shared regional auth profiles", async () => {
+    const agentDir = await makeAgentDir();
 
     upsertAuthProfile({
       profileId: "stepfun:cn",
