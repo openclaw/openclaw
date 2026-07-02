@@ -35,6 +35,7 @@ export interface ReasoningTagTextPartitioner {
   flush(): ReasoningTagTextDelta[];
   hasPending(): boolean;
   isInsideReasoning(): boolean;
+  isInsideUnclosedVisibleInlineCode(): boolean;
 }
 
 export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner {
@@ -205,6 +206,9 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     },
     isInsideReasoning() {
       return reasoningDepth > 0;
+    },
+    isInsideUnclosedVisibleInlineCode() {
+      return reasoningDepth === 0 && Boolean(inlineCodeState.open || fenceState?.open);
     },
   };
 }
