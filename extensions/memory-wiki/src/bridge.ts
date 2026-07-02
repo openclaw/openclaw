@@ -215,6 +215,37 @@ async function writeBridgeSourcePage(params: {
   });
 }
 
+export async function resolveBridgePublicArtifacts(params: {
+  cfg: OpenClawConfig;
+}): Promise<MemoryPluginPublicArtifact[]> {
+  const fromCapability = await listActiveMemoryPublicArtifacts(params);
+  if (fromCapability.length > 0) {
+    return fromCapability;
+  }
+
+  // Fallback for CLI snapshot mode where the memory capability is not
+  // persisted in the global plugin state. See openclaw#85655.
+  // Use the public SDK host function directly instead of going through the
+  // registered capability path, which may be unavailable in snapshot mode.
+  // Before falling back, check that memory-core is effectively enabled
+  // (not globally disabled, denied, or explicitly disabled in config).
+  const memorySlot = params.cfg.plugins?.slots?.memory;
+  if (memorySlot === "memory-core") {
+    const pluginCfg = params.cfg.plugins;
+    if (
+      pluginCfg?.enabled !== false &&
+      !pluginCfg?.deny?.includes("memory-core") &&
+      pluginCfg?.entries?.["memory-core"]?.enabled !== false
+    ) {
+      const { listMemoryHostPublicArtifacts } =
+        await import("openclaw/plugin-sdk/memory-host-core");
+      return listMemoryHostPublicArtifacts(params);
+    }
+  }
+
+  return [];
+}
+
 export async function syncMemoryWikiBridgeSources(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
@@ -237,7 +268,7 @@ export async function syncMemoryWikiBridgeSources(params: {
     };
   }
 
-  const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
+  const publicArtifacts = await resolveBridgePublicArtifacts({ cfg: params.appConfig });
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(
