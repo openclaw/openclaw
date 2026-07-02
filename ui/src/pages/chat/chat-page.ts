@@ -57,6 +57,11 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import {
+  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
+  type DetailFullMessageResult,
+  type SidebarFullMessageRequest,
+} from "./components/chat-sidebar.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { createSessionWorkspaceProps } from "./session-workspace.ts";
@@ -623,7 +628,19 @@ export class ChatPage extends LitElement {
           search: searchForSession(next),
         });
       },
-      client: state.client,
+      onLoadSidebarFullMessage: async (
+        request: SidebarFullMessageRequest,
+      ): Promise<DetailFullMessageResult | null> => {
+        if (!state.client || !state.connected) {
+          return null;
+        }
+        return state.client.request<DetailFullMessageResult>("chat.message.get", {
+          sessionKey: request.sessionKey,
+          ...(request.agentId ? { agentId: request.agentId } : {}),
+          messageId: request.messageId,
+          maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
+        });
+      },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
       splitRatio: state.splitRatio,

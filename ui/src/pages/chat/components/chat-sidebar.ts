@@ -2,7 +2,6 @@ import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { icons } from "../../../components/icons.ts";
 import {
   handleMarkdownCodeBlockCopy,
@@ -16,10 +15,10 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 
-const FULL_MESSAGE_DETAIL_MAX_CHARS = 500_000;
+export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-type DetailFullMessageResult = {
+export type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
@@ -284,7 +283,9 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 export class ChatDetailPanel extends LitElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) client: GatewayBrowserClient | null = null;
+  @property({ attribute: false }) loadFullMessage?:
+    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
+    | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
@@ -310,7 +311,7 @@ export class ChatDetailPanel extends LitElement {
   }
 
   protected override updated(changed: Map<string, unknown>) {
-    if (!changed.has("content") && !changed.has("client")) {
+    if (!changed.has("content") && !changed.has("loadFullMessage")) {
       return;
     }
     const content = this.content;
@@ -322,17 +323,12 @@ export class ChatDetailPanel extends LitElement {
   }
 
   private async upgradeToFullMessage(content: SidebarContent, version: number) {
-    if (!hasFullMessageRequest(content) || !this.client) {
+    if (!hasFullMessageRequest(content) || !this.loadFullMessage) {
       return;
     }
     const request = content.fullMessageRequest;
     try {
-      const result = await this.client.request<DetailFullMessageResult>("chat.message.get", {
-        sessionKey: request.sessionKey,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
-        messageId: request.messageId,
-        maxChars: FULL_MESSAGE_DETAIL_MAX_CHARS,
-      });
+      const result = await this.loadFullMessage(request);
       if (version !== this.requestVersion || this.content !== content) {
         return;
       }

@@ -5,7 +5,6 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons, type IconName } from "../../components/icons.ts";
@@ -51,7 +50,11 @@ import {
   renderContextNotice,
   renderFallbackIndicator,
 } from "./components/chat-composer-controls.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type {
+  DetailFullMessageResult,
+  SidebarContent,
+  SidebarFullMessageRequest,
+} from "./components/chat-sidebar.ts";
 import "./components/chat-sidebar.ts";
 import { DeletedMessages } from "./deleted-messages.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -165,7 +168,9 @@ export type ChatProps = {
   error: string | null;
   sessions: SessionsListResult | null;
   focusMode?: boolean;
-  client?: GatewayBrowserClient | null;
+  onLoadSidebarFullMessage?: (
+    request: SidebarFullMessageRequest,
+  ) => Promise<DetailFullMessageResult | null | undefined>;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
   splitRatio?: number;
@@ -2461,7 +2466,7 @@ export function renderChat(props: ChatProps) {
                     <openclaw-chat-detail-panel
                       class="chat-sidebar"
                       .content=${props.sidebarContent ?? null}
-                      .client=${props.client ?? null}
+                      .loadFullMessage=${props.onLoadSidebarFullMessage ?? null}
                       .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
                       .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
                       .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
