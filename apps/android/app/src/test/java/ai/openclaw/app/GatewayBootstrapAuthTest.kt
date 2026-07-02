@@ -435,6 +435,23 @@ class GatewayBootstrapAuthTest {
       assertFalse(talkMode.ttsOnAllResponses)
     }
 
+  @Test
+  fun talkPttStart_rejectsNewCaptureWhenBackgrounded() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      runtime.setForeground(false)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", result.error?.message)
+      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+    }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
