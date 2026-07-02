@@ -32,7 +32,7 @@ function isKnownChannel(value: string): boolean {
   return getMessageChannels().includes(value as MessageChannelId);
 }
 
-function resolveKnownChannel(value?: string | null): MessageChannelId | undefined {
+export function resolveKnownChannel(value?: string | null): MessageChannelId | undefined {
   const normalized = normalizeMessageChannel(value);
   if (!normalized) {
     return undefined;
