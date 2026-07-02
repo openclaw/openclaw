@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import android.Manifest
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import kotlinx.coroutines.CompletableDeferred
@@ -57,6 +58,25 @@ class OnboardingFlowLogicTest {
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+  }
+
+  @Test
+  fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
+    val afterSendOnly =
+      mergedSmsPermissionGrantState(
+        permissions = mapOf(Manifest.permission.SEND_SMS to true),
+        currentSendSmsGranted = false,
+        currentReadSmsGranted = false,
+      )
+    assertFalse(afterSendOnly)
+
+    val afterReadOnly =
+      mergedSmsPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to true),
+        currentSendSmsGranted = true,
+        currentReadSmsGranted = false,
+      )
+    assertTrue(afterReadOnly)
   }
 
   @Test
