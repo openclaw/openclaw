@@ -98,7 +98,9 @@ async function withServer(handler, fn) {
   try {
     await fn(port);
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
   }
 }
 
@@ -115,7 +117,7 @@ await withServer(
     } catch (e) {
       err = e;
     }
-    check("readProviderJsonResponse rejects oversized streamed Telegram body", !!err);
+    check("readProviderJsonResponse rejects oversized streamed Telegram body", err != null);
     check(
       `parse-boundary label present (got: ${err?.message})`,
       err?.message?.includes(LABEL) || err?.message?.includes("exceeds"),
@@ -133,7 +135,7 @@ console.log("\n--- Case 2: oversized buffered Telegram envelope (production hand
   } catch (e) {
     err = e;
   }
-  check("buffered oversized Telegram body rejected before JSON.parse", !!err);
+  check("buffered oversized Telegram body rejected before JSON.parse", err != null);
   check(`body size ${hugeBody.length} bytes exceeds ${CAP_BYTES} cap`, hugeBody.length > CAP_BYTES);
 }
 
@@ -169,7 +171,7 @@ console.log("\n--- Case 5: bounded helper cancels oversized injected stream ---"
   } catch (e) {
     err = e;
   }
-  check("readProviderJsonResponse rejected oversized injected stream", !!err);
+  check("readProviderJsonResponse rejected oversized injected stream", err != null);
   check(
     `stream read stopped early (readCount=${streamed.getReadCount()})`,
     streamed.getReadCount() < 64,
