@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -244,7 +245,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (lineData.flexMessage) {
         quickReplyMessages.push({
           type: "flex",
-          altText: lineData.flexMessage.altText.slice(0, 400),
+          altText: truncateUtf16Safe(lineData.flexMessage.altText, 400),
           contents: lineData.flexMessage.contents,
         });
       }
@@ -257,8 +258,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       if (lineData.location) {
         quickReplyMessages.push({
           type: "location",
-          title: lineData.location.title.slice(0, 100),
-          address: lineData.location.address.slice(0, 100),
+          title: truncateUtf16Safe(lineData.location.title, 100),
+          address: truncateUtf16Safe(lineData.location.address, 100),
           latitude: lineData.location.latitude,
           longitude: lineData.location.longitude,
         });
@@ -266,7 +267,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       for (const flexMsg of processed.flexMessages) {
         quickReplyMessages.push({
           type: "flex",
-          altText: flexMsg.altText.slice(0, 400),
+          altText: truncateUtf16Safe(flexMsg.altText, 400),
           contents: flexMsg.contents,
         });
       }

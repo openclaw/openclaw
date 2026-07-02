@@ -4,6 +4,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-p
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
@@ -87,8 +88,8 @@ export async function createRichMenu(
   const richMenuRequest: RichMenuRequest = {
     size: menu.size,
     selected: menu.selected ?? false,
-    name: menu.name.slice(0, 300),
-    chatBarText: menu.chatBarText.slice(0, 14),
+    name: truncateUtf16Safe(menu.name, 300),
+    chatBarText: truncateUtf16Safe(menu.chatBarText, 14),
     areas: menu.areas as RichMenuArea[],
   };
 
