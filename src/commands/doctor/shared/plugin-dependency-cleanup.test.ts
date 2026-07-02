@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
+import {
+  testing,
+  cleanupLegacyPluginDependencyState,
+  repairLegacyPluginDependencyStateFindings,
+} from "./plugin-dependency-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -171,6 +175,63 @@ describe("cleanupLegacyPluginDependencyState", () => {
       requirement: "legacy-plugin-dependency-state-removed",
       fixHint: "Run `openclaw doctor --fix` to remove legacy plugin dependency state.",
     });
+    await expectDirectoryPresent(legacyRuntimeRoot);
+  });
+
+  it("previews selected legacy plugin dependency cleanup as dry-run effects", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const legacyTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const slackLink = path.join(slackScope, "web-api");
+
+    await fs.mkdir(legacyTarget, { recursive: true });
+    await fs.writeFile(path.join(legacyTarget, "package.json"), "{}\n");
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.symlink(legacyTarget, slackLink, "dir");
+
+    const result = await repairLegacyPluginDependencyStateFindings({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+      dryRun: true,
+      findings: [
+        {
+          checkId: "core/doctor/legacy-plugin-dependencies",
+          severity: "warning",
+          message: `Legacy plugin dependency state remains at ${legacyRuntimeRoot}.`,
+          target: legacyRuntimeRoot,
+          path: legacyRuntimeRoot,
+          requirement: "legacy-plugin-dependency-state-removed",
+        },
+      ],
+    });
+
+    expect(result.changes).toStrictEqual([
+      `Would remove stale plugin-runtime symlink: ${slackLink}`,
+      `Would remove legacy plugin dependency state: ${legacyRuntimeRoot}`,
+    ]);
+    expect(result.effects).toContainEqual({
+      kind: "file",
+      action: "would-remove-stale-plugin-runtime-symlink",
+      target: slackLink,
+      dryRunSafe: false,
+    });
+    expect(result.effects).toContainEqual({
+      kind: "state",
+      action: "would-remove-legacy-plugin-dependency-state",
+      target: legacyRuntimeRoot,
+      dryRunSafe: false,
+    });
+    expect((await fs.lstat(slackLink)).isSymbolicLink()).toBe(true);
     await expectDirectoryPresent(legacyRuntimeRoot);
   });
 
