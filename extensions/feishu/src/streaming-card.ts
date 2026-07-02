@@ -8,7 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
@@ -118,20 +118,14 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  let data;
+  let data: { code: number; msg: string; tenant_access_token?: string; expire?: number };
   try {
-    const buffer = await readResponseWithLimit(response, FEISHU_STREAMING_RESPONSE_LIMIT_BYTES, {
-      onOverflow: () =>
-        new Error(
-          `Feishu streaming token response exceeded maximum size (${FEISHU_STREAMING_RESPONSE_LIMIT_BYTES} bytes)`,
-        ),
-    });
-    data = JSON.parse(new TextDecoder().decode(buffer)) as {
+    data = await readProviderJsonResponse<{
       code: number;
       msg: string;
       tenant_access_token?: string;
       expire?: number;
-    };
+    }>(response, "Feishu streaming token", { maxBytes: FEISHU_STREAMING_RESPONSE_LIMIT_BYTES });
   } finally {
     await release();
   }
@@ -288,23 +282,13 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    let createData;
+    let createData: { code: number; msg: string; data?: { card_id: string } };
     try {
-      const createBuffer = await readResponseWithLimit(
-        createRes,
-        FEISHU_STREAMING_RESPONSE_LIMIT_BYTES,
-        {
-          onOverflow: () =>
-            new Error(
-              `Feishu create card response exceeded maximum size (${FEISHU_STREAMING_RESPONSE_LIMIT_BYTES} bytes)`,
-            ),
-        },
-      );
-      createData = JSON.parse(new TextDecoder().decode(createBuffer)) as {
+      createData = await readProviderJsonResponse<{
         code: number;
         msg: string;
         data?: { card_id: string };
-      };
+      }>(createRes, "Feishu create card", { maxBytes: FEISHU_STREAMING_RESPONSE_LIMIT_BYTES });
     } finally {
       await releaseCreate();
     }

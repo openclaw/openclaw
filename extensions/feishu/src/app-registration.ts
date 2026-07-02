@@ -7,7 +7,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
@@ -110,13 +110,9 @@ async function fetchFeishuJson<T>(params: {
     auditContext: params.auditContext,
   });
   try {
-    const buffer = await readResponseWithLimit(response, FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES, {
-      onOverflow: () =>
-        new Error(
-          `Feishu registration response exceeded maximum size (${FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES} bytes)`,
-        ),
+    return await readProviderJsonResponse<T>(response, "Feishu registration", {
+      maxBytes: FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES,
     });
-    return JSON.parse(new TextDecoder().decode(buffer)) as T;
   } finally {
     await release();
   }
