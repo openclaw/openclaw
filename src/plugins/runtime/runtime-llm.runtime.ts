@@ -6,6 +6,7 @@ import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -474,6 +475,30 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         usage,
+      });
+
+      // Emit model.usage diagnostic so plugin LLM spend reaches
+      // diagnostics-otel / OTLP backends (parity with main agent loop).
+      const costConfig = resolveModelCostConfig({
+        provider: prepared.selection.provider,
+        model: prepared.selection.modelId,
+        config: cfg,
+      });
+      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      emitTrustedDiagnosticEvent({
+        type: "model.usage",
+        sessionKey: options.authority?.sessionKey,
+        agentId,
+        provider: prepared.selection.provider,
+        model: prepared.selection.modelId,
+        usage: {
+          input: normalizedUsage?.input ?? 0,
+          output: normalizedUsage?.output ?? 0,
+          cacheRead: normalizedUsage?.cacheRead ?? 0,
+          cacheWrite: normalizedUsage?.cacheWrite ?? 0,
+          total: normalizedUsage?.total ?? 0,
+          ...(costUsd !== undefined ? { costUsd } : {}),
+        },
       });
 
       return {
