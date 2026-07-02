@@ -51,6 +51,11 @@ function resolveFeishuSessionConversation(params: { kind: "group" | "channel"; r
   };
 }
 
+function normalizeQqbotTarget(target: string): string | undefined {
+  const id = target.replace(/^qqbot:/i, "");
+  return /^(?:c2c|group|channel):/u.test(id) ? `qqbot:${id}` : undefined;
+}
+
 /** Builds channel registry stubs with conversation resolvers for session tests. */
 export function createSessionConversationTestRegistry() {
   return createTestRegistry([
@@ -165,6 +170,29 @@ export function createSessionConversationTestRegistry() {
         messaging: {
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: resolveFeishuSessionConversation,
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+      },
+    },
+    {
+      pluginId: "qqbot",
+      source: "test",
+      plugin: {
+        id: "qqbot",
+        meta: {
+          id: "qqbot",
+          label: "QQ Bot",
+          selectionLabel: "QQ Bot",
+          docsPath: "/channels/qqbot",
+          blurb: "QQ Bot test stub.",
+          preferSessionLookupForAnnounceTarget: true,
+        },
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+        messaging: {
+          normalizeTarget: normalizeQqbotTarget,
         },
         config: {
           listAccountIds: () => ["default"],

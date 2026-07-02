@@ -1,8 +1,14 @@
 // sessions_send A2A tests cover announce delivery, same-session replies, delayed
 // reply baselines, and channel target/account routing.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { recordInboundSession } from "../../channels/session.js";
+import { clearSessionStoreCacheForTest, loadSessionStore } from "../../config/sessions/store.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
@@ -38,11 +44,41 @@ function firstMockArg(
   return call[0] as Record<string, unknown>;
 }
 
+async function recordQqbotInboundSession(params: {
+  storePath: string;
+  sessionKey: string;
+  ctx: MsgContext;
+  updateLastRoute?: {
+    sessionKey: string;
+    channel: string;
+    to: string;
+    accountId?: string;
+  };
+}) {
+  const recordErrors: unknown[] = [];
+  const metaTasks: Promise<unknown>[] = [];
+  await recordInboundSession({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    ctx: params.ctx,
+    updateLastRoute: params.updateLastRoute,
+    onRecordError: (err) => {
+      recordErrors.push(err);
+    },
+    trackSessionMetaTask: (task) => {
+      metaTasks.push(task);
+    },
+  });
+  await Promise.all(metaTasks);
+  expect(recordErrors).toEqual([]);
+}
+
 describe("runSessionsSendA2AFlow announce delivery", () => {
   let gatewayCalls: CallGatewayOptions[];
   let sessionListRows: SessionListRow[];
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
     gatewayCalls = [];
     sessionListRows = [];
@@ -77,6 +113,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
   afterEach(() => {
     testing.setDepsForTest();
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -288,6 +325,111 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:target-room");
     expect(sendParams.accountId).toBe(accountId);
+  });
+
+  it("announces QQ Bot replies through the stored group route metadata", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qqbot-announce-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const targetSessionKey = "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca";
+    const c2cSessionKey = "agent:main:qqbot:c2c:user-openid";
+    const dmSessionKey = "agent:main:qqbot:dm:dm-guild-id";
+    try {
+      fs.writeFileSync(storePath, "{}\n", "utf8");
+      await recordQqbotInboundSession({
+        storePath,
+        sessionKey: targetSessionKey,
+        ctx: {
+          Provider: "qqbot",
+          Surface: "qqbot",
+          ChatType: "group",
+          From: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+          To: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+          SessionKey: targetSessionKey,
+          OriginatingTo: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+          AccountId: "qq-main",
+        },
+        updateLastRoute: {
+          sessionKey: targetSessionKey,
+          channel: "qqbot",
+          to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+          accountId: "qq-main",
+        },
+      });
+      await recordQqbotInboundSession({
+        storePath,
+        sessionKey: c2cSessionKey,
+        ctx: {
+          Provider: "qqbot",
+          Surface: "qqbot",
+          ChatType: "direct",
+          From: "qqbot:c2c:user-openid",
+          To: "qqbot:c2c:user-openid",
+          SessionKey: c2cSessionKey,
+          OriginatingTo: "qqbot:c2c:user-openid",
+          AccountId: "qq-main",
+        },
+      });
+      await recordQqbotInboundSession({
+        storePath,
+        sessionKey: dmSessionKey,
+        ctx: {
+          Provider: "qqbot",
+          Surface: "qqbot",
+          ChatType: "direct",
+          From: "qqbot:dm:dm-guild-id",
+          To: "qqbot:dm:dm-guild-id",
+          SessionKey: dmSessionKey,
+          OriginatingTo: "qqbot:dm:dm-guild-id",
+          AccountId: "qq-main",
+        },
+      });
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store[targetSessionKey]?.deliveryContext).toEqual({
+        channel: "qqbot",
+        to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+        accountId: "qq-main",
+      });
+      expect(store[c2cSessionKey]?.deliveryContext).toBeUndefined();
+      expect(store[dmSessionKey]?.deliveryContext).toBeUndefined();
+      sessionListRows = Object.entries(store).map(
+        ([key, entry]) =>
+          ({
+            key,
+            kind: key === targetSessionKey ? "group" : "other",
+            channel: "qqbot",
+            origin: entry.origin,
+            deliveryContext: entry.deliveryContext,
+            lastChannel: entry.lastChannel,
+            lastTo: entry.lastTo,
+            lastAccountId: entry.lastAccountId,
+            lastThreadId: entry.lastThreadId,
+          }) satisfies SessionListRow,
+      );
+      vi.mocked(runAgentStep).mockResolvedValueOnce("QQ announce reply");
+
+      await runSessionsSendA2AFlow({
+        targetSessionKey,
+        displayKey: targetSessionKey,
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 0,
+        roundOneReply: "Worker completed successfully",
+      });
+
+      requireGatewayCall("sessions.list");
+      const sendCall = requireGatewayCall("send");
+      const sendParams = sendCall.params as Record<string, unknown>;
+      expect(sendParams.channel).toBe("qqbot");
+      expect(sendParams.to).toBe("qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA");
+      expect(sendParams.to).not.toBe("group:caac3e9d0d1c21018767ef4e6ed45cca");
+      expect(sendParams.accountId).toBe("qq-main");
+      expect(sendParams.message).toBe("QQ announce reply");
+      expect(sendParams.threadId).toBeUndefined();
+    } finally {
+      clearSessionStoreCacheForTest();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
