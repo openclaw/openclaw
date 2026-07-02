@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { redactSensitiveUrlLikeString } from "../../../packages/net-policy/src/redact-sensitive-url.js";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
@@ -137,7 +138,7 @@ const buildAccountNotes = (params: {
     notes.push("secret unavailable in this command path");
   }
   if (snapshot.baseUrl) {
-    notes.push(snapshot.baseUrl);
+    notes.push(redactSensitiveUrlLikeString(snapshot.baseUrl));
   }
   if (snapshot.port != null) {
     notes.push(`port:${snapshot.port}`);
