@@ -276,7 +276,7 @@ function isMSTeamsDmReadTargetAllowed(params: {
   if (dmPolicy === "allowlist") {
     return allowedByDmAllowlist;
   }
-  return allowedByDmAllowlist;
+  return params.targetTrusted || allowedByDmAllowlist;
 }
 
 function hasMatchingMSTeamsChannelRoute(params: {

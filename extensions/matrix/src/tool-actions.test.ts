@@ -364,6 +364,41 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("allows paired current Matrix DM reads without duplicating dm.allowFrom", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "pairing" },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ details: { ok: true } });
+
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
+      cfg,
+      limit: undefined,
+      before: undefined,
+      after: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("blocks current Matrix DM reads when the requested room is not current", async () => {
     const cfg = {
       channels: {

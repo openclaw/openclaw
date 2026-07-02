@@ -709,6 +709,40 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("allows paired implicit current-DM read targets without Teams allowFrom", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:cached-aad",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
   it("blocks implicit current-DM read targets outside the Teams DM allowlist", async () => {
     await expect(
       runAction({

@@ -142,7 +142,7 @@ function isCurrentMatrixDirectReadAllowed(params: {
   if (!contextRoomId || !requestedRoomId || contextRoomId !== requestedRoomId || !directUserId) {
     return false;
   }
-  if (dmPolicy === "open") {
+  if (dmPolicy === "open" || dmPolicy === "pairing") {
     return true;
   }
   return isMatrixDirectUserAllowlisted({
