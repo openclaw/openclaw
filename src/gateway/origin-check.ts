@@ -23,14 +23,76 @@ function parseOrigin(
   }
   try {
     const url = new URL(trimmed);
+    // Opaque origins ("null") signal a non-standard scheme (e.g. tauri://,
+    // electron://) that the URL parser cannot represent. Fall back to manual
+    // parsing so custom-scheme origins can be matched against the allowlist.
+    if (url.origin === "null") {
+      return parseCustomSchemeOrigin(trimmed);
+    }
     return {
       origin: normalizeLowercaseStringOrEmpty(url.origin),
       host: normalizeLowercaseStringOrEmpty(url.host),
       hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
   } catch {
+    return parseCustomSchemeOrigin(trimmed);
+  }
+}
+
+/**
+ * Parse a custom-scheme origin (<scheme>://<host>[:<port>]) that the standard
+ * URL constructor cannot handle. Does not validate the scheme beyond basic
+ * character checks. Returns null when the string cannot be parsed as an origin.
+ */
+function parseCustomSchemeOrigin(
+  raw: string,
+): { origin: string; host: string; hostname: string } | null {
+  // Match <scheme>://<host-part> where host-part is everything before /, ?, or #
+  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)/i.exec(raw);
+  if (!match) {
     return null;
   }
+  const scheme = normalizeLowercaseStringOrEmpty(match[1]);
+  const hostPort = match[2];
+  if (!scheme || !hostPort) {
+    return null;
+  }
+
+  let hostname: string;
+  let port = "";
+  if (hostPort.startsWith("[")) {
+    const bracketEnd = hostPort.indexOf("]");
+    if (bracketEnd === -1) return null;
+    hostname = hostPort.slice(1, bracketEnd);
+    if (hostPort.length > bracketEnd + 1) {
+      if (hostPort[bracketEnd + 1] === ":") {
+        port = hostPort.slice(bracketEnd + 2);
+      } else {
+        return null;
+      }
+    }
+  } else {
+    const colonIdx = hostPort.lastIndexOf(":");
+    if (colonIdx > 0) {
+      hostname = hostPort.slice(0, colonIdx);
+      port = hostPort.slice(colonIdx + 1);
+    } else {
+      hostname = hostPort;
+    }
+  }
+
+  const normalizedHostname = normalizeLowercaseStringOrEmpty(hostname);
+  if (!normalizedHostname) {
+    return null;
+  }
+  const host = normalizeLowercaseStringOrEmpty(
+    port ? `${normalizedHostname}:${port}` : normalizedHostname,
+  );
+  const origin = normalizeLowercaseStringOrEmpty(
+    port ? `${scheme}://${normalizedHostname}:${port}` : `${scheme}://${normalizedHostname}`,
+  );
+
+  return { origin, host, hostname: normalizedHostname };
 }
 
 /** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
