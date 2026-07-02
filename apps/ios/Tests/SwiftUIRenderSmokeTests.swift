@@ -53,6 +53,73 @@ import UIKit
         }
     }
 
+    @Test @MainActor func gatewayQuickSetupBuildsCandidateAndEmptyStates() {
+        let gateways: [GatewayDiscoveryModel.DiscoveredGateway?] = [
+            .previewGateway,
+            nil,
+        ]
+
+        for gateway in gateways {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            if let gateway {
+                gatewayController._test_setGateways([gateway])
+                appModel.gatewayStatusText = "Ready to pair"
+            }
+
+            let root = GatewayQuickSetupSheet()
+                .environment(appModel)
+                .environment(gatewayController)
+                .openClawSheetChrome()
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 520))
+        }
+    }
+
+    @Test @MainActor func onboardingActivationScreensBuildAcrossAppearanceAndTypeSize() {
+        let screens: [AnyView] = [
+            AnyView(OnboardingIntroStep(onContinue: {})),
+            AnyView(OnboardingWelcomeStep(
+                statusLine: "",
+                isConnecting: false,
+                onScanQRCode: {},
+                onManualSetup: {})),
+            AnyView(OnboardingSuccessStep(
+                gatewayName: "OpenClaw Gateway",
+                gatewayAddress: "openclaw.local",
+                onGetStarted: {})),
+            AnyView(NavigationStack {
+                Form {
+                    Section("Connection Mode") {
+                        OnboardingModeRow(
+                            title: "Home Network",
+                            subtitle: "LAN or Tailscale host",
+                            symbol: "house.and.flag",
+                            selected: true,
+                            action: {})
+                        OnboardingModeRow(
+                            title: "Remote Domain",
+                            subtitle: "VPS with domain",
+                            symbol: "globe",
+                            selected: false,
+                            action: {})
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(OpenClawBrand.activationCanvas)
+            }),
+        ]
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for screen in screens {
+                let root = screen
+                    .preferredColorScheme(scheme)
+                    .environment(\.dynamicTypeSize, .accessibility2)
+                _ = Self.host(root, size: CGSize(width: 393, height: 852))
+            }
+        }
+    }
+
     @Test @MainActor func rootTabsBuildsDeviceOrientationShellMatrix() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()
@@ -282,4 +349,21 @@ import UIKit
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass
     }
+}
+
+extension GatewayDiscoveryModel.DiscoveredGateway {
+    fileprivate static let previewGateway = GatewayDiscoveryModel.DiscoveredGateway(
+        name: "Studio Gateway",
+        endpoint: .hostPort(
+            host: .name("openclaw.local", nil),
+            port: 18789),
+        stableID: "preview-gateway",
+        debugID: "openclaw.local",
+        lanHost: "openclaw.local",
+        tailnetDns: nil,
+        gatewayPort: 18789,
+        canvasPort: 18789,
+        tlsEnabled: true,
+        tlsFingerprintSha256: "preview",
+        cliPath: "/opt/homebrew/bin/openclaw")
 }

@@ -26,8 +26,6 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
-    // Embedded Settings rows push onto the sidebar stack; clear it before
-    // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
@@ -1083,7 +1081,7 @@ extension RootTabs {
         case .none:
             self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
-            self.onboardingAllowSkip = true
+            self.onboardingAllowSkip = false
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true
