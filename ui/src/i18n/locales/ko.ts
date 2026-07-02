@@ -1367,6 +1367,11 @@ export const ko: TranslationMap = {
       retrySend: "보내기 다시 시도",
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
+    pairingQrExpired: {
+      title: "페어링 QR 만료됨",
+      reason: "새 설정 코드를 생성하려면 /pair qr을 다시 실행하세요.",
+      badge: "만료됨",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

@@ -1344,6 +1344,11 @@ export const th: TranslationMap = {
       retrySend: "ลองส่งอีกครั้ง",
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
     },
+    pairingQrExpired: {
+      title: "QR การจับคู่หมดอายุ",
+      reason: "เรียกใช้ /pair qr อีกครั้งเพื่อสร้างรหัสตั้งค่าใหม่",
+      badge: "หมดอายุ",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

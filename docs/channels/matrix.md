@@ -212,11 +212,39 @@ form:
 }
 ```
 
+The full object form accepts `{ mode, preview, progress }`:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "auto", // pick from configured or built-in labels (false to hide)
+          labels: ["Thinking", "Writing", "Searching"], // candidates for label: "auto"
+          maxLines: 8, // max rolling progress lines (default: 8)
+          maxLineChars: 120, // max chars per line before truncation (default: 120)
+          toolProgress: true, // show tool/progress activity (default: true)
+        },
+      },
+    },
+  },
+}
+```
+
+- `progress.label`: a custom label, `"auto"` or unset to choose from configured or built-in labels, or `false` to hide the label line.
+- `progress.labels`: candidate labels used only when `label` is `"auto"` or unset. Leave unset for built-in defaults.
+- `progress.maxLines`: maximum rolling progress lines kept in the draft. After this limit, older lines are trimmed.
+- `progress.maxLineChars`: maximum characters per compact progress line before truncation.
+- `progress.toolProgress`: when `true` (default), live tool/progress activity appears in the draft.
+
 | `streaming`       | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"off"` (default) | Wait for the full reply, send once. `true` ↔ `"partial"`, `false` ↔ `"off"`.                                                                                        |
 | `"partial"`       | Edit one normal text message in place as the model writes the current block. Stock Matrix clients may notify on the first preview, not the final edit.              |
 | `"quiet"`         | Same as `"partial"` but the message is a non-notifying notice. Recipients only get a notification once a per-user push rule matches the finalized edit (see below). |
+| `"progress"`      | Sends individual compact progress lines using a progress draft.                                                                                                     |
 
 `blockStreaming` is independent of `streaming`:
 
@@ -877,6 +905,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
+- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.list[].groupChat.mentionPatterns` apply per-room.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.
@@ -894,7 +923,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `replyToMode`: `"off"`, `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"`, `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
-- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, or object form `{ mode, preview: { toolProgress } }`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
+- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, `"progress"`, or object form `{ mode, preview: { toolProgress }, progress: { label, labels, maxLines, maxLineChars, toolProgress } }`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
 - `blockStreaming`: when `true`, completed assistant blocks are kept as separate progress messages.
 - `markdown`: optional Markdown rendering config for outbound text.
 - `responsePrefix`: optional string prepended to outbound replies.
@@ -914,7 +943,10 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 - `groups`: per-room policy map. Session identity uses the stable room ID after resolution. (`rooms` is a legacy alias.)
   - `groups.<room>.account`: restrict one inherited room entry to a specific account.
+  - `groups.<room>.enabled`: per-room toggle. When `false`, the room is ignored as if it were not in the map.
+  - `groups.<room>.requireMention`: per-room override of the channel-level mention requirement.
   - `groups.<room>.allowBots`: per-room override of the channel-level setting (`true` or `"mentions"`).
+  - `groups.<room>.botLoopProtection`: per-room override for bot-to-bot loop protection budget.
   - `groups.<room>.users`: per-room sender allowlist.
   - `groups.<room>.tools`: per-room tool allow/deny overrides.
   - `groups.<room>.autoReply`: per-room mention-gating override. `true` disables mention requirements for that room; `false` forces them back on.

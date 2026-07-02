@@ -22,13 +22,11 @@ struct GatewayTrustPromptAlert: ViewModifier {
                 Task { await self.gatewayController.acceptPendingTrustPrompt() }
             }
         } message: { prompt in
-            Text(
-                """
-                First-time TLS connection.
-
-                Verify this SHA-256 fingerprint out-of-band before trusting:
-                \(prompt.fingerprintSha256)
-                """)
+            Text(String(
+                format: NSLocalizedString(
+                    "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n%@",
+                    comment: "Gateway certificate trust instructions"),
+                prompt.fingerprintSha256))
         }
     }
 }

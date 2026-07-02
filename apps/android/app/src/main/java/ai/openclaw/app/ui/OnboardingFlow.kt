@@ -103,6 +103,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -182,6 +183,36 @@ fun OnboardingFlow(
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
 
+    fun connectToGatewayConfig(
+      config: GatewayConnectConfig,
+      resetSetupAuth: Boolean,
+    ) {
+      setupError = null
+      attemptedGatewayName = null
+      attemptedConnect = true
+      connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+      viewModel.saveGatewayConfigAndConnect(
+        host = config.host,
+        port = config.port,
+        tls = config.tls,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+        resetSetupAuth = resetSetupAuth,
+      )
+      step = OnboardingStep.Recovery
+    }
+
+    fun resolveCurrentGatewayConfig(setupCodeValue: String = setupCode): GatewayConnectConfig? =
+      resolveOnboardingGatewayConnectConfig(
+        setupCode = setupCodeValue,
+        manualHost = manualHost,
+        manualPort = manualPort,
+        manualTls = manualTls,
+        token = token,
+        password = password,
+      )
+
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
         step = OnboardingStep.Gateway
@@ -212,22 +243,38 @@ fun OnboardingFlow(
       AlertDialog(
         onDismissRequest = viewModel::declineGatewayTrustPrompt,
         containerColor = ClawTheme.colors.surfaceRaised,
-        title = { Text("Trust this gateway?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-        text = {
+        title = {
           Text(
-            "Verify the certificate fingerprint before continuing.\n\n${prompt.fingerprintSha256}",
+            stringResource(R.string.trust_this_gateway),
+            style = ClawTheme.type.section,
+            color = ClawTheme.colors.text,
+          )
+        },
+        text = {
+          val message =
+            if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+              stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+            } else {
+              stringResource(
+                R.string.gateway_trust_changed,
+                prompt.previousFingerprintSha256,
+                prompt.fingerprintSha256,
+              )
+            }
+          Text(
+            message,
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
         },
         confirmButton = {
           TextButton(onClick = viewModel::acceptGatewayTrustPrompt) {
-            Text("Trust")
+            Text(stringResource(R.string.trust_and_continue))
           }
         },
         dismissButton = {
           TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-            Text("Cancel")
+            Text(stringResource(R.string.cancel))
           }
         },
       )
@@ -261,7 +308,8 @@ fun OnboardingFlow(
               .startScan()
               .addOnSuccessListener { barcode ->
                 val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
-                if (scanned.setupCode == null) {
+                val scannedSetupCode = scanned.setupCode
+                if (scannedSetupCode == null) {
                   setupError =
                     gatewayEndpointValidationMessage(
                       scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
@@ -269,7 +317,17 @@ fun OnboardingFlow(
                     )
                   return@addOnSuccessListener
                 }
-                setupCode = scanned.setupCode
+                val config = resolveCurrentGatewayConfig(setupCodeValue = scannedSetupCode)
+                if (config == null) {
+                  setupError =
+                    gatewayEndpointValidationMessage(
+                      GatewayEndpointValidationError.INVALID_URL,
+                      GatewayEndpointInputSource.QR_SCAN,
+                    )
+                  return@addOnSuccessListener
+                }
+                setupCode = scannedSetupCode
+                connectToGatewayConfig(config, resetSetupAuth = true)
               }.addOnFailureListener { setupError = "Could not open the scanner." }
           },
           onSetupCodeChange = {
@@ -296,34 +354,12 @@ fun OnboardingFlow(
             step = OnboardingStep.Recovery
           },
           onPair = {
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              )
+            val config = resolveCurrentGatewayConfig()
             if (config == null) {
               setupError = "Enter a setup code or a valid gateway URL."
               return@GatewaySetupScreen
             }
-
-            setupError = null
-            attemptedGatewayName = null
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = true,
-            )
-            step = OnboardingStep.Recovery
+            connectToGatewayConfig(config, resetSetupAuth = true)
           },
         )
       OnboardingStep.Recovery ->
@@ -339,26 +375,8 @@ fun OnboardingFlow(
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
           onRetry = {
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              ) ?: return@GatewayRecoveryScreen
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = false,
-            )
+            val config = resolveCurrentGatewayConfig() ?: return@GatewayRecoveryScreen
+            connectToGatewayConfig(config, resetSetupAuth = false)
           },
           onEdit = { step = OnboardingStep.Gateway },
           onContinue = { step = OnboardingStep.Permissions },
@@ -534,20 +552,24 @@ private fun GatewaySetupScreen(
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         item {
-          OnboardingHeader(title = "Gateway Setup", subtitle = "Connect to your Gateway", onBack = onBack)
+          OnboardingHeader(
+            title = stringResource(R.string.gateway_setup),
+            subtitle = stringResource(R.string.connect_to_gateway),
+            onBack = onBack,
+          )
         }
         item {
           GatewayOption(
             icon = Icons.Default.QrCode2,
-            title = "Scan setup code",
-            subtitle = "Use your Gateway QR or setup code",
+            title = stringResource(R.string.scan_setup_code),
+            subtitle = stringResource(R.string.use_gateway_qr),
             onClick = onScan,
           )
         }
         item {
           GatewayOption(
             icon = Icons.Default.WifiTethering,
-            title = "Nearby gateway",
+            title = stringResource(R.string.nearby_gateway),
             subtitle = nearbyGateway.subtitle,
             status = nearbyGateway.status,
             onClick = onUseNearby.takeIf { nearbyGateway.canConnect },
@@ -556,8 +578,8 @@ private fun GatewaySetupScreen(
         item {
           GatewayOption(
             icon = Icons.Default.Link,
-            title = "Enter gateway URL",
-            subtitle = "Connect using a manual URL",
+            title = stringResource(R.string.enter_gateway_url),
+            subtitle = stringResource(R.string.connect_manual_url),
             onClick = { advancedOpen = true },
           )
         }
@@ -638,7 +660,7 @@ private fun GatewayRecoveryScreen(
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-      OnboardingHeader(title = "Gateway Recovery", onBack = onBack)
+      OnboardingHeader(title = stringResource(R.string.gateway_recovery), onBack = onBack)
       Spacer(modifier = Modifier.height(12.dp))
       Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(
@@ -923,7 +945,9 @@ private fun PermissionTopBar(onBack: () -> Unit) {
     AlertDialog(
       onDismissRequest = { showHelp = false },
       containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text("Permissions", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      title = {
+        Text(stringResource(R.string.permissions), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      },
       text = {
         Text(
           "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
@@ -933,7 +957,7 @@ private fun PermissionTopBar(onBack: () -> Unit) {
       },
       confirmButton = {
         TextButton(onClick = { showHelp = false }) {
-          Text("Done")
+          Text(stringResource(R.string.done))
         }
       },
     )
@@ -1151,59 +1175,28 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-private data class GatewayConfig(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val bootstrapToken: String,
-  val token: String,
-  val password: String,
-)
-
-/** Resolves setup-code or manual fields into the gateway config used for first connect. */
-private fun resolveGatewayConfig(
+/** Resolves onboarding setup-code or manual fields into the gateway config used for connect. */
+internal fun resolveOnboardingGatewayConnectConfig(
   setupCode: String,
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-): GatewayConfig? {
-  val setup = setupCode.takeIf { it.isNotBlank() }?.let(::decodeGatewaySetupCode)
-  if (setup != null) {
-    val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
-    val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
-    // Bootstrap setup codes own first-pairing auth; fall back to typed token or
-    // password only for non-bootstrap setup payloads.
-    return GatewayConfig(
-      host = endpoint.host,
-      port = endpoint.port,
-      tls = endpoint.tls,
-      bootstrapToken = bootstrapToken,
-      token =
-        setup.token
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) token.trim() else "" },
-      password =
-        setup.password
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) password.trim() else "" },
-    )
-  }
-
-  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls) ?: return null
-  val endpoint = parseGatewayEndpointResult(manualUrl).config ?: return null
-  return GatewayConfig(
-    host = endpoint.host,
-    port = endpoint.port,
-    tls = endpoint.tls,
-    bootstrapToken = "",
-    token = token.trim(),
-    password = password.trim(),
+): GatewayConnectConfig? =
+  resolveGatewayConnectConfig(
+    useSetupCode = setupCode.isNotBlank(),
+    setupCode = setupCode,
+    savedManualHost = manualHost,
+    savedManualPort = manualPort,
+    savedManualTls = manualTls,
+    manualHostInput = manualHost,
+    manualPortInput = manualPort,
+    manualTlsInput = manualTls,
+    fallbackBootstrapToken = "",
+    fallbackToken = token,
+    fallbackPassword = password,
   )
-}
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
 internal fun recoveryGatewayDetail(

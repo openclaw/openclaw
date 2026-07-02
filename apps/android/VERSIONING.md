@@ -54,6 +54,12 @@ Recommended workflow:
 8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
 9. Promote to production manually in Google Play Console.
 
+If `pnpm android:release:upload` fails, stop at that failure. Do not continue by
+uploading archived artifacts through `pnpm android:release:archive`,
+`pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts,
+Google Play API mutation commands, or Play Console mutation commands. Fix the
+failing release-lane step, then rerun `pnpm android:release:upload`.
+
 The third-party flavor is archived as a signed APK for non-Play distribution. It is not uploaded by the Play release lane.
 
 ## Release SHA tracking
@@ -81,6 +87,9 @@ immutable: the same ref at the same SHA is accepted, while the same ref at a
 different SHA fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` still checks the ref but does
 not record it because no Play build is published.
 
+Do not create this ref after a manual fallback upload. The ref is release-lane
+evidence, not a repair mechanism for a failed `pnpm android:release:upload` run.
+
 Useful direct commands:
 
 ```bash
@@ -95,3 +104,7 @@ pnpm mobile:release:resolve -- --platform android --version 2026.6.10 --version-
 `sync:pull` decrypts the Play upload keystore and Gradle signing properties into `apps/android/build/release-signing/`. That directory is gitignored, and Fastlane exports the materialized values as Gradle project properties for the current release command.
 
 If `MATCH_PASSWORD` is not set, the existing manual Gradle-property signing path still works: provide `OPENCLAW_ANDROID_STORE_FILE`, `OPENCLAW_ANDROID_STORE_PASSWORD`, `OPENCLAW_ANDROID_KEY_ALIAS`, and `OPENCLAW_ANDROID_KEY_PASSWORD` through your local Gradle user properties before running release tasks.
+
+Agent-driven releases must not use those lower-level signing and upload surfaces
+to bypass a failed `pnpm android:release:upload` attempt. Report the failing
+step and wait for maintainer direction instead.

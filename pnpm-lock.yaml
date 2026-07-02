@@ -873,6 +873,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/imessage:
+    dependencies:
+      typebox:
+        specifier: 1.1.39
+        version: 1.1.39
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

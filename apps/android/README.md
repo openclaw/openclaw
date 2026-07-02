@@ -87,6 +87,15 @@ the screenshots, then shuts down the emulator it started.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
+`pnpm android:release:archive` is for local archive validation only. It is not a
+fallback upload path after `pnpm android:release:upload` fails.
+
+Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
+only release path. If that command fails, stop and fix the failing screenshot,
+metadata, signing, validation, archive, or upload step before trying again. Do
+not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+Google Play API commands, or Play Console mutation commands.
+
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Flavor-specific direct Gradle tasks:
@@ -116,7 +125,7 @@ Direct Gradle tasks:
 cd apps/android
 ./gradlew :app:ktlintCheck :benchmark:ktlintCheck
 ./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintDebug
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.

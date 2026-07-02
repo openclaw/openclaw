@@ -1249,6 +1249,10 @@
       "types": "./dist/plugin-sdk/provider-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-runtime.js"
     },
+    "./plugin-sdk/provider-auth-login-flow-runtime": {
+      "types": "./dist/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-login-flow-runtime.js"
+    },
     "./plugin-sdk/provider-auth-api-key": {
       "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-api-key.js"
@@ -1484,7 +1488,7 @@
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
-    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintDebug",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug",
     "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:release": "bash scripts/android-release.sh",
@@ -1956,6 +1960,10 @@
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
+    "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
+    "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
+    "apple:i18n:check": "node --import tsx scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
     "verify": "node scripts/verify.mjs"
   },

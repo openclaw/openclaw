@@ -29,14 +29,6 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
-    var detail: String {
-        switch self {
-        case .system: "Matches the system appearance."
-        case .light: "Always uses light appearance."
-        case .dark: "Always uses dark appearance."
-        }
-    }
-
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
