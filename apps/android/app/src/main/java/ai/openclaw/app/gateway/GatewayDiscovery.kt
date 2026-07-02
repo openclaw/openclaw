@@ -52,6 +52,26 @@ import kotlin.coroutines.resumeWithException
 @Suppress("DEPRECATION")
 private fun createDnsResolver(): DnsResolver = DnsResolver.getInstance()
 
+internal fun gatewayDiscoveryStatusText(
+  localCount: Int,
+  wideAreaRcode: Int?,
+  wideAreaCount: Int,
+): String {
+  val wide =
+    when (wideAreaRcode) {
+      null -> "Wide: ?"
+      Rcode.NOERROR -> "Wide: $wideAreaCount"
+      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
+      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
+    }
+
+  return when {
+    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
+    localCount == 0 -> wide
+    else -> "Local: $localCount • $wide"
+  }
+}
+
 /**
  * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
  */
@@ -300,23 +320,11 @@ class GatewayDiscovery(
   }
 
   private fun buildStatusText(): String {
-    val localCount = localById.size
-    val wideRcode = lastWideAreaRcode
-    val wideCount = lastWideAreaCount
-
-    val wide =
-      when (wideRcode) {
-        null -> "Wide: ?"
-        Rcode.NOERROR -> "Wide: $wideCount"
-        Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-        else -> "Wide: ${Rcode.string(wideRcode)}"
-      }
-
-    return when {
-      localCount == 0 && wideRcode == null -> "Searching for gateways…"
-      localCount == 0 -> "$wide"
-      else -> "Local: $localCount • $wide"
-    }
+    return gatewayDiscoveryStatusText(
+      localCount = localById.size,
+      wideAreaRcode = lastWideAreaRcode,
+      wideAreaCount = lastWideAreaCount,
+    )
   }
 
   private fun stableId(

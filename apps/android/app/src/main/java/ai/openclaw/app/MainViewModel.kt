@@ -26,6 +26,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+internal fun shouldStartRuntimeOnForeground(
+  foreground: Boolean,
+  onboardingCompleted: Boolean,
+): Boolean = foreground && onboardingCompleted
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -237,7 +242,12 @@ class MainViewModel(
    */
   fun setForeground(value: Boolean) {
     foreground = value
-    if (value && prefs.onboardingCompleted.value) {
+    if (
+      shouldStartRuntimeOnForeground(
+        foreground = value,
+        onboardingCompleted = prefs.onboardingCompleted.value,
+      )
+    ) {
       queueRuntimeStartup()
     }
     runtimeRef.value?.setForeground(value)
