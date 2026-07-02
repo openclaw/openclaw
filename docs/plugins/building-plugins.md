@@ -292,6 +292,38 @@ routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 
+## Logging best practices
+
+Plugins should use `api.logger` for logging instead of `console.log`:
+
+```typescript
+register(api) {
+  // ✅ Correct: use api.logger with optional chaining for safety
+  api.logger?.debug?.("[my-plugin] Plugin initialized");
+  api.logger?.info?.("[my-plugin] Configuration loaded");
+
+  // ❌ Wrong: console.log pollutes stdout
+  // This can corrupt JSON output for CLI commands like `openclaw config schema`
+  console.log("[my-plugin] Plugin initialized");  // Don't do this!
+}
+```
+
+**Why use optional chaining (`?.`)?**
+
+The `logger` property and its methods (`debug`, `info`, etc.) are optional on
+`OpenClawPluginApi`. Using optional chaining (`api.logger?.debug?.(...)`) ensures
+your plugin won't throw a TypeError if the logger is unavailable in certain
+contexts (e.g., during CLI metadata loading).
+
+**Why avoid `console.log` in `register()`?**
+
+- CLI commands like `openclaw config schema` output JSON to stdout
+- `console.log` writes to stdout and corrupts the JSON output
+- Tools that pipe output to `jq` will fail with parse errors
+
+The `api.logger` writes to OpenClaw's logging system (file logs and structured
+console output) without polluting stdout, keeping CLI command output clean.
+
 ## Pre-submission checklist
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
