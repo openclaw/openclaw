@@ -12,7 +12,7 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import {
   claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
-  deleteTelegramSpooledUpdate,
+  completeTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -55,7 +55,7 @@ describe("Telegram ingress spool", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("persists updates durably in update_id order and deletes handled entries", async () => {
+  it("persists updates durably in update_id order and tombstones handled entries", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
         spoolDir,
@@ -77,8 +77,17 @@ describe("Telegram ingress spool", () => {
       if (!updates[0]) {
         throw new Error("Expected a spooled update");
       }
-      await deleteTelegramSpooledUpdate(updates[0]);
+      await completeTelegramSpooledUpdate(updates[0]);
 
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([11]);
+
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 10, message: { text: "refetched first" } },
+        now: 3,
+      });
       expect(
         (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
       ).toEqual([11]);
@@ -114,8 +123,14 @@ describe("Telegram ingress spool", () => {
       if (!claimed) {
         throw new Error("Expected a claimed update");
       }
-      await deleteTelegramSpooledUpdate(claimed);
+      await completeTelegramSpooledUpdate(claimed);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 20, message: { text: "refetched handled update" } },
+      });
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
     });
   });
 
@@ -332,7 +347,7 @@ describe("Telegram ingress spool", () => {
       if (!update) {
         throw new Error("Expected a spooled update");
       }
-      await deleteTelegramSpooledUpdate(update);
+      await completeTelegramSpooledUpdate(update);
 
       await expect(claimTelegramSpooledUpdate(update)).resolves.toBeNull();
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);

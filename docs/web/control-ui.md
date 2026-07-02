@@ -22,6 +22,10 @@ If the Gateway is running on the same computer, open:
 
 If the page fails to load, start the Gateway first: `openclaw gateway`.
 
+<Note>
+On native Windows LAN binds, Windows Firewall or organization-managed Group Policy can still block the advertised LAN URL even when `127.0.0.1` works on the Gateway host. Run `openclaw gateway status --deep` on the Windows host; it reports likely blocked ports, profile mismatches, and local firewall rules that policy may ignore.
+</Note>
+
 Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`

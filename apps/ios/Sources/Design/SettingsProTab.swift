@@ -89,10 +89,6 @@ struct SettingsProTab: View {
                 self.settingsContent))
     }
 
-    var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
-    }
-
     @ViewBuilder
     private var settingsContent: some View {
         if let directRoute {
@@ -113,20 +109,23 @@ struct SettingsProTab: View {
     }
 
     private var settingsNavigationContent: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    self.settingsHeader
-                    self.appearanceSection
-                    self.gatewaySection
-                    self.settingsListSection
+        List {
+            self.gatewaySection
+            self.settingsListSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
-                .padding(.top, 18)
-                .padding(.bottom, 18)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                self.appearanceMenu
             }
         }
-        .navigationBarHidden(true)
         .navigationDestination(for: SettingsRoute.self) { route in
             self.destination(for: route)
         }
@@ -257,7 +256,9 @@ struct SettingsProTab: View {
             navigateToRoute(.notifications)
             return
         }
-        self.navigationPath = [.notifications]
+        // Push, don't replace: Back from Notifications must return to the
+        // Approvals screen the user came from, not reset to the Settings root.
+        self.navigationPath.append(.notifications)
     }
 
     private func applyInitialRouteIfNeeded() {
@@ -287,7 +288,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
                         .font(.title3.weight(.semibold))
                     Text(self.message)
@@ -311,7 +312,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .tint(Color(uiColor: .systemBlue))
+        .tint(OpenClawBrand.accent)
         .padding(24)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

@@ -43,6 +43,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     services: [],
     gatewayDiscoveryServices: [],
     commands: [],
+    interactiveHandlers: [],
     sessionExtensions: [],
     trustedToolPolicies: [],
     toolMetadata: [],

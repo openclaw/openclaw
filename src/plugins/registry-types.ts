@@ -43,6 +43,8 @@ type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProvide
 type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
+type PluginInteractiveHandlerRegistration =
+  import("./types.js").PluginInteractiveHandlerRegistration;
 type OpenClawPluginGatewayRuntimeScopeSurface =
   import("./types.js").OpenClawPluginGatewayRuntimeScopeSurface;
 type OpenClawGatewayDiscoveryService = import("./types.js").OpenClawGatewayDiscoveryService;
@@ -298,6 +300,12 @@ export type PluginCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegistration & {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+};
+
 export type PluginSessionExtensionRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -475,6 +483,7 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
+  interactiveHandlers?: PluginInteractiveHandlerRegistryRegistration[];
   sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
   toolMetadata?: PluginToolMetadataRegistryRegistration[];

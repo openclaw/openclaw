@@ -1,4 +1,5 @@
 // Covers backup archive creation and verification filtering.
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -288,6 +290,52 @@ describe("writeTarArchiveWithRetry", () => {
     ).rejects.toThrow(/permission denied/);
     expect(runTar).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("createBackupVolatileStatCache", () => {
+  it("lets tar filter a volatile file that disappears before lstat", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-volatile-stat-cache-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
+        await state.writeText("settings.json", '{"keep":true}\n');
+        const archivePath = state.path("volatile-stat-cache.tar.gz");
+        const volatilePlan = { stateDirs: [state.stateDir] };
+        const statCache = backupCreateInternals.createBackupVolatileStatCache(volatilePlan);
+        const getCachedStat = statCache.get.bind(statCache);
+        let removedBeforeStat = false;
+
+        statCache.get = (key: string) => {
+          if (path.resolve(key) === path.resolve(volatilePath)) {
+            rmSync(volatilePath, { force: true });
+            removedBeforeStat = true;
+          }
+          return getCachedStat(key);
+        };
+
+        await tar.c(
+          {
+            file: archivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            statCache,
+            filter: (entryPath) => !isVolatileBackupPath(entryPath, volatilePlan),
+          },
+          [state.stateDir],
+        );
+
+        const entries = await listArchiveEntries(archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      },
+    );
   });
 });
 
