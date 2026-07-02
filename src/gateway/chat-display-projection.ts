@@ -809,6 +809,19 @@ function isRenderableAssistantDisplayMessage(message: Record<string, unknown>): 
   return text !== undefined && !isSuppressedControlReplyText(text);
 }
 
+function isTerminalSourceDeliveryConfirmation(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const text = extractAssistantTextForSilentCheck(message)?.trim();
+  if (!text) {
+    return false;
+  }
+  return /^Sent\b.+\bin\s+(?:WhatsApp|Telegram|Discord|Slack|Signal|SMS|iMessage|the chat)\.?$/i.test(
+    text,
+  );
+}
+
 function readMessageToolResultName(message: Record<string, unknown>): string | undefined {
   return (
     normalizeOptionalString(message.toolName) ??
@@ -1040,6 +1053,12 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       matchingDeliveryMirrorPending.length === 0 &&
       isRenderableAssistantDisplayMessage(record)
     ) {
+      if (pending.some((item) => item.succeeded) && isTerminalSourceDeliveryConfirmation(record)) {
+        flushSucceededMirrors();
+        next.push({ ...record, display: false });
+        changed = true;
+        continue;
+      }
       clearPending();
     }
 

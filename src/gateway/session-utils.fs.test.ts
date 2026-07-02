@@ -474,6 +474,173 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
       lastMessagePreview: "active preview",
     });
   });
+
+  test("uses projected visible WhatsApp group sends for last-message previews", async () => {
+    const sessionId = "test-cache-wa-group-message-tool-preview";
+    const deliveredText = "Here is the Amazon link: https://example.test/item";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Can you send the Amazon link?" }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: deliveredText }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-wa",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: deliveredText,
+              },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-wa",
+          content: { ok: true, messageId: "wamid.1", chatId: "120363425559039020@g.us" },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Sent the Amazon link in WhatsApp." }],
+        },
+      },
+    ]);
+
+    expect(readSessionTitleFieldsFromTranscript(sessionId, storePath).lastMessagePreview).toBe(
+      deliveredText,
+    );
+    await expect(
+      readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+    ).resolves.toMatchObject({
+      lastMessagePreview: deliveredText,
+    });
+  });
+
+  test("keeps standalone delivery mirrors for bounded last-message previews", async () => {
+    const sessionId = "test-cache-wa-standalone-delivery-mirror-preview";
+    const deliveredText = "Redacted account note delivered.";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Please send the redacted account note." }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: deliveredText }],
+        },
+      },
+    ]);
+
+    expect(readSessionTitleFieldsFromTranscript(sessionId, storePath).lastMessagePreview).toBe(
+      deliveredText,
+    );
+    await expect(
+      readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+    ).resolves.toMatchObject({
+      lastMessagePreview: deliveredText,
+    });
+  });
+
+  test("handles repeated identical delivery text in last-message previews", async () => {
+    const sessionId = "test-cache-wa-repeated-delivery-mirror-preview";
+    const repeatedText = "Done.";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Send the first redacted update." }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: repeatedText }],
+        },
+      },
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Send the second redacted update." }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: repeatedText }],
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-repeated",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: repeatedText,
+              },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: "toolResult",
+          toolName: "message",
+          toolCallId: "call-message-repeated",
+          content: { ok: true, messageId: "wamid.2", chatId: "120363425559039020@g.us" },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Sent the update in WhatsApp." }],
+        },
+      },
+    ]);
+
+    expect(readSessionTitleFieldsFromTranscript(sessionId, storePath).lastMessagePreview).toBe(
+      repeatedText,
+    );
+    await expect(
+      readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+    ).resolves.toMatchObject({
+      lastMessagePreview: repeatedText,
+    });
+  });
 });
 
 describe("readSessionMessages", () => {
