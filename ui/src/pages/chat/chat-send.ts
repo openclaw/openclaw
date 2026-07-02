@@ -88,8 +88,6 @@ import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export type ChatSlashAction = "new-session" | "export" | "refresh-tools-effective" | "refresh-chat";
-
 export type ChatHost = ChatInputHistoryState & {
   sessions: SessionCapability;
   client: GatewayBrowserClient | null;
@@ -132,7 +130,10 @@ export type ChatHost = ChatInputHistoryState & {
   eventLogBuffer?: unknown[];
   eventLog?: unknown[];
   tab?: string;
-  onSlashAction?: (action: ChatSlashAction) => void | Promise<void>;
+  createChatSession?: () => void | Promise<void>;
+  exportCurrentChat?: () => void | Promise<void>;
+  refreshCurrentSessionTools?: () => void | Promise<void>;
+  refreshCurrentChat?: () => void | Promise<void>;
   /** Selected message to reply to (right-click / keyboard shortcut). */
   chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
 };
@@ -1864,11 +1865,11 @@ async function dispatchSlashCommand(
       await handleAbortChat(host);
       return;
     case "new":
-      if (!host.onSlashAction) {
+      if (!host.createChatSession) {
         setChatError(host, "New Chat is unavailable.");
         return;
       }
-      await host.onSlashAction("new-session");
+      await host.createChatSession();
       return;
     case "reset":
       await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
@@ -1881,7 +1882,7 @@ async function dispatchSlashCommand(
       await clearChatHistory(host);
       return;
     case "export-session":
-      await host.onSlashAction?.("export");
+      await host.exportCurrentChat?.();
       return;
   }
 
@@ -1930,11 +1931,11 @@ async function dispatchSlashCommand(
       targetSessionKey,
       result.sessionPatch.modelOverride?.value ?? null,
     );
-    await host.onSlashAction?.("refresh-tools-effective");
+    await host.refreshCurrentSessionTools?.();
   }
 
   if (result.action === "refresh") {
-    await host.onSlashAction?.("refresh-chat");
+    await host.refreshCurrentChat?.();
   }
 
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);

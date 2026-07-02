@@ -1143,19 +1143,19 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const onSlashAction = vi.fn();
+    const createChatSession = vi.fn();
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "restore me",
       sessionKey: "agent:main",
-      onSlashAction,
+      createChatSession,
     });
 
     await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
 
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(request).not.toHaveBeenCalled();
-    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(createChatSession).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("restore me");
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
@@ -1166,34 +1166,34 @@ describe("handleSendChat", () => {
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
     });
-    const onSlashAction = vi.fn();
+    const createChatSession = vi.fn();
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/new",
       sessionKey: "agent:main",
-      onSlashAction,
+      createChatSession,
     });
 
     await handleSendChat(host);
 
     expect(confirm).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
-    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(createChatSession).toHaveBeenCalledTimes(1);
     expect(host.chatMessage).toBe("");
   });
 
   it("does not queue typed /new behind an active run", async () => {
-    const onSlashAction = vi.fn();
+    const createChatSession = vi.fn();
     const host = makeHost({
       chatMessage: "/new",
       chatRunId: "run-main",
       chatStream: "Working...",
-      onSlashAction,
+      createChatSession,
     });
 
     await handleSendChat(host);
 
-    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(createChatSession).toHaveBeenCalledTimes(1);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
@@ -2096,12 +2096,12 @@ describe("handleSendChat", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const onSlashAction = vi.fn();
+    const refreshCurrentSessionTools = vi.fn();
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       sessionKey: "main",
       chatMessage: "/model gpt-5-mini",
-      onSlashAction,
+      refreshCurrentSessionTools,
     });
 
     await handleSendChat(host);
@@ -2111,7 +2111,7 @@ describe("handleSendChat", () => {
       model: "gpt-5-mini",
     });
     expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5-mini");
-    expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+    expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
   it("shows local slash-command feedback when the gateway client is unavailable", async () => {

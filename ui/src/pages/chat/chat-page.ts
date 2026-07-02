@@ -34,7 +34,6 @@ import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   retryReconnectableQueuedChatSends,
-  type ChatSlashAction,
 } from "./chat-send.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import {
@@ -228,28 +227,6 @@ export class ChatPage extends LitElement {
     return true;
   };
 
-  private readonly handleChatSlashAction = async (action: ChatSlashAction) => {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    switch (action) {
-      case "new-session":
-        await this.createSession();
-        return;
-      case "export":
-        exportChatMarkdown(state.chatMessages, state.assistantName);
-        return;
-      case "refresh-tools-effective":
-        await state.onModelChanged?.();
-        state.requestUpdate?.();
-        return;
-      case "refresh-chat":
-        await refreshPageChat(state);
-        state.requestUpdate?.();
-    }
-  };
-
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
@@ -331,9 +308,22 @@ export class ChatPage extends LitElement {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
     });
-    this.state = createPageState(this.context, chatState.requestUpdate, this);
-    this.state.onSlashAction = this.handleChatSlashAction;
-    chatState.attach(this.state);
+    const pageState = createPageState(this.context, chatState.requestUpdate, this);
+    pageState.createChatSession = async () => {
+      await this.createSession();
+    };
+    pageState.exportCurrentChat = () =>
+      exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
+    pageState.refreshCurrentSessionTools = async () => {
+      await pageState.onModelChanged?.();
+      pageState.requestUpdate?.();
+    };
+    pageState.refreshCurrentChat = async () => {
+      await refreshPageChat(pageState);
+      pageState.requestUpdate?.();
+    };
+    this.state = pageState;
+    chatState.attach(pageState);
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
       this.applyRouteSessionKey(this.data.sessionKey);
