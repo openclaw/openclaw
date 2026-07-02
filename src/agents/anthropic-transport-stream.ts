@@ -372,12 +372,10 @@ function convertAnthropicMessages(
   isOAuthToken: boolean,
   options?: {
     allowReasoningContentReplay?: boolean;
-    replayThinkingEnabled?: boolean;
   },
 ) {
   const params: Array<Record<string, unknown>> = [];
   const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
   const activeToolTurnAssistantIndex =
     findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
@@ -907,7 +905,6 @@ function buildAnthropicParams(
   toolProjection?: AnthropicToolProjection;
 } {
   const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
@@ -929,7 +926,6 @@ function buildAnthropicParams(
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
-        replayThinkingEnabled,
       }),
     ),
     max_tokens: maxTokens,

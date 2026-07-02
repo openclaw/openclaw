@@ -1061,7 +1061,6 @@ function buildParams(
   toolProjection?: AnthropicToolProjection;
 } {
   const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
   const compat = context.tools ? getAnthropicCompat(model) : undefined;
@@ -1090,7 +1089,6 @@ function buildParams(
       isOAuthTokenResult,
       cacheControl,
       messageCacheControlLimit,
-      replayThinkingEnabled,
     ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
@@ -1182,7 +1180,6 @@ function convertMessages(
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
-  replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
