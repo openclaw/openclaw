@@ -22,17 +22,13 @@ extension SettingsProTab {
         VStack(alignment: .leading, spacing: 8) {
             ProSectionHeader(title: "Appearance", uppercase: false)
             ProCard(radius: SettingsLayout.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Appearance", selection: self.$appearancePreferenceRaw) {
-                        ForEach(AppAppearancePreference.allCases) { preference in
-                            Text(preference.label).tag(preference.rawValue)
-                        }
+                Picker("Appearance", selection: self.$appearancePreferenceRaw) {
+                    ForEach(AppAppearancePreference.allCases) { preference in
+                        Text(preference.label).tag(preference.rawValue)
                     }
-                    .pickerStyle(.segmented)
-                    Text(self.appearancePreference.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("settings-appearance-picker")
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
         }

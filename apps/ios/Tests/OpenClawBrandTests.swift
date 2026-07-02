@@ -3,12 +3,6 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawBrandTests {
-    @Test func `appearance preference details match selection`() {
-        #expect(AppAppearancePreference.system.detail == "Matches the system appearance.")
-        #expect(AppAppearancePreference.light.detail == "Always uses light appearance.")
-        #expect(AppAppearancePreference.dark.detail == "Always uses dark appearance.")
-    }
-
     @Test func `semantic colors meet text contrast in both appearances`() {
         let colors = [OpenClawBrand.uiOK, OpenClawBrand.uiWarn, OpenClawBrand.uiInfo]
         let backgrounds = [UIColor.systemBackground, UIColor.secondarySystemBackground]

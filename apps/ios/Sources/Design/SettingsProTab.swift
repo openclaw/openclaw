@@ -89,10 +89,6 @@ struct SettingsProTab: View {
                 self.settingsContent))
     }
 
-    var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
-    }
-
     @ViewBuilder
     private var settingsContent: some View {
         if let directRoute {
