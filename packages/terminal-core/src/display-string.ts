@@ -73,11 +73,45 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 
+/** Replace only exact home matches or paths contained by that home directory. */
+function replaceHomePath(input: string, display: { home: string; prefix: string }): string {
+  let output = "";
+  let cursor = 0;
+  const isBeforeBoundary = (value: string | undefined) =>
+    value === undefined || value === "/" || value === "\\" || /[\s("'`:=[{,]/u.test(value);
+  const isTrailingDelimiter = (value: string | undefined) =>
+    value === undefined || /\s/u.test(value) || /[)"'`:,;\]}]/u.test(value);
+  const isAfterBoundary = (value: string | undefined) =>
+    value === undefined || value === "/" || value === "\\";
+
+  while (cursor < input.length) {
+    const index = input.indexOf(display.home, cursor);
+    if (index < 0) {
+      return `${output}${input.slice(cursor)}`;
+    }
+
+    const before = input[index - 1];
+    const after = input[index + display.home.length];
+    const afterNext = input[index + display.home.length + 1];
+    if (
+      isBeforeBoundary(before) &&
+      (isAfterBoundary(after) || (isTrailingDelimiter(after) && isTrailingDelimiter(afterNext)))
+    ) {
+      output += `${input.slice(cursor, index)}${display.prefix}`;
+    } else {
+      output += input.slice(cursor, index + display.home.length);
+    }
+    cursor = index + display.home.length;
+  }
+
+  return output;
+}
+
 /** Replace the effective home path with "~" or "$OPENCLAW_HOME" for terminal display. */
 export function displayString(input: string): string {
   if (!input) {
     return input;
   }
   const display = resolveHomeDisplayPrefix();
-  return display ? input.split(display.home).join(display.prefix) : input;
+  return display ? replaceHomePath(input, display) : input;
 }
