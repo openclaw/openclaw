@@ -7,6 +7,7 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreSync,
@@ -79,13 +80,15 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("resolveCronStorePath", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
+
   afterEach(() => {
-    vi.unstubAllEnvs();
+    envSnapshot.restore();
   });
 
   it("uses OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
+    setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
+    setTestEnvValue("HOME", "/home/other");
 
     const result = resolveCronStorePath("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));

@@ -3,7 +3,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export type SessionChangedPayload = {
@@ -93,10 +93,11 @@ export function emitSessionsChanged(
             ...buildGatewaySessionEventFields({
               sessionRow,
               agentId: payload.agentId,
-              hasActiveRun: hasTrackedActiveSessionRun({
+              hasActiveRun: hasVisibleActiveSessionRun({
                 context,
                 requestedKey: payload.sessionKey ?? sessionRow.key,
                 canonicalKey: sessionRow.key,
+                sessionId: sessionRow.sessionId,
                 agentId: sessionRow.key === "global" ? payload.agentId : undefined,
                 defaultAgentId,
               }),

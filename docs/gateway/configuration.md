@@ -337,7 +337,7 @@ candidate contains redacted secret placeholders such as `***`.
   </Accordion>
 
   <Accordion title="Enable relay-backed push for official iOS builds">
-    Relay-backed push for public App Store/TestFlight builds uses the hosted OpenClaw relay: `https://ios-push-relay.openclaw.ai`.
+    Relay-backed push for public App Store builds uses the hosted OpenClaw relay: `https://ios-push-relay.openclaw.ai`.
 
     Custom relay deployments require a deliberately separate iOS build/deployment path whose relay URL matches the gateway relay URL. If you are using a custom relay build, set this in gateway config:
 
@@ -373,7 +373,7 @@ candidate contains redacted secret placeholders such as `***`.
 
     End-to-end flow:
 
-    1. Install an official/TestFlight iOS build.
+    1. Install the official iOS app.
     2. Optional: configure `gateway.push.apns.relay.baseUrl` on the gateway only when using a deliberately separate custom relay build.
     3. Pair the iOS app to the gateway and let both node and operator sessions connect.
     4. The iOS app fetches the gateway identity, registers with the relay using App Attest plus the app receipt, and then publishes the relay-backed `push.apns.register` payload to the paired gateway.

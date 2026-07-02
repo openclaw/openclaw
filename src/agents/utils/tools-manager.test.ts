@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -21,7 +22,7 @@ let tempAgentDir: string | undefined;
 beforeEach(() => {
   originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
   tempAgentDir = mkdtempSync(join(tmpdir(), "openclaw-tools-manager-"));
-  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
   fetchWithSsrFGuardMock.mockReset();
   spawnSyncMock.mockReturnValue({
     error: new Error("ENOENT"),
@@ -35,9 +36,9 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
   if (originalAgentDir === undefined) {
-    delete process.env.OPENCLAW_AGENT_DIR;
+    deleteTestEnvValue("OPENCLAW_AGENT_DIR");
   } else {
-    process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
+    setTestEnvValue("OPENCLAW_AGENT_DIR", originalAgentDir);
   }
   if (tempAgentDir) {
     rmSync(tempAgentDir, { recursive: true, force: true });

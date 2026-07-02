@@ -1087,7 +1087,7 @@ function buildIMessageEchoScope(params: {
   return scopes;
 }
 
-function buildDirectIMessageReplyTarget(params: {
+export function buildDirectIMessageReplyTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   sender: string;

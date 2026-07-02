@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaTransportCapabilities } from "./qa-transport.js";
 import {
   createQaScenarioRuntimeApi,
   type QaScenarioRuntimeConstants,
@@ -118,12 +119,29 @@ describe("createQaScenarioRuntimeApi", () => {
     const inboundSpy = vi.spyOn(state, "addInboundMessage");
     const outboundSpy = vi.spyOn(state, "addOutboundMessage");
     const readSpy = vi.spyOn(state, "readMessage");
-    const waitForCondition = vi.fn(async (check: () => unknown) => check());
+    const waitForCondition: QaTransportCapabilities["waitForCondition"] = async <T>(
+      check: () => T | Promise<T | null | undefined> | null | undefined,
+    ): Promise<T> => {
+      const value = await check();
+      if (value === null || value === undefined) {
+        throw new Error("waitForCondition test check did not return a value");
+      }
+      return value;
+    };
     const sleep = vi.fn(async () => undefined);
     const env = {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
         state,
+        reset: async () => {
+          state.reset();
+        },
+        sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+          state.addInboundMessage(input),
+        waitForNoOutbound: vi.fn(async () => undefined),
+        waitForOutbound: vi.fn(async () => {
+          throw new Error("not used");
+        }),
         capabilities: {
           waitForCondition,
           getNormalizedMessageState: state.getSnapshot.bind(state),
@@ -132,7 +150,11 @@ describe("createQaScenarioRuntimeApi", () => {
           },
           sendInboundMessage: state.addInboundMessage.bind(state),
           injectOutboundMessage: state.addOutboundMessage.bind(state),
+          waitForOutboundMessage: state.waitFor.bind(state),
           readNormalizedMessage: state.readMessage.bind(state),
+          executeGenericAction: vi.fn(async () => undefined),
+          waitForReady: vi.fn(async () => undefined),
+          assertNoFailureReplies: vi.fn(),
         },
       },
     };

@@ -36,6 +36,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
 
 function formatFlowDetails(details: unknown) {
@@ -158,6 +159,21 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
     }
+    return;
+  }
+  for (const name of ["sendInbound", "waitForOutbound", "waitForNoOutbound"] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const result = await callable(await resolveValue(action[name], api, vars));
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
+    }
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    await reset();
     return;
   }
   if (typeof action.set === "string") {

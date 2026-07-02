@@ -26,6 +26,13 @@ export type {
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
 
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
+
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
@@ -47,11 +54,9 @@ export type SubscribeEmbeddedAgentSessionParams = {
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-  }) => void | Promise<void>;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
+  /** Expands window reasoning beyond "stream" mode for callers with their own display gate. */
+  streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;

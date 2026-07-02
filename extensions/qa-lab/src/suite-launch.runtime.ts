@@ -448,7 +448,9 @@ async function runUnifiedQaSuite(params: {
   );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult>();
-  const partitionTasks: QaUnifiedPartitionTask[] = [];
+  const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   if (params.plan.flowScenarios.length > 0) {
     const sharedFlowScenarios = params.plan.flowScenarios.filter(
       (scenario) => !scenarioRequiresIsolatedQaSuiteWorker(scenario),
@@ -488,7 +490,7 @@ async function runUnifiedQaSuite(params: {
     for (const partition of flowPartitions) {
       const isolatedPartition =
         partition.kind === "isolated" || partition.kind.startsWith("isolated-");
-      partitionTasks.push({
+      const task = {
         weight: partition.concurrency,
         run: async () => {
           const result = await runFlowSuite({
@@ -525,11 +527,16 @@ async function runUnifiedQaSuite(params: {
             scenarioResults,
           };
         },
-      });
+      } satisfies QaUnifiedPartitionTask;
+      if (isolatedPartition) {
+        isolatedFlowPartitionTasks.push(task);
+      } else {
+        sharedFlowPartitionTasks.push(task);
+      }
     }
   }
   if (params.plan.testFileScenariosByKind.size > 0) {
-    partitionTasks.push({
+    testFilePartitionTasks.push({
       weight: 1,
       run: async () => {
         const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
@@ -561,6 +568,11 @@ async function runUnifiedQaSuite(params: {
       },
     });
   }
+  const partitionTasks = [
+    ...sharedFlowPartitionTasks,
+    ...testFilePartitionTasks,
+    ...isolatedFlowPartitionTasks,
+  ];
   const partitionResults = await runWeightedUnifiedPartitionTasks(partitionTasks, concurrency);
   for (const partitionResult of partitionResults) {
     for (const scenarioResult of partitionResult.scenarioResults) {

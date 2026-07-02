@@ -10,7 +10,12 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
-import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
+import {
+  streamSegmentHasItemId,
+  streamSegmentUsesAccumulatedText,
+  trimAccumulatedStreamPrefix,
+  type ChatStreamSegment,
+} from "./stream-text.ts";
 import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -18,7 +23,7 @@ export type BuildChatItemsProps = {
   sessionKey: string;
   messages: unknown[];
   toolMessages: unknown[];
-  streamSegments: Array<{ text: string; ts: number }>;
+  streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
@@ -336,6 +341,41 @@ function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage:
     labeled.text === native.text ||
     stripSenderLabelPrefix(labeled.text, labeled.senderLabel) === native.text
   );
+}
+
+function assistantGroupHasReplyText(group: MessageGroup): boolean {
+  // A real reply is assistant text; a tool-only assistant group does not count.
+  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+}
+
+// Stamp each tool group with whether its turn ended in a successful assistant
+// reply. Codex marks any non-zero exec exit as failed, so a benign internal tool
+// failure (e.g. a no-match search) must not render as a primary error banner
+// once a clean reply exists. Backward pass: a user group ends the turn
+// downstream; an assistant reply marks success for earlier tool groups in the
+// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
+// preserving the existing error banner.
+function annotateToolTurnOutcome(
+  items: Array<ChatItem | MessageGroup>,
+): Array<ChatItem | MessageGroup> {
+  let sawAssistantReply = false;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.kind !== "group") {
+      continue;
+    }
+    const role = item.role.toLowerCase();
+    if (role === "user") {
+      sawAssistantReply = false;
+    } else if (role === "assistant") {
+      if (assistantGroupHasReplyText(item)) {
+        sawAssistantReply = true;
+      }
+    } else if (role === "tool") {
+      item.turnSucceeded = sawAssistantReply;
+    }
+  }
+  return items;
 }
 
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
@@ -769,13 +809,19 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
   const segments = props.streamSegments ?? [];
-  const maxLen = Math.max(segments.length, tools.length);
+  const keyedSegments = segments.filter(streamSegmentHasItemId);
+  const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
+  const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
   for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length) {
-      const text = sanitizeStreamText(segments[i].text);
-      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-      if (text.length > 0) {
+    if (i < indexedSegments.length) {
+      const segment = indexedSegments[i];
+      const text = sanitizeStreamText(segment.text);
+      const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
+      const visibleText = usesAccumulatedText
+        ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
+        : text;
+      if (usesAccumulatedText && text.length > 0) {
         previousAccumulatedStreamText = text;
       }
       if (visibleText.length > 0) {
@@ -783,7 +829,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           kind: "stream",
           key: `stream-seg:${props.sessionKey}:${i}`,
           text: visibleText,
-          startedAt: segments[i].ts,
+          startedAt: segment.ts,
           isStreaming: false,
         });
       }
@@ -794,6 +840,34 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         key: messageKey(tools[i], i + history.length),
         message: tools[i],
       });
+    }
+  }
+  for (const segment of keyedSegments) {
+    const text = sanitizeStreamText(segment.text);
+    if (text.length === 0) {
+      continue;
+    }
+    const commentaryItem: ChatItem = {
+      kind: "stream",
+      key: `stream-seg:${props.sessionKey}:${segment.itemId}`,
+      text,
+      startedAt: segment.ts,
+      isStreaming: false,
+    };
+    // Merge keyed commentary into the timestamp ordering path instead of
+    // appending it after every tool card. Insert before the first already-built
+    // item whose visible timestamp is strictly later, so a preamble that
+    // arrived before a later tool renders above that tool while the run is live
+    // (not only after final materialization). Tools that share the commentary's
+    // timestamp and are already visible stay above it.
+    const insertionIndex = items.findIndex((existing) => {
+      const existingTimestamp = chatItemTimestamp(existing);
+      return existingTimestamp != null && existingTimestamp > segment.ts;
+    });
+    if (insertionIndex === -1) {
+      items.push(commentaryItem);
+    } else {
+      items.splice(insertionIndex, 0, commentaryItem);
     }
   }
 
@@ -817,7 +891,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  return groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items)));
+  return annotateToolTurnOutcome(
+    groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items))),
+  );
 }
 
 function messageKey(message: unknown, index: number): string {

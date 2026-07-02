@@ -60,6 +60,7 @@ const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
   scheduleGatewayPostReadyMaintenance,
+  startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
@@ -140,6 +141,24 @@ describe("server-runtime-services", () => {
     });
     services.stopModelPricingRefresh();
     expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs cron afterStart after startup succeeds", async () => {
+    const order: string[] = [];
+    const cron = {
+      start: vi.fn(async () => {
+        order.push("start");
+      }),
+    };
+    const afterStart = vi.fn(async () => {
+      order.push("after-start");
+    });
+    const logCron = { error: vi.fn() };
+
+    startGatewayCronWithLogging({ cron, afterStart, logCron });
+
+    await vi.waitFor(() => expect(order).toEqual(["start", "after-start"]));
+    expect(logCron.error).not.toHaveBeenCalled();
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {

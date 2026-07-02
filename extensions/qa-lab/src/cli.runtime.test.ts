@@ -462,10 +462,10 @@ describe("qa cli runtime", () => {
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
-          features?: { fulfilled?: unknown };
+          coverageIds?: { fulfilled?: unknown };
           categoryReports?: Array<{
             id?: unknown;
-            features?: { fulfilled?: unknown };
+            coverageIds?: { fulfilled?: unknown };
             missingCoverageIds?: unknown;
           }>;
         };
@@ -480,11 +480,11 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
+      expect(evidence.scorecard?.coverageIds?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "channel-framework.conversation-routing-and-delivery",
-        features: {
-          fulfilled: 0,
+        coverageIds: {
+          fulfilled: 1,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
@@ -558,6 +558,8 @@ describe("qa cli runtime", () => {
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
         "thread-follow-up",
+        "claude-cli-provider-capabilities",
+        "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
         "image-understanding-attachment",
         "native-image-generation",
