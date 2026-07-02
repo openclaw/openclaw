@@ -475,8 +475,23 @@ export async function readLegacyMemoryWikiImportRunRecords(
     entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map(async (entry) => {
-        const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
-        return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
+        const filePath = path.join(importRunsDir, entry.name);
+        let raw: string;
+        try {
+          raw = await fs.readFile(filePath, "utf8");
+        } catch {
+          // Unreadable legacy file; skip it rather than failing the whole read.
+          return null;
+        }
+        try {
+          return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
+        } catch {
+          // Malformed legacy import run (partial write, truncation, editor save
+          // with a syntax error). Skip it rather than crashing `openclaw doctor`;
+          // the trailing filter drops null. Matches the modern SQLite-backed
+          // path, which deserializes rows defensively.
+          return null;
+        }
       }),
   );
   return records.filter((entry): entry is ChatGptImportRunRecord => entry !== null);
