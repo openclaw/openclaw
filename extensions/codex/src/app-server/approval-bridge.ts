@@ -782,13 +782,11 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     }
     return { handled: true };
   } catch (error) {
-    return {
-      handled: true,
-      blocked: true,
-      reason: `OpenClaw native hook relay unavailable for Codex app-server approval: ${formatCodexDisplayText(
-        formatErrorMessage(error),
-      )}`,
-    };
+    // When the native hook relay is unavailable (gateway restart, stale bridge,
+    // port mismatch), fall through to normal OpenClaw policy evaluation instead
+    // of hard-blocking. The before_tool_call hook path enforces the same policy
+    // without requiring a live relay subprocess.
+    return undefined;
   }
 }
 
