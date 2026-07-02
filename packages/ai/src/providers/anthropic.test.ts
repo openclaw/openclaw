@@ -75,12 +75,14 @@ describe("Anthropic provider", () => {
       apiKey?: string | null;
       authToken?: string | null;
       defaultHeaders?: Record<string, string | null>;
+      fetch?: unknown;
     };
 
     expect(config.apiKey).toBe("sk-ant-provider");
     expect(config.authToken).toBeNull();
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
+    expect(typeof config.fetch).toBe("function");
   });
 
   it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
