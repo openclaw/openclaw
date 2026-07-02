@@ -858,6 +858,18 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   return true;
 }
 
+export function forceClearReplyRunForResetBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation || operation.phase === "queued") {
+    return false;
+  }
+  operation.abortForRestart();
+  if (!resolveReplyRunForCurrentSessionId(sessionId)) {
+    return true;
+  }
+  return forceClearReplyRunBySessionId(sessionId, cause);
+}
+
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
   timeoutMs: number,
