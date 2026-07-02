@@ -367,11 +367,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     let restartedClientConnected = true;
     try {
       await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
-      await sendGatewayUserMessage(
+      const resetPreludeRunId = await sendGatewayUserMessage(
         restartedClient,
         context.resetSessionKey,
         "sqlite user-facing send before reset",
       );
+      await waitForAgentRunOk(restartedClient, resetPreludeRunId);
       await waitForSqliteMessageContains(
         context.agentDbPath,
         context.legacySessionId,
