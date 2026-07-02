@@ -88,14 +88,26 @@ async function readFileWithBound(
     if (stat.size > maxBytes) {
       throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
     }
-    // Read at most maxBytes + 1 bytes. If the file grew after stat, the
-    // actual read is still bounded and we catch it via bytesRead > maxBytes.
+    // Loop until EOF (bytesRead === 0) or until we have read maxBytes + 1
+    // bytes. Node's FileHandle.read can return fewer bytes than the requested
+    // length on any call, so a single read is not guaranteed to return the
+    // full file even when it fits within the cap.
     const buffer = Buffer.alloc(maxBytes + 1);
-    const { bytesRead } = await fd.read(buffer, 0, maxBytes + 1, 0);
-    if (bytesRead > maxBytes) {
-      throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+    let totalBytes = 0;
+    for (;;) {
+      const { bytesRead } = await fd.read(
+        buffer,
+        totalBytes,
+        maxBytes + 1 - totalBytes,
+        totalBytes,
+      );
+      if (bytesRead === 0) break; // EOF
+      totalBytes += bytesRead;
+      if (totalBytes > maxBytes) {
+        throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+      }
     }
-    return buffer.toString("utf8", 0, bytesRead);
+    return buffer.toString("utf8", 0, totalBytes);
   } finally {
     await fd.close();
   }
