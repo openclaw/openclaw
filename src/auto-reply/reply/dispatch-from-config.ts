@@ -1496,21 +1496,32 @@ export async function dispatchReplyFromConfig(
     // operation registered under the archived sessionId keeps the slot latched.
     // Without this check the first post-reset visible turn (including the reset
     // acknowledgement) waits out the full stuck-session abort window before the
-    // recovery one-shot reclaims the slot. An operation whose sessionId no
-    // longer matches the freshly-resolved store entry is provably superseded;
-    // a legitimately concurrent fresh operation carries the current sessionId
-    // and is never touched, and terminal-recovery operations stay protected
-    // exactly as in the terminal-session force-clear below.
+    // recovery one-shot reclaims the slot. Guards, in order: terminal-recovery
+    // operations stay protected exactly as in the terminal-session force-clear
+    // below; both the dispatch-start snapshot AND a fresh store lookup must
+    // disagree with the operation's sessionId, so a mid-run rotation that has
+    // committed the store but not yet relabeled its own operation is never
+    // treated as stale; and terminal snapshots are excluded entirely because
+    // terminal-session recovery admits a fresh operation with a NEW sessionId
+    // before the store entry rotates (#86827), which the id comparison alone
+    // cannot distinguish from a leftover.
     if (phase === "dispatch" && replyTurnKind === "visible") {
       const activeBeforeAdmission = replyRunRegistry.get(dispatchOperationSessionKey);
-      if (activeBeforeAdmission && !activeBeforeAdmission.terminalRecovery) {
-        const currentSessionId = resolveSessionStoreLookup(
+      const snapshotSessionId = sessionStoreEntry.entry?.sessionId;
+      if (
+        activeBeforeAdmission &&
+        !activeBeforeAdmission.terminalRecovery &&
+        snapshotSessionId &&
+        snapshotSessionId !== activeBeforeAdmission.sessionId
+      ) {
+        const currentEntry = resolveSessionStoreLookup(
           { ...ctx, SessionKey: dispatchOperationSessionKey },
           cfg,
-        ).entry?.sessionId;
+        ).entry;
         if (
-          currentSessionId &&
-          activeBeforeAdmission.sessionId !== currentSessionId &&
+          currentEntry?.sessionId &&
+          currentEntry.sessionId !== activeBeforeAdmission.sessionId &&
+          !isRecoverableTerminalSessionStatus(currentEntry.status) &&
           forceClearReplyRunBySessionId(
             activeBeforeAdmission.sessionId,
             new Error("clearing stale reply operation from a rotated session"),
