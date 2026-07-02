@@ -2607,7 +2607,10 @@ internal fun permissionContinueNeedsNodeApproval(
   requiresNodeApprovalAfterApply: Boolean,
   nodeCapabilityApprovalState: GatewayNodeApprovalState,
 ): Boolean =
-  requiresNodeApprovalAfterApply ||
+  (
+    requiresNodeApprovalAfterApply &&
+      nodeCapabilityApprovalState != GatewayNodeApprovalState.Unsupported
+  ) ||
     (
       !ready &&
         nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)

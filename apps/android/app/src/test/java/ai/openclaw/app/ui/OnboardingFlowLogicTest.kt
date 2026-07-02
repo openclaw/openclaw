@@ -453,6 +453,13 @@ class OnboardingFlowLogicTest {
     assertFalse(
       permissionContinueNeedsNodeApproval(
         ready = true,
+        requiresNodeApprovalAfterApply = true,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
+      ),
+    )
+    assertFalse(
+      permissionContinueNeedsNodeApproval(
+        ready = true,
         requiresNodeApprovalAfterApply = false,
         nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
