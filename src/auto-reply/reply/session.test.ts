@@ -30,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -4885,6 +4885,13 @@ describe("persistSessionUsageUpdate", () => {
         updatedAt: Date.now(),
         modelProvider: "openai",
         model: "gpt-5.4",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "pre-heartbeat-cli-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "pre-heartbeat-cli-session",
+        },
+        claudeCliSessionId: "pre-heartbeat-cli-session",
       },
     });
 
@@ -4894,9 +4901,13 @@ describe("persistSessionUsageUpdate", () => {
       isHeartbeat: true,
       usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
       lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-      providerUsed: "openai",
-      modelUsed: "gpt-5.1-codex-mini",
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
       contextTokensUsed: 128_000,
+      cliSessionBinding: {
+        sessionId: "heartbeat-cli-session",
+        authProfileId: "anthropic:heartbeat",
+      },
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -4906,6 +4917,63 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(100);
     expect(stored[sessionKey].cacheRead).toBe(200);
     expect(stored[sessionKey].totalTokens).toBe(1_105);
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("heartbeat-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "heartbeat-cli-session",
+      authProfileId: "anthropic:heartbeat",
+    });
+  });
+
+  it("clears stale CLI binding when heartbeat usage reports an unflushed replacement", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: {
+          "claude-cli": "stale-cli-session",
+          "codex-cli": "codex-session",
+        },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "stale-cli-session",
+            authProfileId: "anthropic:old",
+          },
+          "codex-cli": {
+            sessionId: "codex-session",
+          },
+        },
+        claudeCliSessionId: "stale-cli-session",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
+      lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      contextTokensUsed: 128_000,
+      clearCliSessionBinding: true,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-session",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
