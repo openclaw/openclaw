@@ -15,6 +15,7 @@ import {
   writeClaudeBundleManifest,
   resolveBundlePluginRoot,
 } from "./bundle-mcp.test-support.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
@@ -152,6 +153,65 @@ describe("loadEnabledBundleMcpConfig", () => {
             rootDir: await fs.realpath(pluginRoot),
             source: "test",
             manifestPath: path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+          },
+        ],
+      },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.bundleProbe).toMatchObject({
+      command: "node",
+    });
+  });
+
+  it("skips unreadable bundle manifest rows from provided registries", async () => {
+    const homeDir = await tempHarness.createTempDir("openclaw-bundle-mcp-home-");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-mcp-workspace-");
+    const { pluginRoot } = await createBundleProbePlugin(homeDir);
+    const manifestPath = path.join(pluginRoot, ".claude-plugin", "plugin.json");
+    const poisonedFormatRecord = {
+      id: "poisoned-format",
+      get format() {
+        throw new Error("bundle config format exploded");
+      },
+    } as unknown as PluginManifestRecord;
+    const poisonedRootRecord = {
+      id: "poisoned-root",
+      origin: "global",
+      format: "bundle",
+      bundleFormat: "claude",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      get rootDir() {
+        throw new Error("bundle config root exploded");
+      },
+      source: "test",
+      manifestPath,
+    } as unknown as PluginManifestRecord;
+
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["poisoned-root", "bundle-probe"]),
+      manifestRegistry: {
+        plugins: [
+          poisonedFormatRecord,
+          poisonedRootRecord,
+          {
+            id: "bundle-probe",
+            origin: "global",
+            format: "bundle",
+            bundleFormat: "claude",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: await fs.realpath(pluginRoot),
+            source: "test",
+            manifestPath,
           },
         ],
       },

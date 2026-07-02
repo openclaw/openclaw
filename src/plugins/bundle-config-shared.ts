@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
@@ -81,6 +81,25 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
   };
 }
 
+type EnabledBundleRecord = {
+  pluginId: string;
+  origin: PluginManifestRecord["origin"];
+  rootDir: string;
+  bundleFormat: PluginBundleFormat;
+};
+
+function resolveEnabledBundleRecord(record: PluginManifestRecord): EnabledBundleRecord | null {
+  if (record.format !== "bundle" || !record.bundleFormat) {
+    return null;
+  }
+  return {
+    pluginId: record.id,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    bundleFormat: record.bundleFormat,
+  };
+}
+
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -109,12 +128,20 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   let merged = params.createEmptyConfig();
 
   for (const record of registry.plugins) {
-    if (record.format !== "bundle" || !record.bundleFormat) {
+    let bundleRecord: EnabledBundleRecord | null;
+    try {
+      bundleRecord = resolveEnabledBundleRecord(record);
+    } catch {
+      // Bundle config rows come from plugin-owned metadata. One unreadable row
+      // must not block unrelated enabled bundle config from loading.
+      continue;
+    }
+    if (!bundleRecord) {
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({
-      id: record.id,
-      origin: record.origin,
+      id: bundleRecord.pluginId,
+      origin: bundleRecord.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
@@ -123,13 +150,13 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     }
 
     const loaded = params.loadBundleConfig({
-      pluginId: record.id,
-      rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
+      pluginId: bundleRecord.pluginId,
+      rootDir: bundleRecord.rootDir,
+      bundleFormat: bundleRecord.bundleFormat,
     });
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
-      diagnostics.push(params.createDiagnostic(record.id, message));
+      diagnostics.push(params.createDiagnostic(bundleRecord.pluginId, message));
     }
   }
 
