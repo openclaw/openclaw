@@ -374,10 +374,17 @@ export function parseCliJson(
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let text = "";
+  let errorText: string | undefined;
   let sawStructuredOutput = false;
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
+    const resultEnvelopeError = readClaudeCliResultEnvelopeError(parsed);
+    if (resultEnvelopeError) {
+      errorText = resultEnvelopeError;
+      sawStructuredOutput = true;
+      continue;
+    }
     const nextText =
       collectCliText(parsed.message) ||
       collectCliText(parsed.content) ||
@@ -402,6 +409,9 @@ export function parseCliJson(
   if (!text && !sawStructuredOutput) {
     return null;
   }
+  if (errorText) {
+    return { text: "", sessionId, usage, errorText };
+  }
   return { text, sessionId, usage };
 }
 
@@ -415,11 +425,19 @@ function parseClaudeCliJsonlResult(params: {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
-  if (
-    typeof params.parsed.type === "string" &&
-    params.parsed.type === "result" &&
-    typeof params.parsed.result === "string"
-  ) {
+  if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
+    const resultEnvelopeError = readClaudeCliResultEnvelopeError(params.parsed);
+    if (resultEnvelopeError) {
+      return {
+        text: "",
+        sessionId: params.sessionId,
+        usage: params.usage,
+        errorText: resultEnvelopeError,
+      };
+    }
+    if (typeof params.parsed.result !== "string") {
+      return null;
+    }
     const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
       return { text: resultText, sessionId: params.sessionId, usage: params.usage };
@@ -712,6 +730,14 @@ function dispatchGeminiCliStreamingToolEvent(params: {
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
 const GEMINI_CLI_RESULT_ERROR_FALLBACK = "Gemini CLI result status was error.";
+const CLAUDE_CLI_RESULT_ERROR_FALLBACK = "Claude CLI result status was error.";
+
+function readClaudeCliResultEnvelopeError(parsed: Record<string, unknown>): string | undefined {
+  if (parsed.type !== "result" || parsed.is_error !== true) {
+    return undefined;
+  }
+  return collectExplicitCliErrorText(parsed) || CLAUDE_CLI_RESULT_ERROR_FALLBACK;
+}
 
 function isFallbackGeminiCliStreamJsonError(errorText: string): boolean {
   return (

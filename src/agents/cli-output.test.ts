@@ -752,6 +752,41 @@ describe("parseCliJsonl", () => {
 
     expect(result).toBe(message);
   });
+
+  it("classifies Claude is_error result envelopes as errorText instead of assistant text", () => {
+    const { message, apiError, jsonl } = createClaudeApiErrorFixture();
+    const backend = {
+      command: "claude",
+      output: "jsonl" as const,
+      sessionIdFields: ["session_id"],
+    };
+
+    expect(parseCliJsonl(jsonl, backend, "claude-cli")).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
+    });
+
+    expect(
+      parseCliJson(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: apiError,
+          session_id: "session-api-error",
+        }),
+        backend,
+        "claude-cli",
+      ),
+    ).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
@@ -931,6 +966,29 @@ describe("createCliJsonlStreamingParser", () => {
       sessionId: undefined,
       usage: undefined,
       errorText: "Gemini stream failed",
+    });
+  });
+
+  it("classifies Claude is_error result envelopes in streamed JSONL output", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(`${jsonl}\n`);
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
     });
   });
 

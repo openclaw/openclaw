@@ -12,6 +12,7 @@ import {
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
+import { createClaudeApiErrorFixture } from "../test-helpers/claude-api-error-fixture.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -240,6 +241,37 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(result.text).toBe("resumed answer");
     expect(result.sessionId).toBe("resume-jsonl-session");
+  });
+
+  it("fails one-shot Claude JSONL turns when the result envelope is is_error", async () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(`${jsonl}\n`);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : `${jsonl}\n`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      );
+    } catch (error) {
+      const failover = error as { message?: string; reason?: string };
+      expect(failover.message).toBe(message);
+      expect(failover.reason).toBe("billing");
+      return;
+    }
+    throw new Error("Expected Claude JSONL is_error turn to fail with failover");
   });
 
   it("classifies failed stdout from the retained parse buffer before the diagnostic tail", async () => {
