@@ -89,6 +89,83 @@ describe("redactSensitiveUrlLikeString", () => {
       ),
     ).toBe("wss://***:***@[bad-host/socket?token=***&keep=visible)");
   });
+
+  it("preserves diagnostic text after redacted query secrets in arbitrary text", () => {
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc timed out")).toBe(
+      "failed https://x.test/cb?token=*** timed out",
+    );
+  });
+
+  it("redacts quoted query secrets before preserving diagnostic text", () => {
+    expect(redactSensitiveUrlLikeString('failed https://x.test/cb?token="abc" timed out')).toBe(
+      'failed https://x.test/cb?token="***" timed out',
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token='abc' timed out")).toBe(
+      "failed https://x.test/cb?token='***' timed out",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=`abc` timed out")).toBe(
+      "failed https://x.test/cb?token=`***` timed out",
+    );
+  });
+
+  it("redacts unmatched quoted query secrets before preserving diagnostic text", () => {
+    expect(redactSensitiveUrlLikeString('failed https://x.test/cb?token="abc timed out')).toBe(
+      'failed https://x.test/cb?token="*** timed out',
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token='abc timed out")).toBe(
+      "failed https://x.test/cb?token='*** timed out",
+    );
+  });
+
+  it("preserves wrapper diagnostics around unmatched quoted query secrets", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "git failed: unable to access 'https://x.test/cb?token='abc timed out/': URL rejected",
+      ),
+    ).toBe("git failed: unable to access 'https://x.test/cb?token='*** timed out/': URL rejected");
+  });
+
+  it("preserves bracket and delimiter wrapped diagnostic text after redacted query secrets", () => {
+    expect(redactSensitiveUrlLikeString("failed (https://x.test/cb?token=abc) timed out")).toBe(
+      "failed (https://x.test/cb?token=***) timed out",
+    );
+    expect(redactSensitiveUrlLikeString("failed [https://x.test/cb?token=abc], retrying")).toBe(
+      "failed [https://x.test/cb?token=***], retrying",
+    );
+  });
+
+  it("redacts multiple fallback query secrets without swallowing fragments", () => {
+    expect(
+      redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc&client_secret=def#section"),
+    ).toBe("failed https://x.test/cb?token=***&client_secret=***#section");
+  });
+
+  it("keeps delimiter-like punctuation inside fallback query secrets masked", () => {
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc,def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc;def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc)def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc]def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc),def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?token=abc];def&safe=1")).toBe(
+      "failed https://x.test/cb?token=***&safe=1",
+    );
+  });
+
+  it("keeps non-sensitive fallback query params unchanged in diagnostic text", () => {
+    expect(redactSensitiveUrlLikeString("failed https://x.test/cb?safe=value timed out")).toBe(
+      "failed https://x.test/cb?safe=value timed out",
+    );
+  });
 });
 
 describe("isSensitiveUrlQueryParamName", () => {

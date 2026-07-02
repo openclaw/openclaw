@@ -40,6 +40,38 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 // Keep in sync with FORM_BODY_KEY_SEPARATOR_RE in src/logging/redact.ts: Hangul fillers are
 // category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
+const URL_QUERY_FALLBACK_QUOTES = new Set(['"', "'", "`"]);
+const URL_QUERY_FALLBACK_KEY_STOPS = new Set([
+  "=",
+  "&",
+  "#",
+  " ",
+  "\t",
+  "\r",
+  "\n",
+  '"',
+  "'",
+  "`",
+  "<",
+  ">",
+  ")",
+  "]",
+]);
+const URL_QUERY_FALLBACK_UNQUOTED_VALUE_STOPS = new Set([
+  "&",
+  "#",
+  " ",
+  "\t",
+  "\r",
+  "\n",
+  '"',
+  "'",
+  "`",
+  "<",
+  ">",
+]);
+const URL_QUERY_FALLBACK_WRAPPER_CLOSES = new Set([")", "]"]);
+const URL_QUERY_FALLBACK_AFTER_WRAPPER_STOPS = new Set([" ", "\t", "\r", "\n", ",", ";", ".", ":"]);
 
 function normalizeUrlQueryParamName(name: string): string {
   const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
@@ -99,15 +131,116 @@ export function redactSensitiveUrl(value: string): string {
   }
 }
 
+function findFallbackQueryValueEnd(
+  value: string,
+  valueStart: number,
+): { end: number; closingQuote?: string } {
+  const quote = value[valueStart];
+  if (quote && URL_QUERY_FALLBACK_QUOTES.has(quote)) {
+    const quotedValueStart = valueStart + 1;
+    const closingQuoteIndex = value.indexOf(quote, quotedValueStart);
+    if (closingQuoteIndex !== -1) {
+      const afterQuote = value[closingQuoteIndex + 1];
+      if (afterQuote === undefined || URL_QUERY_FALLBACK_UNQUOTED_VALUE_STOPS.has(afterQuote)) {
+        return { end: closingQuoteIndex, closingQuote: quote };
+      }
+    }
+    return { end: findFallbackUnquotedQueryValueEnd(value, quotedValueStart) };
+  }
+  return { end: findFallbackUnquotedQueryValueEnd(value, valueStart) };
+}
+
+function findFallbackUnquotedQueryValueEnd(value: string, start: number): number {
+  let end = start;
+  while (end < value.length && !isFallbackUnquotedQueryValueStop(value, end)) {
+    end += 1;
+  }
+  return end;
+}
+
+function isFallbackUnquotedQueryValueStop(value: string, index: number): boolean {
+  const char = value[index];
+  if (URL_QUERY_FALLBACK_UNQUOTED_VALUE_STOPS.has(char)) {
+    return true;
+  }
+  if (!URL_QUERY_FALLBACK_WRAPPER_CLOSES.has(char)) {
+    return false;
+  }
+  const next = value[index + 1];
+  if (next === undefined || !URL_QUERY_FALLBACK_AFTER_WRAPPER_STOPS.has(next)) {
+    return false;
+  }
+  return !hasFallbackQuerySeparatorAfterWrapperClose(value, index + 1);
+}
+
+function hasFallbackQuerySeparatorAfterWrapperClose(value: string, start: number): boolean {
+  for (let i = start; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === "&") {
+      return true;
+    }
+    if (
+      char === "#" ||
+      char === " " ||
+      char === "\t" ||
+      char === "\r" ||
+      char === "\n" ||
+      char === "<" ||
+      char === ">"
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// This fallback scans arbitrary diagnostic text, where query-looking spans may be malformed.
+function redactFallbackQuerySecrets(value: string): string {
+  let redacted = "";
+  let cursor = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const prefix = value[i];
+    if (prefix !== "?" && prefix !== "&") {
+      continue;
+    }
+
+    let keyEnd = i + 1;
+    while (keyEnd < value.length && !URL_QUERY_FALLBACK_KEY_STOPS.has(value[keyEnd])) {
+      keyEnd += 1;
+    }
+    if (keyEnd === i + 1 || value[keyEnd] !== "=") {
+      continue;
+    }
+
+    const key = value.slice(i + 1, keyEnd);
+    const valueStart = keyEnd + 1;
+    const { end: valueEnd, closingQuote } = findFallbackQueryValueEnd(value, valueStart);
+    if (valueEnd === valueStart) {
+      continue;
+    }
+
+    if (!isSensitiveUrlQueryParamName(key)) {
+      continue;
+    }
+
+    const redactedEnd = closingQuote ? valueEnd + 1 : valueEnd;
+    const openingQuote = value[valueStart];
+    redacted += value.slice(cursor, valueStart);
+    redacted +=
+      openingQuote && URL_QUERY_FALLBACK_QUOTES.has(openingQuote)
+        ? `${openingQuote}***${closingQuote ?? ""}`
+        : "***";
+    cursor = redactedEnd;
+    i = redactedEnd - 1;
+  }
+  return cursor === 0 ? value : redacted + value.slice(cursor);
+}
+
 /** Redacts sensitive URL-looking substrings even when the full value is not a valid URL. */
 export function redactSensitiveUrlLikeString(value: string): string {
   const redactedUrl = redactSensitiveUrl(value);
   if (redactedUrl !== value) {
     return redactedUrl;
   }
-  return value
-    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
-    .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
-    );
+  return redactFallbackQuerySecrets(value.replace(/\/\/([^@/?#\s]+)@/g, "//***:***@"));
 }
