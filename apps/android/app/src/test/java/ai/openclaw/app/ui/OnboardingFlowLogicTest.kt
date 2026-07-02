@@ -533,6 +533,42 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun nodeApprovalCheckClearsUnobservedRefreshOnlyOnApprovalScreen() {
+    assertTrue(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.Permissions,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+  }
+
+  @Test
   fun nodeApprovalCheckContinuesOnlyAfterRequestedRefreshCompletesReady() {
     assertFalse(
       nodeApprovalCheckCanContinue(
