@@ -25,7 +25,10 @@ import { persistChatComposerState, restoreChatComposerState } from "./chat/compo
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./controllers/workboard.ts";
+import { syncControlUiDocumentTitle } from "./document-title.ts";
 import type { Tab } from "./navigation.ts";
+import { areUiSessionKeysEquivalent } from "./session-key.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
@@ -56,6 +59,9 @@ type LifecycleHost = {
   chatManualRefreshInFlight: boolean;
   settings?: { gatewayUrl?: string | null };
   sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
+  activeSessionTitleRow?: SessionsListResult["sessions"][number] | null;
+  chatSessionPickerResult?: SessionsListResult | null;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
   chatComposerProvisionalRestore?: {
@@ -95,9 +101,26 @@ type LifecycleHost = {
   topbarObserver: ResizeObserver | null;
 };
 
+function findActiveSessionRow(host: LifecycleHost): SessionsListResult["sessions"][number] | null {
+  const sessions = host.sessionsResult?.sessions;
+  return (
+    sessions?.find((row) => row.key === host.sessionKey) ??
+    sessions?.find((row) => areUiSessionKeysEquivalent(row.key, host.sessionKey)) ??
+    null
+  );
+}
+
+function syncActiveSessionTitleRowFromSessionsResult(host: LifecycleHost): void {
+  const activeRow = findActiveSessionRow(host);
+  if (activeRow) {
+    host.activeSessionTitleRow = activeRow;
+  }
+}
+
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
+  syncControlUiDocumentTitle(host);
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
@@ -232,6 +255,17 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (
+    changed.has("sessionKey") ||
+    changed.has("sessionsResult") ||
+    changed.has("activeSessionTitleRow") ||
+    changed.has("chatSessionPickerResult")
+  ) {
+    if (changed.has("sessionKey") || changed.has("sessionsResult")) {
+      syncActiveSessionTitleRowFromSessionsResult(host);
+    }
+    syncControlUiDocumentTitle(host);
+  }
   if (changed.has("chatQueue")) {
     clearPendingChatComposerPersistence(host);
     persistChatComposerState(host);

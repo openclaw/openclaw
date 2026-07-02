@@ -4,6 +4,8 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { handleDisconnected, handleUpdated } from "./app-lifecycle.ts";
 import { loadChatComposerSnapshot } from "./chat/composer-persistence.ts";
 import { configureWorkboardPolling, getWorkboardState } from "./controllers/workboard.ts";
+import { CONTROL_UI_DOCUMENT_TITLE } from "./document-title.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 function createHost() {
@@ -40,8 +42,37 @@ type ComposerPersistHost = ReturnType<typeof createHost> & {
   chatComposerPersistTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
 };
 
+type TitleLifecycleHost = ReturnType<typeof createHost> & {
+  sessionsResult?: SessionsListResult | null;
+  activeSessionTitleRow?: SessionsListResult["sessions"][number] | null;
+};
+
 function createComposerPersistHost(): ComposerPersistHost {
   return createHost() as ComposerPersistHost;
+}
+
+function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
+  return {
+    ts: 1,
+    path: "/api/sessions",
+    count: sessions.length,
+    defaults: {
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+    },
+    sessions,
+  };
+}
+
+function sessionRow(
+  row: Partial<SessionsListResult["sessions"][number]> & { key: string },
+): SessionsListResult["sessions"][number] {
+  return {
+    kind: "agent",
+    updatedAt: 1,
+    ...row,
+  } as SessionsListResult["sessions"][number];
 }
 
 describe("handleDisconnected", () => {
@@ -294,5 +325,33 @@ describe("handleUpdated", () => {
       draft: "survive refresh",
       queue: [{ id: "queued-1", text: "next prompt", createdAt: 1 }],
     });
+  });
+
+  it("preserves the active title row when filtered sessions refreshes exclude the current session", () => {
+    vi.stubGlobal("document", { title: CONTROL_UI_DOCUMENT_TITLE });
+    const host = createHost() as TitleLifecycleHost;
+    host.sessionKey = "agent:main:project";
+    host.sessionsResult = sessionsResult([
+      sessionRow({ key: "agent:main:project", label: "Project planning" }),
+    ]);
+
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["sessionsResult", null]]),
+    );
+
+    expect(host.activeSessionTitleRow?.key).toBe("agent:main:project");
+    expect(document.title).toBe("Project planning - OpenClaw Control");
+
+    host.sessionsResult = sessionsResult([
+      sessionRow({ key: "agent:main:other", label: "Other session" }),
+    ]);
+    handleUpdated(
+      host as unknown as Parameters<typeof handleUpdated>[0],
+      new Map<PropertyKey, unknown>([["sessionsResult", null]]),
+    );
+
+    expect(host.activeSessionTitleRow?.key).toBe("agent:main:project");
+    expect(document.title).toBe("Project planning - OpenClaw Control");
   });
 });

@@ -702,6 +702,7 @@ function switchChatSessionInternal(
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
+  state.activeSessionTitleRow = nextSessionRow ?? null;
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {
     state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
