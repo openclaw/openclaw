@@ -783,6 +783,9 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
 }) {
   const trustedDirectId =
     params.requestedTarget?.kind === "direct" ? params.requestedTarget.id : undefined;
+  if (!params.requestedTarget && shouldEnforceFeishuDirectReadTarget(params.account)) {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
   if (params.requestedTarget?.kind === "direct") {
     if (
       (shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account }) ||

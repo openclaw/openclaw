@@ -790,6 +790,29 @@ describe("feishuPlugin actions", () => {
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("blocks messageId-only reads before fetching when Feishu DM allowlist is enforced", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "read",
+        params: { messageId: "om_blocked" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "allowlist",
+              allowFrom: ["ou_allowed"],
+              groupPolicy: "open",
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("blocks caller-supplied allowed Feishu read targets before fetching messages", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -1614,6 +1637,31 @@ describe("feishuPlugin actions", () => {
               groups: {
                 oc_group_1: {},
               },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(listReactionsFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks messageId-only Feishu reaction reads when DM allowlist is enforced", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "reactions",
+        params: { messageId: "om_blocked" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "allowlist",
+              allowFrom: ["ou_allowed"],
+              groupPolicy: "open",
+              actions: { reactions: true },
             },
           },
         } as OpenClawConfig,
