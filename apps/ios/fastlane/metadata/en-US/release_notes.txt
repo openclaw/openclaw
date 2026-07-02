@@ -1,3 +1,3 @@
 Maintenance update for the current OpenClaw beta release.
 
-- Improved notification cleanup, Watch app compatibility, and native file input handling.
+- Refreshed iOS 26 visual styling, Talk controls, Gateway recovery, localization, and App Store screenshots.

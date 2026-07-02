@@ -907,7 +907,6 @@ describe("test-projects args", () => {
           "test/scripts/fixture-plugin-commands.test.ts",
           "test/scripts/incremental-line-reader.test.ts",
           "test/scripts/ios-configure-signing.test.ts",
-          "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",

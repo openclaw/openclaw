@@ -1638,7 +1638,6 @@
     "ios:screenshots": "bash scripts/ios-screenshots.sh",
     "ios:version": "node --import tsx scripts/ios-version.ts --json",
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
-    "ios:version:pin": "node --import tsx scripts/ios-pin-version.ts",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
     "lint": "node scripts/run-oxlint-shards.mjs",

@@ -7,7 +7,7 @@ export { parseVersionSyncArgs as parseArgs } from "./lib/version-script-args.ts"
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--root dir]\n",
+    "Usage: node --import tsx scripts/ios-sync-versioning.ts [--write|--check] [--version YYYY.M.D] [--root dir]\n",
   );
 }
 
@@ -18,7 +18,11 @@ function main(argv = process.argv.slice(2)): number {
     return 0;
   }
 
-  const result = syncIosVersioning({ mode: options.mode, rootDir: options.rootDir });
+  const result = syncIosVersioning({
+    mode: options.mode,
+    releaseVersion: options.releaseVersion,
+    rootDir: options.rootDir,
+  });
 
   if (options.mode === "check") {
     process.stdout.write("iOS versioning artifacts are up to date.\n");
