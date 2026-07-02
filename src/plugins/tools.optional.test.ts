@@ -164,6 +164,25 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createUnreadableParametersTool(name: string) {
+  return Object.defineProperties(
+    {
+      name,
+      description: `${name} tool`,
+      async execute() {
+        return { content: [{ type: "text", text: "bad" }] };
+      },
+    },
+    {
+      parameters: {
+        get() {
+          throw new Error("parameters getter exploded");
+        },
+      },
+    },
+  );
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1939,6 +1958,26 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips plugin tools with unreadable schema getters while keeping valid siblings", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [createUnreadableParametersTool("broken_tool"), makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool parameters object is unreadable",
     );
   });
 

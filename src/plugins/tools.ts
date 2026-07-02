@@ -335,7 +335,11 @@ function readPluginToolName(tool: unknown): string {
     return "";
   }
   // Optional-tool allowlists need a best-effort name before full shape validation.
-  return typeof tool.name === "string" ? tool.name.trim() : "";
+  try {
+    return typeof tool.name === "string" ? tool.name.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 function toElapsedMs(value: number): number {
@@ -467,14 +471,32 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return "tool must be an object";
   }
-  const name = readPluginToolName(tool);
+  let rawName: unknown;
+  try {
+    rawName = tool.name;
+  } catch {
+    return "tool name is unreadable";
+  }
+  const name = typeof rawName === "string" ? rawName.trim() : "";
   if (!name) {
     return "missing non-empty name";
   }
-  if (typeof tool.execute !== "function") {
+  let execute: unknown;
+  try {
+    execute = tool.execute;
+  } catch {
+    return `${name} execute function is unreadable`;
+  }
+  if (typeof execute !== "function") {
     return `${name} missing execute function`;
   }
-  if (!isRecord(tool.parameters)) {
+  let parameters: unknown;
+  try {
+    parameters = tool.parameters;
+  } catch {
+    return `${name} parameters object is unreadable`;
+  }
+  if (!isRecord(parameters)) {
     return `${name} missing parameters object`;
   }
   return undefined;
