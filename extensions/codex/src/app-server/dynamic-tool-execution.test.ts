@@ -40,6 +40,35 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(timeoutMs);
   });
 
+  it("uses per-call timeoutSeconds when timeoutMs is absent", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-seconds",
+          namespace: null,
+          tool: "session_status",
+          arguments: { sessionKey: "current", timeoutSeconds: 2 },
+        },
+        config: undefined,
+      }),
+    ).toBe(12_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-prefers-ms",
+          namespace: null,
+          tool: "session_status",
+          arguments: { sessionKey: "current", timeoutMs: 1500, timeoutSeconds: 2 },
+        },
+        config: undefined,
+      }),
+    ).toBe(1500);
+  });
+
   it("ignores partial dynamic tool timeout strings", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
@@ -54,6 +83,24 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
+  it("ignores invalid per-call timeoutSeconds values", () => {
+    for (const timeoutSeconds of [0, -1, "2" as never, Number.NaN]) {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-invalid-seconds",
+            namespace: null,
+            tool: "session_status",
+            arguments: { sessionKey: "current", timeoutSeconds },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    }
   });
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
@@ -236,6 +283,75 @@ describe("dynamic tool execution helpers", () => {
         },
       },
       isError: true,
+    });
+  });
+
+  it("returns the existing failed response shape for timeoutSeconds deadlines", async () => {
+    vi.useFakeTimers();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-timeout-seconds",
+      namespace: null,
+      tool: "session_status",
+      arguments: { sessionKey: "current", timeoutSeconds: 1 },
+    };
+    const response = handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: {
+        handleToolCall: vi.fn(() => new Promise<never>(() => {})),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: resolveDynamicToolCallTimeoutMs({ call, config: undefined }),
+    });
+
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    await expect(response).resolves.toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 11000ms while running tool session_status.",
+        },
+      ],
+    });
+  });
+
+  it("lets tool-owned timeoutSeconds return before the wrapper grace expires", async () => {
+    vi.useFakeTimers();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-tool-seconds",
+      namespace: null,
+      tool: "sessions_send",
+      arguments: { sessionKey: "current", message: "ping", timeoutSeconds: 1 },
+    };
+    const response = handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: {
+        handleToolCall: vi.fn(
+          () =>
+            new Promise<CodexDynamicToolCallResponse>((resolve) => {
+              setTimeout(() => {
+                resolve({
+                  success: true,
+                  contentItems: [{ type: "inputText", text: "timeout: no reply" }],
+                });
+              }, 1_000);
+            }),
+        ),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: resolveDynamicToolCallTimeoutMs({ call, config: undefined }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(response).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "timeout: no reply" }],
     });
   });
 

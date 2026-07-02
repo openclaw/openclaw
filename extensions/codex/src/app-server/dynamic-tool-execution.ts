@@ -10,7 +10,10 @@ import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   isJsonObject,
@@ -23,6 +26,7 @@ import {
 export const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 /** Hard cap for per-call Codex dynamic tool timeout overrides. */
 export const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 10_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 /** Timeout for image-understanding style dynamic tool calls. */
 export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
@@ -443,7 +447,14 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readPositiveFiniteTimeoutMs(value.timeoutMs);
+  const timeoutMs = readPositiveFiniteTimeoutMs(value.timeoutMs);
+  if (timeoutMs !== undefined) {
+    return timeoutMs;
+  }
+  const timeoutSecondsMs = readTimeoutSecondsAsMs(value.timeoutSeconds);
+  return timeoutSecondsMs === undefined
+    ? undefined
+    : addTimerTimeoutGraceMs(timeoutSecondsMs, CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS);
 }
 
 function readConfiguredDynamicToolTimeoutMs(
