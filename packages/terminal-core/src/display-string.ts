@@ -73,16 +73,10 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 
-/** Replace only exact home matches or paths contained by that home directory. */
+/** Replace a whole-value home or child path without clipping sibling path prefixes. */
 function replaceHomePath(input: string, display: { home: string; prefix: string }): string {
   let output = "";
   let cursor = 0;
-  const isBeforeBoundary = (value: string | undefined) =>
-    value === undefined || value === "/" || value === "\\" || /[\s("'`:=[{,]/u.test(value);
-  const isTrailingDelimiter = (value: string | undefined) =>
-    value === undefined || /\s/u.test(value) || /[)"'`:,;\]}]/u.test(value);
-  const isAfterBoundary = (value: string | undefined) =>
-    value === undefined || value === "/" || value === "\\";
 
   while (cursor < input.length) {
     const index = input.indexOf(display.home, cursor);
@@ -91,12 +85,19 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
     }
 
     const before = input[index - 1];
-    const after = input[index + display.home.length];
-    const afterNext = input[index + display.home.length + 1];
-    if (
-      isBeforeBoundary(before) &&
-      (isAfterBoundary(after) || (isTrailingDelimiter(after) && isTrailingDelimiter(afterNext)))
-    ) {
+    const homeEnd = index + display.home.length;
+    const after = input[homeEnd];
+    const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+    let punctuationEnd = homeEnd;
+    while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input[punctuationEnd])) {
+      punctuationEnd += 1;
+    }
+    const punctuationEndsToken =
+      punctuationEnd > homeEnd &&
+      (punctuationEnd === input.length || /\s/u.test(input[punctuationEnd]));
+    const endsTokenOrContinuesPath =
+      after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+    if (startsToken && endsTokenOrContinuesPath) {
       output += `${input.slice(cursor, index)}${display.prefix}`;
     } else {
       output += input.slice(cursor, index + display.home.length);

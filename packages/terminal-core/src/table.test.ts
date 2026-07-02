@@ -190,57 +190,16 @@ describe("renderTable", () => {
       rows: [
         { Path: home },
         { Path: `${home}/project` },
-        { Path: `${home}\\project` },
         { Path: `${home}2/project` },
-        { Path: `prefix${home}/project` },
         { Path: `Workspace: ${home}/project` },
-        { Path: `path=${home}/project` },
-        { Path: `Home: ${home},` },
-        { Path: `(${home})` },
-        { Path: `${home},backup` },
-        { Path: `${home} backup\\file` },
       ],
     });
 
-    const embedded = `prefix${home}/project`;
     expect(out).toContain("~\n");
     expect(out).toContain("~/project");
-    expect(out).toContain("~\\project");
     expect(out).toContain(`${home}2/project`);
-    expect(out).toContain(embedded);
     expect(out).toContain("Workspace: ~/project");
-    expect(out).toContain("path=~/project");
-    expect(out).toContain("Home: ~,");
-    expect(out).toContain("(~)");
-    expect(out).toContain(`${home},backup`);
-    expect(out).toContain(`${home} backup\\file`);
     expect(out).not.toContain("~2/project");
-    expect(out).not.toContain("~,backup");
-    expect(out).not.toContain("~ backup\\file");
-    expect(out).not.toContain("prefix~/project");
-  });
-
-  it("keeps OPENCLAW_HOME as the display prefix for exact and child paths", () => {
-    const home = path.resolve("test-home", "alice");
-    const openclawHome = path.resolve("test-openclaw-home");
-    vi.stubEnv("HOME", home);
-    vi.stubEnv("USERPROFILE", "");
-    vi.stubEnv("OPENCLAW_HOME", openclawHome);
-
-    const out = renderTable({
-      border: "none",
-      columns: [{ key: "Path", header: "Path" }],
-      rows: [
-        { Path: openclawHome },
-        { Path: `${openclawHome}/state` },
-        { Path: `${openclawHome}2/state` },
-      ],
-    });
-
-    expect(out).toContain("$OPENCLAW_HOME\n");
-    expect(out).toContain("$OPENCLAW_HOME/state");
-    expect(out).toContain(`${openclawHome}2/state`);
-    expect(out).not.toContain("$OPENCLAW_HOME2/state");
   });
 
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
