@@ -9,8 +9,8 @@ import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } fr
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   applyCommonResponsesParams,
-  createResponsesAssistantOutput,
   convertResponsesMessages,
+  createResponsesAssistantOutput,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
@@ -115,6 +115,45 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
     yield event as never;
   }
 }
+
+describe("runResponsesStreamLifecycle", () => {
+  it("does not include maxRetries in request options by default", async () => {
+    const capturedOptions: unknown[] = [];
+    async function* emptyStream(): AsyncIterable<ResponseStreamEvent> {}
+    const stream = new AssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(nativeOpenAIModel);
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      createClient: () => ({
+        responses: {
+          create: (_params, options) => {
+            capturedOptions.push(options);
+            return {
+              withResponse: async () => ({
+                data: emptyStream(),
+                response: new Response(null, { status: 200 }),
+              }),
+            };
+          },
+        },
+      }),
+      buildParams: () => ({
+        model: nativeOpenAIModel.id,
+        input: "hello",
+        stream: true,
+      }),
+      formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(capturedOptions).toHaveLength(1);
+    expect(capturedOptions[0]).not.toHaveProperty("maxRetries");
+  });
+});
 
 describe("convertResponsesTools", () => {
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
@@ -840,7 +879,7 @@ describe("processResponsesStream", () => {
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
   ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
-    const output = createAssistantOutput();
+    const output = createResponsesAssistantOutput(nativeOpenAIModel);
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
     const collect = (async () => {
