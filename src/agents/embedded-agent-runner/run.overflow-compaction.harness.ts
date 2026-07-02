@@ -673,6 +673,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInActiveTarget: mockedTruncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInRuntimeTranscript: mockedTruncateOversizedToolResultsInSession,
   }));

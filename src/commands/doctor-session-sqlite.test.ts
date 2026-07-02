@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { SessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 type TestStore = {
@@ -22,20 +23,6 @@ type TestStore = {
   unreferencedJsonlPath: string;
   trajectoryPath: string;
   transcriptPath: string;
-};
-
-type TestMigrationManifest = {
-  failedAt?: string;
-  runId: string;
-  targets: Array<{
-    agentId: string;
-    completedMoves: Array<{ sourcePath: string }>;
-    issues: Array<{ code: string; message: string }>;
-    plannedMoves: Array<{ sourcePath: string }>;
-    sqlitePath: string;
-    storePath: string;
-    validationBeforeArchive: string;
-  }>;
 };
 
 const previousEnv = {
@@ -1035,11 +1022,11 @@ function createLegacyStore(
   };
 }
 
-function readMigrationManifest(manifestPath: string | undefined): TestMigrationManifest {
+function readMigrationManifest(manifestPath: string | undefined): SessionSqliteMigrationManifest {
   if (!manifestPath) {
     throw new Error("expected migration manifest path");
   }
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as TestMigrationManifest;
+  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as SessionSqliteMigrationManifest;
 }
 
 function requireMigrationManifestPath(manifestPath: string | undefined): string {
