@@ -78,7 +78,7 @@ export type {
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
 // unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
 // cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1272,8 +1272,10 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (entry.costTotal === undefined || entry.costTotal === 0) {
+        // Fill in missing or zero cost estimates. Some providers (e.g. DeepSeek V4)
+        // return cost.total=0 but have known pricing; treat $0 as missing so the
+        // estimate path runs (#97047).
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
       }
     }
