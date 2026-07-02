@@ -114,13 +114,13 @@ hasOwnProperty: null
 Body text`;
     const result = parseFrontmatterBlock(content);
     expect(Object.hasOwn(result, "toString")).toBe(true);
-    expect(result.toString).toBe("null");
+    expect(result["toString"]).toBe("null");
     expect(Object.hasOwn(result, "constructor")).toBe(true);
-    expect(result.constructor).toBe("null");
+    expect(result["constructor"]).toBe("null");
     expect(Object.hasOwn(result, "valueOf")).toBe(true);
-    expect(result.valueOf).toBe("null");
+    expect(result["valueOf"]).toBe("null");
     expect(Object.hasOwn(result, "hasOwnProperty")).toBe(true);
-    expect(result.hasOwnProperty).toBe("null");
+    expect(result["hasOwnProperty"]).toBe("null");
     // normal key unaffected
     expect(result.title).toBe("Hello");
   });
