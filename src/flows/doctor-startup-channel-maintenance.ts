@@ -1,9 +1,10 @@
 // Doctor startup channel maintenance runs channel plugin startup repairs.
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
+import { resolveDoctorChannelPreviewConfig } from "../commands/doctor/shared/preview-warnings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "./health-checks.js";
 
-const STARTUP_CHANNEL_MAINTENANCE_CHECK_ID = "core/doctor/startup-channel-maintenance";
+const CHANNEL_PREVIEW_WARNINGS_CHECK_ID = "core/doctor/channel-preview-warnings";
 
 // Doctor wrapper for plugin startup maintenance repairs.
 type DoctorStartupMaintenanceRuntime = {
@@ -21,28 +22,34 @@ function warningPath(warning: string): string | undefined {
   return warning.match(/^\s*-?\s*(channels\.[^\s:]+)/)?.[1];
 }
 
-/** Collect read-only startup-channel maintenance findings from channel doctor preview warnings. */
-export async function collectStartupChannelMaintenanceHealthFindings(params: {
+/** Collect read-only channel doctor preview warnings as structured findings. */
+export async function collectChannelPreviewWarningHealthFindings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand?: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<readonly HealthFinding[]> {
   const { collectChannelDoctorPreviewWarnings } =
     await import("../commands/doctor/shared/channel-doctor.js");
   const doctorFixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
-  const warnings = await collectChannelDoctorPreviewWarnings({
+  const previewConfig = await resolveDoctorChannelPreviewConfig({
     cfg: params.cfg,
+    env: params.env ?? process.env,
+    allowExec: params.allowExec,
+  });
+  const warnings = await collectChannelDoctorPreviewWarnings({
+    cfg: previewConfig.cfg,
     doctorFixCommand,
     env: params.env ?? process.env,
   });
   return warnings.map((warning): HealthFinding => {
     const path = warningPath(warning);
     const baseFinding = {
-      checkId: STARTUP_CHANNEL_MAINTENANCE_CHECK_ID,
+      checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
       severity: "warning",
       message: normalizeWarningMessage(warning),
-      requirement: "Configured channels should not require startup maintenance before use.",
-      fixHint: `Run \`${doctorFixCommand}\` to apply safe channel maintenance repairs, or update the affected channel config manually.`,
+      requirement: "Configured channels should not emit doctor preview warnings.",
+      fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
     } satisfies HealthFinding;
     if (path) {
       return {
