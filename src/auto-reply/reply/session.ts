@@ -72,13 +72,13 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -307,28 +307,32 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
+// A single retry was insufficient under bursts of rapid consecutive turns
+// on the same sessionKey. See the `!committed.ok` branch below.
+const MAX_SESSION_INIT_ATTEMPTS = 4;
+
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params, 0);
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
+  attempt: number,
 ): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
   // Guarded revision checks only serialize correctly when the snapshot and
   // commit share the same writer lane.
   return await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
-    async () => await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried),
+    async () => await initSessionStateAttemptLocked(params, attemptContext, attempt),
   );
 }
 
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
-  staleSnapshotRetried: boolean,
+  attempt: number,
 ): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
@@ -930,8 +934,8 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true);
+    if (attempt + 1 < MAX_SESSION_INIT_ATTEMPTS) {
+      return await initSessionStateAttemptLocked(params, attemptContext, attempt + 1);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }
