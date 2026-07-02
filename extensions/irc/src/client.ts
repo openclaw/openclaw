@@ -24,6 +24,28 @@ function sliceIrcPrivmsgChunk(text: string, end: number): string {
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
+const IRC_MAX_LINE_BYTES = 512;
+
+function fitIrcChunkToByteBudget(text: string, maxBytes: number): string {
+  let fitted = "";
+  let fittedBytes = 0;
+  for (const codePoint of text) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (fittedBytes + codePointBytes > maxBytes) {
+      break;
+    }
+    fitted += codePoint;
+    fittedBytes += codePointBytes;
+  }
+  if (fitted.length === text.length) {
+    return text;
+  }
+  const splitAt = fitted.lastIndexOf(" ");
+  if (splitAt >= Math.floor(fitted.length / 2)) {
+    return fitted.slice(0, splitAt);
+  }
+  return fitted;
+}
 
 type IrcPrivmsgEvent = {
   senderNick: string;
@@ -223,6 +245,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!cleaned) {
       return;
     }
+    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const maxChunkBytes = Math.min(messageChunkMaxChars, IRC_MAX_LINE_BYTES - lineOverheadBytes);
     let remaining = cleaned;
     while (remaining.length > 0) {
       let chunk = remaining;
@@ -232,6 +256,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           splitAt = messageChunkMaxChars;
         }
         chunk = sliceIrcPrivmsgChunk(chunk, splitAt).trim();
+      }
+      if (Buffer.byteLength(chunk, "utf8") > maxChunkBytes) {
+        chunk = fitIrcChunkToByteBudget(chunk, maxChunkBytes).trim();
       }
       if (!chunk) {
         break;
