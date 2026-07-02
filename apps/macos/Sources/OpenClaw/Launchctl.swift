@@ -90,7 +90,7 @@ enum LaunchAgentPlist {
     }
 
     private static func readGeneratedEnvironmentFile(_ args: [String]) -> [String: String] {
-        guard Self.isGeneratedEnvironmentWrapper(args) else { return [:] }
+        guard isGeneratedEnvironmentWrapper(args) else { return [:] }
         guard args.count >= 2 else { return [:] }
         guard let content = try? String(contentsOfFile: args[1], encoding: .utf8) else { return [:] }
         var environment: [String: String] = [:]
@@ -129,7 +129,7 @@ enum LaunchAgentPlist {
     }
 
     private static func unwrapGeneratedEnvironmentWrapper(_ args: [String]) -> [String] {
-        guard Self.isGeneratedEnvironmentWrapper(args) else { return args }
+        guard isGeneratedEnvironmentWrapper(args) else { return args }
         return Array(args.dropFirst(2))
     }
 
