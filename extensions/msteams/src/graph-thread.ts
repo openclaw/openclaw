@@ -21,6 +21,31 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const THREAD_REPLIES_PAGE_SIZE = 50;
 const THREAD_REPLIES_MAX_PAGES = 50;
 
+function createdDateTimeMs(message: GraphThreadMessage): number | undefined {
+  return asDateTimestampMs(Date.parse(message.createdDateTime ?? ""));
+}
+
+function newestThreadReplies(
+  items: GraphThreadMessage[],
+  replyLimit: number,
+): GraphThreadMessage[] {
+  const sortableItems: Array<{ item: GraphThreadMessage; index: number; createdAtMs: number }> = [];
+  for (const [index, item] of items.entries()) {
+    const createdAtMs = createdDateTimeMs(item);
+    if (createdAtMs === undefined) {
+      return items.slice(-replyLimit);
+    }
+    sortableItems.push({ item, index, createdAtMs });
+  }
+  const orderedItems = sortableItems
+    .toSorted((a, b) => {
+      const dateOrder = a.createdAtMs - b.createdAtMs;
+      return dateOrder === 0 ? a.index - b.index : dateOrder;
+    })
+    .map(({ item }) => item);
+  return orderedItems.slice(-replyLimit);
+}
+
 function resolveTeamGroupIdCacheExpiresAt(nowRaw = Date.now()): number | undefined {
   const now = asDateTimestampMs(nowRaw);
   return now === undefined
@@ -117,8 +142,8 @@ export async function fetchChannelMessage(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * The Graph replies endpoint does not support `$orderby`, so pages arrive
- * oldest-first. Follow pagination and retain the newest replies for context.
+ * The Graph replies endpoint does not support `$orderby`, so sort paginated
+ * results before retaining the newest replies for context.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -129,15 +154,13 @@ export async function fetchThreadReplies(
 ): Promise<GraphThreadMessage[]> {
   const rawLimit = Number.isFinite(limit) ? Math.floor(limit) : THREAD_REPLIES_PAGE_SIZE;
   const replyLimit = Math.min(Math.max(rawLimit, 1), THREAD_REPLIES_PAGE_SIZE);
-  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // Keep the newest replies as pages arrive so long threads preserve recent context.
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${THREAD_REPLIES_PAGE_SIZE}&$select=id,from,body,createdDateTime`;
   const { items } = await fetchAllGraphPages<GraphThreadMessage>({
     token,
     path,
     maxPages: THREAD_REPLIES_MAX_PAGES,
   });
-  return items.slice(-replyLimit);
+  return newestThreadReplies(items, replyLimit);
 }
 
 /**

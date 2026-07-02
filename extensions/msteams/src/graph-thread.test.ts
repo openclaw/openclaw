@@ -194,7 +194,10 @@ describe("fetchThreadReplies", () => {
 
   it("clamps limit to 50 maximum", async () => {
     vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
-      items: Array.from({ length: 52 }, (_, index) => ({ id: `reply-${index + 1}` })),
+      items: Array.from({ length: 52 }, (_, index) => ({
+        id: `reply-${index + 1}`,
+        createdDateTime: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      })),
       truncated: false,
     } as never);
 
@@ -208,14 +211,17 @@ describe("fetchThreadReplies", () => {
 
   it("clamps limit to 1 minimum and keeps the newest reply", async () => {
     vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
-      items: [{ id: "oldest" }, { id: "newest" }],
+      items: [
+        { id: "oldest", createdDateTime: "2026-01-01T00:00:00Z" },
+        { id: "newest", createdDateTime: "2026-01-01T00:01:00Z" },
+      ],
       truncated: false,
     } as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m", 0);
 
     expect(firstFetchAllGraphPagesPath()).toContain("$top=50");
-    expect(result).toEqual([{ id: "newest" }]);
+    expect(result.map((reply) => reply.id)).toEqual(["newest"]);
   });
 
   it("returns empty array when value is missing", async () => {
@@ -227,13 +233,49 @@ describe("fetchThreadReplies", () => {
 
   it("returns newest limited replies from paginated results", async () => {
     vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
-      items: [{ id: "reply-1" }, { id: "reply-2" }, { id: "reply-3" }, { id: "reply-4" }],
+      items: [
+        { id: "reply-1", createdDateTime: "2026-01-01T00:00:00Z" },
+        { id: "reply-2", createdDateTime: "2026-01-01T00:01:00Z" },
+        { id: "reply-3", createdDateTime: "2026-01-01T00:02:00Z" },
+        { id: "reply-4", createdDateTime: "2026-01-01T00:03:00Z" },
+      ],
       truncated: false,
     } as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m", 3);
 
-    expect(result).toEqual([{ id: "reply-2" }, { id: "reply-3" }, { id: "reply-4" }]);
+    expect(result.map((reply) => reply.id)).toEqual(["reply-2", "reply-3", "reply-4"]);
+  });
+
+  it("returns newest limited replies when Graph pages arrive newest-first", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [
+        { id: "reply-4", createdDateTime: "2026-01-01T00:03:00Z" },
+        { id: "reply-3", createdDateTime: "2026-01-01T00:02:00Z" },
+        { id: "reply-2", createdDateTime: "2026-01-01T00:01:00Z" },
+        { id: "reply-1", createdDateTime: "2026-01-01T00:00:00Z" },
+      ],
+      truncated: false,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 3);
+
+    expect(result.map((reply) => reply.id)).toEqual(["reply-2", "reply-3", "reply-4"]);
+  });
+
+  it("preserves arrival order for replies without parseable dates", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [
+        { id: "reply-1" },
+        { id: "reply-2", createdDateTime: "not-a-date" },
+        { id: "reply-3" },
+      ],
+      truncated: false,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 2);
+
+    expect(result.map((reply) => reply.id)).toEqual(["reply-2", "reply-3"]);
   });
 
   it("sets a page cap to avoid unbounded pagination", async () => {
