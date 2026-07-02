@@ -75,6 +75,7 @@ type SignalApprovalDeliveryTarget = {
 type SignalApprovalDeliveryResult = {
   channel?: string;
   messageId?: string | null;
+  toJid?: string;
   meta?: Record<string, unknown>;
 };
 
@@ -379,7 +380,6 @@ function isStandaloneApprovalPromptText(text: string): boolean {
     /^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "") ||
     /^(?:(?:🛡️|🛡|🚨|ℹ️|ℹ)\s*)?Plugin approval required$/.test(firstLine ?? "")
   );
-}
 }
 
 function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {

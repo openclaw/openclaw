@@ -54,7 +54,6 @@ export type ContainerWebSocketMessage = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
-const DEFAULT_REST_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 // Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
 // Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
 const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
