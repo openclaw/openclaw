@@ -428,7 +428,7 @@ async function workspaceHasBootstrapCompletionEvidence(params: {
   // However, if setupCompletedAt is already set, profile differences are valid
   // evidence of user customization after onboarding.
   const hasSetupState = typeof params.state?.setupCompletedAt === "string";
-  if (params.bootstrapExists === true && !hasSetupState) {
+  if (params.bootstrapExists && !hasSetupState) {
     return await hasWorkspaceUserContentEvidence(params.dir, { includeSkills: false });
   }
   return await workspaceProfileLooksConfigured(params);
