@@ -4,6 +4,7 @@
  */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -302,7 +303,10 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = await readProviderJsonResponse<OpenAIModelsResponse>(
+      response,
+      "Mantle model discovery",
+    );
     const rawModels = body.data ?? [];
 
     const models = rawModels
