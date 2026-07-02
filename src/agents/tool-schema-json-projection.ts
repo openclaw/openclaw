@@ -1,5 +1,3 @@
-import { normalizeAnthropicSchema } from "./anthropic-schema-normalizer.js";
-
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
   | null
@@ -126,9 +124,8 @@ export function projectRuntimeToolInputSchema(
     violations.push(`${path}.type must be "object"`);
   }
   violations.push(...findDynamicSchemaKeywordViolations(projection.schema, path));
-  const normalized = normalizeAnthropicSchema(projection.schema);
   return {
-    schema: normalized as RuntimeToolInputSchemaJson,
+    schema: projection.schema,
     violations,
   };
 }
