@@ -365,6 +365,9 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const resolveApiKeyForCandidate = async (candidate?: string) => {
+    const envFallbackCandidate =
+      candidate === undefined &&
+      params.profileCandidates.some((profileCandidate) => typeof profileCandidate === "string");
     return getApiKeyForModel({
       model: params.getRuntimeModel(),
       cfg: params.config,
@@ -373,6 +376,7 @@ export function createEmbeddedRunAuthController(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
+      credentialPrecedence: envFallbackCandidate ? "env-first" : undefined,
     });
   };
 

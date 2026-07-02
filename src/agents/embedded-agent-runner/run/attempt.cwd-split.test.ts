@@ -65,6 +65,28 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
   });
 
+  it("continues with core tools when bundle MCP materialization fails", async () => {
+    hoisted.materializeBundleMcpToolsForRunMock.mockRejectedValueOnce(
+      new Error("MCP catalog unavailable"),
+    );
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:telegram:chat:hex",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+    });
+
+    const materializeCall = hoisted.materializeBundleMcpToolsForRunMock.mock.calls[0]?.[0] as
+      | { reservedToolNames?: string[] }
+      | undefined;
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.getOrCreateSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(materializeCall?.reservedToolNames).toContain("sessions_spawn");
+  });
+
   it("forwards native and routable channel targets into runtime tools", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),

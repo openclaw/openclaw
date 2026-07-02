@@ -95,7 +95,7 @@ function createMutableAuthControllerHarness(): MutableAuthControllerHarness {
 function createMutableEmbeddedRunAuthController(params: {
   harness: MutableAuthControllerHarness;
   setRuntimeApiKey: RuntimeApiKeySetter;
-  profileCandidates?: string[];
+  profileCandidates?: Array<string | undefined>;
   authStore?: AuthProfileStore;
   fallbackConfigured?: boolean;
   warn?: (message: string) => void;
@@ -231,6 +231,47 @@ describe("createEmbeddedRunAuthController", () => {
       mode: "api-key",
       source: "models.providers.custom-openai",
     });
+  });
+
+  it("uses env-first auth when profile failover reaches the env fallback candidate", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+    mocks.getApiKeyForModel.mockImplementation(
+      async (params: { profileId?: string; credentialPrecedence?: string }) => ({
+        apiKey: params.profileId ? "stored-profile-key" : "env-openai-key",
+        mode: "api-key",
+        profileId: params.profileId,
+        source: params.profileId ? `profile:${params.profileId}` : "env:OPENAI_API_KEY",
+      }),
+    );
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
+
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey,
+      profileCandidates: ["default", undefined],
+    });
+
+    await controller.initializeAuthProfile();
+    await controller.advanceAuthProfile();
+
+    expect(mocks.getApiKeyForModel).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        profileId: "default",
+        credentialPrecedence: undefined,
+      }),
+    );
+    expect(mocks.getApiKeyForModel).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        profileId: undefined,
+        credentialPrecedence: "env-first",
+      }),
+    );
+    expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "env-openai-key");
+    expect(harness.lastProfileId).toBeUndefined();
   });
 
   it("preserves OAuth mode when billing-disabled profiles are all unavailable", async () => {
