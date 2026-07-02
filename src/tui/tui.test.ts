@@ -185,6 +185,55 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("allows gateway submit while a run is active when queueMode is followup", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "followup",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks submit while optimistic state is pending even in followup mode", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        pendingOptimisticUserMessage: true,
+        queueMode: "followup",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows submit with pending run id when queueMode is collect", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+        queueMode: "collect",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows submit with pending run id when queueMode is interrupt", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+        queueMode: "interrupt",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks gateway submit while a run is active when queueMode is steer", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "steer",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isTuiBusyActivityStatus", () => {
@@ -241,9 +290,7 @@ describe("resolveTuiShutdownHardExitMs", () => {
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
-        MAX_TIMER_TIMEOUT_MS + 2000,
-      );
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
     });
   });
 });

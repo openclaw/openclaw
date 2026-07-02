@@ -1,6 +1,6 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
 export type TuiOptions = {
   local?: boolean;
@@ -96,6 +96,7 @@ export type SessionInfo = {
   effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
 };
 
 export type SessionScope = "per-sender" | "global";

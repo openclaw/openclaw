@@ -407,12 +407,21 @@ export function canSubmitTuiChatMessage(params: {
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   message?: string;
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
 }): boolean {
   const stopText = params.message ? isChatStopCommandText(params.message) : false;
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
   }
-  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
+  // Always block while awaiting the ACK for the current optimistic send.
+  if (params.pendingOptimisticUserMessage === true) {
+    return false;
+  }
+  const allowQueuedSend = (params.queueMode ?? "steer") !== "steer";
+  if (allowQueuedSend) {
+    return true;
+  }
+  const pending = Boolean(params.pendingChatRunId);
   if (!params.local && params.activeChatRunId) {
     return false;
   }
@@ -1432,6 +1441,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
+      queueMode: state.sessionInfo.queueMode,
     });
   const notifyBlockedChatSubmit = () => {
     chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
