@@ -1191,6 +1191,7 @@ describe("Anthropic provider", () => {
     expect(payload.tools?.[0]?.input_schema).toMatchObject({
       properties: { query: { type: "string" } },
       required: ["query"],
+      additionalProperties: false,
     });
   });
 

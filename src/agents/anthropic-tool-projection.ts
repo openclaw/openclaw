@@ -15,6 +15,7 @@ type AnthropicProjectedTool = {
     readonly type: "object";
     readonly properties: Record<string, unknown>;
     readonly required: string[];
+    readonly additionalProperties: false;
   };
 };
 
@@ -88,6 +89,7 @@ export function projectAnthropicTools(
           type: "object",
           properties: (properties ?? {}) as Record<string, unknown>,
           required: (required ?? []) as string[],
+          additionalProperties: false,
         },
       };
     } catch {
