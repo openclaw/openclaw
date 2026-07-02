@@ -3,7 +3,11 @@ import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
+import {
+  REDACTED_SENTINEL,
+  redactConfigSnapshot,
+  restoreRedactedValues as restoreRedactedRaw,
+} from "./redact-snapshot.js";
 import {
   makeSnapshot,
   restoreRedactedValues,
@@ -1377,5 +1381,16 @@ describe("redactConfigSnapshot", () => {
       "https://alice:secret@chrome.prod.example.com",
     );
     expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+  });
+
+  it("rejects prototype-named missing keys instead of returning functions", () => {
+    const PROTOTYPE_KEYS = ["toString", "constructor", "valueOf", "hasOwnProperty"];
+    for (const key of PROTOTYPE_KEYS) {
+      const redacted = { [key]: REDACTED_SENTINEL };
+      const original = {};
+      const hints = { [key]: { sensitive: true, label: "test" } };
+      const result = restoreRedactedRaw(redacted, original, hints);
+      expect(result.ok).toBe(false);
+    }
   });
 });
