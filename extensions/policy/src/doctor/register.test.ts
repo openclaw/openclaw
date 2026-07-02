@@ -381,6 +381,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/gateway-remote-enabled",
       "policy/gateway-http-endpoint-enabled",
       "policy/gateway-http-url-fetch-unrestricted",
+      "policy/gateway-node-command-denied",
       "policy/agents-workspace-access-denied",
       "policy/agents-tool-not-denied",
       "policy/tools-profile-unapproved",
@@ -789,6 +790,17 @@ describe("registerPolicyDoctorChecks", () => {
       "gateway requireUrlAllowlists string",
       { gateway: { http: { requireUrlAllowlists: "true" } } },
       "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
+    ],
+    ["gateway nodes array", { gateway: { nodes: [] } }, "oc://policy.jsonc/gateway/nodes"],
+    [
+      "gateway nodes denyCommands string",
+      { gateway: { nodes: { denyCommands: "system.run" } } },
+      "oc://policy.jsonc/gateway/nodes/denyCommands",
+    ],
+    [
+      "gateway nodes denyCommands blank entry",
+      { gateway: { nodes: { denyCommands: ["system.run", " "] } } },
+      "oc://policy.jsonc/gateway/nodes/denyCommands/#1",
     ],
     ["agents array", { agents: [] }, "oc://policy.jsonc/agents"],
     ["agents workspace array", { agents: { workspace: [] } }, "oc://policy.jsonc/agents/workspace"],
@@ -6656,6 +6668,9 @@ describe("registerPolicyDoctorChecks", () => {
             },
           },
         },
+        nodes: {
+          allowCommands: ["mcp.help", "mcp.invoke", "system.run"],
+        },
       },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -6680,6 +6695,9 @@ describe("registerPolicyDoctorChecks", () => {
           http: {
             denyEndpoints: ["chatCompletions", "responses"],
             requireUrlAllowlists: true,
+          },
+          nodes: {
+            denyCommands: ["system.run", "system.run.prepare", "system.which"],
           },
         },
       }),
@@ -6739,9 +6757,15 @@ describe("registerPolicyDoctorChecks", () => {
           ocPath: "oc://openclaw.config/gateway/http/endpoints/chatCompletions/images/allowUrl",
           requirement: "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
         }),
+        expect.objectContaining({
+          checkId: "policy/gateway-node-command-denied",
+          severity: "error",
+          ocPath: "oc://openclaw.config/gateway/nodes/allowCommands/#2",
+          requirement: "oc://policy.jsonc/gateway/nodes/denyCommands",
+        }),
       ]),
     );
-    expect(result.findings).toHaveLength(12);
+    expect(result.findings).toHaveLength(13);
   });
 
   it("reports omitted gateway bind when non-loopback exposure is denied", async () => {

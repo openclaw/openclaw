@@ -167,6 +167,7 @@ export type PolicyGatewayExposureEvidence = {
     | "controlUi"
     | "httpEndpoint"
     | "httpUrlFetch"
+    | "nodeCommand"
     | "remote"
     | "tailscale";
   readonly source: string;
@@ -175,6 +176,7 @@ export type PolicyGatewayExposureEvidence = {
   readonly explicit?: boolean;
   readonly endpoint?: string;
   readonly hasAllowlist?: boolean;
+  readonly command?: string;
 };
 
 export type PolicyAgentWorkspaceEvidence = {
@@ -951,6 +953,8 @@ export function scanPolicyGatewayExposure(
   const endpoints = isRecord(http.endpoints) ? http.endpoints : {};
   pushGatewayHttpEndpointEvidence(entries, endpoints, "chatCompletions");
   pushGatewayHttpEndpointEvidence(entries, endpoints, "responses");
+  const nodes = isRecord(gateway.nodes) ? gateway.nodes : {};
+  pushGatewayNodeCommandEvidence(entries, nodes);
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
@@ -2849,6 +2853,31 @@ function pushGatewayHttpUrlFetchEvidence(
     endpoint,
     explicit: allowUrl === true,
     hasAllowlist: hasEffectiveAllowlist,
+  });
+}
+
+function pushGatewayNodeCommandEvidence(
+  entries: PolicyGatewayExposureEvidence[],
+  nodes: Record<string, unknown>,
+): void {
+  if (!Array.isArray(nodes.allowCommands)) {
+    return;
+  }
+  nodes.allowCommands.forEach((command, index) => {
+    if (typeof command !== "string") {
+      return;
+    }
+    const normalized = command.trim();
+    if (normalized === "") {
+      return;
+    }
+    entries.push({
+      id: `gateway-node-command-${normalized}`,
+      kind: "nodeCommand",
+      source: `oc://openclaw.config/gateway/nodes/allowCommands/#${index}`,
+      value: normalized,
+      command: normalized,
+    });
   });
 }
 

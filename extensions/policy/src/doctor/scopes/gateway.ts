@@ -86,6 +86,15 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
       );
     },
   };
+  const policyGatewayNodeCommandDeniedCheck: HealthCheck = {
+    id: CHECK_IDS.policyGatewayNodeCommandDenied,
+    kind: "plugin",
+    description: "Gateway node command allowlists match policy.",
+    source: "policy",
+    async detect(ctx) {
+      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNodeCommandDenied);
+    },
+  };
 
   return [
     policyGatewayNonLoopbackBindCheck,
@@ -96,6 +105,7 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     policyGatewayRemoteEnabledCheck,
     policyGatewayHttpEndpointEnabledCheck,
     policyGatewayHttpUrlFetchUnrestrictedCheck,
+    policyGatewayNodeCommandDeniedCheck,
   ];
 }
 
@@ -112,6 +122,7 @@ export function gatewayExposureFindings(
     ...gatewayRemoteFindings(policy, policyDocName, evidence),
     ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
     ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
+    ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
   ];
 }
 
@@ -328,6 +339,38 @@ function gatewayHttpUrlFetchFindings(
         target: entry.source,
         requirement: `oc://${policyDocName}/gateway/http/requireUrlAllowlists`,
         fixHint: "Add a urlAllowlist for this URL-fetch input or update policy after review.",
+      };
+    });
+}
+
+function gatewayNodeCommandFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(
+    readStringList(policy, ["gateway", "nodes", "denyCommands"], { lowercase: false }),
+  );
+  if (denied.size === 0) {
+    return [];
+  }
+  return (evidence.gatewayExposure ?? [])
+    .filter(
+      (entry) =>
+        entry.kind === "nodeCommand" && entry.command !== undefined && denied.has(entry.command),
+    )
+    .map((entry): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayNodeCommandDenied,
+        severity: "error",
+        message: `Gateway node command '${entry.command ?? entry.id}' is denied by policy.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
+        fixHint:
+          "Remove the command from gateway.nodes.allowCommands or update policy after review.",
       };
     });
 }
