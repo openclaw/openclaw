@@ -5363,6 +5363,78 @@ describe("active-memory plugin", () => {
     expect(prependContext).not.toContain("zetalongword");
   });
 
+  it("truncates recall summaries on a UTF-16 boundary without leaking a lone surrogate", async () => {
+    const hasDanglingSurrogate = (value: string): boolean =>
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+    api.pluginConfig = {
+      agents: ["main"],
+      // Minimum accepted value; contentMaxChars becomes 39, placing the emoji's
+      // surrogate pair across the cut so a raw slice would keep only its high half.
+      maxSummaryChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const head = "a".repeat(38);
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, head);
+      return {
+        payloads: [
+          {
+            text: `${head}🎉TAILWORD`,
+          },
+        ],
+      };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "recall the emoji note utf16-boundary-check", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prependContext = requirePrependContext(result);
+    expect(hasDanglingSurrogate(prependContext)).toBe(false);
+    expect(prependContext).toContain(`${head}…`);
+    expect(prependContext).not.toContain("TAILWORD");
+  });
+
+  it("keeps the old word boundary when an emoji follows whitespace at the cut", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      maxSummaryChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const retainedWords = `alpha beta ${"c".repeat(26)}`;
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "alpha beta");
+      return {
+        payloads: [
+          {
+            text: `${retainedWords} 🎉TAILWORD`,
+          },
+        ],
+      };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "recall the emoji note whitespace-boundary-check", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prependContext = requirePrependContext(result);
+    expect(prependContext).toContain(`${retainedWords}…`);
+    expect(prependContext).not.toContain("alpha beta…");
+    expect(prependContext).not.toContain("TAILWORD");
+  });
+
   it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {
     await hooks.before_prompt_build(
       { prompt: "is autonomous pickup running?", messages: [] },
