@@ -785,6 +785,10 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
         #expect(actionsSource.contains("Run /pair approve in your OpenClaw chat"))
         #expect(settingsSource.contains("self.resetOnboarding()"))
+        // The root toast is the only gateway problem surface outside covers, so it
+        // must keep the reset-onboarding primary action the settings banner had.
+        #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
+        #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
         #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
