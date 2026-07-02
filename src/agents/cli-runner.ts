@@ -129,12 +129,19 @@ export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
   workspaceDir?: string,
+  options?: { warmStdin?: boolean },
 ): Promise<boolean> {
   if (!provider || !isClaudeCliProvider(provider)) {
     return true;
   }
   if (!sessionId) {
     return false;
+  }
+  // Warm-stdin backends (liveSession: "claude-stdio") run as persistent stdio
+  // children and never write native transcript files. Probing would always miss
+  // and the miss wipes the session binding, destroying conversation continuity.
+  if (options?.warmStdin) {
+    return true;
   }
   for (const delayMs of [0, 50, 150]) {
     if (delayMs > 0) {
@@ -1057,6 +1064,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           params.provider,
           context.cwd ?? context.workspaceDir,
+          { warmStdin: context.preparedBackend.backend.liveSession === "claude-stdio" },
         );
         await runCliAgentEndHook(params, {
           event: {

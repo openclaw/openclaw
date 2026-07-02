@@ -106,4 +106,28 @@ describe("isCliBindingFlushed", () => {
     expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
   });
+
+  it("returns true without probing for warm-stdin backends", async () => {
+    const probe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
+        warmStdin: true,
+      }),
+    ).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("still probes when warmStdin is false", async () => {
+    const probe = vi.fn(async () => true);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-probe", "claude-cli", workspaceDir, {
+        warmStdin: false,
+      }),
+    ).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
 });
