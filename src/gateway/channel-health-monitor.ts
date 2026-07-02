@@ -175,17 +175,24 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             restartRecords.set(key, record);
           }
 
-          try {
-            if (status.running) {
+          if (status.running) {
+            try {
               await channelManager.stopChannel(channelId as ChannelId, accountId, {
                 manual: false,
               });
+            } catch (err) {
+              log.error?.(
+                `[${channelId}:${accountId}] health-monitor: stop failed during restart: ${String(err)}`,
+              );
             }
+          }
+
+          try {
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
           } catch (err) {
             log.error?.(
-              `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
+              `[${channelId}:${accountId}] health-monitor: start failed during restart: ${String(err)}`,
             );
           }
         }
