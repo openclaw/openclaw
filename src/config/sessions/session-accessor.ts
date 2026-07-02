@@ -52,7 +52,6 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
-  projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
@@ -1160,12 +1159,14 @@ function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
 }): string {
-  const { entry, storePath } = params;
-  // Snapshot reads may see promptRef-only disk entries while commit reads can
-  // see hydrated prompt text and runtime-only resolvedSkills cache entries.
-  // Compare the canonical persisted shape so cache hydration is not a conflict.
+  void params.storePath;
+  const { entry } = params;
+  // Only session identity matters for the initialization guard. Other persisted
+  // fields (updatedAt, heartbeat/delivery metadata, context budgets, etc.) can
+  // change due to background activity without rotating the session, so comparing
+  // the full entry caused false-positive stale-snapshot conflicts.
   return JSON.stringify(
-    entry ? projectSessionEntryForPersistenceRevision({ storePath, entry }) : null,
+    entry ? { sessionId: entry.sessionId, sessionFile: entry.sessionFile } : null,
   );
 }
 
