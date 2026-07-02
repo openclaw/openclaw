@@ -1,7 +1,17 @@
 // Coverage for OpenRouter Anthropic cache_control payload rewriting.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+
+const ORIGINAL_CACHE_RETENTION_ENV = process.env.OPENCLAW_CACHE_RETENTION;
+
+function restoreCacheRetentionEnv(): void {
+  if (ORIGINAL_CACHE_RETENTION_ENV === undefined) {
+    delete process.env.OPENCLAW_CACHE_RETENTION;
+  } else {
+    process.env.OPENCLAW_CACHE_RETENTION = ORIGINAL_CACHE_RETENTION_ENV;
+  }
+}
 
 type StreamPayload = {
   messages: Array<{
@@ -34,6 +44,8 @@ function runOpenRouterPayload(
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
+  afterEach(restoreCacheRetentionEnv);
+
   it("injects cache_control into system message for OpenRouter Anthropic models", () => {
     const payload = {
       messages: [
@@ -118,6 +130,30 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(payload.messages[0].content).toBe("You are a helpful assistant.");
     expect(payload.messages[1].content).toEqual([
       { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    ]);
+  });
+
+  it("uses 1-hour TTL on the OpenRouter default route (no baseUrl) under env-driven long retention", () => {
+    // Regression guard for the verified-default-route gap: with no per-request
+    // cacheRetention option and only `OPENCLAW_CACHE_RETENTION=long` set, the
+    // OpenRouter default route (provider=openrouter, baseUrl undefined) must
+    // still reach the 1-hour marker instead of falling back to 5 minutes.
+    process.env.OPENCLAW_CACHE_RETENTION = "long";
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
     ]);
   });
 
