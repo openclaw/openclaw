@@ -245,6 +245,7 @@ export async function getStatusSummary(
     includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
+    credentialResolutionSkipped?: boolean;
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -329,6 +330,7 @@ export async function getStatusSummary(
           colorize: true,
           includeAllowFrom: true,
           sourceConfig: options.sourceConfig,
+          credentialResolutionSkipped: options.credentialResolutionSkipped,
         }),
       )
     : [];

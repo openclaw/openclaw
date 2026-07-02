@@ -202,6 +202,22 @@ describe("buildChannelSummary", () => {
     );
   });
 
+  it("uses credential-not-checked wording when fast status skips credential resolution", async () => {
+    const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+      plugins: [makeSlackHttpSummaryPlugin()],
+      sourceConfig: { marker: "source", channels: {} } as never,
+      credentialResolutionSkipped: true,
+    });
+
+    expect(lines).toContain("Slack: configured");
+    expect(lines).toContain(
+      "  - primary (Primary) (bot:config, signing:config, credential not checked)",
+    );
+    expect(lines).not.toContain("secret unavailable in this command path");
+  });
+
   it("shows disabled status without configured account detail lines", async () => {
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,

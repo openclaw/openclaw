@@ -86,6 +86,9 @@ export async function scanStatus(
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
+        summary: {
+          credentialResolutionSkipped: !isFullScan,
+        },
         resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
           // Memory plugin probing can touch disk/plugin state; reserve it for full scans.
           opts.all

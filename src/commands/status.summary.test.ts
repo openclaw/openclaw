@@ -274,6 +274,21 @@ describe("getStatusSummary", () => {
     expect(summary.taskAudit.warnings).toBe(1);
   });
 
+  it("passes fast-status credential resolution skips into channel summaries", async () => {
+    await getStatusSummary({
+      credentialResolutionSkipped: true,
+    });
+
+    expect(buildChannelSummary).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        colorize: true,
+        includeAllowFrom: true,
+        credentialResolutionSkipped: true,
+      }),
+    );
+  });
+
   it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {
     const inspectableTasks: TaskRecord[] = [];
     statusSummaryMocks.inspectableTasks = inspectableTasks;

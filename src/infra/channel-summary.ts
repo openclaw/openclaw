@@ -19,11 +19,13 @@ type ChannelSummaryOptions = {
   includeAllowFrom?: boolean;
   plugins?: readonly ChannelPlugin[];
   sourceConfig?: OpenClawConfig;
+  credentialResolutionSkipped?: boolean;
 };
 
 const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "sourceConfig"> = {
   colorize: false,
   includeAllowFrom: false,
+  credentialResolutionSkipped: false,
 };
 
 type ChannelAccountEntry = {
@@ -66,6 +68,7 @@ const buildAccountDetails = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
   includeAllowFrom: boolean;
+  credentialResolutionSkipped: boolean;
 }): string[] => {
   const details: string[] = [];
   const snapshot = params.entry.snapshot;
@@ -91,7 +94,11 @@ const buildAccountDetails = (params: {
     details.push(`signing:${snapshot.signingSecretSource}`);
   }
   if (hasConfiguredUnavailableCredentialStatus(params.entry.account)) {
-    details.push("secret unavailable in this command path");
+    details.push(
+      params.credentialResolutionSkipped
+        ? "credential not checked"
+        : "secret unavailable in this command path",
+    );
   }
   if (snapshot.baseUrl) {
     details.push(snapshot.baseUrl);
@@ -224,6 +231,7 @@ export async function buildChannelSummary(
           plugin,
           cfg: effective,
           includeAllowFrom: resolved.includeAllowFrom,
+          credentialResolutionSkipped: resolved.credentialResolutionSkipped,
         });
         lines.push(
           accountLine(
