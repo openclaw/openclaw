@@ -6,7 +6,7 @@
 	<string>$(OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT)</string>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.hecara.BlueWeather</string>
+		<string>$(OPENCLAW_APP_GROUP_ID)</string>
 	</array>
 </dict>
 </plist>

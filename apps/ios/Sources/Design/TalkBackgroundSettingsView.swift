@@ -68,7 +68,11 @@ struct TalkBackgroundSettingsView: View {
                 else {
                     return
                 }
-                try? TalkWallpaperStore.saveCustomImage(jpeg)
+                do {
+                    try TalkWallpaperStore.saveCustomImage(jpeg)
+                } catch {
+                    return
+                }
                 await MainActor.run {
                     self.customPreview = image
                     self.select(.custom)
@@ -113,7 +117,7 @@ struct TalkBackgroundSettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                        .stroke(isSelected ? OpenClawBrand.accent : Color.clear, lineWidth: 2)
                 }
         }
         .buttonStyle(.plain)
