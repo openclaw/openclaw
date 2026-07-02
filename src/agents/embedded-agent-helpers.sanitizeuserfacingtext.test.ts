@@ -90,6 +90,11 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(crossLine)).toBe(crossLine);
   });
 
+  it("preserves standalone truncation marker examples inside fenced code (#82121)", () => {
+    const fenced = ["Example:", "```text", "...(truncated)...", "```"].join("\n");
+    expect(sanitizeUserFacingText(fenced)).toBe(fenced);
+  });
+
   it("strips a sentinel with mixed unicode/ascii ellipsis without a remnant (#82121)", () => {
     expect(sanitizeUserFacingText("...[truncated]\u2026")).toBe("");
     expect(sanitizeUserFacingText("Done.\n[... 0 more characters truncated]")).toBe("Done.");

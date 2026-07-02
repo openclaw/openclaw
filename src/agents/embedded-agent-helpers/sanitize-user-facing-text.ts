@@ -112,17 +112,13 @@ const TRUNCATION_SENTINEL_CORE = [
   "\\u2026\\[truncated\\]",
   "\\[(?:\\.{3}|\\u2026) \\d+ more characters truncated\\]",
 ].join("|");
-// Sentinel occupying a whole line (standalone). The leading `[ \t]*` is anchored
-// at `^` (per line), so it stays linear.
-const TRUNCATION_SENTINEL_LINE_RE = new RegExp(
-  `^[ \\t]*(?:${TRUNCATION_SENTINEL_CORE})[ \\t]*$`,
-  "gim",
-);
 // Sentinel trailing at the very end of the reply. No leading `[ \t]*` here: an
 // unanchored leading whitespace star would let the engine rescan long whitespace
 // runs on non-matching input (O(n^2)); the final trim in stripTruncationSentinels
 // already removes any space left in front of a stripped trailing sentinel.
 const TRUNCATION_SENTINEL_TRAILING_RE = new RegExp(`(?:${TRUNCATION_SENTINEL_CORE})[ \\t]*$`, "i");
+const TRUNCATION_SENTINEL_TRIMMED_LINE_RE = new RegExp(`^(?:${TRUNCATION_SENTINEL_CORE})$`, "i");
+const MARKDOWN_FENCE_LINE_RE = /^[ \t]*(?:```|~~~)/;
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -414,9 +410,31 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
 }
 
 function stripTruncationSentinels(text: string): string {
-  const stripped = text
-    .replace(TRUNCATION_SENTINEL_LINE_RE, "")
-    .replace(TRUNCATION_SENTINEL_TRAILING_RE, "");
+  let stripped = "";
+  let inMarkdownFence = false;
+  let start = 0;
+
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+
+    if (MARKDOWN_FENCE_LINE_RE.test(line)) {
+      inMarkdownFence = !inMarkdownFence;
+      stripped += chunk;
+    } else if (!inMarkdownFence && TRUNCATION_SENTINEL_TRIMMED_LINE_RE.test(line.trim())) {
+      stripped += chunk.endsWith("\n") ? "\n" : "";
+    } else {
+      stripped += chunk;
+    }
+
+    start = end;
+  }
+
+  if (!inMarkdownFence) {
+    stripped = stripped.replace(TRUNCATION_SENTINEL_TRAILING_RE, "");
+  }
   if (stripped === text) {
     return text;
   }
