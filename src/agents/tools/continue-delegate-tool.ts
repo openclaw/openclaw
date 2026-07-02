@@ -13,7 +13,10 @@ import {
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
-import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
+import {
+  formatActiveContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -190,8 +193,10 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
+      const requestedTraceparent = readStringParam(params, "traceparent");
       const traceparent =
-        readStringParam(params, "traceparent") ?? formatActiveContinuationTraceparent();
+        resolveContinuationTraceparent(requestedTraceparent) ??
+        formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));

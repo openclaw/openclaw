@@ -439,6 +439,28 @@ describe("continue_delegate tool", () => {
     ]);
   });
 
+  it("falls back to the active runtime trace context when a hidden traceparent is invalid", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      executeTool(tool, 0, {
+        task: "ignore malformed hidden traceparent",
+        traceparent: "not-a-traceparent",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+    });
+    expect(result).not.toHaveProperty("traceparent");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "ignore malformed hidden traceparent",
+        traceparent: ACTIVE_TRACEPARENT,
+      }),
+    ]);
+  });
+
   it("omits traceparent when the carrier is absent", async () => {
     const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
 
