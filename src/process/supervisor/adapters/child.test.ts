@@ -389,6 +389,22 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
 
+  it("keeps gemini command unchanged on non-Windows platforms (#98573)", async () => {
+    setPlatform("linux");
+
+    await createAdapterHarness({
+      pid: 3338,
+      argv: ["gemini", "--version"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    // On Linux the command is wrapped through OOM score adjustment via /bin/sh,
+    // but the original command must appear in the argv without .cmd suffix.
+    const argvFlat = spawnArgs.argv?.join(" ") ?? "";
+    expect(argvFlat).toContain("gemini");
+    expect(argvFlat).not.toContain("gemini.cmd");
+  });
+
   it("keeps inherited env when no override env is provided on non-Linux", async () => {
     setPlatform("darwin");
 
@@ -421,6 +437,44 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.options?.windowsHide).toBe(true);
     expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("wraps gemini CLI command through trusted cmd.exe on Windows (#98573)", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3336,
+      argv: ["gemini", "--version"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "gemini.cmd --version",
+    ]);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("wraps claude CLI command through trusted cmd.exe on Windows", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3337,
+      argv: ["claude", "--version"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "claude.cmd --version",
+    ]);
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
