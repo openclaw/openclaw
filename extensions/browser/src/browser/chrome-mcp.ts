@@ -496,10 +496,44 @@ function redactChromeMcpDiagnosticText(text: string): string {
   );
 }
 
+/** Replace home-path occurrences in diagnostic text without clipping sibling prefixes. */
+function replaceHomePathInText(text: string, homePath: string): string {
+  let output = "";
+  let cursor = 0;
+  while (cursor < text.length) {
+    const index = text.indexOf(homePath, cursor);
+    if (index < 0) {
+      return `${output}${text.slice(cursor)}`;
+    }
+    const before = text[index - 1];
+    const homeEnd = index + homePath.length;
+    const after = text[homeEnd];
+    // home-path match must start at a token boundary to avoid rewriting sibling
+    // paths that happen to share the home prefix (e.g. /home/user2 vs /home/user).
+    const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+    let punctuationEnd = homeEnd;
+    while (punctuationEnd < text.length && /[)"'`:,;.\]}]/u.test(text[punctuationEnd])) {
+      punctuationEnd += 1;
+    }
+    const punctuationEndsToken =
+      punctuationEnd > homeEnd &&
+      (punctuationEnd === text.length || /\s/u.test(text[punctuationEnd]));
+    const endsTokenOrContinuesPath =
+      after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+    if (startsToken && endsTokenOrContinuesPath) {
+      output += `${text.slice(cursor, index)}~`;
+    } else {
+      output += text.slice(cursor, index + homePath.length);
+    }
+    cursor = index + homePath.length;
+  }
+  return output;
+}
+
 function redactChromeMcpDiagnosticTextWithLocalPaths(text: string): string {
   const homeDir = normalizeOptionalString(os.homedir());
   const homePath = homeDir ? path.resolve(homeDir) : undefined;
-  const withHomeRedacted = homePath ? text.split(homePath).join("~") : text;
+  const withHomeRedacted = homePath ? replaceHomePathInText(text, homePath) : text;
   return redactChromeMcpDiagnosticText(withHomeRedacted);
 }
 
