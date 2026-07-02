@@ -2107,6 +2107,7 @@ function runCodeModeChild(params: {
       cwd: os.tmpdir(),
       env: {},
       stdio: ["ignore", "pipe", "pipe", "ipc"],
+      windowsHide: true,
     });
     const stderr: string[] = [];
     let settled = false;

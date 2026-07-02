@@ -266,6 +266,7 @@ async function startAndWaitForLocalService(params: {
     env: service.env ? { ...process.env, ...service.env } : process.env,
     stdio: "ignore",
     detached: shouldDetachChildForProcessTree(),
+    windowsHide: true,
   });
   const child = managed.process;
   managed.lastExit = undefined;

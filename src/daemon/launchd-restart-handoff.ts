@@ -246,6 +246,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         detached: true,
         stdio: "ignore",
         env: restartEnv,
+        windowsHide: true,
       },
     );
     child.unref();

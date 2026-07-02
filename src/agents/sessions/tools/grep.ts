@@ -235,7 +235,7 @@ export function createGrepToolDefinition(
             }
             args.push("--", pattern, searchPath);
 
-            const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+            const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
             let matchCount = 0;
