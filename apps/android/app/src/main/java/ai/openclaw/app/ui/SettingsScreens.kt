@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayUsageProviderSummary
@@ -885,9 +887,8 @@ private fun GatewaySettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val isConnected by viewModel.isConnected.collectAsState()
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -909,11 +910,14 @@ private fun GatewaySettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Connection", if (isConnected) "Connected" else "Offline"),
+          SettingsMetric("Connection", if (gatewayConnectionDisplay.isConnected) "Connected" else "Offline"),
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          SettingsMetric("Status", gatewayStatusLabel(statusText = statusText, isConnected = isConnected)),
+          SettingsMetric(
+            "Status",
+            gatewayStatusLabel(gatewayConnectionDisplay),
+          ),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1044,16 +1048,17 @@ internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entrie
 internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
 /** Converts raw gateway connection text into stable settings metric labels. */
-private fun gatewayStatusLabel(
+internal fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
   if (isConnected) return "Ready"
   val status = statusText.trim().lowercase()
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pair") -> "Pairing needed"
-    status.contains("auth") -> "Authentication needed"
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: "Authentication needed"
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
@@ -1062,6 +1067,8 @@ private fun gatewayStatusLabel(
     else -> "Not connected"
   }
 }
+
+internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
 
 @Composable
 private fun AboutSettingsScreen(

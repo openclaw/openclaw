@@ -58,6 +58,127 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("strips variadic Claude --mcp-config values and merges every listed config", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-variadic-",
+    );
+    const firstConfig = path.join(workspaceDir, "first-mcp.json");
+    const secondConfig = path.join(workspaceDir, "second-mcp.json");
+    await fs.writeFile(
+      firstConfig,
+      `${JSON.stringify({
+        mcpServers: {
+          first: { command: "node", args: ["first.mjs"] },
+          shared: { command: "node", args: ["old.mjs"] },
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      secondConfig,
+      `${JSON.stringify({
+        mcpServers: {
+          second: { command: "node", args: ["second.mjs"] },
+          shared: { command: "node", args: ["new.mjs"] },
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: [
+          "./fake-claude.mjs",
+          "--mcp-config",
+          "first-mcp.json",
+          "second-mcp.json",
+          "--verbose",
+        ],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+    });
+
+    expect(prepared.backend.args).not.toContain("first-mcp.json");
+    expect(prepared.backend.args).not.toContain("second-mcp.json");
+    expect(prepared.backend.args).toContain("--verbose");
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { args?: string[] }>;
+    };
+    expect(raw.mcpServers?.first?.args).toEqual(["first.mjs"]);
+    expect(raw.mcpServers?.second?.args).toEqual(["second.mjs"]);
+    expect(raw.mcpServers?.shared?.args).toEqual(["new.mjs"]);
+
+    await prepared.cleanup?.();
+  });
+
+  it("merges and strips Claude --mcp-config equals form", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-equals-",
+    );
+    const configPath = path.join(workspaceDir, "equals-mcp.json");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        mcpServers: {
+          equals: { command: "node", args: ["equals.mjs"] },
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs", "--mcp-config=equals-mcp.json"],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+    });
+
+    expect(prepared.backend.args).not.toContain("--mcp-config=equals-mcp.json");
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { args?: string[] }>;
+    };
+    expect(raw.mcpServers?.equals?.args).toEqual(["equals.mjs"]);
+
+    await prepared.cleanup?.();
+  });
+
+  it("keeps dash-prefixed args after Claude --mcp-config because they terminate variadic values", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-dash-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs", "--mcp-config", "--verbose", "prompt"],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+    });
+
+    expect(prepared.backend.args).toContain("--verbose");
+    expect(prepared.backend.args).toContain("prompt");
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toStrictEqual({});
+
+    await prepared.cleanup?.();
+  });
+
   it("loads workspace bundle MCP plugins from the configured workspace root", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-workspace-root-",

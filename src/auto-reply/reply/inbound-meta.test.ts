@@ -4,7 +4,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
@@ -335,6 +335,26 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
+    expect(text).toContain("Conversation info (untrusted metadata):");
+  });
+
+  it("uses room-event delivery guidance for message-tool-only room events", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-100123",
+        MessageSid: "777",
+        SenderName: "Nik",
+      } as TemplateContext,
+      undefined,
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    expect(text).toContain(ROOM_EVENT_DELIVERY_HINT);
+    expect(text).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
     expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
     expect(text).toContain("Conversation info (untrusted metadata):");
   });

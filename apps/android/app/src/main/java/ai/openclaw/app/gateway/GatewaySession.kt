@@ -180,7 +180,6 @@ class GatewaySession(
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
-  private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
@@ -389,6 +388,11 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+
+    // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+
+    private val pendingLock = Any()
     private val messagePumpJob =
       scope.launch(Dispatchers.IO) {
         for (text in incomingMessages) {
@@ -424,19 +428,14 @@ class GatewaySession(
       timeoutMs: Long,
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
-      } catch (err: Throwable) {
-        pending.remove(id)
-        throw err
-      }
-      return try {
-        withTimeout(timeoutMs) { deferred.await() }
+        return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
-        pending.remove(id)
         throw IllegalStateException("request timeout")
+      } finally {
+        pending.remove(id)
       }
     }
 
@@ -447,8 +446,7 @@ class GatewaySession(
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
@@ -456,18 +454,33 @@ class GatewaySession(
         throw err
       }
       scope.launch(Dispatchers.IO) {
-        val response =
-          try {
-            withTimeout(timeoutMs) { deferred.await() }
-          } catch (_: TimeoutCancellationException) {
-            pending.remove(id)
-            onError(ErrorShape("UNAVAILABLE", "request timeout"))
-            return@launch
+        try {
+          val response =
+            try {
+              withTimeout(timeoutMs) { deferred.await() }
+            } catch (_: TimeoutCancellationException) {
+              onError(ErrorShape("UNAVAILABLE", "request timeout"))
+              return@launch
+            } catch (_: CancellationException) {
+              return@launch
+            }
+          if (!response.ok) {
+            onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
           }
-        if (!response.ok) {
-          onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        } finally {
+          pending.remove(id)
         }
       }
+    }
+
+    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
+      val deferred = CompletableDeferred<RpcResponse>()
+      // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
+      synchronized(pendingLock) {
+        if (isClosed.get()) throw IllegalStateException("Gateway closed")
+        pending[id] = deferred
+      }
+      return deferred
     }
 
     suspend fun sendJson(obj: JsonObject) {
@@ -500,6 +513,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
         }
+        failPending()
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
@@ -1011,10 +1025,13 @@ class GatewaySession(
     }
 
     private fun failPending() {
-      for ((_, waiter) in pending) {
+      val waiters =
+        synchronized(pendingLock) {
+          pending.values.toList().also { pending.clear() }
+        }
+      for (waiter in waiters) {
         waiter.cancel()
       }
-      pending.clear()
     }
   }
 
