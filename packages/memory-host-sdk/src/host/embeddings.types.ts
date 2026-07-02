@@ -45,6 +45,7 @@ export type EmbeddingProviderOptions = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   fallback?: EmbeddingProviderFallback;
   local?: {
     modelPath?: string;

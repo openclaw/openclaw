@@ -1,5 +1,6 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { applyQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
@@ -30,6 +31,7 @@ export type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -361,9 +363,13 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
+  const requestInput =
+    client.queryInstructionTemplate && params.inputType === "query"
+      ? input.map((text) => applyQueryInstructionTemplate(client.model, text))
+      : input;
   const body = {
     model: client.model,
-    input,
+    input: requestInput,
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
@@ -425,6 +431,7 @@ export async function createOpenAICompatibleEmbeddingClient(
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),
+    ...(options.queryInstructionTemplate === true ? { queryInstructionTemplate: true } : {}),
   };
 }
 

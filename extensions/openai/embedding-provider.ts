@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import {
+  applyQueryInstructionTemplate,
   fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
@@ -17,6 +18,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   outputDimensionality?: number;
 };
 
@@ -92,7 +94,10 @@ export async function createOpenAiEmbeddingProvider(
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
         : {}),
       embedQuery: async (text, optionsValue) => {
-        const [vec] = await embed([text], "query", optionsValue?.signal);
+        const query = client.queryInstructionTemplate
+          ? applyQueryInstructionTemplate(client.model, text)
+          : text;
+        const [vec] = await embed([query], "query", optionsValue?.signal);
         return vec ?? [];
       },
       embedBatch: async (texts, optionsLocal) =>
@@ -123,6 +128,7 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    queryInstructionTemplate: options.queryInstructionTemplate === true,
     outputDimensionality: options.outputDimensionality,
   };
 }
