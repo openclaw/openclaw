@@ -244,6 +244,40 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
   });
 
+  it("normalizes raw plugin payloads before Codex content conversion", async () => {
+    const rawPayload = { ok: true, status: "completed", value: "done" };
+    const execute = vi.fn(async () => rawPayload as unknown as AgentToolResult<unknown>);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "desktop_bridge_audit_tail",
+          execute,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-raw-payload",
+      namespace: null,
+      tool: "desktop_bridge_audit_tail",
+      arguments: { limit: 1 },
+    });
+
+    expect(response.success).toBe(true);
+    expect(response.contentItems).toHaveLength(1);
+    const item = response.contentItems[0];
+    expect(item?.type).toBe("inputText");
+    const text = item && "text" in item ? item.text : undefined;
+    if (typeof text !== "string") {
+      throw new Error("expected raw payload response to be converted to input text");
+    }
+    expect(JSON.parse(text)).toEqual(rawPayload);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("can register a durable tool schema while denying execution for the current turn", async () => {
     const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
     const onAgentToolResult = vi.fn();

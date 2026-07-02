@@ -503,7 +503,9 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         didStartExecution = true;
-        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
+        const rawResult = normalizeCodexDynamicToolResult(
+          await tool.execute(call.callId, preparedArgs, signal),
+        );
         const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
           call.callId,
           toolResultHookContext.runId,
@@ -517,23 +519,27 @@ export function createCodexDynamicToolBridge(params: {
         );
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
-        const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          isError: rawIsError,
-          result: rawResult,
-        });
-        const result = await legacyExtensionRunner.applyToolResultExtensions({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          result: middlewareResult,
-        });
+        const middlewareResult = normalizeCodexDynamicToolResult(
+          await middlewareRunner.applyToolResultMiddleware({
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            toolName,
+            args: structuredClone(executedArgs),
+            isError: rawIsError,
+            result: rawResult,
+          }),
+        );
+        const result = normalizeCodexDynamicToolResult(
+          await legacyExtensionRunner.applyToolResultExtensions({
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            toolName,
+            args: structuredClone(executedArgs),
+            result: middlewareResult,
+          }),
+        );
         const resultIsError = rawIsError || isCodexToolResultError(result);
         notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
         void runAgentHarnessAfterToolCallHook({
@@ -1154,6 +1160,36 @@ function readPositiveInteger(value: unknown): number | undefined {
     return undefined;
   }
   return Math.floor(value);
+}
+
+function normalizeCodexDynamicToolResult(result: unknown): AgentToolResult<unknown> {
+  if (isAgentToolResultLike(result)) {
+    return result;
+  }
+  const details = sanitizeToolResult(result) ?? null;
+  return {
+    content: [{ type: "text", text: stringifyCodexDynamicToolPayload(details) }],
+    details,
+  };
+}
+
+function isAgentToolResultLike(result: unknown): result is AgentToolResult<unknown> {
+  return isRecord(result) && Array.isArray(result.content);
+}
+
+function stringifyCodexDynamicToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const text = JSON.stringify(payload, null, 2);
+    if (typeof text === "string") {
+      return text;
+    }
+  } catch {
+    // Fall through to String() for non-JSON payloads.
+  }
+  return String(payload);
 }
 
 function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
