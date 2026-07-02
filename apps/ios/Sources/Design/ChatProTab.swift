@@ -79,6 +79,7 @@ struct ChatProTab: View {
                         composerChrome: .clean,
                         isComposerEnabled: self.gatewayConnected,
                         messagePlaceholder: self.messagePlaceholder,
+                        emptyAssistantIntro: "What would you like to work on?",
                         talkControl: self.talkControl)
                         .id(ObjectIdentifier(viewModel))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -203,9 +204,12 @@ struct ChatProTab: View {
             }
             .buttonBorderShape(.capsule)
             .openClawGlassButton()
+            .accessibilityLabel(self.gatewayAccessibilityLabel)
             .accessibilityHint("Opens Settings / Gateway")
+            .accessibilityIdentifier("chat-gateway-status")
         } else {
             self.connectionPill
+                .accessibilityLabel(self.gatewayAccessibilityLabel)
         }
     }
 
@@ -230,6 +234,10 @@ struct ChatProTab: View {
 
     private var gatewayDisplayState: GatewayDisplayState {
         GatewayStatusBuilder.build(appModel: self.appModel)
+    }
+
+    private var gatewayAccessibilityLabel: String {
+        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
     }
 
     private var gatewayPillColor: Color {

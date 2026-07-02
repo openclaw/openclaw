@@ -154,7 +154,6 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-          - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - "$(OPENCLAW_APP_BUNDLE_ID).bgrefresh"
