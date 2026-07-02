@@ -107,6 +107,7 @@ Scope intent:
 - `channels.matrix.password`
 - `channels.matrix.accounts.*.accessToken`
 - `channels.matrix.accounts.*.password`
+- `channels.nostr.privateKey`
 - `channels.nextcloud-talk.botSecret`
 - `channels.nextcloud-talk.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`
