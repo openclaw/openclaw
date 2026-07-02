@@ -283,6 +283,34 @@ describe("markdownToTelegramHtml", () => {
     expect(sanitized.length).toBeLessThan(300);
   });
 
+  it("strips standalone <parameter> wrappers (#98557)", () => {
+    const input =
+      'Some text <parameter name="assumptions">\n• Assumption one\n</parameter> more text';
+    const sanitized = sanitizeTelegramRichHtml(input);
+    expect(sanitized).not.toContain("parameter");
+    expect(sanitized).toContain("Some text");
+    expect(sanitized).toContain("more text");
+    expect(sanitized).toContain("Assumption one");
+  });
+
+  it("strips <parameter> with unquoted attributes (#98557)", () => {
+    const input = "<parameter name=assumptions>content</parameter>";
+    const sanitized = sanitizeTelegramRichHtml(input);
+    expect(sanitized).toBe("content");
+  });
+
+  it("preserves <parameter> inside <code> blocks (#98557)", () => {
+    const input = "Use <code>&lt;parameter&gt;value&lt;/parameter&gt;</code> in XML";
+    const sanitized = sanitizeTelegramRichHtml(input);
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not affect normal paragraphs (#98557)", () => {
+    const input = "<b>Summary:</b> no parameter tags here";
+    const sanitized = sanitizeTelegramRichHtml(input);
+    expect(sanitized).toBe(input);
+  });
+
   it("renders block-mode tables as code in legacy Telegram HTML", () => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
 
