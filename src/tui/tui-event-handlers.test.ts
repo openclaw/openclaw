@@ -20,6 +20,7 @@ type HandlerChatLog = {
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
+  hasStreamingRun: (...args: unknown[]) => boolean;
 };
 type HandlerBtwPresenter = {
   showResult: (...args: unknown[]) => void;
@@ -35,6 +36,7 @@ type MockChatLog = {
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
+  hasStreamingRun: MockFn;
 };
 type MockBtwPresenter = {
   showResult: MockFn;
@@ -52,6 +54,7 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
+    hasStreamingRun: vi.fn().mockReturnValue(false),
   } as unknown as MockChatLog & HandlerChatLog;
 }
 
@@ -968,6 +971,76 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
+  it("suppresses late displayable final for surrendered finalized run after sessions.changed (#96979)", () => {
+    const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-telegram" },
+    });
+
+    // First final populates chatFinalizedRuns and chatFinalizedRunsWithDisplay.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Hello from Telegram" }] },
+    });
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    chatLog.finalizeAssistant.mockClear();
+
+    // sessions.changed "new" surrenders the finalized run.
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "new",
+      sessionId: state.currentSessionId ?? undefined,
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    // Late displayable final for the surrendered finalized run — suppressed
+    // because the run was already displayed before the reload and the
+    // history-replay static row covers the visible content (#96979 rank-up).
+    chatLog.hasStreamingRun.mockReturnValue(false);
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Recovery attempt" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates late chat delta after sessions.changed clears finalizedRuns (#96967)", () => {
+    const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-telegram" },
+    });
+
+    // First final populates maps.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Hello" }] },
+    });
+    chatLog.updateAssistant.mockClear();
+
+    // sessions.changed reload.
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+      sessionId: state.currentSessionId ?? undefined,
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    // Late delta for same runId — silently dropped by chatFinalizedRuns.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      text: "stale stream chunk",
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
   it("ignores sessions.changed reset events for other sessions", () => {
     const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
       createHandlersHarness({
@@ -1814,6 +1887,387 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  describe("surrender tracking for sessions.changed new", () => {
+    it("suppresses late delta for a surrendered run no longer streaming (#96979)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      // Populate sessionRuns via a delta event.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+      chatLog.updateAssistant.mockClear();
+
+      // sessions.changed "new" surrenders run-active.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      // Late delta for surrendered run — hasStreamingRun returns false.
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "stale stream" }] },
+      });
+
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+    });
+
+    it("allows late events through when loadHistory restored surrendered run as streaming (#96979)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      // sessions.changed "new" surrenders run-active.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      // loadHistory restored this run as in-flight streaming.
+      chatLog.hasStreamingRun.mockReturnValue(true);
+      chatLog.updateAssistant.mockClear();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "live stream" }] },
+      });
+
+      expect(chatLog.updateAssistant).toHaveBeenCalledWith("live stream", "run-active");
+    });
+
+    it("renders displayable late final for surrendered non-streaming run and tracks in chatFinalizedRuns (#96979)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      // sessions.changed "new" surrenders run-active.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late displayable final for surrendered run — should render.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+
+      // A subsequent late error is suppressed because chatFinalizedRuns was set.
+      chatLog.addSystem.mockClear();
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "error",
+        errorMessage: "stale error",
+      });
+      expect(chatLog.addSystem).not.toHaveBeenCalledWith(expect.stringContaining("stale error"));
+    });
+
+    it("suppresses late non-displayable final for surrendered run (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late final without message and without errorMessage — not displayable.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("keeps surrendered finalized marker after late delta so later final is also suppressed (#96979 P2)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-done" } },
+      );
+
+      // First final: run is finalized with display.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+      chatLog.finalizeAssistant.mockClear();
+
+      // sessions.changed "new" surrenders the finalized run.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+
+      // Late delta for surrendered finalized run — suppressed.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "stale chunk" }] },
+      });
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+
+      // Late displayable final — also suppressed because the surrender
+      // marker was NOT cleared by the delta (#96979 P2).
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("suppresses late aborted for surrendered run (#96979)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.addSystem.mockClear();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "aborted",
+      });
+
+      expect(chatLog.addSystem).not.toHaveBeenCalledWith("run aborted");
+    });
+
+    it("renders displayable late final when loadHistory restored surrendered run as empty streaming (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      // Populate sessionRuns and streamAssembler via a delta.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      // sessions.changed "new" surrenders run-active.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      // loadHistory restored as empty in-flight streaming.
+      chatLog.hasStreamingRun.mockReturnValue(true);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late displayable final — should pass through surrender and render.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "recovered reply" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("surrenders runs on sessions.changed reset to prevent late-chat-race duplicate (#96979 P1)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        {
+          state: { activeChatRunId: "run-active" },
+        },
+      );
+
+      // Populate sessionRuns via a delta.
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+
+      // "reset" now also surrenders — sessionKey is unchanged, loadHistory
+      // replays rows without runIds, same race pattern (#96979 P1 rank-up).
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.updateAssistant.mockClear();
+
+      // Late delta for run-active — should be suppressed (surrendered on reset).
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "stale stream" }] },
+      });
+
+      expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+    });
+
+    it("suppresses late displayable final for surrendered finalized run — history-replayed-visible (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-done" } },
+      );
+
+      // First final: run is finalized with display.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+      chatLog.finalizeAssistant.mockClear();
+
+      // sessions.changed "new" surrenders the finalized run as "finalized".
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+
+      // Late displayable final — should be suppressed because the run was
+      // already finalized and displayed; history replay covers it.
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "completed" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("renders late displayable final for surrendered in-flight run — history-replay-missing (#96979 rank-up)", () => {
+      const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness(
+        { state: { activeChatRunId: "run-streaming" } },
+      );
+
+      // Delta populates sessionRuns but does NOT finalize the run.
+      handleChatEvent({
+        runId: "run-streaming",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing…" }] },
+      });
+
+      // sessions.changed "new" surrenders the in-flight run.
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: state.currentSessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+
+      chatLog.hasStreamingRun.mockReturnValue(false);
+      chatLog.finalizeAssistant.mockClear();
+
+      // Late displayable final — should render because the in-flight run
+      // may not have been visible, and history replay may not include it.
+      handleChatEvent({
+        runId: "run-streaming",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "result" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
