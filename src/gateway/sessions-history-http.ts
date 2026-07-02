@@ -11,7 +11,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
+import { resolveEffectiveChatHistoryMaxChars } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -142,7 +142,7 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
-  const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(

@@ -120,6 +120,8 @@ export const FIELD_HELP: Record<string, string> = {
     "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
     "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
+  "gateway.chatHistoryTextMaxChars":
+    "Maximum characters to display per assistant message in WebChat and Control UI chat history. Messages longer than this value are truncated with '...(truncated)...'. Default: 8000. Increase for long reports or technical documents.",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
