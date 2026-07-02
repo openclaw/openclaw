@@ -1,10 +1,13 @@
 // Covers plugin config validation and manifest-backed constraints.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -116,6 +119,13 @@ function expectNoPath(
   pathValue: string,
 ) {
   expect(entries?.some((entry) => entry.path === pathValue)).toBe(false);
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return crypto
+    .createHash("sha256")
+    .update(await fs.readFile(filePath))
+    .digest("hex");
 }
 
 describe("config plugin validation", () => {
@@ -1300,6 +1310,97 @@ describe("config plugin validation", () => {
         { stateDir },
       );
       clearLoadInstalledPluginIndexInstallRecordsCache();
+    }
+  });
+
+  it("keeps load-path plugins valid when a persisted installed index has managed plugins", async () => {
+    const stateDir = path.join(suiteHome, ".openclaw");
+    const managedPluginDir = path.join(stateDir, "npm", "projects", "openclaw-llama-cpp-provider");
+    const loadPathRoot = path.join(suiteHome, "workspace", "plugins");
+    const workspacePluginDir = path.join(loadPathRoot, "local-tools");
+    await writePluginFixture({
+      dir: managedPluginDir,
+      id: "llama-cpp",
+      schema: { type: "object" },
+    });
+    await writePluginFixture({
+      dir: workspacePluginDir,
+      id: "local-tools",
+      schema: { type: "object" },
+    });
+    const config = {
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [loadPathRoot] },
+        entries: {
+          "llama-cpp": { enabled: true },
+          "local-tools": { enabled: true },
+        },
+        allow: ["llama-cpp", "local-tools"],
+      },
+    };
+    const managedManifestPath = path.join(managedPluginDir, "openclaw.plugin.json");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    clearPluginMetadataLifecycleCaches();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+        generatedAtMs: 1,
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "llama-cpp",
+            manifestPath: managedManifestPath,
+            manifestHash: await sha256File(managedManifestPath),
+            source: path.join(managedPluginDir, "index.js"),
+            rootDir: managedPluginDir,
+            origin: "global",
+            enabled: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+        diagnostics: [],
+      },
+      { stateDir },
+    );
+    clearPluginMetadataLifecycleCaches();
+    try {
+      const res = validateInSuite(config);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expectNoPath(res.warnings, "plugins.entries.local-tools");
+      expectNoPath(res.warnings, "plugins.allow");
+    } finally {
+      await writePersistedInstalledPluginIndex(
+        {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: resolveInstalledPluginIndexPolicyHash({}),
+          generatedAtMs: 2,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        { stateDir },
+      );
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+      clearPluginMetadataLifecycleCaches();
     }
   });
 

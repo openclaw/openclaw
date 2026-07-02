@@ -6,7 +6,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import type { PluginCandidate } from "./discovery.js";
+import { normalizePluginsConfig } from "./config-state.js";
+import { discoverConfiguredOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -594,6 +595,34 @@ function toPluginCandidate(
   };
 }
 
+function appendConfiguredPluginCandidates(params: {
+  candidates: PluginCandidate[];
+  diagnostics: PluginManifestRegistry["diagnostics"];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  pluginIdSet: ReadonlySet<string> | null;
+}): void {
+  const loadPaths = normalizePluginsConfig(params.config?.plugins).loadPaths;
+  if (loadPaths.length === 0 && !params.workspaceDir) {
+    return;
+  }
+  const configuredDiscovery = discoverConfiguredOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+    extraPaths: loadPaths,
+    env: params.env,
+  });
+  const candidates = params.pluginIdSet
+    ? configuredDiscovery.candidates.filter((candidate) =>
+        params.pluginIdSet?.has(candidate.idHint),
+      )
+    : configuredDiscovery.candidates;
+  params.candidates.push(...candidates);
+  if (candidates.length > 0 || !params.pluginIdSet) {
+    params.diagnostics.push(...configuredDiscovery.diagnostics);
+  }
+}
+
 export function loadPluginManifestRegistryForInstalledIndex(params: {
   index: InstalledPluginIndex;
   config?: OpenClawConfig;
@@ -622,6 +651,14 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
+      appendConfiguredPluginCandidates({
+        candidates,
+        diagnostics,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+        pluginIdSet,
+      });
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
