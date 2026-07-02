@@ -11,6 +11,7 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,6 +45,98 @@ class ShellScreenLogicTest {
     assertTrue(AppearanceThemeMode.System.isDark(systemDark = true))
     assertTrue(AppearanceThemeMode.Dark.isDark(systemDark = false))
     assertFalse(AppearanceThemeMode.Light.isDark(systemDark = true))
+  }
+
+  @Test
+  fun settingsRouteOpenedCrossTabReturnsToOriginTab() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Gateway)
+    assertEquals(Tab.Settings, nav.activeTab)
+    assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun settingsRouteOpenedFromOverviewReturnsToOverview() {
+    val nav = ShellNavigation()
+    nav.openSettingsRoute(SettingsRoute.Approvals)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+  }
+
+  @Test
+  fun tabBarSettingsSelectionOpensHomeAndBacksToOverview() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Voice)
+    nav.selectTab(Tab.Settings)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun settingsDetailOpenedFromHomeUnwindsToHomeBeforeLeavingSettings() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Home)
+    nav.openSettingsRouteFromHome(SettingsRoute.Gateway)
+
+    nav.back()
+    assertEquals(Tab.Settings, nav.activeTab)
+    assertEquals(SettingsRoute.Home, nav.settingsRoute)
+
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+  }
+
+  @Test
+  fun detailTabsReturnToTheTabThatOpenedThem() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+    nav.openDetailTab(Tab.Sessions)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+
+    nav.selectTab(Tab.Voice)
+    nav.openDetailTab(Tab.ProvidersModels)
+    nav.back()
+    assertEquals(Tab.Voice, nav.activeTab)
+  }
+
+  @Test
+  fun tabBarSelectionClearsCrossTabReturnOrigin() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+    nav.openDetailTab(Tab.Sessions)
+    nav.selectTab(Tab.Voice)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun shellNavigationSaverRoundTripsCrossTabState() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Voice)
+    nav.openSettingsRoute(SettingsRoute.Gateway)
+
+    val saveAnything = SaverScope { true }
+    val saved = with(ShellNavigation.Saver) { saveAnything.save(nav) }!!
+    val restored = ShellNavigation.Saver.restore(saved)!!
+
+    assertEquals(Tab.Settings, restored.activeTab)
+    assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
+    restored.back()
+    assertEquals(Tab.Voice, restored.activeTab)
   }
 
   @Test
