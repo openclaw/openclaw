@@ -109,6 +109,47 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
+  it("keeps healthy plugin node defaults after unreadable policy metadata", () => {
+    const registry = createEmptyPluginRegistry();
+    (registry.nodeInvokePolicies ??= []).push(
+      Object.defineProperty(
+        {
+          pluginId: "stale",
+          source: "test",
+          pluginConfig: {},
+        },
+        "policy",
+        {
+          get() {
+            throw new Error("plugin node policy getter exploded");
+          },
+        },
+      ) as NonNullable<typeof registry.nodeInvokePolicies>[number],
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        source: "/extensions/canvas/index.ts",
+        rootDir: "/extensions/canvas",
+        pluginConfig: {},
+        policy: {
+          commands: ["canvas.snapshot"],
+          defaultPlatforms: ["windows"],
+          foregroundRestrictedOnIos: true,
+          handle: (ctx) => ctx.invokeNode(),
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
+  });
+
   it("does not grant host command defaults for platform prefix aliases", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [

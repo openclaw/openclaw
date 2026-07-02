@@ -12,6 +12,10 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import type { NodeSession } from "./node-registry.js";
+import {
+  readPluginNodeHostCommandRegistration,
+  readPluginNodeInvokePolicyRegistration,
+} from "./plugin-node-command-policy-registrations.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
@@ -42,10 +46,10 @@ function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command
     return null;
   }
   return (
-    registry?.nodeHostCommands?.find(
-      (entry) =>
-        entry.command.dangerous === true && entry.command.command.trim() === normalizedCommand,
-    ) ?? null
+    registry?.nodeHostCommands
+      ?.map(readPluginNodeHostCommandRegistration)
+      .find((entry) => entry?.dangerous === true && entry.command.trim() === normalizedCommand) ??
+    null
   );
 }
 
@@ -129,10 +133,10 @@ export async function applyPluginNodeInvokePolicy(params: {
   idempotencyKey?: string;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActiveRuntimePluginRegistry();
-  const entry = registry?.nodeInvokePolicies?.find((candidate) =>
-    candidate.policy.commands.includes(params.command),
-  );
-  if (!entry) {
+  const policy = registry?.nodeInvokePolicies
+    ?.map(readPluginNodeInvokePolicyRegistration)
+    .find((candidate) => candidate?.commands.includes(params.command));
+  if (!policy) {
     const dangerousCommand = findDangerousPluginNodeCommand(registry, params.command);
     if (dangerousCommand) {
       return {
@@ -171,14 +175,14 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
   };
 
-  return await entry.policy.handle({
+  return await policy.handle({
     nodeId: params.nodeSession.nodeId,
     command: params.command,
     params: params.params,
     timeoutMs: params.timeoutMs,
     idempotencyKey: params.idempotencyKey,
     config: params.context.getRuntimeConfig(),
-    pluginConfig: entry.pluginConfig,
+    pluginConfig: policy.pluginConfig,
     node: {
       nodeId: params.nodeSession.nodeId,
       displayName: params.nodeSession.displayName,
@@ -195,7 +199,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     approvals: createApprovalRuntime({
       context: params.context,
       client: params.client,
-      pluginId: entry.pluginId,
+      pluginId: policy.pluginId,
     }),
     invokeNode,
   });

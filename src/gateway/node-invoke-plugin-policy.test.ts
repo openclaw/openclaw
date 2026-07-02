@@ -304,4 +304,44 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     expect(result).toBeNull();
   });
+
+  it("keeps healthy plugin node policies after unreadable metadata", async () => {
+    registryState.current = {
+      nodeHostCommands: [
+        Object.defineProperty(
+          {
+            pluginId: "stale",
+            source: "test",
+          },
+          "command",
+          {
+            get() {
+              throw new Error("plugin node command getter exploded");
+            },
+          },
+        ),
+      ],
+      nodeInvokePolicies: [
+        Object.defineProperty(
+          {
+            pluginId: "stale",
+            source: "test",
+          },
+          "policy",
+          {
+            get() {
+              throw new Error("plugin node policy getter exploded");
+            },
+          },
+        ),
+        createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+      ],
+    } as unknown as PluginRegistry;
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
 });
