@@ -7,12 +7,17 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPrimaryButton
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
+import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -43,6 +48,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
@@ -85,12 +92,15 @@ fun ChatScreen(
   viewModel: MainViewModel,
   onVoice: () -> Unit,
   onOpenSessions: () -> Unit,
+  onOpenGatewaySettings: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
+  val gatewayConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -99,7 +109,16 @@ fun ChatScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val statusText by viewModel.statusText.collectAsState()
+  val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val manualHost by viewModel.manualHost.collectAsState()
+  val manualPort by viewModel.manualPort.collectAsState()
+  val manualTls by viewModel.manualTls.collectAsState()
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
+  val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
+  val gatewayProblemMessage = gatewayConnectionProblem?.message?.takeIf { it.isNotBlank() }
+  val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: statusText)
+  val gatewayOffline = !gatewayConnected
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -181,7 +200,7 @@ fun ChatScreen(
     )
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
-      ChatNotice(title = "Chat needs attention", body = userFacingChatError(error))
+      ChatNotice(title = "Chat needs attention", body = userFacingChatError(error = error, gatewayConnected = gatewayConnected))
     }
 
     ChatMessageList(
@@ -191,6 +210,7 @@ fun ChatScreen(
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
       onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
@@ -202,11 +222,22 @@ fun ChatScreen(
       thinkingLevel = thinkingLevel,
       contextUsage = contextUsage,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
+      offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       onVoice = onVoice,
+      onFixConnection = onOpenGatewaySettings,
+      onCopyDiagnostics = {
+        copyGatewayDiagnosticsReport(
+          context = context,
+          screen = "chat composer",
+          gatewayAddress = gatewayAddress,
+          statusText = offlineStatus,
+        )
+      },
       onAbort = viewModel::abortChat,
       onSend = {
         val message = input.trim()
@@ -421,6 +452,7 @@ private fun ChatMessageList(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -475,7 +507,12 @@ private fun ChatMessageList(
       if (historyLoading) {
         ClawLoadingState(title = "Loading session", modifier = Modifier.align(Alignment.Center))
       } else {
-        EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
+        EmptyChatHint(
+          healthOk = healthOk,
+          gatewayOffline = gatewayOffline,
+          onStarterPrompt = onStarterPrompt,
+          modifier = Modifier.align(Alignment.Center),
+        )
       }
     }
   }
@@ -484,6 +521,7 @@ private fun ChatMessageList(
 @Composable
 private fun EmptyChatHint(
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -498,8 +536,10 @@ private fun EmptyChatHint(
         text =
           if (healthOk) {
             "Start with a prompt, or use voice."
+          } else if (gatewayOffline) {
+            "Use the recovery options below to reconnect."
           } else {
-            "Reconnect from Settings to send messages."
+            "Chat is checking Gateway health."
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
@@ -509,6 +549,21 @@ private fun EmptyChatHint(
     if (healthOk) {
       StarterPromptList(onStarterPrompt = onStarterPrompt)
     }
+  }
+}
+
+@Composable
+private fun ChatOfflineActions(
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    ClawPrimaryButton(text = "Fix connection", icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
+    ClawSecondaryButton(text = "Copy diagnostics", icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
   }
 }
 
@@ -708,11 +763,15 @@ private fun ChatComposer(
   thinkingLevel: String,
   contextUsage: ChatContextUsage,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
+  offlineStatus: String,
   pendingRunCount: Int,
   onThinkingLevelChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   onVoice: () -> Unit,
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
@@ -735,6 +794,14 @@ private fun ChatComposer(
       )
     }
 
+    if (!healthOk && gatewayOffline) {
+      ChatOfflineNotice(
+        status = offlineStatus,
+        onFixConnection = onFixConnection,
+        onCopyDiagnostics = onCopyDiagnostics,
+      )
+    }
+
     if (pendingRunCount > 0) {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
@@ -754,6 +821,31 @@ private fun ChatComposer(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatOfflineNotice(
+  status: String,
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(
+        text = "Gateway offline",
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = ClawTheme.colors.warning,
+      )
+      Text(
+        text = status,
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = ClawTheme.colors.textMuted,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      ChatOfflineActions(onFixConnection = onFixConnection, onCopyDiagnostics = onCopyDiagnostics)
     }
   }
 }
@@ -982,10 +1074,14 @@ private fun SendButton(
   }
 }
 
-private fun userFacingChatError(error: String): String {
+internal fun userFacingChatError(
+  error: String,
+  gatewayConnected: Boolean,
+): String {
   val lower = error.lowercase(Locale.US)
   return when {
-    lower.contains("not connected") -> "Gateway is offline. Open Settings to reconnect."
+    lower.contains("not connected") && gatewayConnected -> "Chat is still checking Gateway health."
+    lower.contains("not connected") -> "Gateway is offline. Fix the connection below or copy diagnostics."
     lower.contains("unauthorized") || lower.contains("auth") -> "Gateway authentication needs attention."
     else -> error
   }

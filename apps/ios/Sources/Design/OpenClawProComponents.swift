@@ -32,7 +32,7 @@ struct ProSectionHeader: View {
                 if let action {
                     Button(actionTitle, action: action)
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(OpenClawBrand.accent)
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                 } else {
                     Text(actionTitle)
                         .font(.footnote.weight(.medium))

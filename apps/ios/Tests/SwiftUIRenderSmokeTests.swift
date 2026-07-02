@@ -42,7 +42,7 @@ import UIKit
         }
     }
 
-    @Test @MainActor func settingsAboutDestinationBuildsInLightAndDarkMode() {
+    @Test @MainActor func `settings About destination builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)

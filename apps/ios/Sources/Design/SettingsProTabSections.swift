@@ -512,7 +512,7 @@ extension SettingsProTab {
             self.detailListCard {
                 self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 Divider()
-                self.detailRow("Device", value: DeviceInfoHelper.deviceDisplayName())
+                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 Divider()
                 self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
