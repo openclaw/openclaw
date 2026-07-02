@@ -2,67 +2,28 @@ import OpenClawKit
 import SwiftUI
 
 extension SettingsProTab {
-    var settingsHeader: some View {
-        OpenClawAdaptiveHeaderRow(
-            title: "Settings",
-            subtitle: "Gateway, permissions, voice, and device controls.",
-            titleFont: .title3.weight(.semibold),
-            subtitleFont: .callout)
-        {
-            if let headerLeadingAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-            }
-        } accessory: {
-            EmptyView()
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.top, 6)
-    }
-
-    var appearanceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Appearance", uppercase: false)
-            ProCard(radius: SettingsLayout.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Appearance", selection: self.$appearancePreferenceRaw) {
-                        ForEach(AppAppearancePreference.allCases) { preference in
-                            Text(preference.label).tag(preference.rawValue)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    Text("Follows iOS appearance.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    var appearanceMenu: some View {
+        Menu {
+            Picker("Appearance", selection: self.$appearancePreferenceRaw) {
+                ForEach(AppAppearancePreference.allCases) { preference in
+                    Label(preference.label, systemImage: preference.systemImage)
+                        .tag(preference.rawValue)
                 }
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
+        } label: {
+            Label("Appearance", systemImage: "ellipsis")
+                .labelStyle(.iconOnly)
         }
+        .tint(.primary)
+        .accessibilityIdentifier("settings-appearance-menu")
+        .accessibilityHint("Choose system, light, or dark appearance")
     }
 
     var gatewaySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Gateway", uppercase: false)
-            ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-                VStack(spacing: 0) {
-                    NavigationLink(value: SettingsRoute.gateway) {
-                        self.gatewayConnectionRow
-                            .padding(14)
-                            .frame(maxWidth: .infinity, minHeight: SettingsLayout.rowHeight, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    Divider()
-                    self.gatewayDetailRow(label: "Address", value: self.gatewayAddress)
-                    Divider()
-                    self.gatewayDetailRow(label: "Server", value: self.gatewayServer)
-                    Divider()
-                    self.gatewayDetailRow(label: "Agents", value: "\(self.appModel.gatewayAgents.count)")
-                    Divider()
-                    self.gatewayActions
-                        .padding(14)
-                }
+        Section {
+            NavigationLink(value: SettingsRoute.gateway) {
+                self.gatewayConnectionRow
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
         }
     }
 
@@ -73,35 +34,25 @@ extension SettingsProTab {
                 color: self.gatewayStatusColor)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Connection")
+                Text("Gateway")
                     .font(.subheadline.weight(.semibold))
-                Text(self.gatewayStatusDetail)
+                    .lineLimit(1)
+                Text(self.gatewaySummaryDetail)
                     .font(.caption)
-                    .foregroundStyle(self.gatewayStatusColor)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 8)
-
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
         }
+        .padding(.vertical, 4)
     }
 
-    func gatewayDetailRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+    var gatewaySummaryDetail: String {
+        let agentCount = self.appModel.gatewayAgents.count
+        let agents = agentCount == 1 ? "1 agent" : "\(agentCount) agents"
+        return "\(self.gatewayStatusDetail) • \(agents)"
     }
 
     var gatewayActions: some View {
@@ -127,12 +78,13 @@ extension SettingsProTab {
         }
     }
 
+    @ViewBuilder
     var settingsListSection: some View {
-        VStack(spacing: 10) {
+        Section {
             self.settingsListRow(
                 icon: "checkmark.shield.fill",
                 title: "Approvals",
-                detail: self.approvalsDetail,
+                detail: self.pendingApproval == nil ? nil : "1 pending",
                 route: .approvals,
                 color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
                 badgeValue: self.pendingApproval == nil ? nil : "1")
@@ -143,16 +95,18 @@ extension SettingsProTab {
                 route: .permissions)
             self.settingsListRow(
                 icon: "point.3.connected.trianglepath.dotted",
-                title: "Channels / Integrations",
-                detail: "Message routing and external channel clients.",
+                title: "Channels",
                 route: .channels)
             self.settingsListRow(
                 icon: "waveform",
                 title: "Voice & Talk",
                 detail: self.voiceDetail,
                 route: .voice)
+        }
+
+        Section("Device") {
             self.settingsListRow(
-                icon: "globe",
+                icon: "stethoscope",
                 title: "Diagnostics",
                 detail: self.diagnosticsDetail,
                 route: .diagnostics)
@@ -169,16 +123,14 @@ extension SettingsProTab {
             self.settingsListRow(
                 icon: "info.circle",
                 title: "About",
-                detail: DeviceInfoHelper.openClawVersionString(),
                 route: .about)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func settingsListRow(
         icon: String,
         title: String,
-        detail: String,
+        detail: String? = nil,
         route: SettingsRoute,
         color: Color = .secondary,
         badgeValue: String? = nil) -> some View
@@ -189,24 +141,20 @@ extension SettingsProTab {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
                 if let badgeValue {
                     ProValuePill(value: badgeValue, color: color)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: SettingsLayout.rowHeight, alignment: .leading)
-            .proPanelSurface(radius: SettingsLayout.cardRadius)
+            .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
     }
 
     func destination(for route: SettingsRoute) -> some View {
@@ -214,9 +162,6 @@ extension SettingsProTab {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if self.headerLeadingAction != nil {
-                        self.routeHeader(for: route)
-                    }
                     switch route {
                     case .gateway:
                         self.gatewayDestination
@@ -244,32 +189,17 @@ extension SettingsProTab {
         }
         .navigationTitle(self.title(for: route))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(self.headerLeadingAction == nil ? .visible : .hidden, for: .navigationBar)
-    }
-
-    func routeHeader(for route: SettingsRoute) -> some View {
-        OpenClawAdaptiveHeaderRow(
-            title: self.title(for: route),
-            subtitle: self.subtitle(for: route),
-            titleFont: .title3.weight(.semibold),
-            subtitleFont: .callout)
-        {
+        .toolbar {
             if let headerLeadingAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                }
             }
-        } accessory: {
-            EmptyView()
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.top, 6)
     }
 
     var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let gatewayProblem = self.appModel.lastGatewayProblem {
-                self.gatewayProblemCard(gatewayProblem)
-            }
-
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
@@ -575,21 +505,12 @@ extension SettingsProTab {
 
     var aboutDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.detailStatusCard(
-                icon: "info.circle",
-                title: "OpenClaw",
-                detail: "iOS companion app",
-                value: DeviceInfoHelper.openClawVersionString(),
-                color: OpenClawBrand.accent)
-
             self.detailListCard {
-                self.detailRow("Version", value: DeviceInfoHelper.openClawVersionString())
+                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 Divider()
                 self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 Divider()
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                Divider()
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
         }
     }
@@ -612,15 +533,12 @@ extension SettingsProTab {
                     .minimumScaleFactor(0.76)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 34)
-            .foregroundStyle(color)
-            .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(color.opacity(0.14))
-            }
+            .frame(height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle(radius: 8))
+        .tint(color)
+        .controlSize(.small)
         .disabled(isBusy || isDisabled)
     }
 
@@ -983,21 +901,6 @@ extension SettingsProTab {
                     .textFieldStyle(.roundedBorder)
                 self.detailRow("Instance ID", value: self.instanceId)
             }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func gatewayProblemCard(_ problem: GatewayConnectionProblem) -> some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            GatewayProblemBanner(
-                problem: problem,
-                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
-                onPrimaryAction: {
-                    Task { await self.handleGatewayProblemPrimaryAction(problem) }
-                },
-                onShowDetails: {
-                    self.showGatewayProblemDetails = true
-                })
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }

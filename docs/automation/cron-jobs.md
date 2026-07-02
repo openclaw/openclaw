@@ -169,6 +169,9 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 <ParamField path="--thinking" type="string">
   Thinking level override.
 </ParamField>
+<ParamField path="--clear-thinking" type="boolean">
+  On `cron edit`, removes the per-job thinking override so the job follows normal cron thinking precedence. Cannot be combined with `--thinking`.
+</ParamField>
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
 </ParamField>

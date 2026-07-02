@@ -3902,6 +3902,71 @@ describe("task-registry", () => {
     });
   });
 
+  it("cancels stale cron tasks without an active runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "daily-repost",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:daily-repost:123",
+        task: "Daily repost",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("does not mark session-backed cron tasks cancelled without an active runtime abort handle", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "daily-repost",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: "agent:main:cron:daily-repost",
+        runId: "cron:daily-repost:123",
+        task: "Daily repost",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Cron task has no active cancellation handle.",
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        runtime: "cron",
+        status: "running",
+      });
+    });
+  });
+
   it("cancels childless codex-native tasks without routing through OpenClaw subagent sessions", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests();

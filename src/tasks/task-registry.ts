@@ -2100,12 +2100,16 @@ export async function cancelTaskById(params: {
             reason: params.reason?.trim() || "Cancelled by operator.",
           })
         ) {
-          return {
-            found: true,
-            cancelled: false,
-            reason: "Cron task has no active cancellation handle.",
-            task: cloneTaskRecord(task),
-          };
+          if (childSessionKey) {
+            return {
+              found: true,
+              cancelled: false,
+              reason: "Cron task has no active cancellation handle.",
+              task: cloneTaskRecord(task),
+            };
+          }
+          // Childless cron rows are stale legacy ledger records; with no live
+          // runner handle and no child session to cancel, clear the task row.
         }
       } else if (!childSessionKey) {
         if (!isChildlessNativeSubagentTask(task)) {

@@ -40,6 +40,7 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
 export {
+  createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   resolveMcpLoopbackBearerToken,

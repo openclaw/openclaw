@@ -4,7 +4,10 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import { createHash } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import {
@@ -50,6 +53,7 @@ import {
   runMessageAction,
   type MessageActionRunResult,
 } from "../../infra/outbound/message-action-runner.js";
+import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
@@ -59,7 +63,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -78,6 +82,7 @@ import {
   resolveGatewayOptions,
   type GatewayCallOptions,
 } from "./gateway.js";
+import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -161,7 +166,64 @@ function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   return text.replace(/\\r\\n|\\n|\\r/g, "\n");
 }
 
-type VisibleTextSuppressionReason = "internal_runtime_context_echo" | "inbound_metadata_echo";
+type VisibleTextSuppressionReason =
+  | "internal_runtime_context_echo"
+  | "inbound_metadata_echo"
+  | "poll_vote_echo";
+
+const POLL_VOTE_ECHO_TTL_MS = 30_000;
+
+// Keyed by agent session (conversation), NOT per message-tool instance: a native
+// poll and its accompanying comment arrive as separate inbound messages and are
+// processed in separate agent runs, each with a fresh tool instance. An
+// instance-local record would be lost before the follow-up text run, so the echo
+// (the agent restating its vote in prose) would leak. Session-scoped +
+// route-checked storage lets the vote in one run suppress the restatement in the
+// next while never crossing conversations. Single slot per session, TTL-bounded.
+const recentPollVoteBySession = new Map<
+  string,
+  { option: string; route: string; recordedAt: number }
+>();
+
+function resolvePollVoteEchoRoute(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  channel?: string | null;
+  accountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel) {
+    return undefined;
+  }
+  let deliveryAliasTarget: string | undefined;
+  try {
+    deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
+      channel,
+      aliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[params.action],
+    });
+  } catch {
+    return undefined;
+  }
+  const targets = ["target", "to", "channelId"]
+    .map((key) => normalizeOptionalStringifiedId(params.args[key]))
+    .concat(deliveryAliasTarget ?? [])
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    return undefined;
+  }
+  const target = targets[0];
+  const currentTargets = new Set(
+    [params.currentMessagingTarget, params.currentChannelId].filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  // Plugin-declared aliases keep owner-specific target fields out of core.
+  // A route mismatch fails open; provider/account keys prevent cross-send suppression.
+  const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
+  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
+}
 
 function sanitizeUserVisibleToolTextResult(
   text: string,
@@ -1137,6 +1199,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
+  // Poll-vote echo record lives in the session-scoped map (recentPollVoteBySession)
+  // so it survives the run boundary between the vote and the follow-up text; a
+  // null session key disables the guard.
+  const pollEchoSessionKey = options?.agentSessionKey?.trim() || undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
@@ -1147,6 +1213,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? effectiveCurrentChannel.accountId;
+  const currentChannelIsInternal =
+    normalizeMessageChannel(effectiveCurrentChannel.currentChannelProvider) ===
+    INTERNAL_MESSAGE_CHANNEL;
+  // WebChat tool sends use the private sink without changing the run-level
+  // contract: ordinary final answers must remain automatic and visible.
+  const sourceReplySinkDeliveryMode = currentChannelIsInternal
+    ? "message_tool_only"
+    : options?.sourceReplyDeliveryMode;
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -1282,6 +1356,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
+      const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
       const scope = resolveMessageSecretScope({
         channel: params.channel,
@@ -1310,8 +1385,43 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (accountId) {
         params.accountId = accountId;
       }
+      const pollVoteEchoRoute = resolvePollVoteEchoRoute({
+        action,
+        args: params,
+        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+        accountId,
+        currentChannelId: effectiveCurrentChannel.currentChannelId,
+        currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
+      });
+      const recentPollVote = pollEchoSessionKey
+        ? recentPollVoteBySession.get(pollEchoSessionKey)
+        : undefined;
+      if (
+        recentPollVote &&
+        pollEchoSessionKey &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        (action === "send" || action === "reply")
+      ) {
+        if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+          recentPollVoteBySession.delete(pollEchoSessionKey);
+        } else if (pollVoteEchoRoute === recentPollVote.route) {
+          const vote = recentPollVote;
+          recentPollVoteBySession.delete(pollEchoSessionKey);
+          const outboundText =
+            readStringParam(params, "text") ??
+            readStringParam(params, "message") ??
+            readStringParam(params, "content");
+          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
+            return jsonResult({
+              status: "suppressed",
+              reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
+              message: "Suppressed outbound text because it only restated the poll vote just cast.",
+            });
+          }
+        }
+      }
 
-      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
+      const gatewayResolved = resolveGatewayOptions(gatewayOpts);
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,
@@ -1387,7 +1497,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
-          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.currentInboundAudio,
           abortSignal: signal,
@@ -1410,6 +1520,32 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const toolResult = getToolResult(result);
+      if (
+        action === "poll-vote" &&
+        pollVoteEchoRoute &&
+        pollEchoSessionKey &&
+        sourceReplySinkDeliveryMode === "message_tool_only"
+      ) {
+        const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
+        const option =
+          typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
+        if (option) {
+          const recordedAt = Date.now();
+          // Prune expired entries on write so a session that votes but never
+          // sends a follow-up text can't leak a record forever in a long-lived
+          // gateway; the map stays bounded to sessions that voted within the TTL.
+          for (const [key, entry] of recentPollVoteBySession) {
+            if (recordedAt - entry.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+              recentPollVoteBySession.delete(key);
+            }
+          }
+          recentPollVoteBySession.set(pollEchoSessionKey, {
+            option,
+            route: pollVoteEchoRoute,
+            recordedAt,
+          });
+        }
+      }
       if (toolResult) {
         return toolResult;
       }

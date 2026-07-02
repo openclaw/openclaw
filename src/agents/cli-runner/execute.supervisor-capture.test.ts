@@ -279,6 +279,40 @@ describe("executePreparedCliRun supervisor output capture", () => {
     throw new Error("Expected CLI run to reject with a rate limit error");
   });
 
+  it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Credit balance is too low",
+      session_id: "session-jsonl-error",
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Credit balance is too low",
+    });
+  });
+
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {
     // Streaming events are emitted from live chunks, not from the final captured
     // stdout string, so users still see deltas when captureOutput is false.
