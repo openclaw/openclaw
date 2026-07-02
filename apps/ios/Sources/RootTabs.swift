@@ -37,6 +37,10 @@ struct RootTabs: View {
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
+    @State private var gatewayToastDragOffset: CGFloat = 0
+    // Swipe-up keeps the current problem hidden until it clears or a different
+    // problem arrives; without this the toast would reappear on the next render.
+    @State private var swipeDismissedGatewayProblem: GatewayConnectionProblem?
     @State private var showOnboarding: Bool = false
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
@@ -598,28 +602,20 @@ struct RootTabs: View {
     private func rootOverlays(_ content: some View) -> some View {
         content
             .overlay(alignment: .top) {
-                if let gatewayProblem = self.appModel.lastGatewayProblem,
-                   self.gatewayStatus != .connected
-                {
-                    GatewayProblemBanner(
-                        problem: gatewayProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
-                        onPrimaryAction: {
-                            self.handleGatewayProblemPrimaryAction(gatewayProblem)
-                        },
-                        onShowDetails: {
-                            self.showGatewayProblemDetails = true
-                        })
-                        .padding(.horizontal, 12)
-                        .safeAreaPadding(.top, 10)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                // Stable container so the toast's move/opacity transition animates
+                // when the gateway problem appears or clears outside withAnimation.
+                ZStack(alignment: .top) {
+                    if let gatewayProblem = self.activeGatewayProblemToast {
+                        self.gatewayProblemToast(gatewayProblem)
+                    }
                 }
+                .animation(self.gatewayToastAnimation, value: self.activeGatewayProblemToast)
             }
             .overlay(alignment: .topLeading) {
                 if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                     VoiceWakeToast(command: voiceWakeToastText)
                         .padding(.leading, 10)
-                        .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
+                        .safeAreaPadding(.top, self.activeGatewayProblemToast == nil ? 58 : 132)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -634,6 +630,56 @@ struct RootTabs: View {
                     self.canvasPresentationOverlay
                         .transition(.opacity)
                         .zIndex(20)
+                }
+            }
+    }
+
+    private var activeGatewayProblemToast: GatewayConnectionProblem? {
+        guard let problem = self.appModel.lastGatewayProblem,
+              self.gatewayStatus != .connected,
+              problem != self.swipeDismissedGatewayProblem
+        else { return nil }
+        return problem
+    }
+
+    private var gatewayToastAnimation: Animation? {
+        self.reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)
+    }
+
+    private func gatewayProblemToast(_ problem: GatewayConnectionProblem) -> some View {
+        GatewayProblemBanner(
+            problem: problem,
+            primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+            onPrimaryAction: {
+                self.handleGatewayProblemPrimaryAction(problem)
+            },
+            onShowDetails: {
+                self.showGatewayProblemDetails = true
+            })
+            .padding(.horizontal, 12)
+            .safeAreaPadding(.top, 10)
+            .offset(y: min(self.gatewayToastDragOffset, 0))
+            .gesture(self.gatewayToastSwipeGesture)
+            // A drag cancelled by toast removal never fires onEnded; clear the
+            // offset so the next toast doesn't render shifted up.
+            .onDisappear { self.gatewayToastDragOffset = 0 }
+            .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private var gatewayToastSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                self.gatewayToastDragOffset = value.translation.height
+            }
+            .onEnded { value in
+                let swipedUp = value.translation.height < -32 || value.predictedEndTranslation.height < -80
+                withAnimation(self.gatewayToastAnimation) {
+                    if swipedUp {
+                        // Dismiss the problem currently shown, not one captured at
+                        // gesture creation; the toast can swap problems mid-drag.
+                        self.swipeDismissedGatewayProblem = self.activeGatewayProblemToast
+                    }
+                    self.gatewayToastDragOffset = 0
                 }
             }
     }
@@ -726,6 +772,11 @@ struct RootTabs: View {
         content
             .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
+            .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
+                if newValue != self.swipeDismissedGatewayProblem {
+                    self.swipeDismissedGatewayProblem = nil
+                }
+            }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
                     self.onboardingComplete = true
