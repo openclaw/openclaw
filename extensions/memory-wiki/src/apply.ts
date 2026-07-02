@@ -194,18 +194,13 @@ function buildSynthesisBody(params: {
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
 function isMissingWikiPageError(error: unknown): boolean {
-  return (
-    error instanceof FsSafeError && (error.code === "not-found" || error.code === "path-alias")
-  );
+  return error instanceof FsSafeError && error.code === "not-found";
 }
 
 async function readExistingWikiPage(root: VaultRoot, pagePath: string): Promise<string> {
   try {
     return await root.readText(pagePath);
-  } catch (error) {
-    if (isMissingWikiPageError(error)) {
-      return "";
-    }
+  } catch {
     try {
       return await root.readText(pagePath);
     } catch (retryError) {

@@ -143,10 +143,7 @@ function isMissingConversationPageError(error: unknown): boolean {
 async function readExistingConversationPage(absolutePath: string): Promise<string> {
   try {
     return await fs.readFile(absolutePath, "utf8");
-  } catch (error) {
-    if (isMissingConversationPageError(error)) {
-      return "";
-    }
+  } catch {
     try {
       return await fs.readFile(absolutePath, "utf8");
     } catch (retryError) {
