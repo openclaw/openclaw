@@ -23,6 +23,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { isDurableRuntimesEnabled } from "../durable/config.js";
 import {
   buildDurableSubagentOrchestrationGuidance,
   resolveDurableOrchestrationPolicy,
@@ -92,6 +93,21 @@ type StablePromptPrefixCacheEntry = {
 
 function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
   return mode === "prefer" ? "prefer" : "suggest";
+}
+
+function resolvePromptDurableOrchestrationPolicy(
+  policy?: DurableOrchestrationPolicy,
+): DurableOrchestrationPolicy | undefined {
+  if (policy !== undefined) {
+    return policy;
+  }
+  if ((process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY ?? "").trim()) {
+    return resolveDurableOrchestrationPolicy();
+  }
+  if (isDurableRuntimesEnabled()) {
+    return resolveDurableOrchestrationPolicy();
+  }
+  return undefined;
 }
 
 function buildSubagentDelegationPreferenceSection(params: {
@@ -522,12 +538,15 @@ function buildMessagingSection(params: {
   const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
-  const subagentOrchestrationGuidance = buildDurableSubagentOrchestrationGuidance({
-    policy: params.durableOrchestrationPolicy,
-    hasSessionsSpawn,
-    hasSubagents,
-    hasSessionsYield,
-  });
+  const subagentOrchestrationGuidance =
+    params.durableOrchestrationPolicy === undefined
+      ? ""
+      : buildDurableSubagentOrchestrationGuidance({
+          policy: params.durableOrchestrationPolicy,
+          hasSessionsSpawn,
+          hasSubagents,
+          hasSessionsYield,
+        });
   return [
     "## Messaging",
     messageToolOnly
@@ -937,8 +956,9 @@ export function buildAgentSystemPrompt(params: {
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
-  const durableOrchestrationPolicy =
-    params.durableOrchestrationPolicy ?? resolveDurableOrchestrationPolicy();
+  const durableOrchestrationPolicy = resolvePromptDurableOrchestrationPolicy(
+    params.durableOrchestrationPolicy,
+  );
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -1071,12 +1091,16 @@ export function buildAgentSystemPrompt(params: {
       ...(renderOpenClawToolWorkflowHints
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-            buildDurableSubagentOrchestrationGuidance({
-              policy: durableOrchestrationPolicy,
-              hasSessionsSpawn,
-              hasSubagents: availableTools.has("subagents"),
-              hasSessionsYield: availableTools.has("sessions_yield"),
-            }),
+            ...(durableOrchestrationPolicy === undefined
+              ? []
+              : [
+                  buildDurableSubagentOrchestrationGuidance({
+                    policy: durableOrchestrationPolicy,
+                    hasSessionsSpawn,
+                    hasSubagents: availableTools.has("subagents"),
+                    hasSessionsYield: availableTools.has("sessions_yield"),
+                  }),
+                ]),
             '`sessions_spawn`: omit `context` unless transcript needed; then set `context:"fork"`.',
           ]
         : []),
@@ -1108,7 +1132,7 @@ export function buildAgentSystemPrompt(params: {
       "",
       ...buildSubagentDelegationPreferenceSection({
         mode: subagentDelegationMode,
-        durableOrchestrationPolicy,
+        durableOrchestrationPolicy: durableOrchestrationPolicy ?? "parallel_first",
         isMinimal,
         hasSessionsSpawn,
         hasSubagents: availableTools.has("subagents"),
