@@ -284,6 +284,18 @@ export function describeGithubCopilotProviderRuntimeContract(
 
 export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("google provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    const previousGoogleGeminiCliHarnessEnv = process.env.OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS;
+    beforeAll(() => {
+      process.env.OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS = "1";
+    });
+    afterAll(() => {
+      if (previousGoogleGeminiCliHarnessEnv === undefined) {
+        delete process.env.OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS;
+      } else {
+        process.env.OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS = previousGoogleGeminiCliHarnessEnv;
+      }
+    });
+
     const requireProviderContractProvider = installRuntimeHooks([
       { providerIds: ["google", "google-gemini-cli"], pluginId: "google", name: "Google", load },
     ]);
