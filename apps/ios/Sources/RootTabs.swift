@@ -639,8 +639,9 @@ struct RootTabs: View {
     }
 
     private var activeGatewayProblemToast: GatewayConnectionProblem? {
+        // Operator-scope auth/pairing failures can coexist with a connected node.
+        // The problem itself, not aggregate gateway status, owns toast visibility.
         guard let problem = self.appModel.lastGatewayProblem,
-              self.gatewayStatus != .connected,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
         return problem

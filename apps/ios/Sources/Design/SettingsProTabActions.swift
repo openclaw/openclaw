@@ -173,6 +173,14 @@ extension SettingsProTab {
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
     }
 
+    func syncAfterOnboardingReset() {
+        self.connectingGatewayID = nil
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = nil
+        self.pendingManualAuthOverride = nil
+        self.syncSettingsState()
+    }
+
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
         self.connectingGatewayID = gateway.id
         defer { self.connectingGatewayID = nil }

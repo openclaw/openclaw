@@ -747,6 +747,10 @@ struct RootTabsSourceGuardTests {
         let trustSource = try String(contentsOf: Self.gatewayTrustPromptAlertSourceURL(), encoding: .utf8)
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let activeProblemToast = try Self.extract(
+            rootSource,
+            from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
+            to: "private var gatewayToastAnimation: Animation?")
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -769,6 +773,10 @@ struct RootTabsSourceGuardTests {
         #expect(!sectionsSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
+        // Operator auth/pairing problems can coexist with a connected node, so the
+        // root's only remediation surface must not depend on aggregate status.
+        #expect(activeProblemToast.contains("self.appModel.lastGatewayProblem"))
+        #expect(!activeProblemToast.contains("gatewayStatus"))
         // Every problem report re-surfaces a swiped-away toast or shakes the
         // visible one; value equality alone must not keep the toast hidden.
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
@@ -785,6 +793,10 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
         #expect(actionsSource.contains("Run /pair approve in your OpenClaw chat"))
         #expect(settingsSource.contains("self.resetOnboarding()"))
+        #expect(settingsSource.contains(".onChange(of: self.onboardingRequestID)"))
+        #expect(settingsSource.contains("self.syncAfterOnboardingReset()"))
+        #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
+        #expect(actionsSource.contains("self.pendingManualAuthOverride = nil"))
         // The root toast is the only gateway problem surface outside covers, so it
         // must keep the reset-onboarding primary action the settings banner had.
         #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
