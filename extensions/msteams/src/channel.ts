@@ -245,6 +245,21 @@ function isMSTeamsReadTargetAllowed(params: {
   cfg: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>;
   target: string;
 }): boolean {
+  const target = normalizeActionConversationTarget(params.target);
+  const directConversationId =
+    parseMSTeamsConversationId(params.target) ??
+    (!params.target.includes("/") &&
+    target &&
+    !/^user:/i.test(target) &&
+    looksLikeMSTeamsTargetId(params.target)
+      ? target
+      : undefined);
+  if (directConversationId) {
+    return hasMatchingMSTeamsChannelRoute({
+      teams: params.cfg.teams,
+      conversationId: directConversationId,
+    });
+  }
   const parsed = parseMSTeamsTeamChannelInput(params.target);
   if (parsed.team) {
     return resolveMSTeamsRouteConfig({
@@ -257,7 +272,6 @@ function isMSTeamsReadTargetAllowed(params: {
     }).allowed;
   }
 
-  const target = normalizeActionConversationTarget(params.target);
   if (!target || /^user:/i.test(target)) {
     return true;
   }

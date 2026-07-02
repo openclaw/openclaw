@@ -44,7 +44,10 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "./runtime-api.js";
-import { resolveDefaultGroupPolicy } from "./runtime-api.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
@@ -86,13 +89,12 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
 function resolveMatrixReadGroupPolicy(params: {
   cfg: CoreConfig;
   accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
-}): "open" | "allowlist" | "disabled" | undefined {
-  const hasRoomAllowlist =
-    Object.keys(params.accountConfig.groups ?? params.accountConfig.rooms ?? {}).length > 0;
-  const groupPolicy =
-    params.accountConfig.groupPolicy ??
-    resolveDefaultGroupPolicy(params.cfg) ??
-    (hasRoomAllowlist ? "allowlist" : undefined);
+}): "open" | "allowlist" | "disabled" {
+  const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.matrix !== undefined,
+    groupPolicy: params.accountConfig.groupPolicy,
+    defaultGroupPolicy: resolveDefaultGroupPolicy(params.cfg),
+  });
   return params.accountConfig.allowlistOnly === true && groupPolicy === "open"
     ? "allowlist"
     : groupPolicy;
@@ -107,7 +109,7 @@ function assertMatrixReadTargetAllowed(params: {
   const rooms = params.accountConfig.groups ?? params.accountConfig.rooms;
   const groupPolicy = resolveMatrixReadGroupPolicy(params);
   const roomConfig = roomId ? resolveMatrixRoomConfig({ rooms, roomId, aliases: [] }) : undefined;
-  if (!groupPolicy || groupPolicy === "open") {
+  if (groupPolicy === "open") {
     if (roomConfig?.allowlistConfigured && !roomConfig.allowed) {
       throw new Error("Matrix read target room is not allowed.");
     }

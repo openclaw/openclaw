@@ -166,7 +166,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts to add reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "react",
@@ -185,7 +187,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts to remove reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "react",
@@ -206,7 +210,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts and limit to reaction listing", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     const result = await handleMatrixAction(
       {
         action: "reactions",
@@ -255,8 +261,32 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
   });
 
+  it("defaults Matrix reaction reads to the allowlist provider policy", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "reactions",
+          roomId: "!other:example",
+          messageId: "$msg",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
+  });
+
   it("rejects fractional reaction limits before listing reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await expect(
       handleMatrixAction(
         {
@@ -366,7 +396,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts to pin listing", async () => {
-    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { pins: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "listPins",
@@ -384,7 +416,7 @@ describe("handleMatrixAction pollVote", () => {
 
   it("passes account-scoped opts to member and room info actions", async () => {
     const memberCfg = {
-      channels: { matrix: { actions: { memberInfo: true } } },
+      channels: { matrix: { groupPolicy: "open", actions: { memberInfo: true } } },
     } as CoreConfig;
     await handleMatrixAction(
       {
@@ -395,7 +427,9 @@ describe("handleMatrixAction pollVote", () => {
       },
       memberCfg,
     );
-    const roomCfg = { channels: { matrix: { actions: { channelInfo: true } } } } as CoreConfig;
+    const roomCfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { channelInfo: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "channelInfo",

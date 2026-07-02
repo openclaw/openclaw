@@ -12,7 +12,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
@@ -55,13 +58,13 @@ function readGoogleChatMessageSpaceName(messageName: string): string | undefined
 function resolveGoogleChatReadGroupPolicy(params: {
   cfg: OpenClawConfig;
   account: ReturnType<typeof resolveGoogleChatAccount>;
-}): "open" | "allowlist" | "disabled" | undefined {
-  const hasGroupAllowlist = Object.keys(params.account.config.groups ?? {}).length > 0;
-  return (
-    params.account.config.groupPolicy ??
-    resolveDefaultGroupPolicy(params.cfg) ??
-    (hasGroupAllowlist ? "allowlist" : undefined)
-  );
+}): "open" | "allowlist" | "disabled" {
+  const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.googlechat !== undefined,
+    groupPolicy: params.account.config.groupPolicy,
+    defaultGroupPolicy: resolveDefaultGroupPolicy(params.cfg),
+  });
+  return groupPolicy;
 }
 
 function assertGoogleChatReadTargetAllowed(params: {
@@ -73,7 +76,7 @@ function assertGoogleChatReadTargetAllowed(params: {
   const spaceName = readGoogleChatMessageSpaceName(params.messageName);
   const groups = params.account.config.groups ?? {};
   const entry = spaceName ? (groups[spaceName] ?? groups["*"]) : undefined;
-  if (!groupPolicy || groupPolicy === "open") {
+  if (groupPolicy === "open") {
     if (entry?.enabled === false) {
       throw new Error("Google Chat read target space is not allowed.");
     }

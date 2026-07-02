@@ -324,6 +324,45 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("allows conversation-prefixed read targets inside the Teams route allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        target: targetChannelId,
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
   it("advertises upload-file in the message tool surface", () => {
     expect(
       msteamsPlugin.actions?.describeMessageTool?.({
