@@ -156,17 +156,6 @@ enum OpenClawBrand {
             endPoint: .bottom)
     }
 
-    static var activationPrimaryStroke: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color.white.opacity(0.36),
-                activationGlow.opacity(0.58),
-                Color.black.opacity(0.18),
-            ],
-            startPoint: .top,
-            endPoint: .bottom)
-    }
-
     static var activationSurfaceStroke: LinearGradient {
         LinearGradient(
             colors: [

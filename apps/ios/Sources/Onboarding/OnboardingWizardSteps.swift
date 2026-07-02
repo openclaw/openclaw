@@ -71,7 +71,6 @@ private struct OnboardingHeroHeader: View {
 }
 
 private typealias OnboardingPrimaryButtonStyle = OpenClawPrimaryActionButtonStyle
-private typealias OnboardingSecondaryButtonStyle = OpenClawSecondaryActionButtonStyle
 private typealias OnboardingTertiaryButtonStyle = OpenClawTertiaryActionButtonStyle
 
 private enum OnboardingIntroPanelStyle {
