@@ -135,18 +135,26 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects flat command schedule shorthand for add", async () => {
+  it("does not recover a flat command field into an on-exit schedule on add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
-    await expect(
-      tool.execute("call-flat-onexit-infer", {
-        action: "add",
-        name: "watch build",
-        command: "make",
-        message: "done",
-      }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    await tool.execute("call-flat-onexit-infer", {
+      action: "add",
+      name: "watch build",
+      command: "make",
+      message: "done",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+      payload?: unknown;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toBeUndefined();
+    expect(params.payload).toEqual({
+      kind: "agentTurn",
+      message: "done",
+    });
   });
 
   it("rejects flat on-exit schedule shorthand for update", async () => {
@@ -164,7 +172,7 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects flat command schedule shorthand for update", async () => {
+  it("does not recover a flat command field into an on-exit patch on update", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await expect(
@@ -173,7 +181,7 @@ describe("cron tool flat-params", () => {
         jobId: "job-infer",
         command: "make",
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("patch required");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
