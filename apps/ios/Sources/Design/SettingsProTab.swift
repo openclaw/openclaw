@@ -286,7 +286,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(OpenClawBrand.accent)
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
                         .font(.title3.weight(.semibold))
                     Text(self.message)

@@ -55,14 +55,18 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
 }
 
 enum OpenClawBrand {
-    static let uiAccent = adaptiveUIColor(light: (232, 48, 42), dark: (232, 48, 42))
-    static let uiAccentHot = adaptiveUIColor(light: (240, 69, 64), dark: (240, 69, 64))
+    // Accent fills stay dark enough for white content; foreground accents adapt
+    // separately so small labels retain 4.5:1 contrast on dark surfaces and tinted pills.
+    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
+    static let uiAccentForeground = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
+    static let uiAccentHot = adaptiveUIColor(light: (204, 55, 50), dark: (255, 93, 86))
     static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (52, 211, 153))
     static let uiWarn = adaptiveUIColor(light: (180, 83, 9), dark: (245, 158, 11))
     static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (255, 59, 59))
     static let uiInfo = adaptiveUIColor(light: (37, 99, 235), dark: (96, 165, 250))
 
     static let accent = Color(uiColor: Self.uiAccent)
+    static let accentForeground = Color(uiColor: Self.uiAccentForeground)
     static let accentHot = Color(uiColor: Self.uiAccentHot)
     static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)

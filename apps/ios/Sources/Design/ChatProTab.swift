@@ -237,7 +237,7 @@ struct ChatProTab: View {
         case .connected:
             self.gatewayConnected ? OpenClawBrand.ok : .secondary
         case .connecting:
-            OpenClawBrand.accent
+            OpenClawBrand.accentForeground
         case .error:
             OpenClawBrand.warn
         case .disconnected:
