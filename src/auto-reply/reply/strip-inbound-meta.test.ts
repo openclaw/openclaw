@@ -71,13 +71,15 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
   });
 
-  it("strips all six known sentinel types", () => {
+  it("strips all known sentinel types", () => {
     const sentinels = [
       "Conversation info (untrusted metadata):",
       "Sender (untrusted metadata):",
       "Thread starter (untrusted, for context):",
+      "Reply chain of current user message (untrusted, nearest first):",
       "Reply target of current user message (untrusted, for context):",
       "Forwarded message context (untrusted metadata):",
+      "Location (untrusted metadata):",
       "Chat history since last reply (untrusted, for context):",
     ];
     for (const sentinel of sentinels) {
@@ -155,6 +157,32 @@ What should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe(
       "Queued earlier user turn\n\nWhat should I grab on the way?",
     );
+  });
+
+  it("does not strip user text that starts with 'Current message:' when not part of metadata structure", () => {
+    const input = `Current message: this is what I want to say
+Hello, how are you?`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip user text containing (untrusted, ...) pattern in normal conversation", () => {
+    const input = `I got a notification (untrusted, from chrome) about the update
+Let me check what happened`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip leading user text that contains similar-looking metadata-like context", () => {
+    // User text that coincidentally contains "(untrusted" but is not a metadata header
+    const input = `I received an untrusted message from the system
+Please help me with this.`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
+
+  it("does not strip user text with parenthetical annotations that are not metadata patterns", () => {
+    // User text containing parenthetical notes shouldn't be mistaken for metadata
+    const input = `the file (see attached) needs review
+Also check the config (untrusted location) for details`;
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
   });
 
   it("does not strip lookalike sentinel lines with extra text", () => {
