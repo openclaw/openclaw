@@ -82,6 +82,9 @@ importers:
       '@mozilla/readability':
         specifier: 0.6.0
         version: 0.6.0
+      '@openclaw/ai':
+        specifier: workspace:*
+        version: link:packages/ai
       '@openclaw/fs-safe':
         specifier: 0.3.0
         version: 0.3.0
@@ -1835,6 +1838,24 @@ importers:
         specifier: 1.1.39
         version: 1.1.39
 
+  packages/ai:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: 0.100.1
+        version: 0.100.1(zod@4.4.3)
+      '@google/genai':
+        specifier: 2.7.0
+        version: 2.7.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@mistralai/mistralai':
+        specifier: 2.2.5
+        version: 2.2.5
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
+      openai:
+        specifier: 6.39.1
+        version: 6.39.1(ws@8.21.0)(zod@4.4.3)
+
   packages/gateway-client:
     dependencies:
       '@openclaw/gateway-protocol':
@@ -1858,12 +1879,6 @@ importers:
       typebox:
         specifier: 1.1.39
         version: 1.1.39
-
-  packages/llm-runtime:
-    dependencies:
-      '@openclaw/llm-core':
-        specifier: workspace:*
-        version: link:../llm-core
 
   packages/markdown-core:
     dependencies:

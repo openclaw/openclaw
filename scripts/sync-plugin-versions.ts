@@ -25,6 +25,7 @@ type SyncPluginVersionsOptions = {
 };
 
 const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
+const VERSION_ALIGNED_PACKAGE_DIRS = ["packages/llm-core", "packages/ai"] as const;
 
 function syncOpenClawDependencyRange(
   deps: Record<string, string> | undefined,
@@ -116,6 +117,19 @@ export function syncPluginVersions(
   const updated: string[] = [];
   const changelogged: string[] = [];
   const skipped: string[] = [];
+
+  for (const packageDir of VERSION_ALIGNED_PACKAGE_DIRS) {
+    const packagePath = join(rootDir, packageDir, "package.json");
+    const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+    if (!pkg.name || pkg.version === targetVersion) {
+      continue;
+    }
+    pkg.version = targetVersion;
+    if (write) {
+      writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+    }
+    updated.push(pkg.name);
+  }
 
   for (const dir of dirs) {
     const packagePath = join(extensionsDir, dir.name, "package.json");

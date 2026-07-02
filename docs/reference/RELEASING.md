@@ -217,7 +217,8 @@ release state.
   exports, and plugin SDK API baseline. `pnpm release:check` re-runs those
   guards in check mode and reports every generated drift failure it finds in one
   pass before running package release checks.
-- Plugin version sync updates official plugin package versions and existing
+- Plugin version sync updates the publishable AI runtime packages, official
+  plugin package versions, and existing
   `openclaw.compat.pluginApi` floors to the OpenClaw release version by
   default. Treat that field as the plugin SDK/runtime API floor, not just a copy
   of the package version: for plugin-only releases that intentionally remain

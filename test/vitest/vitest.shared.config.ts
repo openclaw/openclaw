@@ -242,6 +242,18 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: /^@openclaw\/ai\/internal\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
+      },
+      {
+        find: /^@openclaw\/ai\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/llm-core/diagnostics",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
       },

@@ -198,6 +198,7 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@openclaw/ai",
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
@@ -553,14 +554,6 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "@openclaw/llm-core" ||
@@ -598,10 +591,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -785,20 +774,11 @@ export default defineConfig([
     entry: buildModelCatalogCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("model-catalog-core"),
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
-  }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : { neverBundle: shouldNeverBundleDependency },
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,

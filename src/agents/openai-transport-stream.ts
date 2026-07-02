@@ -5,6 +5,17 @@
  * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
  */
 import { createHash, randomUUID } from "node:crypto";
+import {
+  clampOpenAIPromptCacheKey,
+  convertMessages,
+  mapOpenAIStopReason,
+  resolveAzureDeploymentNameFromMap,
+} from "@openclaw/ai/internal/openai";
+import { calculateCost, getEnvApiKey, parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
@@ -21,19 +32,8 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
-import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
-import { convertMessages } from "../llm/providers/openai-completions.js";
-import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
-import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

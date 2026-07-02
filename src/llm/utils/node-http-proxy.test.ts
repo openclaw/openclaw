@@ -1,11 +1,11 @@
-// Node HTTP proxy tests cover proxy agent creation for provider requests.
-import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
 import {
   createHttpProxyAgentsForTarget,
   resolveHttpProxyUrlForTarget,
   UNSUPPORTED_PROXY_PROTOCOL_MESSAGE,
-} from "./node-http-proxy.js";
+} from "@openclaw/ai/internal/runtime";
+// Node HTTP proxy tests cover proxy agent creation for provider requests.
+import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 
 const PROXY_ENV_KEYS = [
   "http_proxy",

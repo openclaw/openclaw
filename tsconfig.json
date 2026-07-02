@@ -27,6 +27,9 @@
       "openclaw/extension-api": ["./src/extensionAPI.ts"],
       "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "@openclaw/ai": ["./packages/ai/src/index.ts"],
+      "@openclaw/ai/providers": ["./packages/ai/src/providers.ts"],
+      "@openclaw/ai/internal/*": ["./packages/ai/src/internal/*.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
@@ -34,8 +37,6 @@
       "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],
       "@openclaw/llm-core/validation": ["./packages/llm-core/src/validation.ts"],
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
-      "@openclaw/llm-runtime": ["./packages/llm-runtime/src/index.ts"],
-      "@openclaw/llm-runtime/*": ["./packages/llm-runtime/src/*"],
       "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
       "@openclaw/model-catalog-core/configured-model-refs": [
         "./packages/model-catalog-core/src/configured-model-refs.ts"

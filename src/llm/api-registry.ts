@@ -1,2 +1,2 @@
-// Core facade for the shared LLM runtime API provider registry.
-export * from "../../packages/llm-runtime/src/api-registry.js";
+// Compatibility facade for the reusable AI package registry.
+export * from "@openclaw/ai";

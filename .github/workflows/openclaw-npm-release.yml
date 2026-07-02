@@ -156,6 +156,26 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Pack AI runtime dependencies
+        id: ai_runtime_tarballs
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          for package_dir in packages/llm-core packages/ai; do
+            package_version="$(node -p "require('./${package_dir}/package.json').version")"
+            if [[ "$package_version" != "$PACKAGE_VERSION" ]]; then
+              echo "${package_dir} version ${package_version} does not match openclaw ${PACKAGE_VERSION}." >&2
+              exit 1
+            fi
+          done
+          ARTIFACT_DIR="$RUNNER_TEMP/openclaw-ai-runtime-packages"
+          rm -rf "$ARTIFACT_DIR"
+          mkdir -p "$ARTIFACT_DIR"
+          pnpm --dir packages/llm-core pack --pack-destination "$ARTIFACT_DIR"
+          pnpm --dir packages/ai pack --pack-destination "$ARTIFACT_DIR"
+          (cd "$ARTIFACT_DIR" && sha256sum ./*.tgz > SHA256SUMS)
+          echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Build Control UI
         run: pnpm ui:build
 
@@ -219,10 +239,11 @@ jobs:
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
+          AI_RUNTIME_TARBALL_DIR: ${{ steps.ai_runtime_tarballs.outputs.dir }}
         run: |
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
-          npm pack --json 2>&1 | tee "$PACK_OUTPUT"
+          pnpm pack --json 2>&1 | tee "$PACK_OUTPUT"
           PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
@@ -230,19 +251,21 @@ jobs:
 
           function resolveTarballFileName(value) {
             const fileName = typeof value === "string" ? value.trim() : "";
+            const resolved = path.resolve(fileName);
             if (
               !fileName.endsWith(".tgz") ||
               fileName.includes("\0") ||
-              fileName !== path.basename(fileName) ||
-              fileName !== path.win32.basename(fileName)
+              path.dirname(resolved) !== process.cwd()
             ) {
               console.error(`npm pack reported unsafe tarball filename ${JSON.stringify(fileName)}.`);
               process.exit(1);
             }
-            return fileName;
+            return path.basename(resolved);
           }
 
-          function arrayEndFrom(start) {
+          function jsonEndFrom(start) {
+            const opening = input[start];
+            const closing = opening === "[" ? "]" : "}";
             let depth = 0;
             let inString = false;
             let escape = false;
@@ -260,9 +283,9 @@ jobs:
               }
               if (char === "\"") {
                 inString = true;
-              } else if (char === "[") {
+              } else if (char === opening) {
                 depth += 1;
-              } else if (char === "]") {
+              } else if (char === closing) {
                 depth -= 1;
                 if (depth === 0) {
                   return i + 1;
@@ -272,15 +295,15 @@ jobs:
             return -1;
           }
 
-          for (const match of input.matchAll(/\[/g)) {
+          for (const match of input.matchAll(/[\[{]/g)) {
             const start = match.index;
-            const end = arrayEndFrom(start);
+            const end = jsonEndFrom(start);
             if (end === -1) {
               continue;
             }
             try {
               const parsed = JSON.parse(input.slice(start, end));
-              const first = Array.isArray(parsed) ? parsed[0] : null;
+              const first = Array.isArray(parsed) ? parsed[0] : parsed;
               if (first && Object.prototype.hasOwnProperty.call(first, "filename")) {
                 process.stdout.write(resolveTarballFileName(first.filename));
                 process.exit(0);
@@ -312,6 +335,8 @@ jobs:
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
+          cp "$AI_RUNTIME_TARBALL_DIR"/*.tgz "$ARTIFACT_DIR/"
+          cp "$AI_RUNTIME_TARBALL_DIR/SHA256SUMS" "$ARTIFACT_DIR/ai-runtime-SHA256SUMS"
           cp -R "$DEPENDENCY_EVIDENCE_DIR" "$ARTIFACT_DIR/dependency-evidence"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
@@ -344,14 +369,17 @@ jobs:
           PREFLIGHT_ARTIFACT_DIR: ${{ steps.packed_tarball.outputs.dir }}
         run: |
           set -euo pipefail
-          TARBALL_PATH="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name '*.tgz' -print | sort | tail -n 1)"
+          TARBALL_PATH="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-[0-9]*.tgz' -print | sort | tail -n 1)"
           if [[ -z "$TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball not found." >&2
             ls -la "$PREFLIGHT_ARTIFACT_DIR" >&2 || true
             exit 1
           fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
+          LLM_CORE_TARBALL="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-llm-core-*.tgz' -print | head -n 1)"
+          AI_TARBALL="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
+          node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
+            "$TARBALL_PATH" "$PACKAGE_VERSION" "$LLM_CORE_TARBALL" "$AI_TARBALL"
 
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -674,6 +702,11 @@ jobs:
             echo "Prepared preflight tarball digest mismatch." >&2
             exit 1
           fi
+          if [[ ! -f preflight-tarball/ai-runtime-SHA256SUMS ]]; then
+            echo "Prepared AI runtime dependency checksums are missing." >&2
+            exit 1
+          fi
+          (cd preflight-tarball && sha256sum -c ai-runtime-SHA256SUMS)
 
       - name: Verify full release validation target
         if: ${{ inputs.full_release_validation_run_id != '' }}
@@ -718,7 +751,7 @@ jobs:
         id: publish_tarball
         run: |
           set -euo pipefail
-          TARBALL_PATH="$(find preflight-tarball -type f -name '*.tgz' -print | sort | tail -n 1)"
+          TARBALL_PATH="$(find preflight-tarball -type f -name 'openclaw-[0-9]*.tgz' -print | sort | tail -n 1)"
           if [[ -z "$TARBALL_PATH" ]]; then
             echo "Prepared preflight tarball not found." >&2
             ls -la preflight-tarball >&2 || true
@@ -737,4 +770,21 @@ jobs:
           if [[ -n "${publish_target}" ]]; then
             publish_target="./${publish_target}"
           fi
+          publish_if_missing() {
+            local package_name="$1"
+            local tarball_path="$2"
+            local package_version
+            if [[ -z "$tarball_path" || ! -f "$tarball_path" ]]; then
+              echo "Prepared tarball for ${package_name} was not found." >&2
+              exit 1
+            fi
+            package_version="$(node -p "require('./package.json').version")"
+            if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+              echo "${package_name}@${package_version} is already published; reusing it."
+              return 0
+            fi
+            bash scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
+          }
+          publish_if_missing "@openclaw/llm-core" "$(find preflight-tarball -type f -name 'openclaw-llm-core-*.tgz' -print | head -n 1)"
+          publish_if_missing "@openclaw/ai" "$(find preflight-tarball -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"

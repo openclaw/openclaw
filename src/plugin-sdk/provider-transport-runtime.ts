@@ -8,7 +8,7 @@ export { transformTransportMessages } from "../agents/transport-message-transfor
 export {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
+} from "@openclaw/ai/internal/shared";
 export {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,

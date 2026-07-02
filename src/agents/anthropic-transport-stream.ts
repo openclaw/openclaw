@@ -1,3 +1,19 @@
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "@openclaw/ai/internal/anthropic";
+import type { AnthropicOptions, AnthropicThinkingDisplay } from "@openclaw/ai/internal/anthropic";
+import {
+  calculateCost,
+  clampThinkingLevel,
+  getEnvApiKey,
+  parseStreamingJson,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
  * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
@@ -7,18 +23,6 @@ import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
-import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  findActiveAnthropicToolTurnAssistantIndex,
-} from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultBlockText,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -26,7 +30,6 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import {
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,

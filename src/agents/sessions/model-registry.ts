@@ -4,11 +4,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resetApiProviders } from "@openclaw/ai/providers";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { registerApiProvider } from "../../llm/api-registry.js";
-import { resetApiProviders } from "../../llm/providers/register-builtins.js";
 import type {
   AnthropicMessagesCompat,
   Api,
