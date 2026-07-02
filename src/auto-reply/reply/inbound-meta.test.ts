@@ -551,6 +551,86 @@ describe("buildInboundUserContextPrefix", () => {
     expect(reply["body"]).toBe("quoted body");
   });
 
+  it("does not duplicate reply target blocks already quoted in BodyForAgent", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      OriginatingTo: "signal:group:g1",
+      BodyForAgent: [
+        "Quoted Signal reply context from sender:",
+        "> quoted body",
+        "",
+        "Did this get done?",
+      ].join("\n"),
+      ReplyToSender: "sender",
+      ReplyToBody: "quoted body",
+    } as TemplateContext);
+
+    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
+    expect(text).not.toContain("Reply target of current user message");
+    expect(text).not.toContain('"body": "quoted body"');
+  });
+
+  it("keeps reply target blocks for ordinary user-authored blockquotes", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      BodyForAgent: ["> quoted body", "", "I agree"].join("\n"),
+      ReplyToSender: "Alice",
+      ReplyToBody: "quoted body",
+      ReplyToIsQuote: true,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["sender_label"]).toBe("Alice");
+    expect(reply["is_quote"]).toBe(true);
+    expect(reply["body"]).toBe("quoted body");
+  });
+
+  it("keeps Signal reply target blocks when marker text is not the generated wrapper", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      OriginatingTo: "signal:group:g1",
+      BodyForAgent: [
+        "ordinary pasted note",
+        "Quoted Signal reply context from sender:",
+        "> quoted body",
+      ].join("\n"),
+      ReplyToSender: "sender",
+      ReplyToBody: "quoted body",
+      ReplyToIsQuote: true,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["sender_label"]).toBe("sender");
+    expect(reply["is_quote"]).toBe(true);
+    expect(reply["body"]).toBe("quoted body");
+  });
+
+  it("keeps Signal reply target blocks when generated-looking wrapper is altered", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      OriginatingChannel: "signal",
+      OriginatingTo: "signal:group:g1",
+      BodyForAgent: [
+        "Quoted Signal reply context from sender:",
+        "> quoted body but altered",
+        "",
+        "I agree",
+      ].join("\n"),
+      ReplyToSender: "sender",
+      ReplyToBody: "quoted body",
+      ReplyToIsQuote: true,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["sender_label"]).toBe("sender");
+    expect(reply["is_quote"]).toBe(true);
+    expect(reply["body"]).toBe("quoted body");
+  });
+
   it("renders hydrated reply chain instead of duplicate one-hop reply target", () => {
     const text = buildInboundUserContextPrefix({
       ReplyToSender: "Blair",

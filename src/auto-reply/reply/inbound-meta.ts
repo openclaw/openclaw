@@ -400,8 +400,41 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
   );
 }
 
+function isSignalInboundContext(ctx: TemplateContext): boolean {
+  return [ctx.OriginatingChannel, ctx.Surface, ctx.Provider].some(
+    (value) => normalizePromptMetadataString(value) === "signal",
+  );
+}
+
 function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
   return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
+}
+
+function normalizeQuotedPromptBody(value: string | undefined): string {
+  return (value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
+
+function hasGeneratedSignalReplyContextPrefix(body: string, header: string, quotedBlock: string) {
+  const generatedPrefix = `${header}\n${quotedBlock}`;
+  return body === generatedPrefix || body.startsWith(`${generatedPrefix}\n\n`);
+}
+
+function bodyForAgentContainsReplyQuote(ctx: TemplateContext, replyToBody: string | undefined) {
+  const quote = normalizeQuotedPromptBody(replyToBody);
+  const bodyForAgent = normalizeQuotedPromptBody(sanitizePromptBody(ctx.BodyForAgent));
+  if (!quote || !bodyForAgent || !isSignalInboundContext(ctx)) {
+    return false;
+  }
+  const quotedBlock = quote
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  const quoteSender = normalizeQuotedPromptBody(sanitizePromptBody(ctx.ReplyToSender));
+  const header = `Quoted Signal reply context${quoteSender ? ` from ${quoteSender}` : ""}:`;
+  return hasGeneratedSignalReplyContextPrefix(bodyForAgent, header, quotedBlock);
 }
 
 function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
@@ -665,6 +698,7 @@ export function buildInboundUserContextPrefix(
 
   const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
   const replyToBody = rawReplyToBody ? truncateBodyHeadTail(rawReplyToBody) : rawReplyToBody;
+  const bodyAlreadyCarriesReplyContext = bodyForAgentContainsReplyQuote(ctx, rawReplyToBody);
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock(
@@ -672,7 +706,12 @@ export function buildInboundUserContextPrefix(
         replyChainPayload,
       ),
     );
-  } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
+  } else if (
+    replyToBody &&
+    !chatWindowCoversReplyContext &&
+    !currentMessageContext &&
+    !bodyAlreadyCarriesReplyContext
+  ) {
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),

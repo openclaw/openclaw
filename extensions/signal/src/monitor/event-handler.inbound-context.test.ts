@@ -235,6 +235,189 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.UntrustedContext).toBeUndefined();
   });
 
+  it("includes Signal quote context in BodyForAgent for ambiguous quoted replies", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: "Did this get done?",
+          quote: {
+            text: "Original request\nwith a second line",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe(
+      [
+        "Quoted Signal reply context from +15550001111:",
+        "> Original request",
+        "> with a second line",
+        "",
+        "Did this get done?",
+      ].join("\n"),
+    );
+    expect(context.RawBody).toBe("Did this get done?");
+    expect(context.CommandBody).toBe("Did this get done?");
+    expect(context.BodyForCommands).toBe("Did this get done?");
+    expect(context.ReplyToBody).toBe("Original request\nwith a second line");
+    expect(context.ReplyToSender).toBe("+15550001111");
+    expect(context.ReplyToIsQuote).toBe(true);
+  });
+
+  it("does not duplicate Signal quote context when BodyForAgent is already decorated", async () => {
+    const decoratedBody = [
+      "Quoted Signal reply context from +15550001111:",
+      "> Original request",
+      "",
+      "Did this get done?",
+    ].join("\n");
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: decoratedBody,
+          quote: {
+            text: "Original request",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    const bodyForAgent = context.BodyForAgent ?? "";
+    expect(bodyForAgent).toBe(decoratedBody);
+    expect((bodyForAgent.match(/Quoted Signal reply context/g) ?? []).length).toBe(1);
+  });
+
+  it("does not treat pasted Signal quote markers as generated context", async () => {
+    const pastedBody = [
+      "ordinary pasted note",
+      "Quoted Signal reply context from +15550001111:",
+      "> Original request",
+    ].join("\n");
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: pastedBody,
+          quote: {
+            text: "Original request",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe(
+      ["Quoted Signal reply context from +15550001111:", "> Original request", "", pastedBody].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("does not treat altered Signal quote wrappers as generated context", async () => {
+    const alteredBody = [
+      "Quoted Signal reply context from +15550001111:",
+      "> Original request but altered",
+      "",
+      "Did this get done?",
+    ].join("\n");
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: alteredBody,
+          quote: {
+            text: "Original request",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe(
+      [
+        "Quoted Signal reply context from +15550001111:",
+        "> Original request",
+        "",
+        alteredBody,
+      ].join("\n"),
+    );
+  });
+
+  it("preserves current Signal text when it equals the quoted body", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        dataMessage: {
+          message: "same text",
+          quote: {
+            text: "same text",
+            author: "+15550001111",
+          },
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toBe(
+      ["Quoted Signal reply context from +15550001111:", "> same text", "", "same text"].join("\n"),
+    );
+    expect(context.RawBody).toBe("same text");
+    expect(context.CommandBody).toBe("same text");
+  });
+
   it("keeps pending group history structured while current text stays command-clean", async () => {
     const groupHistories = new Map([
       [
@@ -655,7 +838,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("quoted context");
+    expect(context.BodyForAgent).toBe(
+      ["Quoted Signal reply context from +15550002222:", "> quoted context"].join("\n"),
+    );
     expect(context.ReplyToBody).toBe("quoted context");
     expect(context.ReplyToSender).toBe("+15550002222");
     expect(context.ReplyToIsQuote).toBe(true);
