@@ -1109,6 +1109,50 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a bracket delegate when the parent chain-cost persist fails and the folded basis exceeds the cap (#1144)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-guard": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 150_000,
+        outputTokens: 100_000,
+      },
+      // Parent chain cost is UNDER the cap without the run fold, OVER with it.
+      "agent:main:main": {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        continuationChainTokens: 300_000,
+      },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // Parent-entry persist throws, so the guard's requester basis stays stale.
+    updateSessionStoreMock.mockRejectedValue(new Error("session store write failed"));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-guard",
+      childRunId: "run-bracket-guard",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    // Parent persist failed → the guard folds the run cost: 300_000 + (150_000 +
+    // 100_000) = 550_000 > costCapTokens (500_000) → rejected. The bracket must
+    // NOT spawn (immediate) or enqueue (durable) on the stale pre-run basis.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+  });
+
   // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
   // already propagates model) must forward an explicit continue_delegate model
   // override to the grandchild spawn so a tool-delegated hop honors the requested

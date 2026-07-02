@@ -1048,6 +1048,12 @@ export async function runSubagentAnnounceFlow(params: {
     // persist succeeds, so the basis is never double-counted in the normal path;
     // a fallback double-count would only over-estimate cost (fails closed).
     let childChainTokensToFold = 0;
+    // Companion to childChainTokensToFold for the PARENT-entry persist: the
+    // bracket/tool chain guard reads the requester (parent) chain cost, which is
+    // stale if the parent accumulation persist failed. When it fails this holds
+    // the run cost so the guard folds it in-memory and cannot under-enforce the
+    // cost cap; 0 when the persist succeeds (no double-count) (#1144).
+    let parentChainTokensToFold = 0;
     if (continuationEnabled && isContinuationChainDelegate) {
       let childEntry = readSessionEntryByKey(params.childSessionKey);
       const hasTokenData =
@@ -1091,6 +1097,11 @@ export async function runSubagentAnnounceFlow(params: {
           );
           invalidateSessionEntry(targetRequesterSessionKey);
         } catch (err) {
+          // Parent-entry persist failed: the requester chain cost read by the
+          // bracket/tool chain guard below is stale (missing this run). Fold the
+          // run cost into the guard's basis so it cannot under-enforce the cost
+          // cap (fails closed) (#1144).
+          parentChainTokensToFold = accumulatedChildTokens;
           defaultRuntime.log(
             `[subagent-chain-hop] Failed to persist token accumulation for ${targetRequesterSessionKey}: ${String(err)}`,
           );
@@ -1265,10 +1276,14 @@ export async function runSubagentAnnounceFlow(params: {
           } else {
             const parentEntry = readSessionEntryByKey(targetRequesterSessionKey);
             const storedChainTokens = parentEntry?.continuationChainTokens ?? 0;
-            const parentChainTokens =
-              storedChainTokens >= accumulatedChildTokens
-                ? storedChainTokens
-                : storedChainTokens + accumulatedChildTokens;
+            // storedChainTokens already includes this run's tokens when the
+            // parent accumulation persist succeeded (parentChainTokensToFold === 0).
+            // If that persist FAILED, the entry is stale and parentChainTokensToFold
+            // carries the run cost so the guard still enforces against the post-run
+            // total — never guessed from a `stored >= run` heuristic that
+            // under-enforces when the stale prior chain cost already exceeds the
+            // run cost (#1144).
+            const parentChainTokens = storedChainTokens + parentChainTokensToFold;
             if (costCapTokens > 0 && parentChainTokens > costCapTokens) {
               chainGuardResult = {
                 allowed: false,
@@ -1471,10 +1486,10 @@ export async function runSubagentAnnounceFlow(params: {
 
           const parentEntryForTool = readSessionEntryByKey(targetRequesterSessionKey);
           const storedToolChainTokens = parentEntryForTool?.continuationChainTokens ?? 0;
-          const parentChainTokensForTool =
-            storedToolChainTokens >= accumulatedChildTokens
-              ? storedToolChainTokens
-              : storedToolChainTokens + accumulatedChildTokens;
+          // Same definitive fold as the bracket guard: parentChainTokensToFold is
+          // 0 when the parent persist landed (storedToolChainTokens already
+          // includes the run cost) and the run cost when it failed (#1144).
+          const parentChainTokensForTool = storedToolChainTokens + parentChainTokensToFold;
           if (toolCostCapTokens > 0 && parentChainTokensForTool > toolCostCapTokens) {
             const remaining = toolDelegates.length - toolDelegateIdx;
             const summary = `Tool delegate rejected: cost cap exceeded (${parentChainTokensForTool} > ${toolCostCapTokens}).`;
