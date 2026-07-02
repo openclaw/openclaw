@@ -551,4 +551,219 @@ describe("channel ingress queue", () => {
       expect(await queue.listClaims()).toEqual([]);
     });
   });
+
+  describe("corrupt JSON resilience", () => {
+    function insertCorruptRow(
+      stateDir: string,
+      queueName: string,
+      eventId: string,
+      overrides: Partial<{
+        payload_json: string;
+        metadata_json: string | null;
+        completed_metadata_json: string | null;
+        status: string;
+        claim_token: string;
+        claim_owner: string;
+        claimed_at: number;
+        completed_at: number;
+      }>,
+    ) {
+      const { db } = openOpenClawStateDatabase({
+        env: createStateDirEnv(stateDir),
+      });
+      const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("channel_ingress_events").values({
+          queue_name: queueName,
+          event_id: eventId,
+          channel_id: "test",
+          account_id: "account",
+          status: overrides.status ?? "pending",
+          lane_key: null,
+          payload_json: overrides.payload_json ?? "null",
+          metadata_json: overrides.metadata_json ?? null,
+          completed_metadata_json: overrides.completed_metadata_json ?? null,
+          received_at: 100,
+          updated_at: 200,
+          attempts: 0,
+          claim_token: overrides.claim_token ?? null,
+          claim_owner: overrides.claim_owner ?? null,
+          claimed_at: overrides.claimed_at ?? null,
+          completed_at: overrides.completed_at ?? null,
+        } as any),
+      );
+    }
+
+    it("skips a pending row with corrupt payload_json in listPending", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("good-1", { text: "hello" });
+        insertCorruptRow(stateDir, '["test","account"]', "bad-1", {
+          payload_json: "{corrupt: true, >>>NOT JSON<<<",
+        });
+        await queue.enqueue("good-2", { text: "world" });
+
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(2);
+        expect(pending.map((r) => r.id).toSorted()).toEqual(["good-1", "good-2"]);
+      });
+    });
+
+    it("skips corrupt metadata_json in listPending", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }, { source: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("ev-1", { text: "ok" }, { metadata: { source: "good" } });
+        insertCorruptRow(stateDir, '["test","account"]', "ev-bad-meta", {
+          payload_json: JSON.stringify({ text: "has corrupt metadata" }),
+          metadata_json: "{broken",
+        });
+
+        const pending = await queue.listPending();
+        const bad = pending.find((r) => r.id === "ev-bad-meta");
+        expect(bad).not.toBeNull();
+        expect(bad!.metadata).toBeUndefined();
+      });
+    });
+
+    it("skips a claimed row with corrupt payload_json in listClaims", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("claim-ok", { text: "ok" });
+        insertCorruptRow(stateDir, '["test","account"]', "claim-bad", {
+          payload_json: "{{{broken",
+          status: "claimed",
+          claim_token: "tok-1",
+          claim_owner: "worker",
+          claimed_at: 200,
+        });
+
+        // Verify that listClaims skips the corrupt claimed row.
+        const initialClaims = await queue.listClaims();
+        expect(initialClaims.some((c) => c.id === "claim-bad")).toBe(false);
+
+        // The valid enqueued row can still be claimed.
+        const claimResult = await queue.claim("claim-ok");
+        expect(claimResult).not.toBeNull();
+
+        const allClaims = await queue.listClaims();
+        expect(allClaims.some((c) => c.id === "claim-bad")).toBe(false);
+      });
+    });
+
+    it("skips corrupt completed_metadata_json during duplicate detection", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }, unknown, { handler: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("comp-1", { text: "first" });
+        await queue.complete("comp-1", { metadata: { handler: "worker" }, completedAt: 150 });
+
+        // Corrupt the completed_metadata_json
+        const { db } = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        db.prepare(
+          `UPDATE channel_ingress_events
+             SET completed_metadata_json = ?
+           WHERE queue_name = ? AND event_id = ?`,
+        ).run("not valid json", '["test","account"]', "comp-1");
+
+        // Duplicate detection should still work (metadata just omitted)
+        const dup = await queue.enqueue("comp-1", { text: "late" });
+        expect(dup.kind).toBe("completed");
+        if (dup.kind === "completed") {
+          expect(dup.record.metadata).toBeUndefined();
+        }
+      });
+    });
+
+    it("claimNext skips a corrupt first pending row without lane derivation", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        // Insert the bad row first so it sorts before the good row.
+        const earlyTime = 10;
+        insertCorruptRow(stateDir, '["test","account"]', "bad-claim", {
+          payload_json: "{corrupt",
+        });
+        // Override the bad row's received_at to be earlier.
+        {
+          const { db } = openOpenClawStateDatabase({
+            env: createStateDirEnv(stateDir),
+          });
+          db.prepare(
+            `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
+          ).run(earlyTime, '["test","account"]', "bad-claim");
+        }
+        await queue.enqueue("good-1", { text: "hello" }, { receivedAt: earlyTime + 10 });
+
+        const claimed = await queue.claimNext();
+        expect(claimed).not.toBeNull();
+        expect(claimed!.id).toBe("good-1");
+      });
+    });
+
+    it("claim returns null for a corrupt pending row", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("good-1", { text: "hello" });
+        insertCorruptRow(stateDir, '["test","account"]', "bad-direct", {
+          payload_json: "{corrupt",
+        });
+
+        // The corrupt row should not be claimable.
+        const badClaim = await queue.claim("bad-direct");
+        expect(badClaim).toBeNull();
+
+        // The good row should still be claimable.
+        const goodClaim = await queue.claim("good-1");
+        expect(goodClaim).not.toBeNull();
+        expect(goodClaim!.payload.text).toBe("hello");
+      });
+    });
+
+    it("handles valid JSON null payload correctly", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<null>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        // Valid JSON null should parse as null, not be treated as corrupt.
+        await queue.enqueue("null-ok", null);
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(1);
+        expect(pending[0].payload).toBeNull();
+      });
+    });
+  });
 });

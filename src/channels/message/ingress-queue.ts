@@ -218,20 +218,31 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function parseJson(value: string): unknown {
-  return JSON.parse(value);
+type ParseJsonResult = { ok: true; value: unknown } | { ok: false };
+
+function parseJson(value: string): ParseJsonResult {
+  try {
+    return { ok: true, value: JSON.parse(value) };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function baseRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
-): ChannelIngressQueueRecord<TPayload, TMetadata> {
+): ChannelIngressQueueRecord<TPayload, TMetadata> | null {
+  const payloadResult = parseJson(row.payload_json);
+  if (!payloadResult.ok) {
+    return null;
+  }
+  const metaResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
   return {
     id: row.event_id,
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
-    payload: parseJson(row.payload_json) as TPayload,
-    ...(row.metadata_json === null ? {} : { metadata: parseJson(row.metadata_json) as TMetadata }),
+    payload: payloadResult.value as TPayload,
+    ...(metaResult === null || !metaResult.ok ? {} : { metadata: metaResult.value as TMetadata }),
     receivedAt: row.received_at,
     updatedAt: row.updated_at,
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
@@ -243,9 +254,13 @@ function baseRecord<TPayload, TMetadata>(
 
 function claimedRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
-): ChannelIngressQueueClaim<TPayload, TMetadata> {
+): ChannelIngressQueueClaim<TPayload, TMetadata> | null {
+  const base = baseRecord<TPayload, TMetadata>(row);
+  if (base === null) {
+    return null;
+  }
   return {
-    ...baseRecord<TPayload, TMetadata>(row),
+    ...base,
     claim: {
       token: row.claim_token ?? "",
       ownerId: row.claim_owner ?? "",
@@ -257,15 +272,17 @@ function claimedRecord<TPayload, TMetadata>(
 function completedRecord<TCompletedMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueCompletedRecord<TCompletedMetadata> {
+  const metaResult =
+    row.completed_metadata_json === null ? null : parseJson(row.completed_metadata_json);
   return {
     id: row.event_id,
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
     completedAt: row.completed_at ?? row.updated_at,
-    ...(row.completed_metadata_json === null
+    ...(metaResult === null || !metaResult.ok
       ? {}
-      : { metadata: parseJson(row.completed_metadata_json) as TCompletedMetadata }),
+      : { metadata: metaResult.value as TCompletedMetadata }),
   };
 }
 
@@ -309,7 +326,7 @@ function claimTokenFrom(
 
 function rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(
   row: ChannelIngressRow,
-): ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> {
+): ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> | null {
   if (row.status === "completed") {
     return { kind: "completed", duplicate: true, record: completedRecord(row) };
   }
@@ -317,9 +334,11 @@ function rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(
     return { kind: "failed", duplicate: true, record: failedRecord(row) };
   }
   if (row.status === "claimed") {
-    return { kind: "claimed", duplicate: true, record: claimedRecord(row) };
+    const rec = claimedRecord<TPayload, TMetadata>(row);
+    return rec ? { kind: "claimed", duplicate: true, record: rec } : null;
   }
-  return { kind: "pending", duplicate: true, record: baseRecord(row) };
+  const rec = baseRecord<TPayload, TMetadata>(row);
+  return rec ? { kind: "pending", duplicate: true, record: rec } : null;
 }
 
 function normalizeLimit(limit: number | "all" | undefined): number {
@@ -402,13 +421,23 @@ export function createChannelIngressQueue<
           throw new Error(`Failed to read channel ingress event ${queueName}/${eventId}`);
         }
         if (affectedRows(insert) > 0) {
+          const fresh = baseRecord<TPayload, TMetadata>(row);
+          if (fresh === null) {
+            throw new Error(
+              `Corrupt payload_json in channel ingress event ${queueName}/${eventId}`,
+            );
+          }
           return {
             kind: "accepted",
             duplicate: false,
-            record: baseRecord<TPayload, TMetadata>(row),
+            record: fresh,
           };
         }
-        return rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row);
+        const dup = rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row);
+        if (dup === null) {
+          throw new Error(`Corrupt channel ingress event ${queueName}/${eventId}`);
+        }
+        return dup;
       },
       { path: database.path },
     );
@@ -432,7 +461,9 @@ export function createChannelIngressQueue<
         ? baseQuery.orderBy("event_id", "asc")
         : baseQuery.orderBy("received_at", "asc").orderBy("event_id", "asc");
     const rows = executeSqliteQuerySync(db, query).rows;
-    return rows.map((row) => baseRecord<TPayload, TMetadata>(row));
+    return rows
+      .map((row) => baseRecord<TPayload, TMetadata>(row))
+      .filter((rec): rec is ChannelIngressQueueRecord<TPayload, TMetadata> => rec !== null);
   };
 
   const listClaims: ChannelIngressQueue<
@@ -453,7 +484,9 @@ export function createChannelIngressQueue<
         .orderBy("received_at", "asc")
         .orderBy("event_id", "asc"),
     ).rows;
-    return rows.map((row) => claimedRecord<TPayload, TMetadata>(row));
+    return rows
+      .map((row) => claimedRecord<TPayload, TMetadata>(row))
+      .filter((rec): rec is ChannelIngressQueueClaim<TPayload, TMetadata> => rec !== null);
   };
 
   const claimNext: ChannelIngressQueue<
@@ -489,7 +522,16 @@ export function createChannelIngressQueue<
               .where("event_id", "in", candidateIds),
           ).rows;
           const claimedCandidateLaneKeys = claimedCandidateRows
-            .map((row) => row.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(row)))
+            .map((row) => {
+              if (row.lane_key) {
+                return row.lane_key;
+              }
+              if (!claimOptions?.deriveLaneKey) {
+                return undefined;
+              }
+              const rec = baseRecord<TPayload, TMetadata>(row);
+              return rec ? claimOptions.deriveLaneKey(rec) : undefined;
+            })
             .filter((laneKey): laneKey is string => Boolean(laneKey));
           if (claimedCandidateLaneKeys.length > 0) {
             effectiveBlocked = new Set([...blocked, ...claimedCandidateLaneKeys]);
@@ -513,20 +555,29 @@ export function createChannelIngressQueue<
           claimOptions?.orderBy === "id"
             ? select.orderBy("event_id", "asc")
             : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
-        orderedSelect =
-          claimOptions?.deriveLaneKey === undefined
-            ? orderedSelect.limit(1)
-            : orderedSelect.limit(normalizeScanLimit(claimOptions.scanLimit));
+        orderedSelect = orderedSelect.limit(normalizeScanLimit(claimOptions?.scanLimit));
         const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
         const selected = rows.find((row) => {
-          const laneKey = row.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(row));
+          const rec = baseRecord<TPayload, TMetadata>(row);
+          if (rec === null) {
+            return false;
+          }
+          const laneKey =
+            row.lane_key ??
+            (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
           return !laneKey || !effectiveBlocked.has(laneKey);
         });
         if (!selected) {
           return null;
         }
+        // Validate the payload can be decoded before mutating row state.
+        const selectedBase = baseRecord<TPayload, TMetadata>(selected);
+        if (selectedBase === null) {
+          return null;
+        }
         const derivedLaneKey =
-          selected.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(selected));
+          selected.lane_key ??
+          (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(selectedBase) : undefined);
         const token = randomUUID();
         const claimedAt = now();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
@@ -568,6 +619,15 @@ export function createChannelIngressQueue<
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
+        // Validate the payload can be decoded before mutating row state.
+        const pendingRow = selectRow(tx.db, queueName, eventId);
+        if (
+          !pendingRow ||
+          pendingRow.status !== "pending" ||
+          baseRecord<TPayload, TMetadata>(pendingRow) === null
+        ) {
+          return null;
+        }
         const token = randomUUID();
         const claimedAt = now();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
