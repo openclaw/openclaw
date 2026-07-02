@@ -780,14 +780,26 @@ final class NodeAppModel {
     }
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
-        guard mode != .off else { return true }
+        guard mode != .off else {
+            self.locationService.setBackgroundLocationUpdatesEnabled(false)
+            self.locationService.stopMonitoringSignificantLocationChanges()
+            return true
+        }
         let status = await self.locationService.ensureAuthorization(mode: mode)
         switch status {
         case .authorizedAlways:
+            self.locationService.setBackgroundLocationUpdatesEnabled(mode == .always)
+            if mode != .always {
+                self.locationService.stopMonitoringSignificantLocationChanges()
+            }
             return true
         case .authorizedWhenInUse:
-            return mode != .always
+            self.locationService.setBackgroundLocationUpdatesEnabled(false)
+            self.locationService.stopMonitoringSignificantLocationChanges()
+            return true
         default:
+            self.locationService.setBackgroundLocationUpdatesEnabled(false)
+            self.locationService.stopMonitoringSignificantLocationChanges()
             return false
         }
     }

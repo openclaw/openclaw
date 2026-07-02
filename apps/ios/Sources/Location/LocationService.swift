@@ -10,6 +10,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     }
 
     private let manager = CLLocationManager()
+    private var authWaitID: UUID?
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
@@ -71,7 +72,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
     private func awaitAuthorizationChange() async -> CLAuthorizationStatus {
         await withCheckedContinuation { cont in
+            let waitID = UUID()
+            self.authWaitID = waitID
             self.authContinuation = cont
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(1500))
+                guard self.authWaitID == waitID, self.authContinuation != nil else { return }
+                self.authWaitID = nil
+                self.authContinuation = nil
+                cont.resume(returning: self.manager.authorizationStatus)
+            }
         }
     }
 
@@ -89,10 +99,22 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager.startMonitoringSignificantLocationChanges()
     }
 
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool) {
+        self.manager.allowsBackgroundLocationUpdates = enabled
+    }
+
+    func stopMonitoringSignificantLocationChanges() {
+        self.significantLocationCallback = nil
+        self.isMonitoringSignificantChanges = false
+        self.manager.stopMonitoringSignificantLocationChanges()
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
+            self.reconcileBackgroundMonitoringAuthorization(status)
             if let cont = self.authContinuation {
+                self.authWaitID = nil
                 self.authContinuation = nil
                 cont.resume(returning: status)
             }

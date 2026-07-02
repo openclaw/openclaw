@@ -713,8 +713,13 @@ extension SettingsProTab {
                 .pickerStyle(.segmented)
                 .disabled(self.isChangingLocationMode)
 
-                if let locationStatusText {
-                    Text(locationStatusText)
+                Text(self.locationPermissionDetailText)
+                    .font(.caption2)
+                    .foregroundStyle(
+                        self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
+
+                if let locationPermissionWarningText {
+                    Text(locationPermissionWarningText)
                         .font(.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }

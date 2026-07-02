@@ -31,7 +31,17 @@ protocol LocationServicing: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool)
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
+    func stopMonitoringSignificantLocationChanges()
+}
+
+extension LocationServicing {
+    func reconcileBackgroundMonitoringAuthorization(_ status: CLAuthorizationStatus) {
+        guard status != .authorizedAlways else { return }
+        self.setBackgroundLocationUpdatesEnabled(false)
+        self.stopMonitoringSignificantLocationChanges()
+    }
 }
 
 @MainActor

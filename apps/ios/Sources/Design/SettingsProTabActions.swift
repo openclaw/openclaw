@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -170,10 +171,34 @@ extension SettingsProTab {
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        self.refreshLocationPermissionSummary()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func refreshLocationPermissionSummary() {
+        let mode = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let manager = CLLocationManager()
+        let authorizationStatus = manager.authorizationStatus
+        let accuracyAuthorization = manager.accuracyAuthorization
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            await MainActor.run {
+                self.locationPermissionSummary = LocationPermissionSummary(
+                    desiredMode: mode,
+                    locationServicesEnabled: locationServicesEnabled,
+                    authorizationStatus: authorizationStatus,
+                    accuracyAuthorization: accuracyAuthorization)
+            }
+        }
+    }
+
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
     }
 
     func syncAfterOnboardingReset() {
@@ -379,12 +404,15 @@ extension SettingsProTab {
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
+            _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
+            self.refreshLocationPermissionSummary()
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        self.refreshLocationPermissionSummary()
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -392,6 +420,7 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
+            self.refreshLocationPermissionSummary()
         }
     }
 
@@ -773,15 +802,32 @@ extension SettingsProTab {
 
     var privacyDetail: String {
         let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
+        return switch (location, self.locationPermissionSummary.effectiveMode) {
+        case (.off, _):
+            "Location off"
+        case (.whileUsing, .whileUsing):
+            "Location While Using"
+        case (.whileUsing, .off):
+            "Location While Using, effective Off"
+        case (.whileUsing, .always):
+            "Location While Using, effective Always"
+        case (.always, .always):
+            "Location Always"
+        case (.always, .whileUsing):
+            "Location Always, effective While Using"
+        case (.always, .off):
+            "Location Always, effective Off"
+        }
     }
 
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
-        }
+    var locationPermissionDetailText: String {
+        self.locationPermissionSummary.detailText
+    }
+
+    var locationPermissionWarningText: String? {
+        guard let locationStatusText else { return nil }
+        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        return locationStatusText
     }
 
     var notificationStatusText: String {
