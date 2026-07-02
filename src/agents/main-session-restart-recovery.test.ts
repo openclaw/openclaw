@@ -972,6 +972,54 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
+  it("directly delivers terminal sessions with a pending final delivery payload", async () => {
+    const sessionsDir = await makeSessionsDir("mexico-city-trip");
+    const pendingPayload = "Done, logged.";
+    await writeStore(sessionsDir, {
+      "agent:mexico-city-trip:whatsapp:group:120363408042254152@g.us": {
+        sessionId: "terminal-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryContext: {
+          channel: "whatsapp",
+          to: "120363408042254152@g.us",
+          accountId: "default",
+        },
+        pendingFinalDeliveryCreatedAt: 123_456,
+      },
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+      method: "message.action",
+      params: {
+        channel: "whatsapp",
+        action: "send",
+        sessionKey: "agent:mexico-city-trip:whatsapp:group:120363408042254152@g.us",
+        sessionId: "terminal-session",
+        idempotencyKey: "main-session-pending-final:terminal-session:123456",
+        accountId: "default",
+        params: {
+          to: "120363408042254152@g.us",
+          message: pendingPayload,
+          bestEffort: true,
+        },
+      },
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:mexico-city-trip:whatsapp:group:120363408042254152@g.us"];
+    expect(entry?.status).toBe("done");
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = [
