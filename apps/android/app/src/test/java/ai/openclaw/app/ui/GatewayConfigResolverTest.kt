@@ -607,6 +607,22 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun composeGatewayManualUrl_bracketsIpv6ForEndpointParsing() {
+    val url = composeGatewayManualUrl("::1", "18789", tls = false)
+
+    assertEquals("http://[::1]:18789", url)
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "::1",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://[::1]:18789",
+      ),
+      parseGatewayEndpoint(url!!),
+    )
+  }
+
+  @Test
   fun resolveGatewayConnectConfigManualAcceptsTailscaleHostWithoutPort() {
     val resolved =
       resolveGatewayConnectConfig(

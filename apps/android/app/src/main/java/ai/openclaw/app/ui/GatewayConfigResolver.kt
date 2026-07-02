@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -261,7 +262,7 @@ internal fun composeGatewayManualUrl(
     }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
+  return "$scheme://${formatGatewayAuthority(host, port)}"
 }
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
