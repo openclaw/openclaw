@@ -129,7 +129,7 @@ type SlackWebApiError = Error & {
   data?: SlackWebApiErrorData;
 };
 
-function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
+export function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
 }
 
@@ -334,7 +334,7 @@ async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<
   throw new Error("unreachable Slack DNS retry loop exit");
 }
 
-function isSlackCustomizeScopeError(err: unknown): boolean {
+export function isSlackCustomizeScopeError(err: unknown): boolean {
   const data = getSlackWebApiErrorData(err);
   const code = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.error));
   if (code !== "missing_scope") {

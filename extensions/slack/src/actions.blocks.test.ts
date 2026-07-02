@@ -1,5 +1,5 @@
 // Slack tests cover actions.blocks plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackEditTestClient } from "./blocks.test-helpers.js";
 
 const { editSlackMessage } = await import("./actions.js");
@@ -35,6 +35,76 @@ describe("editSlackMessage blocks", () => {
       text: "Shared a Block Kit message",
       blocks: [{ type: "divider" }],
     });
+  });
+
+  it("preserves custom username and icon_url on edit", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackMessage("C123", "171234.567", "updated", {
+      token: "xoxb-test",
+      client,
+      identity: {
+        username: "OpenClaw Agent",
+        iconUrl: "https://example.com/avatar.png",
+      },
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        ts: "171234.567",
+        text: "updated",
+        username: "OpenClaw Agent",
+        icon_url: "https://example.com/avatar.png",
+      }),
+    );
+  });
+
+  it("forwards icon_emoji identity on edit (mutually exclusive with icon_url)", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackMessage("C123", "171234.567", "updated", {
+      token: "xoxb-test",
+      client,
+      identity: {
+        username: "OpenClaw Agent",
+        iconEmoji: ":lobster:",
+      },
+    });
+
+    const [payload] = client.chat.update.mock.calls[0] as [Record<string, unknown>];
+    expect(payload).toMatchObject({
+      username: "OpenClaw Agent",
+      icon_emoji: ":lobster:",
+    });
+    expect(payload).not.toHaveProperty("icon_url");
+  });
+
+  it("retries the edit without identity when chat:write.customize scope is missing", async () => {
+    const scopeError = Object.assign(new Error("missing_scope"), {
+      data: { error: "missing_scope", needed: "chat:write.customize" },
+    });
+    const update = vi
+      .fn<(payload: Record<string, unknown>) => Promise<{ ok: boolean }>>()
+      .mockRejectedValueOnce(scopeError)
+      .mockResolvedValueOnce({ ok: true });
+    const client = { chat: { update } } as unknown as ReturnType<typeof createSlackEditTestClient>;
+
+    await editSlackMessage("C123", "171234.567", "updated", {
+      token: "xoxb-test",
+      client,
+      identity: { username: "OpenClaw Agent", iconUrl: "https://example.com/a.png" },
+    });
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        icon_url: "https://example.com/a.png",
+        username: "OpenClaw Agent",
+      }),
+    );
+    expect(update.mock.calls[1]?.[0]).not.toHaveProperty("icon_url");
+    expect(update.mock.calls[1]?.[0]).not.toHaveProperty("username");
   });
 
   it("uses image block text as edit fallback", async () => {

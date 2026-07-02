@@ -1310,6 +1310,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             messageId,
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+            ...(slackIdentity ? { identity: slackIdentity } : {}),
             threadTs: finalThreadTs,
           });
         } catch (err) {
@@ -1396,6 +1397,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             messageId: preview.messageId,
             text: edit.text,
             ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
+            ...(slackIdentity ? { identity: slackIdentity } : {}),
             threadTs: edit.threadTs,
           });
           if (!ttsSupplement) {
