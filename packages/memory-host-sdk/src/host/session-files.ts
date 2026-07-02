@@ -840,16 +840,13 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
-      }
+      // Per-message cron-prompt drop happens in sanitizeSessionText below — we
+      // do NOT cross-message wipe here. A user-typed "[cron:..." prefix must
+      // not flip the entire archive to cron-generated, because that drops
+      // every later message and any already-collected earlier messages. The
+      // structured isCronRunGeneratedRecord check above is the only safe
+      // cron-run signal because it reads server-set sessionKey provenance
+      // that user text cannot spoof. See #98241.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
