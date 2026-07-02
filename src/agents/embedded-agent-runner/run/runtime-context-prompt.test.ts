@@ -99,6 +99,105 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("strips system-event prefix from modelPrompt when hooks add prepend context", () => {
+    // Regression: before_prompt_build hooks that add prependContext set hasPromptBuildContext=true,
+    // causing modelPrompt=effectivePrompt (with system-event prefix). Without this fix the event
+    // appeared in both runtimeContext (Message A) and modelPrompt (Message B). #95323
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello, what can you do?";
+    const prependContext = "Hook injected context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [prependContext, "", queuedBody].join("\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [prependContext, "", userText].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips system-event prefix from modelPrompt when hooks add append context", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook tail context";
+    const queuedBody = [systemEvent, "", userText].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: queuedBody,
+        transcriptPrompt: userText,
+        modelPrompt: [queuedBody, "", appendContext].join("\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, "", appendContext].join("\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips hidden prompt context on both sides without removing repeated hook text", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const untrustedContext = "Untrusted channel metadata";
+    const hookContext = systemEvent;
+    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+    const modelPrompt = [hookContext, effectivePrompt, hookContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt,
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [hookContext, userText, hookContext].join("\n\n"),
+      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+    });
+  });
+
+  it("anchors hidden-context removal before append hooks that repeat the prompt", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook summary: Hello";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [systemEvent, userText].join("\n\n"),
+        transcriptPrompt: userText,
+        modelPrompt: [systemEvent, userText, appendContext].join("\n\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, appendContext].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
+  it("strips the last matching prompt occurrence when prepend hooks quote the body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const untrustedContext = "Untrusted channel metadata";
+    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [effectivePrompt, userText].join("\n\n"),
+      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
@@ -178,6 +277,20 @@ describe("runtime context prompt submission", () => {
     expect(parts.runtimeContext).toBe(
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     );
+  });
+
+  it("preserves repeated hook text when there is no hidden runtime context", () => {
+    const modelPrompt = "Hello\n\nHook summary: Hello";
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "Hello",
+        transcriptPrompt: "Hello",
+        modelPrompt,
+      }),
+    ).toEqual({
+      prompt: "Hello",
+      modelPrompt,
+    });
   });
 
   it("fails closed for unterminated hidden runtime context blocks", () => {
