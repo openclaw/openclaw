@@ -19,9 +19,16 @@ import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
+  readSessionChangedEvent,
+  type SessionChangedResult,
+} from "../../lib/sessions/reconcile.ts";
+import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import {
@@ -40,8 +47,13 @@ import {
   handleChatSideResultGatewayEvent,
   type ChatEventPayload,
 } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import {
+  chatScopedEventSessionMatches,
+  loadChatHistory,
+  type ChatMetadataResult,
+  type ChatState,
+} from "./chat-history.ts";
+import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
@@ -118,12 +130,14 @@ export type ChatPageHost = ChatHost &
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult: SessionsListResult | null;
+    sessionsResultAgentId: string | null;
     sessionsError: string | null;
     sessionsShowArchived: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     refreshSessionsAfterChat: Map<string, { sessionKey: string; agentId?: string }>;
     pendingAbort: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+    pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, unknown>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
@@ -606,6 +620,153 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   return refresh;
 }
 
+function sessionMessageMatchesChat(
+  state: ChatPageHost,
+  event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
+): boolean {
+  return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
+}
+
+function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
+  return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
+}
+
+function globalSessionEventMatchesChat(
+  state: ChatPageHost,
+  event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
+): boolean {
+  if (!isUiGlobalSessionKey(event.key)) {
+    return true;
+  }
+  const selectedAgentId = isUiGlobalSessionKey(state.sessionKey)
+    ? resolveUiSelectedGlobalAgentId(state)
+    : resolveUiGlobalAliasAgentId(state, state.sessionKey);
+  return selectedAgentId
+    ? selectedGlobalEventAgentId(state, event.agentId) === selectedAgentId
+    : true;
+}
+
+function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionChangedResult {
+  const selectedAgentId = resolveChatAgentId(state);
+  const reconciled = state.sessions.reconcileChanged(payload, {
+    resultAgentId: state.sessionsResultAgentId ?? selectedAgentId,
+    selectedGlobalAgentId: selectedAgentId,
+    showArchived: state.sessionsShowArchived,
+  });
+  if (reconciled.applied) {
+    state.sessionsResult = state.sessions.state.result;
+    state.sessionsResultAgentId = state.sessions.state.agentId;
+    state.sessionsError = state.sessions.state.error;
+  }
+  return reconciled;
+}
+
+function finishSessionMessageRunReconcile(
+  state: ChatPageHost,
+  sessionKey: string,
+  runId: string | null,
+  row: SessionChangedResult["row"] | undefined,
+): boolean {
+  const cleared = row
+    ? reconcileChatRunFromSessionRow(state, row, { publishRunStatus: true })
+    : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+  if (!cleared) {
+    return false;
+  }
+  clearPendingQueueItemsForRun(state, runId ?? undefined);
+  void loadChatHistory(state).finally(() => {
+    if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
+      return;
+    }
+    flushChatQueueForEvent(state);
+    state.requestUpdate?.();
+  });
+  return true;
+}
+
+function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
+  const event = readSessionChangedEvent(payload);
+  if (!event || !globalSessionEventMatchesChat(state, event)) {
+    return;
+  }
+  const matchesChat = sessionMessageMatchesChat(state, event);
+  const runIdBeforeApply = state.chatRunId;
+  const result = reconcileSessionEvent(state, payload);
+  if (runIdBeforeApply && matchesChat) {
+    const runId = event.clientRunId ?? event.runId ?? runIdBeforeApply;
+    state.pendingSessionMessageReloadSessionKey = event.key;
+    if (event.hasActiveRun === true) {
+      return;
+    }
+    if (finishSessionMessageRunReconcile(state, event.key, runId, result.row)) {
+      state.pendingSessionMessageReloadSessionKey = null;
+      return;
+    }
+    void refreshCurrentChatSessionList(state).then(() => {
+      if (!state.pendingSessionMessageReloadSessionKey || state.chatRunId !== runIdBeforeApply) {
+        return;
+      }
+      if (
+        finishSessionMessageRunReconcile(
+          state,
+          state.pendingSessionMessageReloadSessionKey,
+          runId,
+          undefined,
+        )
+      ) {
+        state.pendingSessionMessageReloadSessionKey = null;
+      }
+    });
+    return;
+  }
+  if (matchesChat) {
+    state.pendingSessionMessageReloadSessionKey = null;
+    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+  }
+}
+
+function replayPendingSessionMessageReload(
+  state: ChatPageHost,
+  payload: ChatEventPayload | undefined,
+) {
+  const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
+  const payloadSessionKey = payload?.sessionKey?.trim();
+  if (
+    !pendingSessionKey ||
+    !payloadSessionKey ||
+    !areUiSessionKeysEquivalent(pendingSessionKey, payloadSessionKey) ||
+    !areUiSessionKeysEquivalent(payloadSessionKey, state.sessionKey) ||
+    state.chatRunId
+  ) {
+    return;
+  }
+  state.pendingSessionMessageReloadSessionKey = null;
+  void loadChatHistory(state).finally(() => state.requestUpdate?.());
+}
+
+function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
+  const runIdBeforeApply = state.chatRunId;
+  const event = readSessionChangedEvent(payload);
+  const result = reconcileSessionEvent(state, payload);
+  if (
+    result.applied &&
+    event &&
+    runIdBeforeApply &&
+    sessionMessageMatchesChat(state, event) &&
+    finishSessionMessageRunReconcile(
+      state,
+      event.key,
+      event.clientRunId ?? event.runId ?? runIdBeforeApply,
+      result.row,
+    )
+  ) {
+    return;
+  }
+  if (!result.applied && event?.isChatTurn !== true) {
+    void refreshCurrentChatSessionList(state);
+  }
+}
+
 async function loadPageAssistantIdentity(
   state: ChatPageHost,
   opts?: { sessionKey?: string; expectedSessionKey?: string },
@@ -697,6 +858,7 @@ export function createPageState(
     chatModelsLoading: false,
     chatModelCatalog: [] as ModelCatalogEntry[],
     sessionsResult: null,
+    sessionsResultAgentId: null,
     sessionsLoading: false,
     sessionsError: null,
     sessionsShowArchived: false,
@@ -704,6 +866,7 @@ export function createPageState(
     agentsSelectedId: null,
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
+    pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
     chatSendTimingsByRun: new Map<string, unknown>(),
     chatQueue: [] as ChatQueueItem[],
@@ -833,6 +996,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       state as unknown as ChatState,
       event.payload as ChatEventPayload | undefined,
     );
+    replayPendingSessionMessageReload(state, event.payload as ChatEventPayload | undefined);
     requestPageUpdate(state);
     return;
   }
@@ -856,8 +1020,14 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     recordChatSendServerTiming(state, event.payload);
     return;
   }
-  if (event.event === "sessions.changed" || event.event === "session.message") {
-    void refreshPageChat(state).finally(() => requestPageUpdate(state));
+  if (event.event === "session.message") {
+    handleSessionMessageEvent(state, event.payload);
+    requestPageUpdate(state);
+    return;
+  }
+  if (event.event === "sessions.changed") {
+    handleSessionsChangedEvent(state, event.payload);
+    requestPageUpdate(state);
   }
 }
 

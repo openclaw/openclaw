@@ -15,8 +15,24 @@ export type SessionReconcileOptions = {
 
 export type SessionChangedResult = {
   applied: boolean;
+  key?: string;
+  agentId?: string | null;
+  runId?: string | null;
+  clientRunId?: string | null;
+  hasActiveRun?: boolean | null;
+  isChatTurn?: boolean;
+  row?: GatewaySessionRow;
   deletedKey?: string;
   result: SessionsListResult | null;
+};
+
+export type SessionChangedEventInfo = {
+  key: string;
+  agentId: string | null;
+  runId: string | null;
+  clientRunId: string | null;
+  hasActiveRun: boolean | null;
+  isChatTurn: boolean;
 };
 
 type ThinkingMetadataCarrier = {
@@ -137,26 +153,91 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+type ParsedSessionChangedEvent = SessionChangedEventInfo & {
+  event: Record<string, unknown>;
+  source: Record<string, unknown>;
+  reason: string | null;
+};
+
+function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
+  const event = recordOrNull(payload);
+  if (!event) {
+    return null;
+  }
+  const source = recordOrNull(event.session) ?? event;
+  const key =
+    stringValue(recordValue(source, "key")) ?? stringValue(recordValue(event, "sessionKey"));
+  if (!key) {
+    return null;
+  }
+  const reason =
+    stringValue(recordValue(event, "reason")) ?? stringValue(recordValue(source, "reason")) ?? null;
+  const phase =
+    stringValue(recordValue(event, "phase")) ?? stringValue(recordValue(source, "phase"));
+  const hasActiveRun =
+    typeof recordValue(source, "hasActiveRun") === "boolean"
+      ? (recordValue(source, "hasActiveRun") as boolean)
+      : typeof recordValue(event, "hasActiveRun") === "boolean"
+        ? (recordValue(event, "hasActiveRun") as boolean)
+        : null;
+  return {
+    event,
+    source,
+    key,
+    reason,
+    agentId: stringValue(recordValue(event, "agentId")) ?? null,
+    runId:
+      stringValue(recordValue(event, "runId")) ?? stringValue(recordValue(source, "runId")) ?? null,
+    clientRunId:
+      stringValue(recordValue(event, "clientRunId")) ??
+      stringValue(recordValue(source, "clientRunId")) ??
+      null,
+    hasActiveRun,
+    isChatTurn:
+      phase === "start" ||
+      phase === "message" ||
+      phase === "end" ||
+      phase === "error" ||
+      reason === "send" ||
+      reason === "steer",
+  };
+}
+
+export function readSessionChangedEvent(payload: unknown): SessionChangedEventInfo | null {
+  const parsed = parseSessionChangedEvent(payload);
+  if (!parsed) {
+    return null;
+  }
+  return {
+    key: parsed.key,
+    agentId: parsed.agentId,
+    runId: parsed.runId,
+    clientRunId: parsed.clientRunId,
+    hasActiveRun: parsed.hasActiveRun,
+    isChatTurn: parsed.isChatTurn,
+  };
+}
+
 export function reconcileSessionChanged(
   result: SessionsListResult | null,
   payload: unknown,
   options: SessionReconcileOptions = {},
 ): SessionChangedResult {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  const parsed = parseSessionChangedEvent(payload);
+  if (!parsed) {
     return { applied: false, result };
   }
-  const event = payload as Record<string, unknown>;
-  const nested = event.session;
-  const source =
-    nested && typeof nested === "object" && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : event;
-  const key = stringValue(recordValue(source, "key")) ?? stringValue(event.sessionKey);
-  if (!key || !result) {
+  const { event, source, key, reason } = parsed;
+  if (!result) {
     return { applied: false, result };
   }
-  const reason = stringValue(event.reason) ?? stringValue(source.reason);
-  const selectedGlobalAgentId = stringValue(event.agentId) ?? options.selectedGlobalAgentId ?? null;
+  const selectedGlobalAgentId = parsed.agentId ?? options.selectedGlobalAgentId ?? null;
   const existing = result.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
@@ -167,11 +248,12 @@ export function reconcileSessionChanged(
 
   if (reason === "delete") {
     if (!existing) {
-      return { applied: true, result, deletedKey: key };
+      return { applied: true, result, key, deletedKey: key };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
     return {
       applied: true,
+      key,
       result: {
         ...result,
         count: sessions.length,
@@ -209,7 +291,7 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const row = {
-    ...(existing ?? {}),
+    ...existing,
     ...rowFields,
     key: existing?.key ?? key,
     kind,
@@ -224,9 +306,24 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
+  const reconciledResult = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const reconciledRow = reconciledResult.sessions.find((candidate) =>
+    matchesExistingSession(
+      candidate,
+      { key, kind: "global", updatedAt: null },
+      selectedGlobalAgentId,
+    ),
+  );
   return {
     applied: true,
-    result: eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) },
+    key,
+    agentId: parsed.agentId,
+    runId: parsed.runId,
+    clientRunId: parsed.clientRunId,
+    hasActiveRun: parsed.hasActiveRun,
+    isChatTurn: parsed.isChatTurn,
+    row: reconciledRow,
+    result: reconciledResult,
   };
 }
 

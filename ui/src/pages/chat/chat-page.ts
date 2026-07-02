@@ -477,6 +477,7 @@ export class ChatPage extends LitElement {
     }
     if (clientChanged) {
       this.connectedClient = snapshot.client;
+      void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true }).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();

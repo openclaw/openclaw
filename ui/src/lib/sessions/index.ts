@@ -128,6 +128,7 @@ export type SessionCapability = {
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ) => boolean;
+  reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   refresh: (options?: SessionListOptions & { force?: boolean }) => Promise<void>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
@@ -660,6 +661,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
+  const reconcileChanged = (
+    payload: unknown,
+    options?: SessionReconcileOptions,
+  ): SessionChangedResult => {
+    const reconciled = reconcileSessionChanged(state.result, payload, options);
+    if (reconciled.applied && reconciled.result !== state.result) {
+      publish({
+        ...state,
+        result: reconciled.result,
+        agentId: options?.resultAgentId?.trim()
+          ? normalizeAgentId(options.resultAgentId)
+          : state.agentId,
+        error: null,
+        deletedKeys: reconciled.deletedKey ? [reconciled.deletedKey] : [],
+      });
+    }
+    return reconciled;
+  };
+
   const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
     const client = gateway.snapshot.client;
     if (!client || !gateway.snapshot.connected || disposed) {
@@ -924,6 +944,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
     list: requestList,
     reconcile,
+    reconcileChanged,
     refresh,
     create,
     patch,
