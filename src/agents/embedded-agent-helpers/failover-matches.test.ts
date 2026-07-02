@@ -179,6 +179,50 @@ describe("server error status classification", () => {
   });
 });
 
+describe("HTTP 429 with overloaded message body", () => {
+  // Some providers (Z.ai/GLM, Anthropic) return HTTP 429 with an
+  // "overloaded" message when their model fleet is at capacity.
+  // This is a transient server-side overload, not a per-account
+  // rate limit — it should be classified as "overloaded" so the
+  // runner retries with backoff instead of immediately falling
+  // over to the next model.
+  it("classifies 429 'temporarily overloaded' as overloaded, not rate_limit", () => {
+    const raw = "429 The service may be temporarily overloaded, please try again later";
+    expect(isOverloadedErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("overloaded");
+  });
+
+  it("classifies 429 'overloaded' (bare) as overloaded", () => {
+    const raw = "429 overloaded";
+    expect(isOverloadedErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("overloaded");
+  });
+
+  it("classifies 429 'model is at capacity' as overloaded", () => {
+    const raw = "429 The selected model is at capacity";
+    expect(isOverloadedErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("overloaded");
+  });
+
+  it("still classifies 429 'rate limit exceeded' as rate_limit", () => {
+    const raw = "429 Rate limit exceeded";
+    expect(isRateLimitErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("rate_limit");
+  });
+
+  it("still classifies 429 'too many requests' as rate_limit", () => {
+    const raw = "429 Too many requests";
+    expect(isRateLimitErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("rate_limit");
+  });
+
+  it("still classifies 429 billing messages as billing", () => {
+    const raw =
+      '429 {"code":1311,"message":"The model you requested is not available in your current plan"}';
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
+});
+
 describe("generic assistant error text classification (#93931)", () => {
   it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
     // The generic error text wraps provider availability failures (model not
