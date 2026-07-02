@@ -6,7 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 
-fun photoReadPermissionsForRequest(): List<String> =
+internal fun photoReadPermissionsForRequest(): List<String> =
   when {
     Build.VERSION.SDK_INT >= 34 ->
       listOf(
@@ -17,7 +17,7 @@ fun photoReadPermissionsForRequest(): List<String> =
     else -> listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
   }
 
-fun hasPhotoReadPermission(context: Context): Boolean =
+internal fun hasPhotoReadPermission(context: Context): Boolean =
   photoReadPermissionsForRequest().any { permission ->
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
   }
