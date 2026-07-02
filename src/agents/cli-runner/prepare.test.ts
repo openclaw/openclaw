@@ -2470,6 +2470,73 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior claude-cli ask",
+        timestamp: 1,
+      },
+    });
+    try {
+      // Same claude-cli runtime resolver seam as setClaudeCliBackendForPrepareTest,
+      // but opted into raw-transcript reseed so the missing-transcript path can
+      // redeliver prior OpenClaw history instead of silently losing continuity.
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+              reseedFromRawTranscriptWhenUncompacted: true,
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-missing-transcript-reseed",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      // Candidate is invalidated (no native --resume) yet reseed still fires:
+      // prepare hands the prior OpenClaw conversation forward as history.
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
+      expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
+      expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates orphaned claude-cli transcripts during run preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
 

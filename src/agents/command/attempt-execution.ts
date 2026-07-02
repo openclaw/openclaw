@@ -657,7 +657,12 @@ export function runAgentAttempt(params: {
           })) ?? params.sessionEntry;
       }
 
-      return undefined;
+      // The store is already cleared above, so no stale --resume can leak to a
+      // later turn. Still return the bound id as the reuse candidate: prepare
+      // re-detects the missing transcript, keeps useResume=false, and arms
+      // raw-transcript reseed from prior OpenClaw history. Returning undefined
+      // strips the candidate and starves reseed, losing warm-stdin continuity.
+      return cliSessionBinding;
     };
     const runCliWithSession = (
       nextCliSessionId: string | undefined,
