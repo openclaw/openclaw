@@ -139,6 +139,7 @@ Defaults:
 
 - Voice tab toggle: **Talk**
 - Manual **Mic** and **Talk** are mutually exclusive runtime capture modes.
+- Manual Mic and realtime Talk prefer a connected Bluetooth Classic or BLE headset microphone. If it disconnects, the app requests another headset input or lets Android use the default microphone; stopping capture restores the default microphone preference.
 - Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
 - Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
 
