@@ -593,6 +593,54 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun normalizeManualGatewayHostInput_rejectsBareWsSchemePrefix() {
+    assertNull(normalizeManualGatewayHostInput("ws://"))
+    assertNull(normalizeManualGatewayHostInput("WS://"))
+  }
+
+  @Test
+  fun normalizeManualGatewayHostInput_stripsWsSchemeFromLanHost() {
+    assertEquals("192.168.178.57", normalizeManualGatewayHostInput("ws://192.168.178.57"))
+    assertEquals("192.168.178.57", normalizeManualGatewayHostInput("ws://192.168.178.57:18789"))
+  }
+
+  @Test
+  fun composeGatewayManualUrl_rejectsWsSchemeOnlyHost() {
+    assertNull(composeGatewayManualUrl("ws://", "18789", tls = false))
+  }
+
+  @Test
+  fun composeGatewayManualUrl_acceptsLanHostWithWsSchemePrefix() {
+    val url = composeGatewayManualUrl("ws://192.168.178.57", "18789", tls = false)
+
+    assertEquals("http://192.168.178.57:18789", url)
+    assertEquals("192.168.178.57", parseGatewayEndpoint(url!!)?.host)
+    assertEquals(false, parseGatewayEndpoint(url)?.tls)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManual_acceptsLanHostWithWsSchemePrefix() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "ws://192.168.178.57",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("192.168.178.57", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+  }
+
+  @Test
   fun composeGatewayManualUrlDefaultsPortTo443WhenTlsAndPortBlank() {
     val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
 

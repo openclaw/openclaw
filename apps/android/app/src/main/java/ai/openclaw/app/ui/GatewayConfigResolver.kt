@@ -244,14 +244,29 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
+/** Strips accidental ws/wss/http(s) scheme prefixes from manual host input. */
+internal fun normalizeManualGatewayHostInput(raw: String): String? {
+  var value = raw.trim()
+  if (value.isEmpty()) return null
+  value = value.replace(Regex("^(?i)(wss?|https?)://"), "")
+  value = value.trimEnd('/')
+  if (value.isEmpty()) return null
+  if (value.startsWith('[')) {
+    val end = value.indexOf(']')
+    if (end <= 0) return null
+    return value.substring(1, end).trim()
+  }
+  val hostPart = value.substringBefore(':').trim()
+  return hostPart.ifEmpty { null }
+}
+
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,
   portInput: String,
   tls: Boolean,
 ): String? {
-  val host = hostInput.trim()
-  if (host.isEmpty()) return null
+  val host = normalizeManualGatewayHostInput(hostInput) ?: return null
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
