@@ -12,7 +12,7 @@ vi.mock("node:child_process", async () => {
 });
 
 import {
-  __resetOsSummaryCachesForTests,
+  resetOsSummaryCachesForTests,
   resolveOsSummary,
   resolveRuntimePromptOs,
 } from "./os-summary.js";
@@ -28,7 +28,7 @@ type OsSummaryCase = {
 
 describe("resolveOsSummary", () => {
   beforeEach(() => {
-    __resetOsSummaryCachesForTests();
+    resetOsSummaryCachesForTests();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -114,7 +114,7 @@ type RuntimePromptOsCase = {
 
 describe("resolveRuntimePromptOs", () => {
   beforeEach(() => {
-    __resetOsSummaryCachesForTests();
+    resetOsSummaryCachesForTests();
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -179,7 +179,7 @@ describe("resolveRuntimePromptOs", () => {
 
 describe("resolveRuntimePromptOs caching", () => {
   beforeEach(() => {
-    __resetOsSummaryCachesForTests();
+    resetOsSummaryCachesForTests();
   });
   afterEach(() => {
     vi.restoreAllMocks();

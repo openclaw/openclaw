@@ -42,7 +42,7 @@ function macosProductVersion(): string {
  * Darwin marketing version. Not part of the public API — prefer keying tests
  * by unique kernel releases when possible.
  */
-export function __resetOsSummaryCachesForTests(): void {
+export function resetOsSummaryCachesForTests(): void {
   cachedOsSummaryByKey.clear();
   cachedMacosProductVersionByRelease.clear();
 }
