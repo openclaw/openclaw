@@ -1229,6 +1229,7 @@ function discoverFromPath(params: {
       level: "error",
       message: `plugin path not found: ${resolved}`,
       source: resolved,
+      code: "orphan-source-path",
     });
     return;
   }
@@ -1240,6 +1241,7 @@ function discoverFromPath(params: {
         level: "error",
         message: `plugin path is not a supported file: ${resolved}`,
         source: resolved,
+        code: "orphan-source-path",
       });
       return;
     }

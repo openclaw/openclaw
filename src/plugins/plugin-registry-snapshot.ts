@@ -405,13 +405,36 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {
   return index.diagnostics.some((diag) => {
     const source = diag.source;
-    return (
-      typeof diag.pluginId === "string" &&
-      diag.pluginId.trim().length > 0 &&
+    const hasPluginId =
+      typeof diag.pluginId === "string" && diag.pluginId.trim().length > 0;
+    const sourceMissing =
       typeof source === "string" &&
       path.isAbsolute(source) &&
-      !fs.existsSync(source)
-    );
+      !fs.existsSync(source);
+    // Diagnostics tied to a specific plugin become stale when the source path
+    // no longer exists (e.g. the plugin was uninstalled or moved).
+    if (hasPluginId && sourceMissing) {
+      return true;
+    }
+    // Diagnostics tagged with the orphan-source-path code (set by
+    // discoverFromPath when a configured load path does not exist or is
+    // not a supported file) are always stale. Without this, removing a
+    // plugin and its files would leave a "plugin path not found" diagnostic
+    // that persists forever in SQLite diagnostics_json, blocking Gateway
+    // startup with an ok:false config validation error.
+    if (diag.code === "orphan-source-path") {
+      return true;
+    }
+    // Legacy upgrade path: diagnostics persisted before the.code field was
+    // added to PluginDiagnosticSchema (released or current OpenClaw). Those
+    // rows have no pluginId and no code, but are conceptually orphan
+    // diagnostics if their absolute source path no longer exists. Without
+    // this, users upgrading from an older version with stale SQLite
+    // diagnostics_json rows would still hit a Gateway startup block.
+    if (!hasPluginId && sourceMissing && diag.code === undefined) {
+      return true;
+    }
+    return false;
   });
 }
 
