@@ -33,6 +33,7 @@ export type LineAutoReplyDeps = {
     latitude: number;
     longitude: number;
   }) => messagingApi.LocationMessage;
+  warn?: (...args: unknown[]) => void;
 } & Pick<
   SendLineReplyChunksParams,
   | "replyMessageLine"
@@ -124,7 +125,18 @@ export async function deliverLineAutoReply(params: {
     ? deps.processLineMessage(payload.text)
     : { text: "", flexMessages: [] };
 
+  // LINE FlexMessage total payload includes wrapper ({ type, altText, contents }),
+  // use a conservative limit to account for ~200 bytes of wrapper + altText overhead
+  const FLEX_MAX_CONTENTS_BYTES = 32768 - 200;
+
   for (const flexMsg of processed.flexMessages) {
+    const flexBytes = new TextEncoder().encode(JSON.stringify(flexMsg.contents)).length;
+    if (flexBytes > FLEX_MAX_CONTENTS_BYTES) {
+      deps.warn?.(
+        `[LINE] FlexMessage from markdown ${flexBytes} bytes exceeds ${FLEX_MAX_CONTENTS_BYTES}, skipping`,
+      );
+      continue;
+    }
     richMessages.push(deps.createFlexMessage(flexMsg.altText.slice(0, 400), flexMsg.contents));
   }
 

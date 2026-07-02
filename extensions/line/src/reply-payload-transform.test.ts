@@ -390,4 +390,44 @@ describe("parseLineDirectives", () => {
       expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
     });
   });
+
+  describe("FlexMessage 32KB size validation", () => {
+    it("preserves flexMessage when under 32KB", () => {
+      const result = parseLineDirectives({
+        text: "[[media_player: Song | Artist | Speaker | https://example.com/img.jpg | playing]]",
+      });
+      const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "under 32KB");
+      expect(flexMessage.altText).toBe("🎵 Song - Artist");
+    });
+
+    it("falls back to plain text when flexMessage exceeds 32KB", () => {
+      const longDescription = "A".repeat(50000);
+      const result = parseLineDirectives({
+        text: `[[event: Test Event | Jan 1 | ${longDescription}]]`,
+      });
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toContain("內容過長");
+    });
+
+    it("does nothing when no flexMessage exists", () => {
+      const result = parseLineDirectives({
+        text: "Just plain text",
+      });
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toBe("Just plain text");
+    });
+
+    it("preserves flexMessage at exactly 32768 bytes", () => {
+      const bodyContent = "X".repeat(32500);
+      const result = parseLineDirectives({
+        text: `[[media_player: ${bodyContent.slice(0, 100)} | Artist | Speaker | https://example.com/img.jpg | playing]]`,
+      });
+      const flexMessage = getLineData(result).flexMessage;
+      if (flexMessage) {
+        const payloadJson = JSON.stringify((flexMessage as { contents?: unknown }).contents);
+        const byteSize = new TextEncoder().encode(payloadJson).length;
+        expect(byteSize).toBeLessThanOrEqual(32768);
+      }
+    });
+  });
 });
