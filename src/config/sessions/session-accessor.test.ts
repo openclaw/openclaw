@@ -566,9 +566,14 @@ describe("session accessor file-backed seam", () => {
       agentId: "main",
       expectedRevision: snapshot.revision,
       previousEntry: snapshot.currentEntry,
+      // The real caller builds the prepared entry from the snapshot, so it
+      // inherits the pre-drift heartbeat values. The commit must still notice
+      // the concurrent metadata change and preserve the newer values.
       sessionEntry: {
         sessionId: "existing-session",
         updatedAt: 30,
+        lastHeartbeatSentAt: 100,
+        lastHeartbeatText: "heartbeat-1",
       },
       sessionKey,
       storePath,

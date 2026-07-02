@@ -99,7 +99,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import { mergeSessionEntry, type SessionCompactionCheckpoint, type SessionEntry } from "./types.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -1155,6 +1155,32 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+// Background activity can mutate non-identity fields after the initialization
+// snapshot. Carry forward only those changes; the prepared entry still wins for
+// any field it explicitly modified relative to the snapshot. This preserves
+// heartbeat/delivery/context metadata without resurrecting fields that a reset
+// intentionally cleared (e.g. provider/model overrides on /new).
+function mergeConcurrentReplySessionMetadata(params: {
+  currentEntry: SessionEntry;
+  preparedEntry: SessionEntry;
+  snapshotEntry?: SessionEntry;
+}): SessionEntry {
+  const { currentEntry, preparedEntry, snapshotEntry } = params;
+  if (!snapshotEntry) {
+    return preparedEntry;
+  }
+  const merged = { ...preparedEntry } as Record<string, unknown>;
+  for (const key of Object.keys(currentEntry)) {
+    const currentValue = (currentEntry as Record<string, unknown>)[key];
+    const snapshotValue = (snapshotEntry as Record<string, unknown>)[key];
+    const preparedValue = merged[key];
+    if (currentValue !== snapshotValue && preparedValue === snapshotValue) {
+      merged[key] = currentValue;
+    }
+  }
+  return merged as SessionEntry;
+}
+
 function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
@@ -1788,12 +1814,16 @@ export async function commitReplySessionInitialization(params: {
         storePath: params.storePath,
       });
       // The identity-only guard allows commits when background activity touched
-      // non-identity metadata after the snapshot. Merge the current row so that
-      // heartbeat, delivery, context-budget, and route fields are not rolled
-      // back by the prepared turn entry; the prepared entry still wins for any
-      // fields it explicitly carries.
+      // non-identity metadata after the snapshot. Merge only the fields that
+      // actually changed since the snapshot so heartbeat/delivery/context
+      // metadata is not rolled back, while reset-cleared fields (e.g. provider
+      // or model overrides on /new) stay cleared.
       store[resolved.normalizedKey] = currentEntry
-        ? mergeSessionEntry(currentEntry, sessionEntry)
+        ? mergeConcurrentReplySessionMetadata({
+            currentEntry,
+            preparedEntry: sessionEntry,
+            snapshotEntry: params.previousEntry,
+          })
         : sessionEntry;
       if (params.retiredEntry) {
         store[params.retiredEntry.key] = params.retiredEntry.entry;
