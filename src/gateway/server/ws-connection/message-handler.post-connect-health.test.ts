@@ -212,6 +212,7 @@ function attachGatewayHarness(options: {
     mode: "none",
     allowTailscale: false,
   };
+  const advanceHandshakePhase = vi.fn();
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
@@ -244,6 +245,7 @@ function attachGatewayHarness(options: {
       return true;
     },
     setHandshakeState: vi.fn(),
+    advanceHandshakePhase,
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
@@ -256,6 +258,7 @@ function attachGatewayHarness(options: {
   }
   const sendMessage = onMessage;
   return {
+    advanceHandshakePhase,
     socketSend,
     sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
       sendMessage(
@@ -582,6 +585,46 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
     expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
+  });
+
+  it("records credential and hello preparation phases during connect", async () => {
+    const harness = attachGatewayHarness({
+      connId: "conn-phases",
+      connectNonce: "nonce-phases",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+    });
+
+    harness.sendConnect("connect-phases", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    expect(harness.advanceHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
+      "auth_credentials_received",
+      "auth_validated",
+      "session_attached",
+      "hello_payload_prepared",
+      "ready",
+    ]);
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {

@@ -26,3 +26,15 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   invalidated?: boolean;
   invalidatedReason?: string;
 };
+
+export const WS_HANDSHAKE_PHASES = [
+  "tcp_accepted",
+  "ws_upgrade_started",
+  "auth_credentials_received",
+  "auth_validated",
+  "session_attached",
+  "hello_payload_prepared",
+  "ready",
+] as const;
+
+export type WsHandshakePhase = (typeof WS_HANDSHAKE_PHASES)[number];
