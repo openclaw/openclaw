@@ -83,13 +83,13 @@ struct PrivacyAccessSectionView: View {
     private func statusColor(for status: String) -> Color {
         switch status {
         case "Allowed":
-            .green
+            OpenClawBrand.ok
         case "Not Set":
-            .orange
+            OpenClawBrand.warn
         case "Add-Only":
-            .yellow
+            OpenClawBrand.warn
         default:
-            .red
+            OpenClawBrand.danger
         }
     }
 

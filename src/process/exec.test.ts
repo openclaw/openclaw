@@ -34,8 +34,13 @@ async function loadExecModules(options?: { mockSpawn?: boolean; mockExecFile?: b
     vi.doUnmock("node:child_process");
   }
   ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
-  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, runExec, shouldSpawnWithShell } =
-    await import("./exec.js"));
+  ({
+    resolveCommandEnv,
+    resolveProcessExitCode,
+    runCommandWithTimeout,
+    runExec,
+    shouldSpawnWithShell,
+  } = await import("./exec.js"));
 }
 
 describe("runCommandWithTimeout", () => {
@@ -340,6 +345,47 @@ describe("runCommandWithTimeout", () => {
       expect(result.code).toBe(0);
     },
   );
+
+  it("preserves matching output lines even when the tail capture truncates them", async () => {
+    await loadExecModules();
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        [
+          "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
+          "process.stdout.write('x'.repeat(200))",
+        ].join(";"),
+      ],
+      {
+        timeoutMs: 3_000,
+        maxOutputBytes: 24,
+        preserveOutputLine: (line) => line.includes("enter code"),
+      },
+    );
+
+    expect(result.stdout).toBe("x".repeat(24));
+    expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
+    expect(result.preservedStdoutLines).toEqual([
+      "Visit https://example.com/device and enter code ABCD-EFGH",
+    ]);
+  });
+
+  it("bounds preserved matching output for long lines without newlines", async () => {
+    await loadExecModules();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdout.write('x'.repeat(10_000))"],
+      {
+        timeoutMs: 3_000,
+        maxOutputBytes: 24,
+        preserveOutputLine: () => true,
+      },
+    );
+
+    expect(result.stdout).toBe("x".repeat(24));
+    expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
+    expect(result.preservedStdoutLines).toEqual(["x".repeat(24)]);
+  });
 });
 
 describe("attachChildProcessBridge", () => {

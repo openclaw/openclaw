@@ -18,6 +18,8 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+const CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_MS;
+const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 // Cron has its own outer watchdog; stream stalls must fail early enough for
 // the existing model fallback chain to try the next configured candidate.
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
@@ -302,6 +304,63 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
+}
+
+export function resolveLlmFirstEventTimeoutMs(params?: {
+  cfg?: OpenClawConfig;
+  runTimeoutMs?: number;
+  modelRequestTimeoutMs?: number;
+  model?: { baseUrl?: string; id?: string; provider?: string };
+}): number {
+  const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
+  const runTimeoutMs = params?.runTimeoutMs;
+  const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(
+    params?.cfg?.agents?.defaults?.timeoutSeconds,
+  );
+  const hasExplicitRunTimeout =
+    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const runTimeoutIsBounded = hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS;
+  const baseUrl = params?.model?.baseUrl;
+  const isLocalProvider =
+    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
+  const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
+  const isExplicitLocalHostnameRuntimeModel =
+    typeof baseUrl === "string" &&
+    baseUrl.length > 0 &&
+    isExplicitLocalHostnameBaseUrl(baseUrl) &&
+    !isOllamaCloudModel(params?.model);
+  const isSelfHostedHostnameRuntimeModel =
+    typeof baseUrl === "string" &&
+    baseUrl.length > 0 &&
+    isBareProviderHostnameBaseUrl(baseUrl) &&
+    (isSelfHostedProviderId(params?.model?.provider) ||
+      hasConfiguredLocalProviderSignal({ cfg: params?.cfg, provider: params?.model?.provider })) &&
+    !isOllamaCloudModel(params?.model);
+  const timeoutBounds = [
+    runTimeoutIsBounded ? runTimeoutMs : undefined,
+    hasExplicitRunTimeout ? undefined : agentTimeoutMs,
+  ].filter(
+    (value): value is number =>
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value > 0 &&
+      value < MAX_TIMER_TIMEOUT_MS,
+  );
+
+  const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
+  if (
+    typeof modelRequestTimeoutMs === "number" &&
+    Number.isFinite(modelRequestTimeoutMs) &&
+    modelRequestTimeoutMs > 0
+  ) {
+    return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
+  }
+
+  const defaultTimeoutMs =
+    isLocalRuntimeModel || isExplicitLocalHostnameRuntimeModel || isSelfHostedHostnameRuntimeModel
+      ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
+      : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
+  return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
 }
 
 /**

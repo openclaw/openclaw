@@ -380,6 +380,9 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
+const SESSION_FILE_CHANGED_ANNOUNCE_RE =
+  /session file changed while embedded prompt lock was released/i;
+
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -390,14 +393,73 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  SESSION_FILE_CHANGED_ANNOUNCE_RE,
 ];
+
+function isSessionFileChangedAnnounceError(message: string): boolean {
+  return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
+}
+
+const ANNOUNCE_ERROR_CHAIN_KEYS = [
+  "cause",
+  "cleanupError",
+  "error",
+  "promptError",
+  "reason",
+] as const;
+type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
+type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
+  sentBeforeError?: unknown;
+  visibleReplySent?: unknown;
+};
+
+function isAnnounceErrorRecord(error: unknown): error is AnnounceErrorRecord {
+  return Boolean(error && typeof error === "object");
+}
+
+function hasAnnounceErrorMatch(
+  error: unknown,
+  matches: (candidate: unknown) => boolean,
+  seen: Set<object> = new Set(),
+): boolean {
+  if (matches(error)) {
+    return true;
+  }
+  if (!isAnnounceErrorRecord(error)) {
+    return false;
+  }
+  if (seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
+}
+
+function hasSessionFileChangedAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, (candidate) =>
+    isSessionFileChangedAnnounceError(summarizeDeliveryError(candidate)),
+  );
+}
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
+  const topLevelPermanent = Boolean(
+    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  );
+  if (topLevelPermanent && !isSessionFileChangedAnnounceError(message)) {
+    return false;
+  }
+
+  const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
+  if (sessionFileChanged) {
+    return !hasAnnounceSendEvidence(error);
+  }
+
   if (!message) {
     return false;
   }
-  if (PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
+  if (topLevelPermanent) {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
@@ -405,8 +467,9 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 
 function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
-  return Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  return (
+    (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
+    hasSessionFileChangedAnnounceError(error)
   );
 }
 
@@ -426,17 +489,18 @@ function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
   );
 }
 
-function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
+function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
   }
-  const maybeDeliveryError = error as {
-    sentBeforeError?: unknown;
-    visibleReplySent?: unknown;
-  };
-  return (
-    maybeDeliveryError.sentBeforeError === true || maybeDeliveryError.visibleReplySent === true
-  );
+  if (!isAnnounceErrorRecord(error)) {
+    return false;
+  }
+  return error.sentBeforeError === true || error.visibleReplySent === true;
+}
+
+function hasAnnounceSendEvidence(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -891,7 +955,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       path: "direct",
     };
   } catch (err) {
-    const terminal = didVisibleSendFailAfterPartialDelivery(err);
+    const terminal = hasAnnounceSendEvidence(err);
     return {
       delivered: false,
       path: "direct",
@@ -1508,7 +1572,7 @@ async function sendSubagentAnnounceDirectly(params: {
           }),
       });
     } catch (err) {
-      if (isPermanentAnnounceDeliveryError(err)) {
+      if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
         throw err;
       }
       if (
@@ -1695,10 +1759,12 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "direct",
     };
   } catch (err) {
+    const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
+      ...(terminal ? { terminal: true } : {}),
     };
   }
 }
@@ -1785,5 +1851,8 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
+  hasAnnounceSendEvidence,
+  hasSessionFileChangedAnnounceError,
+  isSessionFileChangedAnnounceError,
 };
 export { testing as __testing };

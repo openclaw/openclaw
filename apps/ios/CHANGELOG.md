@@ -1,8 +1,14 @@
 # OpenClaw iOS Changelog
 
+## 2026.6.11 - 2026-07-01
+
+Maintenance update for the current OpenClaw release.
+
+- Refreshed iOS 26 visual styling, Talk controls, Gateway recovery, localization, and App Store screenshots.
+
 ## 2026.6.10 - 2026-06-21
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 - Improved notification cleanup, Watch app compatibility, and native file input handling.
 

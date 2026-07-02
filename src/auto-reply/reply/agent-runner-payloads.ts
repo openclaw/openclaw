@@ -303,6 +303,13 @@ export async function buildReplyPayloads(params: {
     });
     dedupedPayloads = [];
     for (const payload of silentFilteredPayloads) {
+      const payloadMetadata = getReplyPayloadMetadata(payload);
+      // Source mirrors exist because an internal sink send must reach the UI and
+      // transcript; that send is not outbound evidence for dropping the mirror.
+      if (payloadMetadata?.sourceReplyTranscriptMirror) {
+        dedupedPayloads.push(payload);
+        continue;
+      }
       const decision = dedupeRuntime.resolveMessagingToolPayloadDedupe({
         config: params.config,
         messageProvider,
@@ -311,11 +318,9 @@ export async function buildReplyPayloads(params: {
         originatingThreadId: params.originatingThreadId,
         replyToId: payload.replyToId,
         replyToIsExplicit: Boolean(
-          getReplyPayloadMetadata(payload)?.replyToIdExplicit ||
-          payload.replyToTag ||
-          payload.replyToCurrent,
+          payloadMetadata?.replyToIdExplicit || payload.replyToTag || payload.replyToCurrent,
         ),
-        replyDelivery: getReplyPayloadMetadata(payload)?.replyDelivery,
+        replyDelivery: payloadMetadata?.replyDelivery,
         accountId,
       });
       if (!decision.shouldDedupePayloads) {

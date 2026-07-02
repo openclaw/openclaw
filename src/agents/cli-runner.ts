@@ -18,6 +18,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import type { CliOutput } from "./cli-output.js";
 import {
   attachCliMessagingDeliveryEvidence,
@@ -99,6 +100,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
+    case "context_overflow":
+      return params.error.code === "cli_context_overflow";
     default:
       return false;
   }
@@ -367,7 +370,7 @@ async function finalizeCliContextEngineTurn(params: {
     sessionIdUsed: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     sessionFile: runParams.sessionFile,
-    isHeartbeat: runParams.bootstrapContextRunKind === "heartbeat",
+    isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
