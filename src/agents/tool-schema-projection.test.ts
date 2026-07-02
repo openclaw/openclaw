@@ -138,6 +138,32 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("reports invalid runtime tool list lengths", () => {
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: {} },
+    };
+    const proxy = new Proxy([healthy] as Array<typeof healthy>, {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return -1;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(filterRuntimeCompatibleTools(proxy)).toEqual({
+      tools: [],
+      diagnostics: [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["runtime tool list length is invalid"],
+        },
+      ],
+    });
+  });
+
   it("quarantines unreadable runtime tool fields without dropping healthy siblings", () => {
     const unreadable = {
       name: "fuzzplugin_unreadable",
