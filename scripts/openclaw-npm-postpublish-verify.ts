@@ -408,6 +408,7 @@ export function collectInstalledPackageErrors(params: {
     }
   }
 
+  errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
@@ -439,6 +440,10 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
     return match !== null && installedExtensionIds.has(match[1]);
   });
+}
+
+export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
+  return readBundledExtensionPackageJsons(packageRoot).errors;
 }
 
 export function normalizeInstalledBinaryVersion(output: string): string {

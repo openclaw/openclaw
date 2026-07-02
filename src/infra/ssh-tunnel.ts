@@ -21,6 +21,13 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
+// Reject hosts that would corrupt the SSH HostName field or enable argument
+// injection: a leading '-' becomes an ssh option, and a stray leading/trailing
+// ':' (e.g. sliced from "host::22") produces an invalid HostName.
+function isMalformedHost(host: string): boolean {
+  return host.startsWith("-") || host.startsWith(":") || host.endsWith(":");
+}
+
 export function parseSshTarget(raw: string): SshParsedTarget | null {
   const trimmed = raw.trim().replace(/^ssh\s+/, "");
   if (!trimmed) {
@@ -44,8 +51,7 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     if (!host || port === undefined || port > 65535) {
       return null;
     }
-    // Security: Reject hostnames starting with '-' to prevent argument injection
-    if (host.startsWith("-")) {
+    if (isMalformedHost(host)) {
       return null;
     }
     return { user: userPart, host, port };
@@ -54,8 +60,7 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (!hostPart) {
     return null;
   }
-  // Security: Reject hostnames starting with '-' to prevent argument injection
-  if (hostPart.startsWith("-")) {
+  if (isMalformedHost(hostPart)) {
     return null;
   }
   return { user: userPart, host: hostPart, port: 22 };

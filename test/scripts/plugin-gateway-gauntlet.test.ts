@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -130,6 +129,34 @@ describe("plugin gateway gauntlet helpers", () => {
       pluginIds: ["telegram"],
       qaScenarios: ["channel-chat-baseline"],
     });
+  });
+
+  it("rejects duplicate repeatable selectors", () => {
+    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+    expect(() =>
+      parseArgs([
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+  });
+
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
   });
 
   it("rejects valued flags followed by another option", () => {
@@ -592,8 +619,8 @@ describe("plugin gateway gauntlet helpers", () => {
       args: ["-e", "setTimeout(() => process.exit(0), 25)"],
       label: "oversized-timeout",
       phase: "probe",
-      timeoutKillGraceMs: MAX_TIMER_TIMEOUT_MS + 1,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
       timeMode: "none",
     });
 

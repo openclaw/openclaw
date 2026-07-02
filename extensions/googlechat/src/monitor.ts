@@ -29,7 +29,7 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
+import type { GoogleChatAttachment, GoogleChatEvent, GoogleChatSpace } from "./types.js";
 
 setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
@@ -60,6 +60,20 @@ function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
   }
   const parsed = Date.parse(eventTime);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
+  const spaceType = (space.spaceType ?? "").toUpperCase();
+  // Google Chat deprecates `type` in favor of `spaceType`; known modern
+  // values must win if the fields disagree. Fall back to the bot-DM flag and
+  // legacy type so incomplete payloads retain their existing direct routing.
+  if (spaceType === "DIRECT_MESSAGE") {
+    return false;
+  }
+  if (spaceType === "SPACE" || spaceType === "GROUP_CHAT") {
+    return true;
+  }
+  return space.singleUserBotDm !== true && (space.type ?? "").toUpperCase() !== "DM";
 }
 
 function resolveGoogleChatBotLoopProtection(params: {
@@ -186,8 +200,7 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
-  const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  const isGroup = isGoogleChatGroupSpace(space);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
@@ -298,6 +311,7 @@ async function processMessageWithPipeline(params: {
       id: senderId,
       name: senderName || undefined,
       username: senderEmail,
+      isBot: isBotSender || undefined,
     },
     conversation: {
       kind: isGroup ? "channel" : "direct",

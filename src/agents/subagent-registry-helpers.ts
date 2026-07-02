@@ -5,16 +5,10 @@
  */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-  updateSessionStore,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
@@ -22,7 +16,10 @@ import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delive
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  resolveSubagentRunOrphanReason,
+  type SubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -42,9 +39,6 @@ export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
-
-/** Why a registry run can no longer be matched to a live child session. */
-type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
 
 /** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
@@ -94,22 +88,6 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
-// Session keys may differ only by casing after legacy writes. Prefer exact
-// matches, then fall back to normalized lookup for recovery paths.
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -129,77 +107,38 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await updateSessionStore(storePath, (store) => {
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return;
-    }
+  await patchSessionEntry(
+    { storePath, sessionKey: childSessionKey },
+    (sessionEntry) => {
+      const next = { ...sessionEntry };
 
-    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-      sessionEntry.startedAt = startedAt;
-    } else {
-      delete sessionEntry.startedAt;
-    }
+      if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+        next.startedAt = startedAt;
+      } else {
+        delete next.startedAt;
+      }
 
-    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-      sessionEntry.endedAt = endedAt;
-    } else {
-      delete sessionEntry.endedAt;
-    }
+      if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+        next.endedAt = endedAt;
+      } else {
+        delete next.endedAt;
+      }
 
-    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      sessionEntry.runtimeMs = runtimeMs;
-    } else {
-      delete sessionEntry.runtimeMs;
-    }
+      if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+        next.runtimeMs = runtimeMs;
+      } else {
+        delete next.runtimeMs;
+      }
 
-    if (status) {
-      sessionEntry.status = status;
-    } else {
-      delete sessionEntry.status;
-    }
-  });
-}
-
-/** Resolves whether a registry row is orphaned from its child session entry. */
-export function resolveSubagentRunOrphanReason(params: {
-  entry: SubagentRunRecord;
-  storeCache?: Map<string, Record<string, SessionEntry>>;
-  includeStaleUnended?: boolean;
-  now?: number;
-}): SubagentRunOrphanReason | null {
-  const childSessionKey = params.entry.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return "missing-session-entry";
-  }
-  try {
-    const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    let store = params.storeCache?.get(storePath);
-    if (!store) {
-      store = loadSessionStore(storePath);
-      params.storeCache?.set(storePath, store);
-    }
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return "missing-session-entry";
-    }
-    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
-      return "missing-session-id";
-    }
-    if (
-      params.includeStaleUnended === true &&
-      sessionEntry.abortedLastRun !== true &&
-      isStaleUnendedSubagentRun(params.entry, params.now)
-    ) {
-      return "stale-unended-run";
-    }
-    return null;
-  } catch {
-    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
-    return null;
-  }
+      if (status) {
+        next.status = status;
+      } else {
+        delete next.status;
+      }
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }
 
 // Attachment cleanup must stay within the recorded root even if paths were
@@ -343,13 +282,11 @@ export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const storeCache = new Map<string, Record<string, SessionEntry>>();
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
     const orphanReason = resolveSubagentRunOrphanReason({
       entry,
-      storeCache,
       includeStaleUnended: true,
       now,
     });

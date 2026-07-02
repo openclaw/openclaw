@@ -825,6 +825,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.prompt).toContain("Message delivery destination metadata");
   });
 
+  it("drops the auto-applied default toolsAllow cap for CLI-backed runs instead of failing", async () => {
+    // A CLI backend cannot enforce a runtime toolsAllow, so the auto-applied
+    // creator-surface cap (#91499, flagged toolsAllowIsDefault) is dropped at
+    // run time rather than handed to the CLI runner — which would otherwise
+    // reject the run. An explicit user restriction (no flag) is still
+    // propagated; see the "restricted toolsAllow" case above.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        {
+          kind: "agentTurn",
+          message: "send a message",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      ),
+    });
+
+    const cliRun = expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {},
+      "CLI run params",
+    );
+    expect(cliRun.toolsAllow).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -961,12 +996,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
-  it("keeps shared cron run context references active after completion", async () => {
+  it("releases preexisting run context after detached current-session completion", async () => {
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": { retained: true } },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
+    const { getAgentRunContext, registerAgentRunContext } =
       await import("../../infra/agent-events.js");
     registerAgentRunContext("test-session-id", {
       sessionKey: "agent:default:cron:message-tool-policy",
@@ -980,11 +1015,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: currentSessionJob as never,
     });
 
-    expect(getAgentRunContext("test-session-id")).toMatchObject({
-      sessionKey: "agent:default:cron:message-tool-policy",
-    });
+    expect(getAgentRunContext("test-session-id")).toBeUndefined();
     expect(cronSession.store).toBeUndefined();
-    clearAgentRunContext("test-session-id");
   });
 
   it("releases a shared cron run context created by this invocation", async () => {

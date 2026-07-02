@@ -1,6 +1,7 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
 import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -62,8 +63,7 @@ function normalizeWizardTextInput(value: unknown): string {
 }
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(normalizeWizardTextInput(value));
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -78,16 +78,16 @@ export async function configureGatewayForSetup(
   const port =
     flow === "quickstart"
       ? quickstartGateway.port
-      : Number.parseInt(
-          normalizeWizardTextInput(
-            await prompter.text({
-              message: t("wizard.gateway.port"),
-              initialValue: String(localPort),
-              validate: validateGatewayPortInput,
-            }),
-          ),
-          10,
+      : parsePort(
+          await prompter.text({
+            message: t("wizard.gateway.port"),
+            initialValue: String(localPort),
+            validate: validateGatewayPortInput,
+          }),
         );
+  if (port === null) {
+    throw new Error(formatPortRangeHint());
+  }
 
   let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"

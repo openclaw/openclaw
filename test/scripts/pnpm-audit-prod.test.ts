@@ -2,7 +2,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
   collectProdResolvedPackagesFromLockfile,
@@ -279,7 +278,7 @@ snapshots:
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
       fetchImpl: (async (_url, init) => {
         signal = init?.signal ?? undefined;
         await new Promise<void>((resolve, reject) => {

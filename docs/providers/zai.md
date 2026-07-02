@@ -13,6 +13,7 @@ OpenClaw uses the `zai` provider with a Z.AI API key.
 | Property | Value                                        |
 | -------- | -------------------------------------------- |
 | Provider | `zai`                                        |
+| Package  | `@openclaw/zai-provider`                     |
 | Auth     | `ZAI_API_KEY` (legacy alias: `Z_AI_API_KEY`) |
 | API      | Z.AI Chat Completions (Bearer auth)          |
 
@@ -22,6 +23,12 @@ GLM is a model family, not a separate provider. In OpenClaw, GLM models use
 refs such as `zai/glm-5.2`: provider `zai`, model id `glm-5.2`.
 
 ## Getting started
+
+Install the provider plugin first:
+
+```bash
+openclaw plugins install @openclaw/zai-provider
+```
 
 <Tabs>
   <Tab title="Auto-detect endpoint">
@@ -96,7 +103,7 @@ you want to force a specific Coding Plan or general API surface.
 
 ## Built-in catalog
 
-OpenClaw ships the bundled `zai` provider catalog in the plugin manifest, so read-only
+The `zai` provider plugin ships its catalog in the plugin manifest, so read-only
 listing can show known GLM rows without loading provider runtime:
 
 ```bash
@@ -143,7 +150,7 @@ known to your installed version.
 
 <AccordionGroup>
   <Accordion title="Forward-resolving unknown GLM-5 models">
-    Unknown `glm-5*` ids still forward-resolve on the bundled provider path by
+    Unknown `glm-5*` ids still forward-resolve on the provider path by
     synthesizing provider-owned metadata from the `glm-4.7` template when the id
     matches the current GLM-5 family shape.
   </Accordion>
@@ -200,7 +207,7 @@ known to your installed version.
   </Accordion>
 
   <Accordion title="Image understanding">
-    The bundled Z.AI plugin registers image understanding.
+    The Z.AI plugin registers image understanding.
 
     | Property      | Value       |
     | ------------- | ----------- |

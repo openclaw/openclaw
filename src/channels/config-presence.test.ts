@@ -100,6 +100,25 @@ describe("config presence", () => {
     ).toEqual([{ channelId: "matrix", source: "env" }]);
   });
 
+  it("detects official external channel env vars", () => {
+    const env = {
+      MATTERMOST_URL: "https://mattermost.example.test",
+      MATTERMOST_BOT_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["mattermost"],
+      options: { includePersistedAuthState: false },
+    });
+    expect(
+      listPotentialConfiguredChannelPresenceSignals({}, env, {
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([{ channelId: "mattermost", source: "env" }]);
+  });
+
   it("detects persisted Matrix credentials without config or env", () => {
     const stateDir = makeTempStateDir().replace(
       "openclaw-channel-config-presence-",

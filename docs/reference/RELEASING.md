@@ -191,10 +191,11 @@ release state.
    closeout requires both assets and a matching checksum. A partial manifest
    replays its recorded `main` SHA and rollback drill to regenerate identical
    bytes, then attaches the missing checksum; an invalid pair, or a checksum
-   without a manifest, stays blocking. A missing or more-than-90-day-old drill
-   record blocks a new evidence-backed closeout; private recovery commands
-   remain in the maintainer-only runbook. Use manual dispatch only to repair or
-   replay an evidence-backed stable closeout.
+   without a manifest, stays blocking. A push-triggered run without rollback
+   drill repository variables skips without completing closeout; a missing or
+   more-than-90-day-old drill record still blocks manual evidence-backed
+   closeout. Private recovery commands remain in the maintainer-only runbook.
+   Use manual dispatch only to repair or replay an evidence-backed stable closeout.
    A legacy fallback correction tag may reuse base-package evidence only when
    the correction tag resolves to the same source commit as the base stable tag.
    A correction with different source must publish and verify its own package

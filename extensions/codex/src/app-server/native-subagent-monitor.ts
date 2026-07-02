@@ -91,6 +91,9 @@ const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
 ];
 const DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS = 10_000;
 const RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS = 60_000;
+// Codex's recorder uses this filename contract; non-canonical names keep the
+// legacy substring fallback for older or test-created transcript files.
+const CODEX_ROLLOUT_FILENAME_RE = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$/u;
 
 const defaultRuntime: NativeSubagentMonitorRuntime = {
   createAgentHarnessTaskRuntime,
@@ -1188,8 +1191,9 @@ async function findTranscriptPaths(params: {
 }): Promise<Map<string, string>> {
   const sessionsDir = path.join(params.codexHome, "sessions");
   const found = new Map<string, string>();
+  const remaining = new Set(params.childThreadIds);
   const stack = [sessionsDir];
-  while (stack.length > 0 && found.size < params.childThreadIds.size) {
+  while (stack.length > 0 && remaining.size > 0) {
     const dir = stack.pop()!;
     let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
     try {
@@ -1206,9 +1210,19 @@ async function findTranscriptPaths(params: {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
         continue;
       }
-      for (const childThreadId of params.childThreadIds) {
-        if (!found.has(childThreadId) && entry.name.includes(childThreadId)) {
+      const rolloutMatch = entry.name.match(CODEX_ROLLOUT_FILENAME_RE);
+      if (rolloutMatch) {
+        const childThreadId = rolloutMatch[1];
+        if (remaining.delete(childThreadId)) {
           found.set(childThreadId, entryPath);
+        }
+        continue;
+      }
+      for (const childThreadId of remaining) {
+        if (entry.name.includes(childThreadId)) {
+          found.set(childThreadId, entryPath);
+          remaining.delete(childThreadId);
+          break;
         }
       }
     }
@@ -1236,10 +1250,13 @@ async function findTranscriptPath(params: {
         stack.push(entryPath);
         continue;
       }
+      const rolloutMatch = entry.name.match(CODEX_ROLLOUT_FILENAME_RE);
       if (
         entry.isFile() &&
         entry.name.endsWith(".jsonl") &&
-        entry.name.includes(params.childThreadId)
+        (rolloutMatch
+          ? rolloutMatch[1] === params.childThreadId
+          : entry.name.includes(params.childThreadId))
       ) {
         return entryPath;
       }

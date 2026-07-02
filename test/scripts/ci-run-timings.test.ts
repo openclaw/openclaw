@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
+  isRetryableGhJsonErrorMessage,
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
@@ -141,6 +142,21 @@ describe("scripts/ci-run-timings.mjs", () => {
         status: "completed",
       },
     ]);
+  });
+
+  it("retries transient GitHub API failures while preserving auth failures", () => {
+    for (const message of [
+      "gh: API secondary rate limit exceeded (HTTP 403)",
+      "gh: HTTP 429: too many requests",
+      "Command failed: gh api repos/openclaw/openclaw/actions/runs/1/jobs\nHTTP 502",
+      "read ECONNRESET",
+    ]) {
+      expect(isRetryableGhJsonErrorMessage(message)).toBe(true);
+    }
+
+    expect(
+      isRetryableGhJsonErrorMessage("gh: Resource not accessible by integration (HTTP 403)"),
+    ).toBe(false);
   });
 
   it("summarizes the pnpm store warmup fanout barrier", () => {

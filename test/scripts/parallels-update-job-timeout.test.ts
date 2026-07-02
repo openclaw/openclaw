@@ -42,7 +42,7 @@ describe("Parallels update job timeout", () => {
           label: "Linux",
           run: async () => undefined,
           timeoutDescription: "oversized",
-          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+          timeoutMs: Number.MAX_SAFE_INTEGER,
           writeLog,
         }),
       ).resolves.toBe(0);

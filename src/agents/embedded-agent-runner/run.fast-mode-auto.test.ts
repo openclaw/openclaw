@@ -276,6 +276,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         model: "glm-5.1:cloud",
         runId: `run-fast-auto-off-${failureTarget}`,
         fastMode: "auto",
+        timeoutMs: 120_000,
         onAgentEvent: (event) => {
           events.push(event);
           const summary = event.data?.summary;
@@ -350,6 +351,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         model: "glm-5.1:cloud",
         runId: `run-fast-auto-reset-${failureTarget}`,
         fastMode: "auto",
+        timeoutMs: 120_000,
         onAgentEvent: (event) => {
           events.push(event);
           if (failureTarget === "agent-event" && event.data?.summary === "💨Fast: auto-on") {

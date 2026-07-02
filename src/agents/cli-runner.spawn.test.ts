@@ -1809,7 +1809,6 @@ describe("runCliAgent spawn path", () => {
               supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
             cancel: vi.fn(),
             cancelScope: vi.fn(),
-            reconcileOrphans: vi.fn(),
             getRecord: vi.fn(),
           }),
           onAssistantDelta: () => {},
@@ -1961,7 +1960,7 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; toolUseID?: string };
+        response: { behavior: string; toolUseID?: string; updatedInput?: unknown };
       };
     };
     expect(parsed.type).toBe("control_response");
@@ -1969,6 +1968,7 @@ ${JSON.stringify({
     expect(parsed.response.request_id).toBe("req-allow");
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
+    expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
   });
 
   it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
@@ -2049,7 +2049,6 @@ ${JSON.stringify({
             supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
           cancel: vi.fn(),
           cancelScope: vi.fn(),
-          reconcileOrphans: vi.fn(),
           getRecord: vi.fn(),
         }),
         onAssistantDelta: () => {},
@@ -2331,11 +2330,12 @@ ${JSON.stringify({
       response: {
         subtype: string;
         request_id: string;
-        response: { behavior: string; toolUseID?: string };
+        response: { behavior: string; toolUseID?: string; updatedInput?: unknown };
       };
     };
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-default-allow-1");
+    expect(parsed.response.response.updatedInput).toEqual({ command: "echo hi" });
   });
 
   it("answers Claude live control_request can_use_tool with deny when approval defaults are restrictive", async () => {
@@ -2860,7 +2860,6 @@ ${JSON.stringify({
             supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
           cancel: vi.fn(),
           cancelScope: vi.fn(),
-          reconcileOrphans: vi.fn(),
           getRecord: vi.fn(),
         }),
         onAssistantDelta: () => {},

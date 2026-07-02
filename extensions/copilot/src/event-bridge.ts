@@ -41,6 +41,16 @@ export interface SessionLike {
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+  onAgentEvent?: (event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }) => void | Promise<void>;
+  onNativeSubagentEvent?: (
+    event: Extract<
+      SessionEvent,
+      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
+    >,
+  ) => void;
   onCompactionComplete?: (payload: {
     messagesRemoved?: number;
     success: boolean;
@@ -72,6 +82,7 @@ export interface EventBridgeController {
   awaitSessionIdle(): Promise<void>;
   settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
+  awaitAgentEventChain(): Promise<void>;
   hasObservedCompaction(): boolean;
   hasObservedSessionIdle(): boolean;
   isCompacting(): boolean;
@@ -103,6 +114,7 @@ export function attachEventBridge(
   let observedCompaction = false;
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
+  let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
   let compactionIdle = Promise.resolve();
   let resolveCompactionIdle: (() => void) | undefined;
@@ -116,6 +128,9 @@ export function attachEventBridge(
   const unsubscribeFns: Array<() => void> = [];
 
   registerListener(session, unsubscribeFns, "assistant.message_delta", (event) => {
+    if (!isRootSessionEvent(event)) {
+      return;
+    }
     const messageId = readString(event.data.messageId) ?? "assistant-message";
     const delta = event.data.deltaContent;
     if (!delta) {
@@ -150,6 +165,9 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.reasoning_delta", (event) => {
+    if (!isRootSessionEvent(event)) {
+      return;
+    }
     const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";
     const delta = event.data.deltaContent;
     if (!delta) {
@@ -163,6 +181,9 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.message", (event) => {
+    if (!isRootSessionEvent(event)) {
+      return;
+    }
     lastAssistantEvent = event;
     const entry = ensureMessageAccumulator(messagesById, messageOrder, event.data.messageId);
     if (typeof event.data.content === "string" && event.data.content.length >= entry.text.length) {
@@ -171,17 +192,24 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "assistant.usage", (event) => {
+    if (!isRootSessionEvent(event)) {
+      return;
+    }
     usage = normalizeCopilotUsage(event.data);
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_start", (event) => {
-    startedCount += 1;
+    if (isRootSessionEvent(event)) {
+      startedCount += 1;
+    }
     toolNamesByCallId.set(event.data.toolCallId, event.data.toolName);
     toolMetas.push({ toolName: event.data.toolName });
   });
 
   registerListener(session, unsubscribeFns, "tool.execution_complete", (event) => {
-    completedCount += 1;
+    if (isRootSessionEvent(event)) {
+      completedCount += 1;
+    }
     const toolName = toolNamesByCallId.get(event.data.toolCallId);
     const meta = event.data.success
       ? (event.data.result?.detailedContent ?? event.data.result?.content)
@@ -189,6 +217,70 @@ export function attachEventBridge(
     if (toolName) {
       toolMetas.push({ meta, toolName });
     }
+  });
+
+  registerListener(session, unsubscribeFns, "session.plan_changed", (event) => {
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        operation: event.data.operation,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
+    const steps = splitPlanText(event.data.planContent);
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        ...(event.data.summary ? { explanation: event.data.summary } : {}),
+        ...(steps.length > 0 ? { steps } : {}),
+        ...(event.data.actions.length > 0 ? { actions: event.data.actions } : {}),
+        ...(event.data.requestId ? { requestId: event.data.requestId } : {}),
+        ...(event.data.recommendedAction
+          ? { recommendedAction: event.data.recommendedAction }
+          : {}),
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  registerListener(session, unsubscribeFns, "exit_plan_mode.completed", (event) => {
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan decision",
+        source: "copilot-sdk",
+        requestId: event.data.requestId,
+        ...(event.data.approved !== undefined ? { approved: event.data.approved } : {}),
+        ...(event.data.autoApproveEdits !== undefined
+          ? { autoApproveEdits: event.data.autoApproveEdits }
+          : {}),
+        ...(event.data.feedback ? { feedback: event.data.feedback } : {}),
+        ...(event.data.selectedAction ? { selectedAction: event.data.selectedAction } : {}),
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.started", (event) => {
+    forwardNativeSubagentEvent(event);
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.completed", (event) => {
+    forwardNativeSubagentEvent(event);
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.failed", (event) => {
+    forwardNativeSubagentEvent(event);
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
@@ -276,6 +368,9 @@ export function attachEventBridge(
     awaitDeltaChain() {
       return deltaChain;
     },
+    awaitAgentEventChain() {
+      return agentEventChain;
+    },
     hasObservedCompaction() {
       return observedCompaction;
     },
@@ -332,6 +427,31 @@ export function attachEventBridge(
     }
     const queued = compactionChain.then(callback, callback);
     compactionChain = queued.catch(() => undefined);
+  }
+
+  function enqueueAgentEvent(event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }): void {
+    const callback = options.onAgentEvent;
+    if (!callback) {
+      return;
+    }
+    const invoke = () => callback(event);
+    agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
+  }
+
+  function forwardNativeSubagentEvent(
+    event: Extract<
+      SessionEvent,
+      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
+    >,
+  ): void {
+    try {
+      options.onNativeSubagentEvent?.(event);
+    } catch {
+      // Native task mirroring must not corrupt the Copilot turn.
+    }
   }
 
   async function awaitStableCompaction(): Promise<void> {
@@ -446,14 +566,25 @@ function isAssistantMessageEvent(
   return event?.type === "assistant.message";
 }
 
+function isRootSessionEvent(event: { agentId?: string }): boolean {
+  return event.agentId === undefined;
+}
+
 function isRootCompactionEvent(event: { agentId?: string }): boolean {
   // SDK session events include subagent compaction; only root compaction
   // affects the pooled root session's cleanup and reuse lifecycle.
-  return event.agentId === undefined;
+  return isRootSessionEvent(event);
 }
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
   return order.map((reasoningId) => reasoningById.get(reasoningId) ?? "").join("");
+}
+
+function splitPlanText(text: string | undefined): string[] {
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
+    .filter((line) => line.length > 0);
 }
 
 function readString(value: unknown): string | undefined {

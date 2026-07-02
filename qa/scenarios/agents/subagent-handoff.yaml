@@ -21,6 +21,7 @@ scenario:
     kind: flow
     summary: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
     config:
+      requiredChannelDriver: qa-channel
       prompt: "Delegate one bounded QA task to a subagent. Wait for the subagent to finish. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Include the child result itself, not 'waiting'."
 
 flow:
@@ -36,11 +37,14 @@ flow:
                 expr: config.prompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 90000)
-        - call: waitForCondition
+        - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
+            - ref: env
+            - agent:qa:subagent
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()).at(-1)"
+                params: [text]
+                expr: "(() => { const lower = normalizeLowercaseStringOrEmpty(text); return lower.includes('delegated task') && lower.includes('result') && lower.includes('evidence') && !lower.includes('waiting'); })()"
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:

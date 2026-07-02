@@ -19,11 +19,12 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import {
   loadSessionStore,
   saveSessionStore,
   updateSessionStore,
-  type ResolvedSessionMaintenanceConfig,
+  type ResolvedSessionMaintenanceConfigInput,
 } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -35,6 +36,7 @@ type RuntimeSessionStoreReadParams = {
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
+  readConsistency?: "latest";
   storePath?: string;
 };
 
@@ -58,7 +60,7 @@ type RuntimeSessionStoreEntryUpdateParams = {
 
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (
@@ -95,6 +97,7 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }
@@ -121,7 +124,10 @@ async function patchSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     fallbackEntry: params.fallbackEntry,
-    maintenanceConfig: params.maintenanceConfig,
+    maintenanceConfig:
+      params.maintenanceConfig !== undefined
+        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+        : undefined,
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });

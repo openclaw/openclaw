@@ -5,7 +5,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireBoundaryCheckLock,
@@ -438,7 +437,7 @@ describe("check-extension-package-tsc-boundary", () => {
       runNodeStepAsync(
         "slow-success",
         ["--eval", "setTimeout(() => process.exit(0), 25);"],
-        MAX_TIMER_TIMEOUT_MS + 1,
+        Number.MAX_SAFE_INTEGER,
       ),
     ).resolves.toMatchObject({
       stderr: "",

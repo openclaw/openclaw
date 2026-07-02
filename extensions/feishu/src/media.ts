@@ -5,7 +5,11 @@ import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  runFfmpeg,
+  runFfprobe,
+} from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -471,7 +475,7 @@ export async function uploadFileFeishu(params: {
   file: Buffer | string; // Buffer or file path
   fileName: string;
   fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
-  duration?: number; // Required for audio/video files, in milliseconds
+  duration?: number; // Audio/video duration, in milliseconds.
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
@@ -492,7 +496,7 @@ export async function uploadFileFeishu(params: {
           file_type: fileType,
           file_name: safeFileName,
           file: fileData,
-          ...(duration !== undefined && { duration }),
+          ...(duration !== undefined ? { duration } : {}),
         },
       }),
     "Feishu file upload failed",
@@ -818,6 +822,29 @@ async function prepareFeishuVoiceMedia(params: {
   }
 }
 
+async function probeAudioDurationMs(buffer: Buffer): Promise<number | undefined> {
+  try {
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-audio-probe-" },
+      async (workspace) => {
+        const inputPath = await workspace.write("input.ogg", buffer);
+        const stdout = await runFfprobe(
+          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath],
+          { timeoutMs: 5_000 },
+        );
+        const seconds = Number.parseFloat(stdout.trim());
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          return undefined;
+        }
+        return Math.max(1, Math.round(seconds * 1000));
+      },
+    );
+  } catch (err) {
+    console.warn("[feishu] failed to probe audio duration; voice bubble will omit it:", err);
+    return undefined;
+  }
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
@@ -903,11 +930,13 @@ export async function sendMediaFeishu(params: {
       ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
     };
   }
+  const durationMs = routing.msgType === "audio" ? await probeAudioDurationMs(buffer) : undefined;
   const { fileKey } = await uploadFileFeishu({
     cfg,
     file: buffer,
     fileName: name,
     fileType: routing.fileType ?? "stream",
+    ...(durationMs !== undefined ? { duration: durationMs } : {}),
     accountId,
   });
   const result = await sendFileFeishu({

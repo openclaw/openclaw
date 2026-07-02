@@ -142,6 +142,21 @@ function getStaticFallbackModel(id: string): ModelDefinitionConfig | undefined {
   return fallback ? buildStaticModelDefinition(fallback) : undefined;
 }
 
+/** Builds runtime metadata for models returned by the live gateway catalog. */
+export function resolveVercelAiGatewayDynamicModel(modelId: string): ModelDefinitionConfig {
+  return (
+    getStaticFallbackModel(modelId) ?? {
+      id: modelId,
+      name: modelId,
+      reasoning: false,
+      input: ["text"],
+      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+      cost: VERCEL_AI_GATEWAY_DEFAULT_COST,
+    }
+  );
+}
+
 export function getStaticVercelAiGatewayModelCatalog(): ModelDefinitionConfig[] {
   return STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG.map(buildStaticModelDefinition);
 }

@@ -2,6 +2,7 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -731,10 +732,6 @@ function parseSessionId(parsed: Record<string, unknown>): string | undefined {
   return sessionId || undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function normalizePositiveInt(
   value: number | undefined,
   fallback: number,
@@ -869,6 +866,7 @@ function handleClaudeLiveControlRequest(
     return;
   }
   const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  const toolInput = isRecord(request.input) ? request.input : {};
   const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
   writeClaudeLiveControlResponse(session, {
     type: "control_response",
@@ -878,6 +876,7 @@ function handleClaudeLiveControlRequest(
       response: allowed
         ? {
             behavior: "allow",
+            updatedInput: toolInput,
             ...(toolUseId ? { toolUseID: toolUseId } : {}),
           }
         : {

@@ -42,6 +42,11 @@ Anonymized models are **not** fully private. Venice strips metadata before forwa
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/venice-provider
+    ```
+  </Step>
   <Step title="Get your API key">
     1. Sign up at [venice.ai](https://venice.ai)
     2. Go to **Settings > API Keys > Create new key**

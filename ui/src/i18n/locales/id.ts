@@ -63,7 +63,6 @@ export const id: TranslationMap = {
     docs: "Dokumen",
     theme: "Tema",
     colorMode: "Mode warna",
-    colorModeOption: "Mode warna: {mode}",
     resources: "Sumber daya",
     search: "Cari",
     save: "Simpan",
@@ -1330,6 +1329,8 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    commentaryToggle: "Simpan komentar setelah jawaban akhir",
+    commentaryLabel: "Komentar",
     autoScrollMode: "Mode gulir otomatis",
     autoScrollAlways: "Selalu",
     autoScrollNearBottom: "Dekat bagian bawah",
@@ -1374,6 +1375,11 @@ export const id: TranslationMap = {
       retry: "Coba lagi",
       retrySend: "Coba kirim lagi",
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
+    },
+    pairingQrExpired: {
+      title: "QR pemasangan kedaluwarsa",
+      reason: "Jalankan /pair qr lagi untuk membuat kode pengaturan baru.",
+      badge: "Kedaluwarsa",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1442,6 +1448,7 @@ export const id: TranslationMap = {
     jaJP: "日本語 (Jepang)",
     ko: "한국어 (Korea)",
     fr: "Français (Prancis)",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية (Arab)",
     it: "Italiano (Italia)",
     tr: "Türkçe (Turki)",
@@ -1452,6 +1459,7 @@ export const id: TranslationMap = {
     vi: "Tiếng Việt (Vietnam)",
     nl: "Nederlands (Belanda)",
     fa: "فارسی (Persia)",
+    ru: "Русский (Russian)",
   },
   cron: {
     quickCreate: {

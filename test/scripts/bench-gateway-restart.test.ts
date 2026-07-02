@@ -7,15 +7,15 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+import {
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../src/infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../src/state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
-import {
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../src/infra/kysely-sync.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -90,7 +90,13 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
       "--output requires a value",
     );
+    expect(() =>
+      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
+    ).toThrow("--output was provided more than once");
     expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
+    expect(() =>
+      testing.parseOptions(["--case", "skipChannels", "--case", "skipChannels"]),
+    ).toThrow('Duplicate --case "skipChannels"');
     expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
       "--restarts requires a value",
     );
@@ -114,6 +120,34 @@ describe("gateway restart benchmark script", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("reports duplicate benchmark cases without a stack trace", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-gateway-restart.ts",
+        "--case",
+        "skipChannels",
+        "--case",
+        "skipChannels",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('Duplicate --case "skipChannels"');
     expect(result.stderr).not.toContain("\n    at ");
   });
 

@@ -112,6 +112,23 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+  it("rejects missing valued options instead of consuming the next flag", () => {
+    for (const flag of [
+      "--files",
+      "--invoke-timeout-ms",
+      "--max-workspace-reg-fds",
+      "--min-leaked-fds",
+      "--mode",
+      "--output-dir",
+      "--sample-delay-ms",
+      "--settle-delay-ms",
+    ]) {
+      for (const value of ["--keep", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
+    }
+  });
+
   it("stops parsing options after the argument terminator", () => {
     expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
       fileCount: 20,

@@ -19,17 +19,13 @@ import type {
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
-import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import {
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
+import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
@@ -351,35 +347,11 @@ export async function channelsCapabilitiesCommand(
             allowInstall: true,
           });
           if (resolved.configChanged) {
-            cfg = resolved.cfg;
-            const shouldMovePluginInstalls = Boolean(
-              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
-            );
-            if (shouldMovePluginInstalls) {
-              const committed = await commitConfigWithPendingPluginInstalls({
-                nextConfig: cfg,
-                baseHash: (await sourceSnapshotPromise)?.hash,
-              });
-              cfg = committed.config;
-              await refreshPluginRegistryAfterConfigMutation({
-                config: cfg,
-                reason: "source-changed",
-                installRecords: committed.installRecords,
-                logger: { warn: (message) => runtime.log(message) },
-              });
-            } else {
-              await replaceConfigFile({
-                nextConfig: cfg,
-                baseHash: (await sourceSnapshotPromise)?.hash,
-              });
-              if (resolved.pluginInstalled) {
-                await refreshPluginRegistryAfterConfigMutation({
-                  config: cfg,
-                  reason: "source-changed",
-                  logger: { warn: (message) => runtime.log(message) },
-                });
-              }
-            }
+            cfg = await persistResolvedChannelPluginConfig({
+              resolved,
+              baseHash: (await sourceSnapshotPromise)?.hash,
+              runtime,
+            });
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();

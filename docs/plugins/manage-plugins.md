@@ -110,6 +110,13 @@ When you pass a plugin id, OpenClaw reuses the tracked install spec. Stored
 dist-tags such as `@beta` and exact pinned versions continue to be used on
 later `update <plugin-id>` runs.
 
+`openclaw plugins update --all` is the bulk maintenance path. It still respects
+ordinary tracked install specs, but trusted official OpenClaw plugin records can
+sync to the current official catalog target instead of staying on a stale exact
+official package. If `update.channel` is set to `beta`, that bulk official sync
+uses the beta-channel context. Use a targeted `update <plugin-id>` when you
+intentionally want to keep an exact or tagged official spec untouched.
+
 For npm installs, you can pass an explicit package spec to switch the tracked
 record:
 

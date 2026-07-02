@@ -19,6 +19,8 @@ type AgentPayloadLike = {
   attachments?: unknown;
   isError?: unknown;
   isReasoning?: unknown;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: unknown;
 };
 
 type AgentDeliveryEvidence = {
@@ -80,7 +82,19 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
-function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+function collectMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+  output: Set<string>,
+  // Payloads arrive as in-process `unknown` objects, so a malformed
+  // self-referential `attachments` chain would recurse until the stack
+  // overflows. Track visited records to bound the descent, matching
+  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
+  seen = new WeakSet<object>(),
+) {
+  if (seen.has(record)) {
+    return;
+  }
+  seen.add(record);
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -90,7 +104,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
       }
     }
   }

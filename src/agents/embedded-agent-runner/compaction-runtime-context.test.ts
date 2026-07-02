@@ -271,6 +271,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+    expect(result.nativeHarnessCompaction).toBe(true);
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -315,7 +316,10 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5" }] },
+            openai: {
+              baseUrl: "https://example.test/v1",
+              models: [{ id: "gpt-5.5" }],
+            },
           },
         },
       } as unknown as OpenClawConfig,
@@ -328,6 +332,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+    expect(result.nativeHarnessCompaction).toBeUndefined();
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });
@@ -387,6 +392,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
+    expect(result.nativeHarnessCompaction).toBe(true);
     expect(result.model).toBe("gpt-5.4-mini");
     expect(result.authProfileId).toBeUndefined();
   });

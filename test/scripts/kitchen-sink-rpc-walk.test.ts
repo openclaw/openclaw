@@ -175,16 +175,18 @@ describe("kitchen-sink RPC isolated state", () => {
   });
 
   it("clamps timer env values before they reach Node timers", () => {
-    expect(readPositiveTimerMs(String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1), 60_000)).toBe(
+    const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
+
+    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(
       MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
     );
 
     const config = resolveKitchenSinkRpcConfig({
-      OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_READY_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_READY_MS: oversizedTimerMs,
     });
 
     expect(config.rpcTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
@@ -712,11 +714,38 @@ describe("kitchen-sink RPC command output capture", () => {
     expect(result.stderrTruncatedChars).toBe(3);
   });
 
+  it("clamps oversized command timeout env values before scheduling timers", async () => {
+    const previousTimeout = process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
+    process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
+    try {
+      await expect(
+        runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "setTimeout(() => process.exit(0), 25);",
+        ]),
+      ).resolves.toMatchObject({ stdout: "", stderr: "" });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
+      } else {
+        process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS = previousTimeout;
+      }
+    }
+  });
+
   posixIt("kills timed command process groups", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+    const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
+    const grandchildScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
 
     writeFileSync(
       scriptPath,
@@ -726,8 +755,8 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
+  ${JSON.stringify(grandchildScript)},
+], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
@@ -735,19 +764,28 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
       detached: undefined,
       timeoutKillGraceMs: 25,
       timeoutMs: 500,
     });
+    const runErrorPromise = runPromise.then(
+      () => {
+        throw new Error("expected timed command to reject");
+      },
+      (error: unknown) => error,
+    );
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
+      await waitFor(() => existsSync(grandchildReadyPath));
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 500ms");
+      const runError = await runErrorPromise;
+      expect(runError).toBeInstanceOf(Error);
+      expect((runError as Error).message).toContain("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -993,7 +1031,14 @@ describe("kitchen-sink RPC caller loading", () => {
     const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
     const scriptPath = path.join(root, "term-zero-grandchild.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
+    const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
+    const grandchildScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
 
     writeFileSync(
       scriptPath,
@@ -1003,8 +1048,8 @@ import fs from "node:fs";
 
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
+  ${JSON.stringify(grandchildScript)},
+], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -1012,18 +1057,27 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
       timeoutKillGraceMs: 2_000,
-      timeoutMs: 100,
+      timeoutMs: 1_500,
     });
+    const runErrorPromise = runPromise.then(
+      () => {
+        throw new Error("expected timed command to reject");
+      },
+      (error: unknown) => error,
+    );
 
     try {
       await waitFor(() => existsSync(grandchildPidPath));
+      await waitFor(() => existsSync(grandchildReadyPath));
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 100ms");
+      const runError = await runErrorPromise;
+      expect(runError).toBeInstanceOf(Error);
+      expect((runError as Error).message).toContain("timed out after 1500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -2239,6 +2293,22 @@ describe("kitchen-sink RPC process sampling", () => {
       code: "ETOOBIG",
       message: "fetch response body exceeded 1024 bytes",
     });
+  });
+
+  it("clamps oversized HTTP probe timeouts before scheduling timers", async () => {
+    const fetchImpl = vi.fn(async () => {
+      await delay(25);
+      return new Response('{"status":"live"}', { status: 200 });
+    });
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 1,
+        fetchImpl,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).resolves.toEqual({ ok: true, status: 200, body: { status: "live" } });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("rejects oversized HTTP probe responses before reading declared large bodies", async () => {

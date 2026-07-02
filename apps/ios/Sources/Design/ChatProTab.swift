@@ -11,6 +11,7 @@ struct ChatProTab: View {
     let headerTitle: String?
     let headerSubtitle: String?
     let showsAgentBadge: Bool
+    let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
 
     init(
@@ -18,56 +19,26 @@ struct ChatProTab: View {
         headerTitle: String? = nil,
         headerSubtitle: String? = nil,
         showsAgentBadge: Bool = true,
+        ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
         self.headerSubtitle = headerSubtitle
         self.showsAgentBadge = showsAgentBadge
+        self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                OpenClawProBackground()
-                VStack(spacing: 0) {
-                    self.header
-                    if let viewModel {
-                        OpenClawChatView(
-                            viewModel: viewModel,
-                            drawsBackground: false,
-                            showsSessionSwitcher: false,
-                            userAccent: self.chatUserAccent,
-                            assistantName: self.agentDisplayName,
-                            assistantAvatarText: self.agentBadge,
-                            assistantAvatarTint: OpenClawBrand.accent,
-                            showsAssistantAvatars: false,
-                            composerChrome: .clean,
-                            isComposerEnabled: self.gatewayConnected,
-                            messagePlaceholder: self.messagePlaceholder,
-                            talkControl: self.talkControl)
-                            .id(ObjectIdentifier(viewModel))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    } else {
-                        ProCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Chat is preparing")
-                                    .font(.headline)
-                                Text("The operator session will attach when the gateway is ready.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding()
-                        Spacer()
-                    }
+        Group {
+            if self.ownsNavigationStack {
+                NavigationStack {
+                    self.content
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .safeAreaPadding(.top, 8)
+            } else {
+                self.content
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .navigationBarHidden(true)
         }
         .task {
             self.syncChatViewModel()
@@ -88,6 +59,48 @@ struct ChatProTab: View {
             self.syncChatViewModel()
             self.viewModel?.refresh()
         }
+    }
+
+    private var content: some View {
+        ZStack {
+            OpenClawProBackground()
+            VStack(spacing: 0) {
+                self.header
+                if let viewModel {
+                    OpenClawChatView(
+                        viewModel: viewModel,
+                        drawsBackground: false,
+                        showsSessionSwitcher: false,
+                        userAccent: self.chatUserAccent,
+                        assistantName: self.agentDisplayName,
+                        assistantAvatarText: self.agentBadge,
+                        assistantAvatarTint: OpenClawBrand.accent,
+                        showsAssistantAvatars: false,
+                        composerChrome: .clean,
+                        isComposerEnabled: self.gatewayConnected,
+                        messagePlaceholder: self.messagePlaceholder,
+                        talkControl: self.talkControl)
+                        .id(ObjectIdentifier(viewModel))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    ProCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Chat is preparing")
+                                .font(.headline)
+                            Text("The operator session will attach when the gateway is ready.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding()
+                    Spacer()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .safeAreaPadding(.top, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationBarHidden(true)
     }
 
     private var header: some View {
@@ -122,16 +135,9 @@ struct ChatProTab: View {
                 .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    OpenClawBrand.accent,
-                                    OpenClawBrand.accentHot,
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing)))
+                        .fill(OpenClawBrand.accent.gradient))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
-                .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: 10, y: 5)
+                .shadow(color: OpenClawBrand.accent.opacity(0.14), radius: 5, y: 2)
         } else {
             ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
@@ -195,7 +201,8 @@ struct ChatProTab: View {
             Button(action: openSettings) {
                 self.connectionPill
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             self.connectionPill
@@ -210,16 +217,8 @@ struct ChatProTab: View {
                 .lineLimit(1)
         }
         .foregroundStyle(self.gatewayPillColor)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 4)
         .frame(height: 30)
-        .background {
-            Capsule()
-                .fill(self.gatewayPillColor.opacity(0.11))
-        }
-        .overlay {
-            Capsule()
-                .strokeBorder(self.gatewayPillColor.opacity(0.16), lineWidth: 1)
-        }
     }
 
     private var gatewayConnected: Bool {
@@ -268,8 +267,8 @@ struct ChatProTab: View {
             ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
     }
 
-    private var headerDisplaySubtitle: String {
-        self.normalized(self.headerSubtitle) ?? "AI Assistant"
+    private var headerDisplaySubtitle: String? {
+        self.normalized(self.headerSubtitle)
     }
 
     nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {
@@ -277,7 +276,7 @@ struct ChatProTab: View {
     }
 
     private var chatUserAccent: Color {
-        self.colorScheme == .light ? Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0) : OpenClawBrand.accent
+        self.colorScheme == .light ? OpenClawBrand.info : OpenClawBrand.accent
     }
 
     private var activeAgent: AgentSummary? {

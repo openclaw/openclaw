@@ -473,6 +473,36 @@ describe("config view", () => {
     expect(content.scrollLeft).toBe(0);
   });
 
+  it("resets config content scroll when switching from form to raw mode", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      const renderCase = (overrides: Partial<ConfigProps>) =>
+        render(renderConfig({ ...baseProps(), ...overrides }), container);
+
+      renderCase({ formMode: "form" });
+
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      content.scrollTop = 320;
+      content.scrollLeft = 18;
+      content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+        content.scrollTop = top ?? content.scrollTop;
+        content.scrollLeft = left ?? content.scrollLeft;
+      }) as typeof content.scrollTo;
+
+      renderCase({ formMode: "raw" });
+      await Promise.resolve();
+
+      expect(content["scrollTo"]).toHaveBeenCalledOnce();
+      expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+      expect(content.scrollTop).toBe(0);
+      expect(content.scrollLeft).toBe(0);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("can hide the root tab for scoped settings surfaces", () => {
     const { container } = renderConfigView({
       activeSection: "channels",

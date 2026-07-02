@@ -38,6 +38,22 @@ describe("slack config schema", () => {
     }
   });
 
+  it("rejects Slack Web API URL config overrides", () => {
+    const res = SlackConfigSchema.safeParse({
+      apiUrl: "http://127.0.0.1:49152/api/",
+      accounts: { ops: { apiUrl: "http://127.0.0.1:49153/api/" } },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some(
+          (issue) => issue.code === "unrecognized_keys" && issue.keys.includes("apiUrl"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("accepts unfurl controls at root and account level", () => {
     const res = SlackConfigSchema.safeParse({
       unfurlLinks: false,
