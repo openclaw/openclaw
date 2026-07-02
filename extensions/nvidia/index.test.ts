@@ -211,11 +211,6 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -233,11 +228,6 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
@@ -305,11 +295,6 @@ describe("nvidia provider hooks", () => {
       "static:nvidia/z-ai/glm-5.2",
       "static:nvidia/moonshotai/kimi-k2.6",
       "static:nvidia/minimaxai/minimax-m3",
-      "static:nvidia/moonshotai/kimi-k2.5",
-      "static:nvidia/minimaxai/minimax-m2.7",
-      "static:nvidia/z-ai/glm-5.1",
-      "static:nvidia/minimaxai/minimax-m2.5",
-      "static:nvidia/z-ai/glm5",
     ]);
 
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);

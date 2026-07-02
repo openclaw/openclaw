@@ -1,6 +1,5 @@
 // Nvidia tests cover provider catalog plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildLiveNvidiaProvider,
   buildNvidiaProvider,
@@ -8,6 +7,36 @@ import {
   clearNvidiaFeaturedModelCacheForTests,
   NVIDIA_FEATURED_MODELS_URL,
 } from "./provider-catalog.js";
+
+const EXPECTED_FEATURED_MODELS = [
+  {
+    id: "nvidia/nemotron-3-ultra-550b-a55b",
+    name: "Nemotron 3 Ultra 550B",
+    contextWindow: 1_048_576,
+    maxTokens: 8_192,
+  },
+  {
+    id: "nvidia/nemotron-3-super-120b-a12b",
+    name: "Nemotron 3 Super 120B",
+    contextWindow: 1_000_000,
+    maxTokens: 8_192,
+  },
+  { id: "z-ai/glm-5.2", name: "GLM 5.2", contextWindow: 202_752, maxTokens: 8_192 },
+  {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    contextWindow: 262_144,
+    maxTokens: 8_192,
+  },
+  {
+    id: "minimaxai/minimax-m3",
+    name: "Minimax M3",
+    contextWindow: 196_608,
+    maxTokens: 8_192,
+  },
+] as const;
+
+const EXPECTED_FEATURED_MODEL_IDS = EXPECTED_FEATURED_MODELS.map((model) => model.id);
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -42,18 +71,14 @@ describe("nvidia provider catalog", () => {
     expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe("NVIDIA_API_KEY");
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "z-ai/glm-5.2",
-      "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m3",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
+    expect(
+      provider.models.map(({ id, name, contextWindow, maxTokens }) => ({
+        id,
+        name,
+        contextWindow,
+        maxTokens,
+      })),
+    ).toEqual(EXPECTED_FEATURED_MODELS);
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
     );
@@ -121,51 +146,7 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "z-ai/glm-5.2",
-      "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m3",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
-  });
-
-  it("retains shipped NVIDIA model refs as bundled fallback compatibility rows", () => {
-    const compatibilityIds = new Set([
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
-    const compatibilityRows = manifest.modelCatalog.providers.nvidia.models.filter((model) =>
-      compatibilityIds.has(model.id),
-    );
-
-    expect(compatibilityRows).toMatchObject([
-      {
-        id: "moonshotai/kimi-k2.5",
-        status: "deprecated",
-        replacedBy: "moonshotai/kimi-k2.6",
-      },
-      {
-        id: "minimaxai/minimax-m2.7",
-        status: "deprecated",
-        replacedBy: "minimaxai/minimax-m3",
-      },
-      { id: "z-ai/glm-5.1", status: "deprecated", replacedBy: "z-ai/glm-5.2" },
-      {
-        id: "minimaxai/minimax-m2.5",
-        status: "deprecated",
-        replacedBy: "minimaxai/minimax-m3",
-      },
-      { id: "z-ai/glm5", status: "deprecated", replacedBy: "z-ai/glm-5.2" },
-    ]);
+    expect(provider.models.map((model) => model.id)).toEqual(EXPECTED_FEATURED_MODEL_IDS);
   });
 
   it("uses only selectable live catalog rows when the featured catalog returns models", async () => {
@@ -305,18 +286,7 @@ describe("nvidia provider catalog", () => {
     const first = await buildLiveNvidiaProvider();
     const second = await buildLiveNvidiaProvider();
 
-    expect(first.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "z-ai/glm-5.2",
-      "moonshotai/kimi-k2.6",
-      "minimaxai/minimax-m3",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
+    expect(first.models.map((model) => model.id)).toEqual(EXPECTED_FEATURED_MODEL_IDS);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
