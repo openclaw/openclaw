@@ -1525,6 +1525,102 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("uses a fresh embedded session when the connection closes after the gateway accepts the run", async () => {
+    await withTempStore(async () => {
+      // The gateway accepts (and detaches) the run, then the connection drops
+      // non-transiently before the final frame. The detached gateway run still
+      // owns agent:main:incident-42, so the embedded fallback must not reuse it.
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+        onAccepted?.({
+          status: "accepted",
+          runId: "run-accepted-close",
+          sessionKey: "agent:main:incident-42",
+        });
+        throw createGatewayClosedError();
+      });
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      const fallbackSessionId = String(fallbackOpts.sessionId);
+      const fallbackSessionKey = String(fallbackOpts.sessionKey);
+      expect(fallbackSessionId).toMatch(/^gateway-fallback-/);
+      expect(fallbackSessionKey).not.toBe("agent:main:incident-42");
+      expect(fallbackSessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
+      expect(fallbackOpts.runId).toBe(fallbackSessionId);
+      const resultMetaOverrides = requireRecord(
+        fallbackOpts.resultMetaOverrides,
+        "fallback metadata",
+      );
+      expect(resultMetaOverrides.transport).toBe("embedded");
+      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
+      expect(resultMetaOverrides.fallbackReason).toBe("gateway_connection_lost");
+      expect(resultMetaOverrides.fallbackSessionId).toBe(fallbackSessionId);
+      expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes(
+            "Gateway connection closed after the run was accepted; running embedded agent with fresh session",
+          ),
+        ),
+      ).toBe(true);
+      expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("reconnects to the in-flight gateway run when a transient close follows acceptance", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockImplementationOnce(async (requestValue: unknown) => {
+            const request = requireRecord(requestValue, "gateway request");
+            const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+            onAccepted?.({
+              status: "accepted",
+              runId: "idem-1",
+              sessionKey: "agent:main:incident-42",
+            });
+            // Transient normal close (1000, no reason) after acceptance: the
+            // accepted run is still in flight, so the connect-retry loop must
+            // reconnect rather than reroute to a fresh embedded session.
+            throw createGatewayNormalCloseError();
+          })
+          .mockResolvedValue({
+            runId: "idem-1",
+            status: "in_flight",
+            result: { payloads: [], meta: { stub: true } },
+          });
+
+        const command = agentCliCommand(
+          { message: "hi", sessionKey: "agent:main:incident-42" },
+          runtime,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        await command;
+
+        expect(callGateway).toHaveBeenCalledTimes(2);
+        // Reconnect hits the gateway's server-side accepted/in_flight dedupe
+        // (server-methods/agent.ts), so no embedded fallback runs and the
+        // original session is never re-executed locally.
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(
+          mockMessages(runtime.error).some((message) => message.includes("already in flight")),
+        ).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not fall back to embedded agent for gateway request errors", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(
