@@ -860,6 +860,51 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBeUndefined();
   });
 
+  // ponytail: first-turn edge case — documented scope decision.
+  // When the very first user message in a reset/deleted archive starts with
+  // `[cron:...]`, the `!hasSeenPriorUserMessage` guard can't distinguish
+  // genuine orphan cron (intended opaque) from human-authored content.
+  // The current heuristic preserves orphan-cron opacity at the cost of
+  // treating this edge case as cron-generated. This is a known limitation
+  // scoped by design — maintainers should decide whether trusted session-store
+  // provenance is required before merge.
+  it("first-turn [cron:...] after reset: known scope decision — behaves as cron", async () => {
+    const archivePath = path.join(
+      tmpDir,
+      "agent-first-turn-cron.jsonl.reset.2026-07-01T00-00-00.000Z",
+    );
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] what do these log lines mean?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Those are cron job logs." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Can you explain more?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Sure. Each line is a task." },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    // Current behavior: first-turn [cron:] is classified as cron-generated
+    // because !hasSeenPriorUserMessage is true. Content is wiped.
+    // This is the documented scope trade-off — see the guard comment at line 850.
+    expect(entry.content).toBe("");
+    expect(entry.generatedByCronRun).toBe(true);
+  });
+
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
     const jsonlLines = [
       "",

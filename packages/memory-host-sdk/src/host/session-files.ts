@@ -843,6 +843,14 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
+      // ponytail: content-based cron heuristic — scope decision.
+      // `!hasSeenPriorUserMessage` restricts cron classification to the first
+      // user message, preventing mid-transcript `[cron:]` from wiping content.
+      // Side effect: a first-turn human `[cron:...]` in a reset/deleted archive
+      // is indistinguishable from an orphan cron archive (no session-store
+      // evidence), so it is also classified as cron-generated. Trusted
+      // session-store provenance would be needed to eliminate this trade-off
+      // without sacrificing orphan-cron opacity.
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
