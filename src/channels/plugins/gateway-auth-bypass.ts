@@ -1,10 +1,10 @@
 /**
- * Bundled channel gateway auth bypass loader.
+ * Channel gateway auth bypass loader.
  *
  * Reads optional public artifacts that declare unauthenticated Gateway callback paths.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 
 /**
  * Lightweight public artifact contract for channel gateway auth bypass paths.
@@ -18,10 +18,15 @@ const MISSING_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public s
 
 function loadBundledChannelGatewayAuthApi(channelId: string): GatewayAuthBypassApi | undefined {
   try {
-    return loadBundledPluginPublicArtifactModuleSync<GatewayAuthBypassApi>({
-      dirName: channelId,
-      artifactBasename: GATEWAY_AUTH_API_ARTIFACT_BASENAME,
-    });
+    // Bypass paths grant unauthenticated ingress, so resolution goes through the
+    // activation-gated facade seam: it also covers installed (externalized) plugin
+    // roots and returns null instead of executing a disabled plugin's artifact.
+    return (
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<GatewayAuthBypassApi>({
+        dirName: channelId,
+        artifactBasename: GATEWAY_AUTH_API_ARTIFACT_BASENAME,
+      }) ?? undefined
+    );
   } catch (error) {
     // Missing gateway auth artifacts are optional. Any other load failure means
     // the artifact exists but cannot be trusted, so propagate it to callers.

@@ -1,8 +1,8 @@
 // Gateway auth bypass tests cover channel plugin paths allowed to skip gateway auth.
 import { describe, expect, it, vi } from "vitest";
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
+const { tryLoadActivatedBundledPluginPublicSurfaceModuleSyncMock } = vi.hoisted(() => ({
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSyncMock: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
       if (dirName === "mattermost" && artifactBasename === "gateway-auth-api.js") {
         return {
@@ -14,6 +14,10 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
+      if (dirName === "disabledchannel") {
+        // Activation-gated loads return null for disabled/denied plugins.
+        return null;
+      }
       if (dirName === "broken" && artifactBasename === "gateway-auth-api.js") {
         throw new Error("broken gateway auth artifact");
       }
@@ -24,13 +28,14 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync:
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSyncMock,
 }));
 
 import { resolveBundledChannelGatewayAuthBypassPaths } from "./gateway-auth-bypass.js";
 
-describe("bundled channel gateway auth bypass fast path", () => {
+describe("channel gateway auth bypass fast path", () => {
   it("loads the narrow gateway auth artifact for configured channels", () => {
     const paths = resolveBundledChannelGatewayAuthBypassPaths({
       channelId: "mattermost",
@@ -38,7 +43,7 @@ describe("bundled channel gateway auth bypass fast path", () => {
     });
 
     expect(paths).toEqual(["/api/channels/mattermost/command", "/api/channels/mattermost/work"]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSyncMock).toHaveBeenCalledWith({
       dirName: "mattermost",
       artifactBasename: "gateway-auth-api.js",
     });
@@ -49,6 +54,15 @@ describe("bundled channel gateway auth bypass fast path", () => {
       resolveBundledChannelGatewayAuthBypassPaths({
         channelId: "discord",
         cfg: { channels: { discord: {} } },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("returns no bypass paths when plugin activation blocks the artifact", () => {
+    expect(
+      resolveBundledChannelGatewayAuthBypassPaths({
+        channelId: "disabledchannel",
+        cfg: { channels: { disabledchannel: {} } },
       }),
     ).toStrictEqual([]);
   });
