@@ -113,7 +113,6 @@ Brining
 Nautiling
 Krilling
 Barnacling
-Lobstering
 Tidepooling
 Pearling
 Snapping
