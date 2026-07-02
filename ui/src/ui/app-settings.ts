@@ -440,7 +440,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         }
         break;
       case "overview":
-        await loadOverview(host);
+        await loadOverview(host, { refresh: true });
         break;
       case "activity":
         break;
