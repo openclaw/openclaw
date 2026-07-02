@@ -47,6 +47,8 @@ type EffectivePolicyReport = {
 };
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
+const SESSION_EXEC_OVERRIDES_NOTE =
+  "Per-session /exec overrides are not included; send /exec in the target chat or cron session to inspect them.";
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -233,7 +235,9 @@ function buildEffectivePolicyReport(params: {
         approvals: params.approvals,
         hostPath: params.hostPath,
       }),
-      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      note:
+        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
   if (!cfg) {
@@ -248,7 +252,9 @@ function buildEffectivePolicyReport(params: {
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
-    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+    note:
+      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
 

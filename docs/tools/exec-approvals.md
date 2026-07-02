@@ -35,6 +35,10 @@ prompting even if session or config defaults request `ask: "on-miss"`.
 | `openclaw exec-policy show`                                      | Local-machine merged view.                                                             |
 | `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals file in one step. |
 
+`openclaw approvals get` and `openclaw exec-policy show` do not include per-session `/exec`
+overrides. Send `/exec` in the target chat or cron session to inspect the host and
+policy that the next agent turn will use.
+
 When a local scope requests `host=node`, `exec-policy show` reports that
 scope as node-managed at runtime instead of pretending the local
 approvals file is the source of truth.

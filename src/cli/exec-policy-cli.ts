@@ -69,6 +69,9 @@ type ExecPolicyShowPayload = {
 type ExecPolicyShowSecurity = ExecSecurity | "unknown";
 type ExecPolicyShowAsk = ExecAsk | "unknown";
 
+const SESSION_EXEC_OVERRIDES_NOTE =
+  "Per-session /exec overrides are not included; send /exec in the target chat or cron session to inspect them.";
+
 type ExecPolicyShowScope = Omit<
   ExecPolicyScopeSnapshot,
   "security" | "ask" | "askFallback" | "allowedDecisions"
@@ -234,14 +237,15 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   const hasNodeRuntimeScope = scopes.some(
     (scope) => scope.runtimeApprovalsSource === "node-runtime",
   );
+  const baseNote = hasNodeRuntimeScope
+    ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
+    : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.";
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
-      note: hasNodeRuntimeScope
-        ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      note: `${baseNote} ${SESSION_EXEC_OVERRIDES_NOTE}`,
       scopes,
     },
   };

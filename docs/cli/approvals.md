@@ -51,6 +51,7 @@ Current scope:
 - `exec-policy` is **local-only**
 - it updates the local config file and the local approvals file together
 - it does **not** push policy to the gateway host or a node host
+- it does **not** include per-session `/exec` overrides; send `/exec` in the target chat or cron session to inspect those values
 - `--host node` is rejected in this command because node exec approvals are fetched from the node at runtime and must be managed through node-targeted approvals commands instead
 - `openclaw exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals file
 
@@ -70,6 +71,10 @@ openclaw approvals get --gateway
 - requested `tools.exec` policy
 - host approvals-file policy
 - effective result after precedence rules are applied
+
+<Note>
+Per-session `/exec` overrides are not included. Send `/exec` in the target chat or cron session to inspect them.
+</Note>
 
 Precedence is intentional:
 

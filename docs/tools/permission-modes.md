@@ -31,6 +31,10 @@ Then verify the effective policy:
 openclaw exec-policy show
 ```
 
+`openclaw approvals get` and `openclaw exec-policy show` report config and host approvals
+state, not per-session `/exec` overrides. To inspect the exact session defaults that
+the next agent turn will use, send `/exec` in the target chat or cron session.
+
 In `auto` mode, OpenClaw runs deterministic allowlist matches directly. Approval misses go through OpenClaw's native auto reviewer first, then fall back to the configured human approval route when needed.
 
 ## OpenClaw host exec modes

@@ -6,6 +6,8 @@ import * as execApprovals from "../infra/exec-approvals.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli, testing } from "./exec-approvals-cli.js";
 
+const SESSION_EXEC_OVERRIDES_NOTE = "Per-session /exec overrides are not included";
+
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -243,9 +245,10 @@ describe("exec approvals CLI", () => {
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
-    expect(policy.note).toBe(
+    expect(String(policy.note)).toContain(
       "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
     );
+    expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
       requested: "full",
@@ -337,9 +340,10 @@ describe("exec approvals CLI", () => {
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
-    expect(policy.note).toBe(
+    expect(String(policy.note)).toContain(
       "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     );
+    expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
       requested: "full",
@@ -456,6 +460,24 @@ describe("exec approvals CLI", () => {
       scopes: [],
     });
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("renders the session override caveat in text output", async () => {
+    readBestEffortConfig.mockResolvedValue({
+      tools: {
+        exec: {
+          security: "full",
+          ask: "off",
+        },
+      },
+    });
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("Effective Policy");
+    expect(output).toContain("Precedence:");
+    expect(output).toContain(SESSION_EXEC_OVERRIDES_NOTE);
   });
 
   it("reports agent scopes with inherited global requested policy", async () => {
