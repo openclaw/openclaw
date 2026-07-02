@@ -55,7 +55,10 @@ function resolveMergedBotToBotConfig(params: {
   if (accountBotToBot === undefined) {
     return baseBotToBot;
   }
-  return { ...(baseBotToBot ?? {}), ...accountBotToBot };
+  if (baseBotToBot === undefined) {
+    return accountBotToBot;
+  }
+  return { ...baseBotToBot, ...accountBotToBot };
 }
 
 export function resolveTelegramAccountConfig(

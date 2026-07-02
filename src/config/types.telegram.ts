@@ -100,7 +100,7 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-export type TelegramBotToBotConfig = {
+type TelegramBotToBotConfig = {
   /** Opt-in gate for bot-originated Telegram messages. Default: false. */
   enabled?: boolean;
   /** Emergency switch that drops all bot-originated messages before allowlist checks. */
