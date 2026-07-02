@@ -43,9 +43,7 @@ class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
   }
 }
 
-type VolatileFilterPlan = {
-  stateDirs: string[];
-};
+type VolatileFilterPlan = Parameters<typeof isVolatileBackupPath>[1];
 
 const VOLATILE_BACKUP_SYNTHETIC_STAT = {
   isBlockDevice: () => false,
@@ -67,12 +65,16 @@ class BackupVolatileStatCache extends Map<string, Stats> {
     if (cached) {
       return cached;
     }
-    // node-tar calls filter only after stat succeeds. Synthetic stats let
-    // disposable paths that vanish during traversal reach the normal skip path.
+    // node-tar checks this cache before lstat and applies the filter to a hit.
+    // A synthetic hit lets known volatile paths disappear without aborting the archive.
     return isVolatileBackupPath(key, this.volatilePlan)
       ? VOLATILE_BACKUP_SYNTHETIC_STAT
       : undefined;
   }
+}
+
+function createBackupVolatileStatCache(volatilePlan: VolatileFilterPlan): Map<string, Stats> {
+  return new BackupVolatileStatCache(volatilePlan);
 }
 
 export type BackupCreateOptions = {
@@ -140,8 +142,8 @@ export type BackupCreateResult = {
     coveredBy?: string;
   }>;
   /**
-   * Count of paths the archiver actively skipped because they matched the
-   * known-volatile filter (live sessions, caches, queues, sockets, lock/tmp).
+   * Count of files the archiver actively skipped because they matched the
+   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
@@ -224,7 +226,11 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = {
+  writeTarArchiveWithRetry,
+  isTarEofRaceError,
+  createBackupVolatileStatCache,
+};
 export { testApi as __test };
 
 async function resolveOutputPath(params: {
@@ -441,9 +447,9 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
     lines.push(`Created ${result.archivePath}`);
     if (result.skippedVolatileCount > 0) {
       lines.push(
-        `Skipped ${result.skippedVolatileCount} volatile path${
+        `Skipped ${result.skippedVolatileCount} volatile file${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, caches, queues, sockets, lock/tmp).`,
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
     if (result.verified) {
@@ -817,9 +823,7 @@ export async function createBackupArchive(
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
-    const volatilePlan: VolatileFilterPlan = {
-      stateDirs: [stateAsset?.sourcePath ?? plan.stateDir],
-    };
+    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
     // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
@@ -878,7 +882,7 @@ export async function createBackupArchive(
             portable: true,
             preservePaths: true,
             linkCache: new BackupLinkCache(),
-            statCache: new BackupVolatileStatCache(volatilePlan),
+            statCache: createBackupVolatileStatCache(volatilePlan),
             filter: tarFilter,
             onWriteEntry: (entry) => {
               entry.path = remapArchiveEntryPath({
@@ -906,9 +910,9 @@ export async function createBackupArchive(
     result.skippedVolatileCount = skippedVolatileCount;
     if (skippedVolatileCount > 0) {
       opts.log?.(
-        `Backup skipped ${skippedVolatileCount} volatile path${
+        `Backup skipped ${skippedVolatileCount} volatile file${
           skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, caches, queues, sockets, lock/tmp).`,
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
     await publishTempArchive({ tempArchivePath, outputPath });

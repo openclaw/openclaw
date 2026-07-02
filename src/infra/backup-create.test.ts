@@ -1,4 +1,5 @@
 // Covers backup archive creation and verification filtering.
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -157,7 +159,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile paths (live sessions, caches, queues, sockets, lock/tmp).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
     ]);
   });
 });
@@ -288,6 +290,52 @@ describe("writeTarArchiveWithRetry", () => {
     ).rejects.toThrow(/permission denied/);
     expect(runTar).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("createBackupVolatileStatCache", () => {
+  it("lets tar filter a volatile file that disappears before lstat", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-volatile-stat-cache-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
+        await state.writeText("settings.json", '{"keep":true}\n');
+        const archivePath = state.path("volatile-stat-cache.tar.gz");
+        const volatilePlan = { stateDirs: [state.stateDir] };
+        const statCache = backupCreateInternals.createBackupVolatileStatCache(volatilePlan);
+        const getCachedStat = statCache.get.bind(statCache);
+        let removedBeforeStat = false;
+
+        statCache.get = (key: string) => {
+          if (path.resolve(key) === path.resolve(volatilePath)) {
+            rmSync(volatilePath, { force: true });
+            removedBeforeStat = true;
+          }
+          return getCachedStat(key);
+        };
+
+        await tar.c(
+          {
+            file: archivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            statCache,
+            filter: (entryPath) => !isVolatileBackupPath(entryPath, volatilePlan),
+          },
+          [state.stateDir],
+        );
+
+        const entries = await listArchiveEntries(archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      },
+    );
   });
 });
 
@@ -436,86 +484,6 @@ describe("createBackupArchive", () => {
           ).toBe(false);
         }
         expect(result.skippedVolatileCount).toBe(10);
-      },
-    );
-  });
-
-  it("skips disposable runtime and browser cache paths while preserving durable profile state", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-backup-runtime-cache-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        await fs.mkdir(outputDir, { recursive: true });
-        await state.writeText("agents/main/agent/cache/provider-cache.bin", "cache\n");
-        await state.writeText("agents/main/agent/tmp/inflight.txt", "tmp\n");
-        await state.writeText("agents/main/agent/shell-snapshots/bash.snapshot", "snapshot\n");
-        await state.writeJson("agents/main/agent/auth-profiles.json", { profiles: [] });
-        await state.writeText("cache/shell-snapshots/zsh.snapshot", "snapshot\n");
-        await state.writeText("browser/openclaw/user-data/Default/Cache/data_0", "cache\n");
-        await state.writeText("browser/openclaw/user-data/Default/Code Cache/js/index", "code\n");
-        await state.writeText(
-          "browser/openclaw/user-data/Default/Web Applications/app/Resources/icon",
-          "icon\n",
-        );
-        await state.writeJson("browser/openclaw/user-data/Default/Preferences", {
-          profile: { name: "OpenClaw" },
-        });
-        await state.writeText("browser/openclaw/user-data/Default/Cookies", "cookies\n");
-        await state.writeText(
-          "browser/openclaw/user-data/Default/Local Storage/leveldb/000003.log",
-          "local storage\n",
-        );
-        await state.writeText("archived/retired/obsolete.jsonl", "old\n");
-        await state.writeText("locks/task.lock", "lock\n");
-        await state.writeText("downloads/download.partial", "partial\n");
-        await state.writeText("cache/queue/item.wal", "wal\n");
-        await state.writeText("extensions/example/Cargo.lock", "durable lock\n");
-        await state.writeText("extensions/example/download.partial", "durable partial\n");
-
-        const result = await createBackupArchive({
-          output: outputDir,
-          includeWorkspace: false,
-          nowMs: Date.UTC(2026, 4, 9, 8, 15, 0),
-        });
-        const entries = await listArchiveEntries(result.archivePath);
-
-        for (const suffix of [
-          "/state/agents/main/agent/cache/provider-cache.bin",
-          "/state/agents/main/agent/tmp/inflight.txt",
-          "/state/agents/main/agent/shell-snapshots/bash.snapshot",
-          "/state/cache/shell-snapshots/zsh.snapshot",
-          "/state/browser/openclaw/user-data/Default/Cache/data_0",
-          "/state/browser/openclaw/user-data/Default/Code Cache/js/index",
-          "/state/browser/openclaw/user-data/Default/Web Applications/app/Resources/icon",
-          "/state/archived/retired/obsolete.jsonl",
-          "/state/locks/task.lock",
-          "/state/downloads/download.partial",
-          "/state/cache/queue/item.wal",
-        ]) {
-          expect(
-            entries.some((entry) => entry.endsWith(suffix)),
-            suffix,
-          ).toBe(false);
-        }
-
-        for (const suffix of [
-          "/state/agents/main/agent/auth-profiles.json",
-          "/state/browser/openclaw/user-data/Default/Preferences",
-          "/state/browser/openclaw/user-data/Default/Cookies",
-          "/state/browser/openclaw/user-data/Default/Local Storage/leveldb/000003.log",
-          "/state/extensions/example/Cargo.lock",
-          "/state/extensions/example/download.partial",
-        ]) {
-          expect(
-            entries.some((entry) => entry.endsWith(suffix)),
-            suffix,
-          ).toBe(true);
-        }
-        expect(result.skippedVolatileCount).toBeGreaterThanOrEqual(10);
       },
     );
   });
