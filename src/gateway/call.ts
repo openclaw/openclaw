@@ -504,6 +504,7 @@ function resolveDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
+  allowAuthNone?: boolean;
 }): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
   if (shouldOmitDeviceIdentityForGatewayCall(params)) {
     return null;
@@ -1153,21 +1154,23 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  // auth mode "none" satisfies the local-backend shared-auth requirement without
-  // token / password credentials.  It also triggers device-identity omission so
-  // the server-side device-less self-pairing bypass (shouldSkipLocalBackendSelfPairing)
-  // preserves requested scopes — pairing the two concerns keeps the auth-none
-  // path safe.
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
+  // Auth mode "none" independently satisfies two concerns:
+  // 1. Shared-auth check (hasLocalBackendSharedAuth) — when the caller explicitly
+  //    requests local-backend shared auth, auth-none fulfills it without a token.
+  // 2. Device-identity omission — auth-none should always omit device identity so
+  //    the server-side device-less self-pairing bypass (shouldSkipLocalBackendSelfPairing)
+  //    preserves requested scopes without requiring paired-device checks.
+  //    This applies to ALL callers (including callSubagentGateway), not just those
+  //    that set requireLocalBackendSharedAuth (#98614).
+  const isAuthNone = resolveGatewayCallAuth(context.config).mode === "none";
+  const allowAuthNone = opts.requireLocalBackendSharedAuth === true && isAuthNone;
   const hasLocalBackendSharedAuth = Boolean(token || password) || allowAuthNone;
   const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
     opts,
     url,
     token,
     password,
-    allowAuthNone,
+    allowAuthNone: isAuthNone,
   });
   if (opts.requireLocalBackendSharedAuth && !hasLocalBackendSharedAuth) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
@@ -1178,7 +1181,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password, allowAuthNone: isAuthNone })
       : opts.deviceIdentity;
   if (useStoredDeviceAuth) {
     const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
