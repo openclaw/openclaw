@@ -852,6 +852,51 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("preserves backend staging for queued execution without running it during prepare", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const beforeExecution = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({ beforeExecution }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            sessionMode: "existing",
+            output: "text",
+            input: "arg",
+          },
+        },
+      ],
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-staging-thunk",
+        config: createCliBackendConfig(),
+      });
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(beforeExecution).not.toHaveBeenCalled();
+      await context.preparedBackend.beforeExecution?.();
+      expect(beforeExecution).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
     const { dir, sessionFile } = createSessionFile();
     let generatedSystemSettingsPath: string | undefined;
