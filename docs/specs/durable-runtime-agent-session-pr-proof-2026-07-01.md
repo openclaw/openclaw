@@ -63,6 +63,25 @@ Observed results:
 Review follow-up validation after restoring the pairing QR sensitive-display
 path:
 
+- Reviewer follow-up validation after preserving oversized-history
+  `idempotencyKey`, rerun on 2026-07-02 after rebasing onto the refreshed PR2
+  foundation branch:
+  - Code fix commit: `62057d4654` (`fix(gateway): preserve oversized history
+idempotency keys`). Later proof-doc updates are docs-only.
+  - Addressed reviewer P2: `buildOversizedHistoryPlaceholder` now carries
+    `__openclaw.idempotencyKey` into the oversized placeholder metadata along
+    with `id` and `seq`.
+  - Regression proof: `src/gateway/server-methods/chat-history-omission-logging.test.ts`
+    verifies direct replacement preserves `idempotencyKey: "oversized-key"`.
+  - Compatibility proof: `src/gateway/session-utils.fs.test.ts` was rerun in the
+    same shard and kept the existing oversized transcript metadata assertion
+    green.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat-history-omission-logging.test.ts src/gateway/session-utils.fs.test.ts src/gateway/server-methods/chat.directive-tags.test.ts`
+    - 7 files, 549 tests passed.
+  - `node scripts/generate-docs-map.mjs --check`
+    - passed with `docs/docs_map.md is up to date`.
+  - `git diff --check origin/main HEAD`
+    - passed.
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat.directive-tags.test.ts -t "broadcasts sensitive pairing QR display without persisting QR content"`
   - 2 files, 2 tests passed, 260 skipped.
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/chat.directive-tags.test.ts`
