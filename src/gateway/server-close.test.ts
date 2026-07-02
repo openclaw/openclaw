@@ -1519,4 +1519,27 @@ describe("createGatewayCloseHandler", () => {
       restartExpectedMs: null,
     });
   });
+
+  it("clears tracked interval handles between test cases", () => {
+    const activeIntervalCount = () => {
+      const resources = (
+        process as NodeJS.Process & { getActiveResourcesInfo(): string[] }
+      ).getActiveResourcesInfo();
+      return resources.filter((resource) => resource === "Timeout").length;
+    };
+
+    const before = activeIntervalCount();
+    createGatewayCloseTestDeps();
+    const during = activeIntervalCount();
+    expect(during - before).toBeGreaterThanOrEqual(3);
+
+    for (const handle of testIntervalHandles) {
+      clearInterval(handle);
+    }
+    testIntervalHandles.length = 0;
+
+    const after = activeIntervalCount();
+    console.log(`[interval-cleanup] before=${before} during=${during} after=${after}`);
+    expect(after).toBe(before);
+  });
 });
