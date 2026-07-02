@@ -11,6 +11,7 @@ import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
@@ -276,6 +277,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -293,10 +295,14 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const cfg = opts?.config ?? getRuntimeConfig();
+      const requesterAgentId =
+        opts?.requesterAgentIdOverride ??
+        (opts?.agentSessionKey ? resolveAgentIdFromSessionKey(opts.agentSessionKey) : undefined);
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const resolvedSession = await resolveSessionReference({
@@ -329,6 +335,7 @@ export function createSessionsHistoryTool(opts?: {
       const visibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentId: requesterAgentId,
       });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",

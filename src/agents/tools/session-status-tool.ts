@@ -24,6 +24,7 @@ import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import {
   buildAgentMainSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -381,6 +382,7 @@ export function createSessionStatusTool(opts?: {
    */
   runSessionKey?: string;
   config?: OpenClawConfig;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
@@ -396,16 +398,18 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
-        cfg,
-        agentSessionKey: opts?.agentSessionKey,
-        sandboxed: opts?.sandboxed,
-      });
+      const { mainKey, alias, effectiveRequesterKey, visibility, restrictToSpawned } =
+        resolveSandboxedSessionToolContext({
+          cfg,
+          agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.requesterAgentIdOverride,
+          sandboxed: opts?.sandboxed,
+        });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? effectiveRequesterKey,
-      );
-      const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
+      const requesterAgentId = opts?.requesterAgentIdOverride?.trim()
+        ? normalizeAgentId(opts.requesterAgentIdOverride)
+        : resolveAgentIdFromSessionKey(effectiveRequesterKey);
+      const visibilityRequesterKey = effectiveRequesterKey.trim();
       const usesLegacyMainAlias = alias === mainKey;
       const isLegacyMainVisibilityKey = (sessionKey: string) => {
         const trimmed = sessionKey.trim();
@@ -448,9 +452,12 @@ export function createSessionStatusTool(opts?: {
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,
           sandboxed: opts?.sandboxed === true,
+          agentId: requesterAgentId,
         }),
         a2aPolicy,
       });
+      const restrictSessionIdFallbackToSpawned =
+        restrictToSpawned || (opts?.sandboxed === true && visibility === "spawned");
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
@@ -555,13 +562,13 @@ export function createSessionStatusTool(opts?: {
           alias,
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
-          restrictToSpawned: opts?.sandboxed === true,
+          restrictToSpawned: restrictSessionIdFallbackToSpawned,
         });
         if (resolvedSession.ok && resolvedSession.resolvedViaSessionId) {
           const visibleSession = await resolveVisibleSessionReference({
             resolvedSession,
             requesterSessionKey: effectiveRequesterKey,
-            restrictToSpawned: opts?.sandboxed === true,
+            restrictToSpawned: restrictSessionIdFallbackToSpawned,
             visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
