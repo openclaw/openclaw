@@ -42,6 +42,11 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import {
+  readDynamicToolCallTimeoutMs,
+  readPositiveFiniteTimeoutMs,
+  readTimeoutSecondsAsMs,
+} from "./dynamic-tool-execution.js";
+import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
@@ -882,23 +887,16 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
   config: AgentHarnessSideQuestionParams["cfg"];
 }): number {
   const configured =
-    readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
+    readDynamicToolCallTimeoutMs(params.call.arguments) ??
     (params.call.tool === "image_generate"
       ? (readSideImageGenerationModelTimeoutMs(params.config) ??
         CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
       : undefined) ??
     (params.call.tool === "image"
-      ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
+      ? (readTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
         CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS)
       : undefined);
   return clampSideDynamicToolTimeoutMs(configured ?? CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS);
-}
-
-function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
 }
 
 function readSideImageGenerationModelTimeoutMs(
@@ -908,18 +906,7 @@ function readSideImageGenerationModelTimeoutMs(
   if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
     return undefined;
   }
-  return readSidePositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
-}
-
-function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readSidePositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
-}
-
-function readSidePositiveFiniteTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
 }
 
 function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
