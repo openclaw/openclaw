@@ -56,6 +56,7 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -816,6 +817,13 @@ function isTrustedOfficialPluginInstall(params: {
   if (!installRecord) {
     return false;
   }
+  const officialClawHubInstall =
+    installRecord.source === "clawhub"
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
+          pluginId: params.pluginId,
+          record: installRecord,
+        })
+      : undefined;
   if (
     installRecord.source === "npm" &&
     officialInstall?.npmSpec === packageName &&
@@ -830,11 +838,13 @@ function isTrustedOfficialPluginInstall(params: {
   }
   if (
     installRecord.source === "clawhub" &&
-    officialInstall?.clawhubSpec &&
     installRecord.clawhubChannel === "official" &&
+    officialClawHubInstall &&
     (installRecord.clawhubPackage === packageName ||
-      installRecord.spec === officialInstall.clawhubSpec ||
-      installRecord.resolvedSpec === officialInstall.clawhubSpec)
+      officialClawHubInstall.npmSpec === packageName ||
+      (officialClawHubInstall.clawhubSpec &&
+        (installRecord.spec === officialClawHubInstall.clawhubSpec ||
+          installRecord.resolvedSpec === officialClawHubInstall.clawhubSpec)))
   ) {
     return true;
   }
