@@ -30,6 +30,24 @@ type CompactionEndEvent =
       aborted?: unknown;
     };
 
+function readCompactionResultSessionFile(result: unknown): string | undefined {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return undefined;
+  }
+  const directSessionFile = (result as { sessionFile?: unknown }).sessionFile;
+  if (typeof directSessionFile === "string" && directSessionFile.trim()) {
+    return directSessionFile;
+  }
+  const nestedResult = (result as { result?: unknown }).result;
+  if (!nestedResult || typeof nestedResult !== "object" || Array.isArray(nestedResult)) {
+    return undefined;
+  }
+  const nestedSessionFile = (nestedResult as { sessionFile?: unknown }).sessionFile;
+  return typeof nestedSessionFile === "string" && nestedSessionFile.trim()
+    ? nestedSessionFile
+    : undefined;
+}
+
 // Unknown reasons come from external runtimes or older sessions. Treat them as
 // threshold compaction so logs and event payloads stay on the closed reason set.
 function normalizeCompactionReason(reason: unknown): CompactionReason {
@@ -163,12 +181,14 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   if (!willRetry) {
     const hookRunnerEnd = getGlobalHookRunner();
     if (hookRunnerEnd?.hasHooks("after_compaction")) {
+      const sessionFile =
+        readCompactionResultSessionFile(evt.result) ?? ctx.params.session.sessionFile;
       void hookRunnerEnd
         .runAfterCompaction(
           {
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
-            sessionFile: ctx.params.session.sessionFile,
+            sessionFile,
           },
           { sessionKey: ctx.params.sessionKey },
         )
@@ -187,9 +207,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { default: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { default: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 

@@ -212,7 +212,10 @@ export type AgentSessionEvent =
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
-export type AgentSessionWriteLockRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
+export type AgentSessionWriteLockRunner = <T>(
+  run: () => Promise<T> | T,
+  options?: { publishOwnedWrite?: boolean },
+) => Promise<T>;
 
 // ============================================================================
 // Types
@@ -476,9 +479,12 @@ export class AgentSession {
     return result.ok ? { apiKey: result.apiKey, headers: result.headers } : {};
   }
 
-  private async runWithSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
+  private async runWithSessionWriteLock<T>(
+    run: () => Promise<T> | T,
+    options?: { publishOwnedWrite?: boolean },
+  ): Promise<T> {
     return this.withExternalSessionWriteLock
-      ? await this.withExternalSessionWriteLock(run)
+      ? await this.withExternalSessionWriteLock(run, options)
       : await run();
   }
 
@@ -1971,16 +1977,22 @@ export class AgentSession {
       return { status: "aborted" };
     }
 
-    this.sessionManager.appendCompaction(
-      compactionResult.summary,
-      compactionResult.firstKeptEntryId,
-      compactionResult.tokensBefore,
-      compactionResult.details,
-      fromExtension,
+    const newEntries = await this.runWithSessionWriteLock(
+      () => {
+        this.sessionManager.appendCompaction(
+          compactionResult.summary,
+          compactionResult.firstKeptEntryId,
+          compactionResult.tokensBefore,
+          compactionResult.details,
+          fromExtension,
+        );
+        const entries = this.sessionManager.getEntries();
+        const sessionContext = this.sessionManager.buildSessionContext();
+        this.agent.state.messages = sessionContext.messages;
+        return entries;
+      },
+      { publishOwnedWrite: true },
     );
-    const newEntries = this.sessionManager.getEntries();
-    const sessionContext = this.sessionManager.buildSessionContext();
-    this.agent.state.messages = sessionContext.messages;
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
