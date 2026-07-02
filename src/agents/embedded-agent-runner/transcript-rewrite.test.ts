@@ -1,11 +1,11 @@
 // Transcript rewrite tests cover in-memory and persisted JSONL rewrites for
 // tool-result externalization, labels, compaction markers, and write locks.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -303,116 +303,118 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
 describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
   it("does not create session metadata for missing runtime transcripts", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}\n", "utf8");
+    await withTempDir({ prefix: "openclaw-transcript-rewrite-runtime-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await fs.writeFile(storePath, "{}\n", "utf8");
 
-    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-      scope: {
-        agentId: "main",
-        sessionId: "missing-session",
-        sessionKey: "agent:main:missing",
-        storePath,
-      },
-      request: { replacements: [] },
-    });
-
-    expect(result.changed).toBe(false);
-    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
-  });
-
-  it("rewrites runtime transcripts through scoped session identity", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
-    const sessionManager = SessionManager.create(dir, dir);
-    const entryIds = appendSessionMessages(sessionManager, [
-      asAppendMessage({
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      }),
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: createTextContent("before rewrite"),
-        isError: false,
-        timestamp: 2,
-      }),
-      asAppendMessage({
-        role: "assistant",
-        content: createTextContent("summarized"),
-        timestamp: 3,
-      }),
-    ]);
-    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
-    const resolvedSessionFile = await fs.realpath(sessionFile);
-    const sessionId = path.basename(sessionFile, ".jsonl");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:test": {
-          sessionFile,
-          sessionId,
-          updatedAt: 10,
-        },
-      }),
-      "utf8",
-    );
-    const toolResultEntryId = entryIds[1];
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
-
-    try {
       const result = await rewriteTranscriptEntriesInRuntimeTranscript({
         scope: {
           agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:test",
+          sessionId: "missing-session",
+          sessionKey: "agent:main:missing",
           storePath,
         },
-        request: {
-          replacements: [
-            {
-              entryId: toolResultEntryId,
-              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
-            },
-          ],
-        },
+        request: { replacements: [] },
       });
 
-      expect(result.changed).toBe(true);
-      expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
-        sessionFile: resolvedSessionFile,
-        staleMs: 1_800_000,
-        timeoutMs: 60_000,
-        maxHoldMs: 300_000,
-      });
-      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionFile: resolvedSessionFile,
-        sessionId,
-        sessionKey: "agent:main:test",
-        target: {
+      expect(result.changed).toBe(false);
+      expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+    });
+  });
+
+  it("rewrites runtime transcripts through scoped session identity", async () => {
+    await withTempDir({ prefix: "openclaw-transcript-rewrite-runtime-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionManager = SessionManager.create(dir, dir);
+      const entryIds = appendSessionMessages(sessionManager, [
+        asAppendMessage({
+          role: "user",
+          content: "run tool",
+          timestamp: 1,
+        }),
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "exec",
+          content: createTextContent("before rewrite"),
+          isError: false,
+          timestamp: 2,
+        }),
+        asAppendMessage({
+          role: "assistant",
+          content: createTextContent("summarized"),
+          timestamp: 3,
+        }),
+      ]);
+      const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+      const resolvedSessionFile = await fs.realpath(sessionFile);
+      const sessionId = path.basename(sessionFile, ".jsonl");
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          "agent:main:test": {
+            sessionFile,
+            sessionId,
+            updatedAt: 10,
+          },
+        }),
+        "utf8",
+      );
+      const toolResultEntryId = entryIds[1];
+      const listener = vi.fn();
+      const cleanup = onSessionTranscriptUpdate(listener);
+
+      try {
+        const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+          scope: {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:test",
+            storePath,
+          },
+          request: {
+            replacements: [
+              {
+                entryId: toolResultEntryId,
+                message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+              },
+            ],
+          },
+        });
+
+        expect(result.changed).toBe(true);
+        expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
+          sessionFile: resolvedSessionFile,
+          staleMs: 1_800_000,
+          timeoutMs: 60_000,
+          maxHoldMs: 300_000,
+        });
+        expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
+        expect(listener).toHaveBeenCalledWith({
           agentId: "main",
+          sessionFile: resolvedSessionFile,
           sessionId,
           sessionKey: "agent:main:test",
-        },
-      });
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:test",
+          },
+        });
 
-      const rewrittenSession = SessionManager.open(sessionFile);
-      const branchMessages = getBranchMessages(rewrittenSession);
-      expect(branchMessages.map((message) => message.role)).toEqual([
-        "user",
-        "toolResult",
-        "assistant",
-      ]);
-      expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
-        { type: "text", text: "[runtime rewrite]" },
-      ]);
-    } finally {
-      cleanup();
-    }
+        const rewrittenSession = SessionManager.open(sessionFile);
+        const branchMessages = getBranchMessages(rewrittenSession);
+        expect(branchMessages.map((message) => message.role)).toEqual([
+          "user",
+          "toolResult",
+          "assistant",
+        ]);
+        expect(
+          (branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content,
+        ).toEqual([{ type: "text", text: "[runtime rewrite]" }]);
+      } finally {
+        cleanup();
+      }
+    });
   });
 });

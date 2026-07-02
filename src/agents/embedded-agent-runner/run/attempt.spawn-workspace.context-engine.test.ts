@@ -1,6 +1,5 @@
 // Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
+import { withTempDir } from "../../../test-helpers/temp-dir.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -1192,54 +1192,54 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
-    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    tempPaths.push(sandboxWorkspace);
-    hoisted.resolveSandboxContextMock.mockResolvedValue({
-      enabled: true,
-      workspaceAccess: "ro",
-      workspaceDir: sandboxWorkspace,
-    });
+    await withTempDir({ prefix: "openclaw-sandbox-skills-" }, async (sandboxWorkspace) => {
+      hoisted.resolveSandboxContextMock.mockResolvedValue({
+        enabled: true,
+        workspaceAccess: "ro",
+        workspaceDir: sandboxWorkspace,
+      });
 
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        skillsSnapshot: {
-          prompt:
-            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
-          skills: [{ name: "smaug" }],
-          resolvedSkills: [
-            {
-              name: "smaug",
-              description: "Host copy",
-              disableModelInvocation: false,
-              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-              baseDir: "/Users/alice/.openclaw/skills/smaug",
-              source: "openclaw-workspace",
-              sourceInfo: {
-                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-                source: "openclaw-workspace",
-                scope: "project",
-                origin: "top-level",
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          skillsSnapshot: {
+            prompt:
+              "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+            skills: [{ name: "smaug" }],
+            resolvedSkills: [
+              {
+                name: "smaug",
+                description: "Host copy",
+                disableModelInvocation: false,
+                filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
                 baseDir: "/Users/alice/.openclaw/skills/smaug",
+                source: "openclaw-workspace",
+                sourceInfo: {
+                  path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                  source: "openclaw-workspace",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: "/Users/alice/.openclaw/skills/smaug",
+                },
               },
-            },
-          ],
+            ],
+          },
         },
-      },
-    });
+      });
 
-    expectFields(
-      mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock, 0, "skill entries params"),
-      {
+      expectFields(
+        mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock, 0, "skill entries params"),
+        {
+          workspaceDir: sandboxWorkspace,
+          skillsSnapshot: undefined,
+        },
+      );
+      expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
         workspaceDir: sandboxWorkspace,
         skillsSnapshot: undefined,
-      },
-    );
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
+      });
     });
   });
 
