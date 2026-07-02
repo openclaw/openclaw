@@ -99,6 +99,37 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("surfaces a typed error when the sandbox helper returns non-JSON stdout", async () => {
+    // Helper exits 0 but prints non-JSON (daemon banner, debug log, truncated
+    // output). Without the guard this throws a raw SyntaxError out of the
+    // JSON-RPC handler; the guard wraps it into an attributable error.
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.from("not-json <html>daemon warning</html>"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-1",
+        method: "POST",
+        url: "https://example.test/mcp",
+        headers: [],
+        bodyBase64: "",
+      }),
+    ).rejects.toThrow(/non-JSON stdout/i);
+    socket.close();
+  });
+
   it("blocks private HTTP targets before starting the sandbox backend", async () => {
     const runShellCommand = vi.fn(async () => ({
       stdout: Buffer.alloc(0),

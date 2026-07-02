@@ -89,11 +89,18 @@ async function runSandboxHttpRequest(
     const stderr = result.stderr.toString("utf8").trim();
     throw new Error(stderr || `sandbox http/request failed with code ${result.code}`);
   }
-  const parsed = JSON.parse(result.stdout.toString("utf8")) as {
-    status?: unknown;
-    headers?: unknown;
-    bodyBase64?: unknown;
-  };
+  // The sandbox shell helper can emit non-JSON stdout (startup banner, debug
+  // log interleaved with the response, or stdout truncated by maxBuffer). A raw
+  // SyntaxError here would surface as an opaque JSON-RPC error; wrap it into a
+  // typed, attributable error. The message is kept generic on purpose: the
+  // SyntaxError embeds a snippet of the raw stdout which is surfaced before
+  // session visibility filtering and could leak content via formatErrorMessage.
+  let parsed: { status?: unknown; headers?: unknown; bodyBase64?: unknown };
+  try {
+    parsed = JSON.parse(result.stdout.toString("utf8")) as typeof parsed;
+  } catch {
+    throw new Error("sandbox http/request returned non-JSON stdout");
+  }
   if (typeof parsed.status !== "number" || !Array.isArray(parsed.headers)) {
     throw new Error("sandbox http/request returned an invalid response envelope");
   }
