@@ -164,13 +164,27 @@ function normalizeEndpoint(endpoint?: string): string | undefined {
   return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
+function resolveOtelUrl(
+  endpoint: string | undefined,
+  path: string,
+  options: { rewriteSignalPath?: boolean } = {},
+): string | undefined {
   if (!endpoint) {
     return undefined;
   }
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
-    return endpoint;
+  const signalPathMatch = endpointWithoutQueryOrFragment.match(/\/v1\/(traces|metrics|logs)$/i);
+  if (signalPathMatch) {
+    const requestedSignal = path.split("/").at(-1)?.toLowerCase();
+    const endpointSignal = signalPathMatch[1]?.toLowerCase();
+    if (!options.rewriteSignalPath || endpointSignal === requestedSignal) {
+      return endpoint;
+    }
+    const rewrittenEndpoint = endpointWithoutQueryOrFragment.replace(
+      /\/v1\/(?:traces|metrics|logs)$/i,
+      `/${path}`,
+    );
+    return `${rewrittenEndpoint}${endpoint.slice(endpointWithoutQueryOrFragment.length)}`;
   }
   if (/[?#]/u.test(endpoint)) {
     try {
@@ -191,10 +205,11 @@ function resolveSignalOtelUrl(params: {
   endpoint?: string;
   path: string;
 }): string | undefined {
-  return resolveOtelUrl(
-    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
-    params.path,
-  );
+  const signalEndpoint = normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  if (signalEndpoint) {
+    return resolveOtelUrl(signalEndpoint, params.path);
+  }
+  return resolveOtelUrl(params.endpoint, params.path, { rewriteSignalPath: true });
 }
 
 function resolveSampleRate(value: number | undefined): number | undefined {
