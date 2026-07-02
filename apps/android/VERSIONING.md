@@ -39,7 +39,7 @@ When generating `apps/android/fastlane/metadata/android/en-US/release_notes.txt`
 
 Recommended workflow:
 
-- while iterating on a Play internal testing train, keep pending notes under `## Unreleased`
+- while iterating on a Google Play release train, keep pending notes under `## Unreleased`
 - before the production release, move or copy the final notes under `## <pinned version>` and run sync again
 
 ## Release Workflow
@@ -51,8 +51,8 @@ Recommended workflow:
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
 6. Run `ANDROID_SCREENSHOT_AVD=<avd-name> pnpm android:screenshots` to refresh raw Google Play screenshots with a script-managed emulator, or run `pnpm android:screenshots` when exactly one ADB device is already connected.
 7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
-8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
-9. Promote to production manually in Google Play Console.
+8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to the configured Google Play track.
+9. Complete production rollout manually in Google Play Console when needed.
 
 If `pnpm android:release:upload` fails, stop at that failure. Do not continue by
 uploading archived artifacts through `pnpm android:release:archive`,

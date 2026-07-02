@@ -1,8 +1,8 @@
 ## OpenClaw Android App
 
-Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
+OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Rebuild Checklist
+### Current App Surface
 
 - [x] New 4-step onboarding flow
 - [x] Connect tab with `Setup Code` + `Manual` modes
@@ -18,7 +18,6 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
-- [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
 
@@ -343,5 +342,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-This Android app is currently being rebuilt.
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
