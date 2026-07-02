@@ -118,6 +118,9 @@ describe("package acceptance workflow", () => {
     const checksumIndex = workflow.indexOf(
       'sha256sum --strict --status -c "$evidence_checksum_asset"',
     );
+    const strictPolicyGateIndex = workflow.indexOf(
+      "Stable closeout skipped: release class ${release_class} is not stable.",
+    );
     const evidenceReadIndex = workflow.indexOf('evidence_release_tag="$(jq -r');
     const releaseVersionGateIndex = workflow.indexOf(
       'if [[ "$main_version" != "$release_package_version" &&',
@@ -197,15 +200,12 @@ describe("package acceptance workflow", () => {
     expect(checksumIndex).toBeGreaterThan(-1);
     expect(evidenceReadIndex).toBeGreaterThan(checksumIndex);
     expect(existingCloseoutEvidenceMatchIndex).toBeGreaterThan(evidenceReadIndex);
-    expect(workflow.indexOf("Stable closeout skipped for release class")).toBeGreaterThan(
-      checksumIndex,
-    );
+    expect(strictPolicyGateIndex).toBeGreaterThan(checksumIndex);
+    expect(strictPolicyGateIndex).toBeLessThan(evidenceReadIndex);
     expect(releaseVersionGateIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
-    expect(releaseVersionGateIndex).toBeGreaterThan(checksumIndex);
-    expect(releaseVersionGateIndex).toBeLessThan(evidenceReadIndex);
-    expect(evidenceDownloadIndex).toBeLessThan(releaseVersionGateIndex);
+    expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
     expect(rollbackDrillGateIndex).toBeGreaterThan(existingCloseoutEvidenceMatchIndex);
     expect(rollbackDrillPushSkipIndex).toBeGreaterThan(rollbackDrillGateIndex);
   });

@@ -11,10 +11,8 @@ import { parseReleaseVersion, resolveNpmPublishPlan } from "./lib/npm-publish-pl
 import {
   canonicalJson,
   releasePolicySha256,
-  sha256Hex,
   validateFullValidationManifest as validateReleaseFullValidationManifest,
   validatePreflightManifest as validateReleasePreflightManifest,
-  validateReleaseOperationResult,
 } from "./lib/release-policy-evidence.mjs";
 import { validateStrictPublishPolicy } from "./lib/release-version-policy.mjs";
 
@@ -50,7 +48,7 @@ Options:
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
-  --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
+  --windows-node-tag <tag>            Exact Windows Node release tag. Required for legacy finals.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
@@ -320,7 +318,10 @@ export function parseArgs(argv) {
     options.releaseClass !== "beta";
   const strictStable =
     options.policyMode === "strict" && isStableReleaseClass(options.releaseClass);
-  if ((legacyFinal || strictStable) && !options.windowsNodeTag) {
+  if (strictStable && options.windowsNodeTag) {
+    throw new Error("--windows-node-tag is not supported for strict npm-only stable preflight");
+  }
+  if (legacyFinal && !options.windowsNodeTag) {
     throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
@@ -477,18 +478,6 @@ async function runArtifacts(repo, runId) {
   }));
 }
 
-export function requireExactRunArtifact(artifacts, expectedName) {
-  const matches = artifacts.filter(
-    (artifact) => artifact.name === expectedName && artifact.expired === false,
-  );
-  if (matches.length !== 1) {
-    throw new Error(
-      `expected exactly one unexpired artifact named ${expectedName}; found ${matches.length}`,
-    );
-  }
-  return expectedName;
-}
-
 /**
  * Chooses the expected artifact name, allowing one same-prefix fallback per run.
  */
@@ -513,10 +502,6 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
 
 async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
   return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
-}
-
-async function requireExactRunArtifactName(repo, runId, expectedName) {
-  return requireExactRunArtifact(await runArtifacts(repo, runId), expectedName);
 }
 
 function runAndEcho(command, args) {
@@ -590,10 +575,8 @@ async function runInfo(repo, runId) {
     headBranch: runData.head_branch,
     headSha: runData.head_sha,
     event: runData.event,
-    path: runData.path,
     status: runData.status,
     conclusion: runData.conclusion,
-    runAttempt: runData.run_attempt,
     url: runData.html_url,
     jobs: (jobsData.jobs ?? []).map((job) => ({
       name: job.name,
@@ -692,15 +675,6 @@ function sha256(path) {
   return run("shasum", ["-a", "256", path], { capture: true }).trim().split(/\s+/u)[0] ?? "";
 }
 
-export function requireSingleVerifierArtifactFile(filePaths, expectedPath) {
-  if (filePaths.length !== 1 || filePaths[0] !== expectedPath) {
-    throw new Error(
-      "npm tag-preflight verifier artifact must contain exactly one release-operation-verifier-v1.json",
-    );
-  }
-  return expectedPath;
-}
-
 function pluginPlanArgs(options) {
   const args = ["--selection-mode", options.pluginPublishScope];
   if (options.pluginPublishScope === "selected") {
@@ -738,120 +712,6 @@ async function collectPluginPlanWithRetry(script, options) {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/gu, "'\\''")}'`;
-}
-
-export function buildMacosValidationHandoff(params) {
-  const runId = String(params.npmPreflightRunId);
-  const liveRun = params.npmPreflightRun;
-  const runAttempt = String(liveRun?.runAttempt);
-  if (!/^[1-9][0-9]*$/u.test(runId) || !/^[1-9][0-9]*$/u.test(runAttempt)) {
-    throw new Error("npm tag-preflight verifier run id and attempt must be positive decimals");
-  }
-  if (
-    String(liveRun.databaseId) !== runId ||
-    liveRun.path !== ".github/workflows/openclaw-npm-release.yml" ||
-    liveRun.event !== "workflow_dispatch" ||
-    liveRun.status !== "completed" ||
-    liveRun.conclusion !== "success" ||
-    !/^[0-9a-f]{40}$/u.test(liveRun.headSha ?? "")
-  ) {
-    throw new Error("npm tag-preflight live producer run identity is invalid");
-  }
-
-  let payloadValue;
-  try {
-    payloadValue = JSON.parse(Buffer.from(params.verifierPayloadBytes).toString("utf8"));
-  } catch {
-    throw new Error("npm tag-preflight verifier payload must be valid JSON");
-  }
-  const payload = validateReleaseOperationResult(payloadValue);
-  const releaseVersion = versionFromTag(params.tag);
-  const expectedSourceRef = payload.target.authorizedSourceRef;
-  if (
-    payload.operation !== "tag-preflight" ||
-    payload.releaseVersion !== releaseVersion ||
-    payload.execution.event !== "workflow_dispatch" ||
-    payload.execution.workflowPath !== ".github/workflows/openclaw-npm-release.yml" ||
-    payload.execution.runId !== runId ||
-    payload.execution.runAttempt !== runAttempt ||
-    payload.execution.event !== liveRun.event ||
-    payload.execution.workflowPath !== liveRun.path ||
-    payload.execution.runHeadSha !== liveRun.headSha ||
-    payload.execution.executionRef !== expectedSourceRef ||
-    payload.execution.runHeadSha !== payload.target.authorizedSourceTipSha ||
-    payload.target.targetRef !== `refs/tags/${params.tag}` ||
-    payload.target.targetSha !== params.targetSha ||
-    payload.target.releaseTag !== params.tag ||
-    payload.target.targetReachableFromAuthorizedSource !== true
-  ) {
-    throw new Error("npm tag-preflight verifier provenance does not match release candidate");
-  }
-
-  const selectorClass = ["stable-base", "stable-patch"].includes(payload.releaseClass)
-    ? "stable"
-    : payload.releaseClass;
-  if (
-    (payload.policyMode === "strict" && payload.releaseSelector !== selectorClass) ||
-    (selectorClass === "stable" &&
-      !/^[0-9a-f]{64}$/u.test(payload.policySource.blobs.stableLinesSha256 ?? "")) ||
-    (selectorClass !== "stable" && payload.policySource.blobs.stableLinesSha256 !== null)
-  ) {
-    throw new Error("npm tag-preflight verifier release policy is inconsistent");
-  }
-
-  const sourcePrefix = "refs/heads/";
-  if (!expectedSourceRef.startsWith(sourcePrefix)) {
-    throw new Error("npm tag-preflight verifier source must be a branch ref");
-  }
-  const publicReleaseBranch = expectedSourceRef.slice(sourcePrefix.length);
-  if (liveRun.headBranch !== publicReleaseBranch) {
-    throw new Error("npm tag-preflight live producer branch does not match verifier source");
-  }
-  if (
-    publicReleaseBranch !== "main" &&
-    !/^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/u.test(publicReleaseBranch) &&
-    !/^stable\/[0-9]{4}\.[1-9][0-9]*\.33$/u.test(publicReleaseBranch) &&
-    !/^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(publicReleaseBranch)
-  ) {
-    throw new Error(
-      `npm tag-preflight verifier source ${expectedSourceRef} is not supported by macOS validation`,
-    );
-  }
-
-  const verifierArtifactName = `release-operation-verifier-v1-tag-preflight-${releaseVersion}-${runId}-${runAttempt}`;
-  const verifierPayloadSha256 = sha256Hex(params.verifierPayloadBytes);
-  const fields = [
-    ["tag", params.tag],
-    ["preflight_only", "true"],
-    ["public_release_branch", publicReleaseBranch],
-    ["release_sha", params.targetSha],
-    ["verifier_run_id", runId],
-    ["verifier_run_attempt", runAttempt],
-    ["verifier_artifact_name", verifierArtifactName],
-    ["verifier_payload_sha256", verifierPayloadSha256],
-  ];
-  const command = [
-    "gh",
-    "workflow",
-    "run",
-    "macos-release.yml",
-    "--repo",
-    params.repo,
-    "--ref",
-    "main",
-    ...fields.flatMap(([key, value]) => ["-f", `${key}=${value}`]),
-  ]
-    .map(shellQuote)
-    .join(" ");
-  return {
-    releaseSha: params.targetSha,
-    publicReleaseBranch,
-    verifierRunId: runId,
-    verifierRunAttempt: runAttempt,
-    verifierArtifactName,
-    verifierPayloadSha256,
-    command,
-  };
 }
 
 function appendPolicyFields(fields, options, includeNpmDistTag) {
@@ -1206,37 +1066,6 @@ async function main() {
   ) {
     throw new Error("strict predecessor release policies are not identical");
   }
-  const npmPreflightRunAttempt = String(npmRun.runAttempt);
-  const npmVerifierArtifactName = `release-operation-verifier-v1-tag-preflight-${versionFromTag(options.tag)}-${options.npmPreflightRunId}-${npmPreflightRunAttempt}`;
-  await requireExactRunArtifactName(
-    options.repo,
-    options.npmPreflightRunId,
-    npmVerifierArtifactName,
-  );
-  const npmVerifierDir = join(options.outputDir, "npm-tag-preflight-verifier");
-  downloadArtifact(
-    options.repo,
-    options.npmPreflightRunId,
-    npmVerifierArtifactName,
-    npmVerifierDir,
-  );
-  const npmVerifierPath = join(npmVerifierDir, "release-operation-verifier-v1.json");
-  const npmVerifierFiles = run("find", [npmVerifierDir, "-type", "f", "-print"], {
-    capture: true,
-  })
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .toSorted();
-  requireSingleVerifierArtifactFile(npmVerifierFiles, npmVerifierPath);
-  const macosValidation = buildMacosValidationHandoff({
-    repo: options.repo,
-    tag: options.tag,
-    targetSha,
-    npmPreflightRunId: options.npmPreflightRunId,
-    npmPreflightRun: npmRun,
-    verifierPayloadBytes: readFileSync(npmVerifierPath),
-  });
   const tarballPath = options.publishEligible ? join(npmDir, npmManifest.tarballName) : null;
   let actualTarballSha = null;
   if (tarballPath !== null) {
@@ -1284,10 +1113,8 @@ async function main() {
     fullReleaseValidationUrl: fullRun.url,
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
-    macosValidation,
     artifacts: {
       npmPreflight: npmArtifactName,
-      npmTagPreflightVerifier: npmVerifierArtifactName,
       fullReleaseValidation: fullArtifactName,
     },
     localGeneratedCheck,
@@ -1317,8 +1144,6 @@ async function main() {
       `- target SHA: ${targetSha}`,
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
-      `- npm tag-preflight verifier: ${macosValidation.verifierArtifactName}`,
-      `- npm tag-preflight verifier sha256: ${macosValidation.verifierPayloadSha256}`,
       ...(windowsNodeSourceRelease
         ? [
             `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${windowsNodeSourceRelease.url}`,
@@ -1342,13 +1167,6 @@ async function main() {
       `- NPM Telegram E2E: ${npmTelegram.status}${
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,
-      "",
-      "macOS validation command:",
-      "",
-      "```bash",
-      macosValidation.command,
-      "```",
-      "",
       ...(publishCommand
         ? ["", "Publish command:", "", "```bash", publishCommand, "```", ""]
         : [
@@ -1361,8 +1179,6 @@ async function main() {
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
-  console.log("macOS validation command:");
-  console.log(macosValidation.command);
   if (publishCommand) {
     console.log("publish command:");
     console.log(publishCommand);

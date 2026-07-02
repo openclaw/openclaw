@@ -4,7 +4,6 @@ import { parse } from "yaml";
 
 const FULL_VALIDATION = ".github/workflows/full-release-validation.yml";
 const RELEASE_CHECKS = ".github/workflows/openclaw-release-checks.yml";
-const MACOS_RELEASE = ".github/workflows/macos-release.yml";
 
 type WorkflowInput = {
   default?: boolean | string;
@@ -177,48 +176,5 @@ describe("release verifier evidence consumers", () => {
       "release-ci child execution requires authenticated parent verifier evidence",
     );
     expect(text(RELEASE_CHECKS)).not.toContain("verify-release-operation.mjs");
-  });
-
-  it("requires exact completed npm tag-preflight evidence before public macOS validation", () => {
-    const inputs = workflow(MACOS_RELEASE).on?.workflow_dispatch?.inputs ?? {};
-    expect(inputs.release_sha).toMatchObject({ required: true, type: "string" });
-    for (const name of [
-      "verifier_run_id",
-      "verifier_run_attempt",
-      "verifier_artifact_name",
-      "verifier_payload_sha256",
-    ]) {
-      expect(inputs[name]).toMatchObject({ required: true, type: "string" });
-    }
-
-    const macos = job(MACOS_RELEASE, "validate_macos_release_request");
-    expect(macos.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(macos.steps?.[0]?.name).toBe("Authenticate npm tag-preflight verifier evidence");
-    const consumer = step(
-      MACOS_RELEASE,
-      "validate_macos_release_request",
-      "Authenticate npm tag-preflight verifier evidence",
-    );
-    expect(consumer.run).toContain('.path == ".github/workflows/openclaw-npm-release.yml"');
-    expect(consumer.run).toContain('.status == "completed"');
-    expect(consumer.run).toContain('payload.operation !== "tag-preflight"');
-    expect(consumer.run).toContain("payload.target.targetSha !== process.env.RELEASE_SHA");
-    expect(consumer.run).toContain("payload.target.authorizedSourceRef !== expectedSourceRef");
-    expect(consumer.run).toContain("^stable/[0-9]{4}\\.[1-9][0-9]*\\.33$");
-    expect(consumer.run).not.toContain("^stable/[0-9]{4}\\.[1-9][0-9]*\\.[1-9][0-9]*$");
-    expect(consumer.run).toContain("^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$");
-    expect(consumer.run).not.toContain("^tideclaw/alpha/.*$");
-    expect(consumer.run).toContain("Verifier payload digest mismatch");
-    expect(text(MACOS_RELEASE)).not.toContain("verify-release-operation.mjs");
-
-    const checkout = step(MACOS_RELEASE, "validate_macos_release_request", "Checkout selected tag");
-    expect(checkout.with?.ref).toBe("${{ inputs.release_sha }}");
-    expect(
-      step(
-        MACOS_RELEASE,
-        "validate_macos_release_request",
-        "Verify release tag still resolves to authenticated SHA",
-      ).run,
-    ).toContain("Release tag moved after authenticated npm preflight evidence");
   });
 });
