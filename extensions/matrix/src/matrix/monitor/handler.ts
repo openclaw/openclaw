@@ -128,9 +128,6 @@ let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
 let acpBindingRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
   | undefined;
-let sessionBindingRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/session-binding-runtime")>
-  | undefined;
 let matrixReactionEventsPromise: Promise<typeof import("./reaction-events.js")> | undefined;
 let matrixDraftStreamPromise: Promise<typeof import("../draft-stream.js")> | undefined;
 
@@ -144,13 +141,6 @@ function loadAcpBindingRuntime(): Promise<
 > {
   acpBindingRuntimePromise ??= import("openclaw/plugin-sdk/acp-binding-runtime");
   return acpBindingRuntimePromise;
-}
-
-function loadSessionBindingRuntime(): Promise<
-  typeof import("openclaw/plugin-sdk/session-binding-runtime")
-> {
-  sessionBindingRuntimePromise ??= import("openclaw/plugin-sdk/session-binding-runtime");
-  return sessionBindingRuntimePromise;
 }
 
 function loadMatrixReactionEvents(): Promise<typeof import("./reaction-events.js")> {
@@ -1352,10 +1342,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             discardReservedHistorySlot();
             return undefined;
           }
-        }
-        if (_runtimeBindingId) {
-          const { getSessionBindingService } = await loadSessionBindingRuntime();
-          getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
         }
         const preparedTrigger =
           isRoom && historyLimit > 0

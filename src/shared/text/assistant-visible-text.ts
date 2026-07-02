@@ -808,7 +808,8 @@ export type AssistantVisibleTextSanitizerProfile =
   | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
-  | "tool-progress";
+  | "tool-progress"
+  | "tts";
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
@@ -860,6 +861,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     finalTrim: "both",
     stripFunctionCallsXmlPayloads: true,
     stripInternalTraceLines: false,
+    reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
+  tts: {
+    finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
+    stripInternalTraceLines: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
@@ -943,6 +952,14 @@ export function sanitizeAssistantVisibleText(text: string): string {
 /** Sanitizes text already marked as final-answer prose by the agent runtime. */
 export function sanitizeAssistantFinalAnswerText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
+}
+
+/**
+ * TTS-specific text sanitizer that strips reasoning content, tool calls,
+ * and internal scaffolding to produce clean text suitable for speech synthesis.
+ */
+export function sanitizeForTts(text: string): string {
+  return sanitizeAssistantVisibleTextWithProfile(text, "tts");
 }
 
 /**
