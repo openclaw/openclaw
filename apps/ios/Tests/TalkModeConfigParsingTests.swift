@@ -570,6 +570,13 @@ struct TalkModeManagerTests {
     }
 
     @Test func `speaker preference preserves external audio routes`() {
+        let externalRouteOptions = TalkAudioRoute.categoryOptions(speakerphoneEnabled: false)
+        #expect(externalRouteOptions.contains(.allowBluetoothHFP))
+        #expect(externalRouteOptions.contains(.allowBluetoothA2DP))
+        #expect(externalRouteOptions.contains(.allowAirPlay))
+        #expect(!externalRouteOptions.contains(.defaultToSpeaker))
+        #expect(TalkAudioRoute.categoryOptions(speakerphoneEnabled: true).contains(.defaultToSpeaker))
+
         #expect(TalkAudioRoute.shouldForceSpeaker(
             preferenceEnabled: true,
             outputPortTypes: [.builtInReceiver]))

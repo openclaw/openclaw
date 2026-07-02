@@ -2994,10 +2994,7 @@ extension TalkModeManager {
     static func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
-        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-        if forceSpeaker {
-            options.insert(.defaultToSpeaker)
-        }
+        let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
         try session.setCategory(.playAndRecord, mode: .spokenAudio, options: options)
         try? session.setPreferredSampleRate(48000)
@@ -3017,10 +3014,7 @@ extension TalkModeManager {
     static func configureRealtimeAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
-        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-        if forceSpeaker {
-            options.insert(.defaultToSpeaker)
-        }
+        let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
         // output is less likely to be captured as fresh microphone input.
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)

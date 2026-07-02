@@ -50,6 +50,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var loggedFirstAssistantSignal = false
     private var assistantAudioActive = false
     private var assistantAudioFinishTask: Task<Void, Never>?
+    private var ownsAudioSessionActivation = false
 
     private struct ToolBuffer {
         var name: String
@@ -117,7 +118,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.session = session
 
         self.trace("configure audio session start")
-        try Self.configureAudioSession()
+        try Self.configureAudioSession(activate: true)
+        self.ownsAudioSessionActivation = true
         self.trace("configure audio session done")
         RTCInitializeSSL()
         let factory = RTCPeerConnectionFactory(
@@ -171,6 +173,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.peerConnection?.close()
         self.peerConnection = nil
         self.factory = nil
+        self.releaseAudioSessionActivation()
         self.session = nil
         self.assistantAudioActive = false
         self.assistantAudioFinishTask?.cancel()
@@ -181,8 +184,24 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     func applyAudioRoutePreferenceChanged() throws {
-        try Self.configureAudioSession()
+        try Self.configureAudioSession(activate: false)
         self.trace("audio route preference reapplied")
+    }
+
+    private func releaseAudioSessionActivation() {
+        guard self.ownsAudioSessionActivation else { return }
+        self.ownsAudioSessionActivation = false
+
+        // Balance only the activation this session owns. WebRTC may hold its own
+        // activation while the peer connection is alive.
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        defer { session.unlockForConfiguration() }
+        do {
+            try session.setActive(false)
+        } catch {
+            self.trace("audio session deactivate failed error=\(error.localizedDescription)")
+        }
     }
 
     private func checkNotStopped() throws {
@@ -899,16 +918,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private static func configureAudioSession() throws {
+    private static func configureAudioSession(activate: Bool) throws {
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let config = RTCAudioSessionConfiguration.webRTC()
         config.category = AVAudioSession.Category.playAndRecord.rawValue
         config.mode = AVAudioSession.Mode.default.rawValue
-        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-        if forceSpeaker {
-            options.insert(.defaultToSpeaker)
-        }
-        config.categoryOptions = options
+        config.categoryOptions = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         config.sampleRate = 48000
         config.ioBufferDuration = 0.01
         RTCAudioSessionConfiguration.setWebRTC(config)
@@ -918,10 +933,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer { session.unlockForConfiguration() }
 
         session.ignoresPreferredAttributeConfigurationErrors = true
-        try session.setConfiguration(config, active: true)
+        if activate {
+            try session.setConfiguration(config, active: true)
+        } else {
+            try session.setConfiguration(config)
+        }
         let shouldForceSpeaker = TalkAudioRoute.shouldForceSpeaker(
             preferenceEnabled: forceSpeaker,
-            outputPortTypes: AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType))
+            outputPortTypes: session.currentRoute.outputs.map(\.portType))
         try? session.overrideOutputAudioPort(shouldForceSpeaker ? .speaker : .none)
     }
 }

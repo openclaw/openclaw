@@ -15,6 +15,14 @@ enum TalkDefaults {
 }
 
 enum TalkAudioRoute {
+    static func categoryOptions(speakerphoneEnabled: Bool) -> AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .allowAirPlay]
+        if speakerphoneEnabled {
+            options.insert(.defaultToSpeaker)
+        }
+        return options
+    }
+
     static func shouldForceSpeaker(
         preferenceEnabled: Bool,
         outputPortTypes: [AVAudioSession.Port]) -> Bool
