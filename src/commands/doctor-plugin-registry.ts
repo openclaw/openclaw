@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -27,7 +28,7 @@ import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
@@ -74,6 +75,12 @@ export type PluginRegistryHealthIssue =
       kind: "stale-local-bundled-plugin-install-record";
       pluginId: string;
       stalePath: string;
+    }
+  | {
+      kind: "missing-plugin-install-record-path";
+      pluginId: string;
+      recordPathField: "installPath" | "sourcePath";
+      missingPath: string;
     }
   | {
       kind: "managed-npm-openclaw-peer-link";
@@ -128,6 +135,54 @@ function readPluginManifestId(packageDir: string): string | undefined {
   const manifest = readJsonObject(path.join(packageDir, "openclaw.plugin.json"));
   const id = manifest?.id;
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+function primaryInstallRecordPath(record: PluginInstallRecord): {
+  field: "installPath" | "sourcePath";
+  path: string;
+} | null {
+  if (typeof record.installPath === "string" && record.installPath.trim()) {
+    return { field: "installPath", path: record.installPath };
+  }
+  if (typeof record.sourcePath === "string" && record.sourcePath.trim()) {
+    return { field: "sourcePath", path: record.sourcePath };
+  }
+  return null;
+}
+
+async function listMissingPluginInstallRecordPaths(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<
+  {
+    pluginId: string;
+    recordPathField: "installPath" | "sourcePath";
+    missingPath: string;
+  }[]
+> {
+  const installRecords = await loadInstalledPluginIndexInstallRecords(params);
+  const missing: {
+    pluginId: string;
+    recordPathField: "installPath" | "sourcePath";
+    missingPath: string;
+  }[] = [];
+  for (const [pluginId, record] of Object.entries(installRecords).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const recordPath = primaryInstallRecordPath(record);
+    if (!recordPath) {
+      continue;
+    }
+    const resolvedPath = path.resolve(resolveUserPath(recordPath.path, params.env));
+    if (fs.existsSync(resolvedPath)) {
+      continue;
+    }
+    missing.push({
+      pluginId,
+      recordPathField: recordPath.field,
+      missingPath: resolvedPath,
+    });
+  }
+  return missing;
 }
 
 function listStaleManagedNpmBundledPlugins(
@@ -351,6 +406,43 @@ export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   return stale.map((record) => record.pluginId);
 }
 
+/** Removes install records whose persisted source path no longer exists. */
+export async function maybeRepairMissingPluginInstallRecordPaths(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<string[]> {
+  const missing = await listMissingPluginInstallRecordPaths(params);
+  if (missing.length === 0) {
+    return [];
+  }
+
+  if (!params.prompter.shouldRepair) {
+    note(
+      [
+        "Plugin install records point at missing paths:",
+        ...missing.map(
+          (record) =>
+            `- ${record.pluginId}: ${record.recordPathField} ${shortenHomePath(record.missingPath)}`,
+        ),
+        `Repair with ${formatCliCommand("openclaw doctor --fix")} to remove missing install records and rebuild the plugin registry.`,
+      ].join("\n"),
+      "Plugin registry",
+    );
+    return [];
+  }
+
+  note(
+    [
+      "Removed plugin install record(s) with missing paths:",
+      ...missing.map(
+        (record) =>
+          `- ${record.pluginId}: ${record.recordPathField} ${shortenHomePath(record.missingPath)}`,
+      ),
+    ].join("\n"),
+    "Plugin registry",
+  );
+  return missing.map((record) => record.pluginId);
+}
+
 /** Relinks managed npm plugin packages to the current OpenClaw host packages. */
 export async function maybeRepairManagedNpmOpenClawPeerLinks(
   params: PluginRegistryDoctorRepairParams,
@@ -458,6 +550,14 @@ export async function detectPluginRegistryHealthIssues(
       stalePath: record.stalePath,
     });
   }
+  for (const record of await listMissingPluginInstallRecordPaths(params)) {
+    issues.push({
+      kind: "missing-plugin-install-record-path",
+      pluginId: record.pluginId,
+      recordPathField: record.recordPathField,
+      missingPath: record.missingPath,
+    });
+  }
   for (const issue of await listManagedNpmOpenClawPeerLinkIssues(params)) {
     issues.push({
       kind: "managed-npm-openclaw-peer-link",
@@ -503,6 +603,16 @@ export function pluginRegistryIssueToHealthFinding(
         fixHint:
           "Run `openclaw doctor --fix` to remove stale local install records and rebuild the plugin registry.",
       };
+    case "missing-plugin-install-record-path":
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        message: `Install record for plugin ${issue.pluginId} points at a missing ${issue.recordPathField}.`,
+        path: issue.missingPath,
+        target: issue.pluginId,
+        fixHint:
+          "Run `openclaw doctor --fix` to remove missing install records and rebuild the plugin registry.",
+      };
     case "managed-npm-openclaw-peer-link":
       return {
         checkId: PLUGIN_REGISTRY_CHECK_ID,
@@ -538,6 +648,13 @@ export function pluginRegistryIssueToRepairEffect(
       return {
         kind: "state",
         action: "would-remove-stale-local-bundled-plugin-install-record",
+        target: issue.pluginId,
+        dryRunSafe: false,
+      };
+    case "missing-plugin-install-record-path":
+      return {
+        kind: "state",
+        action: "would-remove-missing-plugin-install-record",
         target: issue.pluginId,
         dryRunSafe: false,
       };
@@ -589,11 +706,14 @@ export async function maybeRepairPluginRegistryState(
   const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
+  const removedMissingPluginInstallRecordIds =
+    await maybeRepairMissingPluginInstallRecordPaths(params);
   const repairedManagedNpmOpenClawPeerLinks = await maybeRepairManagedNpmOpenClawPeerLinks(params);
   const stalePluginIdsToRemove = [
     ...new Set([
       ...(removedStaleManagedNpmBundledPlugins ? staleManagedNpmBundledPluginIds : []),
       ...removedStaleLocalBundledPluginIds,
+      ...removedMissingPluginInstallRecordIds,
     ]),
   ];
   if (!params.prompter.shouldRepair) {
@@ -635,7 +755,7 @@ export async function maybeRepairPluginRegistryState(
   if (
     preflight.action === "skip-existing" ||
     removedStaleManagedNpmBundledPlugins ||
-    removedStaleLocalBundledPluginIds.length > 0 ||
+    stalePluginIdsToRemove.length > 0 ||
     repairedManagedNpmOpenClawPeerLinks
   ) {
     const index = await refreshPluginRegistry({
