@@ -346,6 +346,53 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("skips partial block deliver containing a MEDIA: directive and keeps the final answer", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver(
+          { text: `Here is the image:\nMEDIA:/tmp/openclaw-test/test_image.png` },
+          { kind: "block" },
+        );
+        await deliver(
+          { text: "final answer", mediaUrls: ["/tmp/openclaw-test/test_image.png"] },
+          { kind: "block" },
+        );
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
+    expect(sendMediaMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "image",
+        source: { url: "MEDIA:/tmp/openclaw-test/test_image.png" },
+      }),
+    );
+  });
+
+  it("does not skip a partial block deliver when text merely mentions MEDIA: inline", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "I will not use MEDIA: inline prose" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "I will not use MEDIA: inline prose",
+    ]);
+  });
+
   it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
