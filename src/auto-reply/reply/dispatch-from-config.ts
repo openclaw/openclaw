@@ -2890,6 +2890,13 @@ export async function dispatchReplyFromConfig(
       payload.status === "failed" ||
       payload.status === "error" ||
       (typeof payload.exitCode === "number" && payload.exitCode !== 0);
+    const shouldForwardFailedProgress = (options?: { force?: boolean }) =>
+      options?.force === true || shouldEmitFullVerboseProgress();
+    const shouldForwardFailedProgressStatus = (payload: {
+      phase?: string;
+      status?: string;
+      exitCode?: number | null;
+    }) => shouldForwardFailedProgress() || !hasFailedProgressStatus(payload);
     const shouldSuppressToolErrorWarnings = () => {
       if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
         return params.replyOptions.suppressToolErrorWarnings;
@@ -2915,7 +2922,14 @@ export async function dispatchReplyFromConfig(
     const shouldForwardToolResultProgressCallback = (
       payload: ReplyPayload,
       isFastModeAutoProgress: boolean,
+      isForcedToolProgress: boolean,
     ) => {
+      if (
+        payload.isError === true &&
+        !shouldForwardFailedProgress({ force: isForcedToolProgress })
+      ) {
+        return false;
+      }
       if (isFastModeAutoProgress) {
         return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
       }
@@ -2971,6 +2985,7 @@ export async function dispatchReplyFromConfig(
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
+        shouldForward?: (...args: Args) => boolean;
         waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<void>) | undefined => {
@@ -2987,6 +3002,9 @@ export async function dispatchReplyFromConfig(
           if (isDispatchOperationAborted()) {
             return;
           }
+        }
+        if (options?.shouldForward?.(...args) === false) {
+          return;
         }
         if (shouldForwardProgressCallback(options)) {
           await options?.onForward?.(...args);
@@ -3014,6 +3032,7 @@ export async function dispatchReplyFromConfig(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
+          shouldForward: shouldForwardFailedProgressStatus,
           onForward: (payload) => {
             if (hasFailedProgressStatus(payload)) {
               markVisibleToolErrorProgress();
@@ -3103,6 +3122,7 @@ export async function dispatchReplyFromConfig(
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
+              shouldForward: shouldForwardFailedProgressStatus,
               onForward: (payload) => {
                 if (hasFailedProgressStatus(payload)) {
                   markVisibleToolErrorProgress();
@@ -3145,6 +3165,7 @@ export async function dispatchReplyFromConfig(
                 const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                   payload,
                   isFastModeAutoProgress,
+                  isForcedToolProgress,
                 );
                 if (progressCallbackForwarded) {
                   await onToolResultFromReplyOptions?.(payload);
@@ -3203,6 +3224,12 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                  return;
+                }
+                if (
+                  deliveryPayload.isError === true &&
+                  !shouldForwardFailedProgress({ force: isForcedToolProgress })
+                ) {
                   return;
                 }
                 if (
