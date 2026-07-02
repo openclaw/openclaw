@@ -85,7 +85,9 @@ export class ExecApprovalButton extends Button {
           content: "This approval is no longer valid.",
           ephemeral: true,
         });
-      } catch {}
+      } catch (err) {
+        console.warn("discord exec approval reply failed", err instanceof Error ? err.message : String(err));
+      }
       return;
     }
 
@@ -97,7 +99,9 @@ export class ExecApprovalButton extends Button {
           content: "⛔ You are not authorized to approve exec requests.",
           ephemeral: true,
         });
-      } catch {}
+      } catch (err) {
+        console.warn("discord exec approval unauthorized reply failed", err instanceof Error ? err.message : String(err));
+      }
       return;
     }
 
@@ -110,7 +114,9 @@ export class ExecApprovalButton extends Button {
 
     try {
       await interaction.acknowledge();
-    } catch {}
+    } catch (err) {
+      console.warn("discord exec approval acknowledge failed", err instanceof Error ? err.message : String(err));
+    }
 
     const result = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
     if (!result.ok) {
@@ -122,7 +128,9 @@ export class ExecApprovalButton extends Button {
               : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
-      } catch {}
+      } catch (err) {
+        console.warn("discord exec approval followUp failed", err instanceof Error ? err.message : String(err));
+      }
     }
   }
 }

@@ -7,5 +7,7 @@ export async function replySilently(
 ) {
   try {
     await interaction.reply(params);
-  } catch {}
+  } catch (err) {
+    console.warn("discord component reply failed", err instanceof Error ? err.message : String(err));
+  }
 }

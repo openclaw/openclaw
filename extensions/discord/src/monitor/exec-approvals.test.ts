@@ -229,3 +229,89 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 });
+
+describe("ExecApprovalButton diagnostic logging on interaction failures", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  afterEach(() => {
+    warnSpy?.mockRestore();
+  });
+
+  function createThrowingReply(): ButtonInteraction {
+    return createInteraction({
+      reply: vi.fn(async () => {
+        throw new Error("Unknown interaction");
+      }),
+    });
+  }
+
+  it("logs warn when reply throws for invalid component data", async () => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const button = new ExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true }),
+    });
+
+    await button.run(createThrowingReply(), { id: "", action: "" });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "discord exec approval reply failed",
+      "Unknown interaction",
+    );
+  });
+
+  it("logs warn when unauthorized reply throws", async () => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const button = new ExecApprovalButton({
+      getApprovers: () => ["999"],
+      resolveApproval: async () => ({ ok: true }),
+    });
+
+    await button.run(createThrowingReply(), { id: "abc", action: "allow-once" });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "discord exec approval unauthorized reply failed",
+      "Unknown interaction",
+    );
+  });
+
+  it("logs warn when acknowledge throws", async () => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const interaction = createInteraction({
+      acknowledge: vi.fn(async () => {
+        throw new Error("Interaction already acknowledged");
+      }),
+    });
+    const button = new ExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true }),
+    });
+
+    await button.run(interaction, { id: "abc", action: "allow-once" });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "discord exec approval acknowledge failed",
+      "Interaction already acknowledged",
+    );
+  });
+
+  it("logs warn when followUp throws after failed resolution", async () => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const interaction = createInteraction({
+      followUp: vi.fn(async () => {
+        throw new Error("Invalid Webhook Token");
+      }),
+    });
+    const button = new ExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: false, reason: "not-found" }),
+    });
+
+    await button.run(interaction, { id: "abc", action: "allow-once" });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "discord exec approval followUp failed",
+      "Invalid Webhook Token",
+    );
+  });
+});
