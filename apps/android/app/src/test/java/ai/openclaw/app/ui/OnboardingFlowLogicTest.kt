@@ -178,7 +178,7 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun nearbyGatewayManualTlsPreservesDiscoverySecurityPolicy() {
-    assertTrue(
+    assertFalse(
       nearbyGatewayManualTls(
         GatewayEndpoint(
           stableId = "_openclaw-gw._tcp.|local.|Lan",
@@ -191,11 +191,32 @@ class OnboardingFlowLogicTest {
     assertTrue(
       nearbyGatewayManualTls(
         GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Tls",
+          name = "Tls",
+          host = "192.168.1.12",
+          port = 18789,
+          tlsEnabled = true,
+        ),
+      ),
+    )
+    assertTrue(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
           stableId = "_openclaw-gw._tcp.|local.|Pinned",
           name = "Pinned",
           host = "127.0.0.1",
           port = 18789,
           tlsFingerprintSha256 = "abc123",
+        ),
+      ),
+    )
+    assertTrue(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Remote",
+          name = "Remote",
+          host = "gateway.example.com",
+          port = 443,
         ),
       ),
     )
