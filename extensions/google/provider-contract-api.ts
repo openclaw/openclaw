@@ -52,7 +52,6 @@ export function createGoogleGeminiCliProvider(): ProviderPlugin {
     docsPath: "/providers/models",
     aliases: ["gemini-cli"],
     envVars: [
-      "OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS",
       "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
       "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
       "GEMINI_CLI_OAUTH_CLIENT_ID",
@@ -63,7 +62,7 @@ export function createGoogleGeminiCliProvider(): ProviderPlugin {
         id: "oauth",
         kind: "oauth",
         label: "Google OAuth",
-        hint: "PKCE + localhost callback; direct runtime registration requires OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1",
+        hint: "PKCE + localhost callback for the bundled Gemini CLI runtime",
         run: noopAuth,
       },
     ],
@@ -71,7 +70,7 @@ export function createGoogleGeminiCliProvider(): ProviderPlugin {
       setup: {
         choiceId: "google-gemini-cli",
         choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Optional Gemini CLI OAuth harness; direct runtime registration requires OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1",
+        choiceHint: "Gemini CLI OAuth for the bundled local CLI runtime",
         methodId: "oauth",
       },
     },
