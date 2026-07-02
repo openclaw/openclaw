@@ -31,6 +31,10 @@ function isValidTeamsId(id: string): boolean {
   return TEAMS_BOT_ID_PATTERN.test(id) || AAD_OBJECT_ID_PATTERN.test(id);
 }
 
+function escapeTeamsMentionText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /**
  * Parse mentions from text in the format @[Name](id).
  * Example: "Hello @[John Doe](28:xxx-yyy-zzz)!"
@@ -58,7 +62,7 @@ export function parseMentions(text: string): {
     }
 
     const trimmedName = name.trim();
-    const mentionTag = `<at>${trimmedName}</at>`;
+    const mentionTag = `<at>${escapeTeamsMentionText(trimmedName)}</at>`;
     entities.push({
       type: "mention",
       text: mentionTag,
