@@ -83,6 +83,11 @@ const PendingDelegateStateSchema = z
     model: z.string().min(1).optional(),
     releasedAt: z.number().int().nonnegative().optional(),
     childSessionKey: z.string().min(1).optional(),
+    // Durable chain-cost fold: the settled child's own run-token cost, written
+    // ONLY when the child chain-cost persist to the child session entry failed.
+    // Restart recovery adds it to the (stale) child-entry chain cost so the
+    // continuation cost cap is enforced against the post-run total (#1144).
+    chainTokensFold: z.number().int().nonnegative().optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -162,6 +167,9 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(traceparent ? { traceparent } : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
+    ...(delegate.chainTokensFold !== undefined
+      ? { chainTokensFold: delegate.chainTokensFold }
+      : {}),
   };
 }
 
@@ -408,6 +416,7 @@ function flowToDelegate(
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.model ? { model: state.model } : {}),
+    ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -652,6 +661,43 @@ export function pendingDelegateCount(sessionKey: string): number {
  */
 export function hasRecoverablePendingDelegate(sessionKey: string): boolean {
   return listTaskFlowsForOwnerKey(sessionKey).some(isRecoverablePendingFlow);
+}
+
+/**
+ * Record a durable chain-cost fold on every QUEUED pending delegate for a
+ * session. Called at settle when the child chain-cost persist to the child
+ * session entry failed: the fold (the settled child's own run-token cost) is
+ * then carried on the delegate rows themselves, so restart recovery — which
+ * rebuilds chain cost from the now-stale child session entry — still enforces
+ * the continuation cost cap against the post-run total. Returns the count
+ * annotated. No-op for a non-positive fold (#1144).
+ */
+export function annotateQueuedDelegatesChainTokensFold(
+  sessionKey: string,
+  chainTokensFold: number,
+): number {
+  if (!(chainTokensFold > 0)) {
+    return 0;
+  }
+  let annotated = 0;
+  for (const flow of listQueuedPendingFlows(sessionKey)) {
+    const state = decodeDelegateState(flow);
+    if (!state) {
+      continue;
+    }
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        stateJson: { ...state, chainTokensFold },
+        updatedAt: Date.now(),
+      },
+    });
+    if (result.applied) {
+      annotated += 1;
+    }
+  }
+  return annotated;
 }
 
 export function getContinuationDelegateQueueDepths(

@@ -80,6 +80,14 @@ export type PendingContinuationDelegate = {
    */
   model?: string;
   /**
+   * Durable chain-cost fold: the settled child's own run-token cost, recorded on
+   * the delegate ONLY when the child chain-cost persist to the child session
+   * entry failed. Restart recovery adds it to the (stale) child-entry chain cost
+   * so the continuation cost cap is enforced against the post-run total even when
+   * the child entry never received the run cost (#1144).
+   */
+  chainTokensFold?: number;
+  /**
    * Internal TaskFlow metadata carried from consume → dispatch so downstream
    * spawn/release failures can flip the row from succeeded → failed without
    * re-querying or guessing revision state.

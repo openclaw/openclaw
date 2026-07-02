@@ -1516,4 +1516,48 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
+
+  it("recovery applies the delegate's durable chainTokensFold over a stale child entry (#1144)", async () => {
+    // When the settle-time child chain-cost persist FAILED, the child entry is
+    // permanently stale (missing this run's tokens) and the in-memory fold does
+    // not survive a restart. The fold is instead recorded durably on the delegate
+    // (chainTokensFold); recovery must add it to the stale child-entry cost so the
+    // cost cap still holds — otherwise a child over costCapTokens launches the hop.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:fold-recovery";
+    // A delegate carrying the durable fold, orphaned to `running` by a crash.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", chainTokensFold: 250_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    // The persisted child entry is stale: UNDER the cap without the fold.
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // 300_000 (stale entry) + 250_000 (durable fold) = 550_000 > costCapTokens
+    // (500_000) → rejected. Without the durable fold recovery would read 300_000
+    // and wrongly launch the over-budget hop.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
 });

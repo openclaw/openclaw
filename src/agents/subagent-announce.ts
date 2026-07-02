@@ -6,6 +6,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  annotateQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
@@ -1120,11 +1121,20 @@ export async function runSubagentAnnounceFlow(params: {
           invalidateSessionEntry(params.childSessionKey);
         } catch (err) {
           // Durable persist failed: the child entry's continuationChainTokens is
-          // stale (missing this run's cost). Fold it into the live drain's cost
-          // basis instead so the cost cap still enforces this turn (fails closed).
+          // stale (missing this run's cost). Two-part fail-closed handling:
+          //  (1) fold it into the LIVE drain's cost basis (childChainTokensToFold)
+          //      so THIS turn's dispatch still enforces the cap; and
+          //  (2) annotate the child's already-queued delegates with the durable
+          //      fold so a delegate that survives to restart recovery (which
+          //      rebuilds chain cost from the stale child entry) still enforces
+          //      the post-run total instead of the stale basis (#1144).
           childChainTokensToFold = accumulatedChildTokens;
+          const annotated = annotateQueuedDelegatesChainTokensFold(
+            params.childSessionKey,
+            accumulatedChildTokens,
+          );
           defaultRuntime.log(
-            `[subagent-chain-hop] Failed to persist child chain cost for ${params.childSessionKey}; folding ${accumulatedChildTokens} into the live drain cost basis: ${String(err)}`,
+            `[subagent-chain-hop] Failed to persist child chain cost for ${params.childSessionKey}; folding ${accumulatedChildTokens} into the live drain cost basis and annotating ${annotated} queued delegate(s) for restart recovery: ${String(err)}`,
           );
         }
       }

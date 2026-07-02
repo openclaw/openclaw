@@ -28,6 +28,7 @@ export {
   cancelPendingDelegates,
   consumePendingDelegates,
   enqueuePendingDelegate,
+  annotateQueuedDelegatesChainTokensFold,
   finalizeStagedPostCompactionDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
