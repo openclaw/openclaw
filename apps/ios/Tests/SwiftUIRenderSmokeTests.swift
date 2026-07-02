@@ -42,6 +42,21 @@ import UIKit
         }
     }
 
+    @Test @MainActor func `settings About destination builds in light and dark mode`() {
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let root = SettingsProTab(directRoute: .about)
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+        }
+    }
+
     @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
         for typeSize in [DynamicTypeSize.large, .accessibility5] {
             let root = HostedPushRelayDisclosureSheet(

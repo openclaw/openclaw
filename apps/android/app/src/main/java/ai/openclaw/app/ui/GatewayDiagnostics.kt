@@ -26,6 +26,17 @@ internal fun gatewayStatusHasDiagnostics(statusText: String): Boolean {
   return lower != "offline" && !lower.contains("connecting")
 }
 
+/** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
+internal fun gatewayDiagnosticsEndpoint(
+  remoteAddress: String?,
+  manualHost: String,
+  manualPort: Int,
+  manualTls: Boolean,
+): String {
+  remoteAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+  return composeGatewayManualUrl(manualHost, manualPort.toString(), manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } ?: "Not set"
+}
+
 /** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()

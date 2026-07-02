@@ -1310,10 +1310,12 @@ describe("stageSystemdService", () => {
         environment: {
           OPENCLAW_GATEWAY_TOKEN: "file-backed-token",
           OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "file",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
 

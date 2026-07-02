@@ -3,71 +3,23 @@ import SwiftUI
 import UIKit
 
 struct GatewayProblemBanner: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
     var onPrimaryAction: (() -> Void)?
     var onShowDetails: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: self.iconName)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(self.tint)
-                    .frame(width: 20)
-                    .padding(.top, 2)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(self.problem.title)
-                            .font(.subheadline.weight(.semibold))
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                        Text(self.ownerLabel)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text(self.problem.message)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let requestId = self.problem.requestId {
-                        Text("Request ID: \(requestId)")
-                            .font(.system(.caption, design: .monospaced).weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            HStack(spacing: 10) {
-                if let primaryActionTitle, let onPrimaryAction {
-                    Button(primaryActionTitle, action: onPrimaryAction)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                }
-                if let onShowDetails {
-                    Button("Details", action: onShowDetails)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThickMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(self.colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(self.colorScheme == .dark ? 0.18 : 0.08), radius: 18, y: 8)
-        }
+        OpenClawNoticeBanner(
+            icon: self.iconName,
+            title: self.problem.title,
+            message: self.problem.message,
+            ownerLabel: self.ownerLabel,
+            tint: self.tint,
+            detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
+            primaryActionTitle: self.primaryActionTitle,
+            onPrimaryAction: self.onPrimaryAction,
+            secondaryActionTitle: "Details",
+            onSecondaryAction: self.onShowDetails)
     }
 
     private var iconName: String {
@@ -98,11 +50,11 @@ struct GatewayProblemBanner: View {
              .pairingRoleUpgradeRequired,
              .pairingScopeUpgradeRequired,
              .pairingMetadataUpgradeRequired:
-            .orange
+            OpenClawBrand.warn
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            .yellow
+            OpenClawBrand.warn
         default:
-            .red
+            OpenClawBrand.danger
         }
     }
 

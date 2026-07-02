@@ -117,7 +117,10 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import {
+  recordOutboundMessageForPromptContext,
+  withTelegramPromptContextTimestampMs,
+} from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -244,6 +247,7 @@ export type TelegramDispatchResult =
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
+type CurrentTurnTranscriptFinal = { text: string; timestamp: number };
 type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 type FreshTelegramSessionEntryLoader = ((
   agentId: string,
@@ -1459,9 +1463,15 @@ export const dispatchTelegramMessage = async ({
   const sessionKey = ctxPayload.SessionKey;
   let transcriptMirrorSequence = 0;
   const transcriptMirrorTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
-  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+  let currentTurnTranscriptFinal: CurrentTurnTranscriptFinal | undefined;
+  const resolveCurrentTurnTranscriptFinal = async (): Promise<
+    CurrentTurnTranscriptFinal | undefined
+  > => {
     if (!sessionKey) {
       return undefined;
+    }
+    if (currentTurnTranscriptFinal) {
+      return currentTurnTranscriptFinal;
     }
     try {
       const { entry: sessionEntry, storePath } = loadFreshSessionEntry(route.agentId, sessionKey);
@@ -1477,11 +1487,24 @@ export const dispatchTelegramMessage = async ({
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
-      return latest.text;
+      currentTurnTranscriptFinal = {
+        text: latest.text,
+        timestamp: latest.timestamp,
+      };
+      return currentTurnTranscriptFinal;
     } catch (err) {
       logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
       return undefined;
     }
+  };
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
+    (await resolveCurrentTurnTranscriptFinal())?.text;
+  const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
+    const final = await resolveCurrentTurnTranscriptFinal();
+    if (final?.text.trim() !== text.trim()) {
+      return undefined;
+    }
+    return final.timestamp;
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
@@ -1631,6 +1654,14 @@ export const dispatchTelegramMessage = async ({
         return false;
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
+      const promptContextTimestampMs =
+        options?.durable && deliverablePayload.text
+          ? await resolvePromptContextTimestampMs(deliverablePayload.text)
+          : undefined;
+      const effectivePayload = withTelegramPromptContextTimestampMs(
+        deliverablePayload,
+        promptContextTimestampMs,
+      );
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
@@ -1641,7 +1672,7 @@ export const dispatchTelegramMessage = async ({
           accountId: route.accountId,
           agentId: route.agentId,
           ctxPayload,
-          payload: deliverablePayload,
+          payload: effectivePayload,
           info: { kind: "final" },
           replyToMode,
           threadId: threadSpec.id,
@@ -1652,13 +1683,13 @@ export const dispatchTelegramMessage = async ({
           },
           silent,
           requiredCapabilities: deriveDurableFinalDeliveryRequirements({
-            payload: deliverablePayload,
-            replyToId: deliverablePayload.replyToId,
+            payload: effectivePayload,
+            replyToId: effectivePayload.replyToId,
             threadId: threadSpec.id,
             silent,
             payloadTransport: true,
             extraCapabilities: {
-              nativeQuote: usesNativeTelegramQuote(deliverablePayload),
+              nativeQuote: usesNativeTelegramQuote(effectivePayload),
             },
           }),
         });
@@ -1676,7 +1707,7 @@ export const dispatchTelegramMessage = async ({
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
         transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
-        replies: [deliverablePayload],
+        replies: [effectivePayload],
         onVoiceRecording: sendRecordVoice,
         silent,
         mediaLoader: telegramDeps.loadWebMedia,
@@ -1701,6 +1732,10 @@ export const dispatchTelegramMessage = async ({
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
       try {
+        const promptContextContent =
+          result.delivery.promptContextContent ?? result.delivery.content;
+        const promptContextTimestampMs =
+          await resolvePromptContextTimestampMs(promptContextContent);
         await (
           telegramDeps.recordOutboundMessageForPromptContext ??
           recordOutboundMessageForPromptContext
@@ -1710,7 +1745,8 @@ export const dispatchTelegramMessage = async ({
           chatId: deliveryBaseOptions.chatId,
           message: { message_id: result.delivery.messageId },
           messageId: result.delivery.messageId,
-          text: result.delivery.promptContextContent ?? result.delivery.content,
+          text: promptContextContent,
+          ...(promptContextTimestampMs !== undefined ? { promptContextTimestampMs } : {}),
           ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
         });
       } catch (error) {
@@ -1868,11 +1904,13 @@ export const dispatchTelegramMessage = async ({
       markProgressFinalDelivered();
       return { kind: "sent" };
     };
-    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      await resolveTranscriptBackedChannelFinalText({
+    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> => {
+      const candidate = await resolveCurrentTurnTranscriptFinal();
+      return await resolveTranscriptBackedChannelFinalText({
         finalText: text,
-        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+        resolveCandidateText: async () => candidate?.text,
       });
+    };
 
     if (isDmTopic) {
       try {

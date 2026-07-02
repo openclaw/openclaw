@@ -465,6 +465,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (plan.restartCron) {
       params.onCronRestart?.();
       state.cronState.cron.stop();
+      state.cronState.stopExitWatchers?.();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
@@ -472,6 +473,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       });
       startGatewayCronWithLogging({
         cron: nextState.cronState.cron,
+        afterStart: nextState.cronState.reconcileExitWatchers,
         logCron: params.logCron,
       });
     }
