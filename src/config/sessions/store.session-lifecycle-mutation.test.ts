@@ -256,4 +256,85 @@ describe("session store lifecycle mutations", () => {
     expect(result.deleted).toBe(true);
     expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
   });
+
+  it("removes the deleted session's trajectory artifacts alongside the transcript", async () => {
+    const transcriptPath = path.join(tempDir, "delete-session.jsonl");
+    const runtimePath = path.join(tempDir, "delete-session.trajectory.jsonl");
+    const pointerPath = path.join(tempDir, "delete-session.trajectory-path.json");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, '{"type":"session","id":"delete-session"}\n', "utf-8");
+    fs.writeFileSync(runtimePath, '{"type":"session","sessionId":"delete-session"}\n', "utf-8");
+    fs.writeFileSync(
+      pointerPath,
+      JSON.stringify({ sessionId: "delete-session", runtimeFile: runtimePath }),
+      "utf-8",
+    );
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:delete": {
+          sessionFile: transcriptPath,
+          sessionId: "delete-session",
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:delete",
+        storeKeys: ["agent:main:delete"],
+      },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(fs.existsSync(runtimePath)).toBe(false);
+    expect(fs.existsSync(pointerPath)).toBe(false);
+  });
+
+  it("keeps trajectory artifacts while another entry still references the session", async () => {
+    const transcriptPath = path.join(tempDir, "shared-session.jsonl");
+    const runtimePath = path.join(tempDir, "shared-session.trajectory.jsonl");
+    const pointerPath = path.join(tempDir, "shared-session.trajectory-path.json");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, '{"type":"session","id":"shared-session"}\n', "utf-8");
+    fs.writeFileSync(runtimePath, '{"type":"session","sessionId":"shared-session"}\n', "utf-8");
+    fs.writeFileSync(
+      pointerPath,
+      JSON.stringify({ sessionId: "shared-session", runtimeFile: runtimePath }),
+      "utf-8",
+    );
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:delete": {
+          sessionFile: transcriptPath,
+          sessionId: "shared-session",
+          updatedAt: now - 1,
+        },
+        "agent:main:mirror": {
+          sessionFile: transcriptPath,
+          sessionId: "shared-session",
+          updatedAt: now,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:delete",
+        storeKeys: ["agent:main:delete"],
+      },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(fs.existsSync(runtimePath)).toBe(true);
+    expect(fs.existsSync(pointerPath)).toBe(true);
+  });
 });

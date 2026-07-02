@@ -1478,6 +1478,23 @@ async function deleteSessionEntryLifecycleInternal(
           reason: "deleted",
         })
       : [];
+    if (params.archiveTranscript && deletedSessionId) {
+      // Trajectory artifacts pair with the live transcript: reclaim them only
+      // when the transcript is archived away, and never while another store
+      // entry still references the same session.
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+      const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+      await removeRemovedSessionTrajectoryArtifacts({
+        removedSessionFiles: [[deletedSessionId, deletedSessionFile]],
+        referencedSessionIds,
+        storePath: params.storePath,
+        restrictToStoreDir: true,
+      });
+    }
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
       deleted: true,
