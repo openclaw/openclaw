@@ -507,13 +507,20 @@ export function consumePendingDelegates(
       continue;
     }
 
-    // Filter-at-consume: leave unmatured entries in `queued` so the next
+    // Filter-at-consume: leave unmatured QUEUED entries in `queued` so the next
     // response-finalize (or the hedge timer armed by the dispatch caller)
     // re-checks them. Honors `delayMs` on the tool path without threading a
     // wake-pathway timer (which would change `mode=silent` semantics).
     // `ignoreDelay` overrides this for the fail-closed persist-failure path.
+    //
+    // The gate applies ONLY to `queued` rows. A `running` row is already claimed
+    // for dispatch (recovery includes it via `includeRunning`); re-driving it must
+    // NOT be delay-gated, or a delegate force-claimed pre-due via `ignoreDelay`
+    // and then orphaned by a crash would be skipped here on restart (now < dueAt)
+    // AND get no hedge (hedges only watch queued rows) — stranding it `running`
+    // forever (#1144).
     const dueAt = delegateDueAt(flow, state);
-    if (!options.ignoreDelay && now < dueAt) {
+    if (!options.ignoreDelay && flow.status === "queued" && now < dueAt) {
       continue;
     }
 

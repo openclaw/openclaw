@@ -1394,6 +1394,29 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("recovers a force-claimed not-yet-due running delegate instead of stranding it by due time (#1144)", async () => {
+    const sessionKey = "agent:main:force-claim-crash";
+    // A delayed delegate force-claimed to `running` pre-due (ignoreDelay), then
+    // orphaned by a crash before spawn accept — its dueAt is still in the future.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    // The delay gate applies only to queued rows, so recovery re-drives this
+    // running row despite its future dueAt rather than skipping it (which would
+    // strand it `running` with no hedge to re-arm it).
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+  });
+
   it("reconciles a claimed continuation child accepted before registry registration", async () => {
     const sessionKey = "agent:main:parent";
     enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });
