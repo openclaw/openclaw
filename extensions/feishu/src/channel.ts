@@ -86,7 +86,12 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
-import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
+import type {
+  FeishuConfig,
+  FeishuMessageInfo,
+  FeishuProbeResult,
+  ResolvedFeishuAccount,
+} from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
   const media = params.media;
@@ -651,6 +656,21 @@ function assertFeishuReadTargetAllowed(params: {
   }
 }
 
+function assertFeishuMessageReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  message: FeishuMessageInfo | null;
+}) {
+  if (!params.message) {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
+  assertFeishuReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: params.message.chatId,
+  });
+}
+
 function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
   return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
@@ -917,6 +937,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 details: { error: `Feishu read failed or message not found: ${messageId}` },
               };
             }
+            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
+              assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
+            }
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
           }
 
@@ -1152,13 +1175,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu reaction requires messageId.");
             }
-            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-              assertFeishuReadTargetAllowed({
-                cfg: ctx.cfg,
-                account,
-                chatId: resolveFeishuChatId(ctx),
-              });
-            }
             const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
             const remove = ctx.params.remove === true;
             const clearAll = ctx.params.clearAll === true;
@@ -1166,8 +1182,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               if (!emoji) {
                 throw new Error("Emoji is required to remove a Feishu reaction.");
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
+              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
+              if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
+                const message = await getMessageFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
+              }
               const matches = await listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1192,8 +1216,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
                 );
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
+              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
+              if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
+                const message = await getMessageFeishu({
+                  cfg: ctx.cfg,
+                  messageId,
+                  accountId: ctx.accountId ?? undefined,
+                });
+                assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
+              }
               const reactions = await listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1226,14 +1258,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu reactions lookup requires messageId.");
             }
+            const { getMessageFeishu, listReactionsFeishu } = await loadFeishuChannelRuntime();
             if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-              assertFeishuReadTargetAllowed({
+              const message = await getMessageFeishu({
                 cfg: ctx.cfg,
-                account,
-                chatId: resolveFeishuChatId(ctx),
+                messageId,
+                accountId: ctx.accountId ?? undefined,
               });
+              assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
             }
-            const { listReactionsFeishu } = await loadFeishuChannelRuntime();
             const reactions = await listReactionsFeishu({
               cfg: ctx.cfg,
               messageId,
