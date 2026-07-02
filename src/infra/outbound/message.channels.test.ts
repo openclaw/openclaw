@@ -403,6 +403,22 @@ describe("gateway url override hardening", () => {
     expect(result.params?.filename).toBeUndefined();
     expect(result.params?.contentType).toBeUndefined();
   });
+
+  it("routes a gateway-only plugin through the message gateway", async () => {
+    setThreadChatGatewayRegistry();
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
+
+    const result = await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "threadchat",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(gatewayCall()?.params?.channel).toBe("threadchat");
+    expect(result.via).toBe("gateway");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

@@ -12,7 +12,6 @@ import type {
   ChannelMessageSendResult,
 } from "../../channels/message/types.js";
 import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
-import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
@@ -48,7 +47,10 @@ import {
 } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import {
+  resolveOutboundChannelMessageAdapter,
+  resolveOutboundChannelPluginForDelivery,
+} from "./channel-resolution.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -132,15 +134,6 @@ async function loadTranscriptRuntime() {
   // delivery policy checks and tests.
   transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
   return await transcriptRuntimePromise;
-}
-
-let channelBootstrapRuntimePromise:
-  | Promise<typeof import("./channel-bootstrap.runtime.js")>
-  | undefined;
-
-async function loadChannelBootstrapRuntime() {
-  channelBootstrapRuntimePromise ??= import("./channel-bootstrap.runtime.js");
-  return await channelBootstrapRuntimePromise;
 }
 
 type ChannelHandler = {
@@ -238,16 +231,19 @@ async function loadBootstrappedOutboundAdapter(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
 }): Promise<ChannelOutboundAdapter | undefined> {
-  let outbound = await loadChannelOutboundAdapter(params.channel);
-  if (!outbound) {
-    const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-    bootstrapOutboundChannelPlugin({
-      channel: params.channel,
-      cfg: params.cfg,
-    });
-    outbound = await loadChannelOutboundAdapter(params.channel);
-  }
-  return outbound;
+  // Resolve through the same send-capability-aware resolver as preflight so a
+  // pinned setup-only shell with a defined-but-non-send outbound can never
+  // shadow the real runtime sender on the direct delivery path. allowBootstrap
+  // preserves the prior lazy "bootstrap then retry" behavior for setup-only
+  // channels (e.g. qqbot after a WebSocket reconnect). Direct delivery here only
+  // emits text/media, so the gate is the text operation; poll routes elsewhere.
+  const plugin = resolveOutboundChannelPluginForDelivery({
+    channel: params.channel,
+    cfg: params.cfg,
+    allowBootstrap: true,
+    operation: "text",
+  });
+  return plugin?.outbound;
 }
 
 async function runChannelMessageSendWithLifecycle<
