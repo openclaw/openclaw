@@ -96,16 +96,24 @@ class FakeMatrixEvent extends EventEmitter {
   private readonly roomId: string;
   private readonly eventId: string;
   private readonly sender: string;
+  private readonly encrypted: boolean;
   private type: string;
   private readonly ts: number;
   private content: Record<string, unknown>;
+  private clearEvent?: { type: string; content: Record<string, unknown> };
   private readonly stateKey?: string;
   private readonly unsigned?: {
     age?: number;
     redacted_because?: unknown;
   };
-  readonly decryptionFailureReason?: string;
+  private decryptionFailureReasonValue?: string;
   private decryptionFailure: boolean;
+  private decryptAttemptHandler?: (options?: { isRetry?: boolean }) => Promise<void> | void;
+  readonly attemptDecryption = vi.fn(
+    async (_crypto: unknown, options?: { isRetry?: boolean }): Promise<void> => {
+      await this.decryptAttemptHandler?.(options);
+    },
+  );
 
   constructor(params: {
     roomId: string;
@@ -126,13 +134,18 @@ class FakeMatrixEvent extends EventEmitter {
     this.roomId = params.roomId;
     this.eventId = params.eventId;
     this.sender = params.sender;
+    this.encrypted = params.type === "m.room.encrypted";
     this.type = params.type;
     this.ts = params.ts;
     this.content = params.content;
     this.stateKey = params.stateKey;
     this.unsigned = params.unsigned;
-    this.decryptionFailureReason = params.decryptionFailureReason;
+    this.decryptionFailureReasonValue = params.decryptionFailureReason;
     this.decryptionFailure = params.decryptionFailure === true;
+  }
+
+  get decryptionFailureReason(): string | undefined {
+    return this.decryptionFailureReasonValue;
   }
 
   getRoomId(): string {
@@ -148,7 +161,7 @@ class FakeMatrixEvent extends EventEmitter {
   }
 
   getType(): string {
-    return this.type;
+    return this.clearEvent?.type ?? this.type;
   }
 
   getTs(): number {
@@ -156,7 +169,7 @@ class FakeMatrixEvent extends EventEmitter {
   }
 
   getContent(): Record<string, unknown> {
-    return this.content;
+    return this.clearEvent?.content ?? this.content;
   }
 
   getUnsigned(): { age?: number; redacted_because?: unknown } {
@@ -171,10 +184,33 @@ class FakeMatrixEvent extends EventEmitter {
     return this.decryptionFailure;
   }
 
+  shouldAttemptDecryption(): boolean {
+    return this.encrypted && this.clearEvent === undefined;
+  }
+
+  onAttemptDecryption(handler: (options?: { isRetry?: boolean }) => Promise<void> | void): void {
+    this.decryptAttemptHandler = handler;
+  }
+
+  markDecryptionFailed(reason: string): void {
+    this.clearEvent = {
+      type: "m.room.message",
+      content: {
+        msgtype: "m.bad.encrypted",
+        body: `** Unable to decrypt: ${reason} **`,
+      },
+    };
+    this.decryptionFailure = true;
+    this.decryptionFailureReasonValue ??= DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID;
+    this.emit("decrypted", this, new Error(reason));
+  }
+
   markDecrypted(params: { type: string; content: Record<string, unknown> }): void {
     this.type = params.type;
     this.content = params.content;
+    this.clearEvent = { type: params.type, content: params.content };
     this.decryptionFailure = false;
+    this.decryptionFailureReasonValue = undefined;
   }
 }
 
@@ -206,7 +242,7 @@ type MatrixJsClientStub = {
   sendTyping: ReturnType<typeof vi.fn>;
   getRoom: ReturnType<typeof vi.fn>;
   getRooms: ReturnType<typeof vi.fn>;
-  getCrypto: ReturnType<typeof vi.fn>;
+  getCrypto: ReturnType<typeof vi.fn<() => unknown>>;
   decryptEventIfNeeded: ReturnType<typeof vi.fn>;
   relations: ReturnType<typeof vi.fn>;
 };
@@ -974,7 +1010,7 @@ describe("MatrixClient event bridge", () => {
         body: "hello",
       },
     });
-    matrixJsClient.decryptEventIfNeeded = vi.fn(async () => {
+    encrypted.onAttemptDecryption(() => {
       encrypted.emit("decrypted", decrypted);
     });
 
@@ -989,8 +1025,9 @@ describe("MatrixClient event bridge", () => {
     expect(trigger).toBeTypeOf("function");
     trigger?.();
     await Promise.resolve();
+    await Promise.resolve();
 
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
+    expect(encrypted.attemptDecryption).toHaveBeenCalledTimes(1);
     expect(delivered).toEqual(["m.room.message"]);
   });
 
@@ -1155,10 +1192,145 @@ describe("MatrixClient event bridge", () => {
     expect(failed).toEqual(["missing room key"]);
   });
 
-  it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
+  it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();
+    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-exhausted-retry-"));
     const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
+    });
+    const delivered: string[] = [];
+    const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
+
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+        cryptoListeners.set(eventName, listener);
+      }),
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+      requestOwnUserVerification: vi.fn(async () => null),
+    }));
+
+    client.on("room.message", (_roomId, event) => {
+      delivered.push(event.type);
+    });
+
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+
+    matrixJsClient.decryptEventIfNeeded = vi.fn(
+      async (event: FakeMatrixEvent, options?: { isRetry?: boolean }) => {
+        if (!event.shouldAttemptDecryption()) {
+          return;
+        }
+        await event.attemptDecryption(matrixJsClient.getCrypto(), options);
+      },
+    );
+
+    await client.start();
+    try {
+      matrixJsClient.emit("event", encrypted);
+      encrypted.markDecryptionFailed("missing room key");
+
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(encrypted.attemptDecryption).toHaveBeenCalledTimes(8);
+
+      encrypted.attemptDecryption.mockClear();
+      encrypted.onAttemptDecryption(() => {
+        encrypted.markDecrypted({
+          type: "m.room.message",
+          content: {
+            msgtype: "m.text",
+            body: "hello",
+          },
+        });
+      });
+
+      const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
+      expect(trigger).toBeTypeOf("function");
+      trigger?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(encrypted.attemptDecryption).toHaveBeenCalledTimes(1);
+      expect(delivered).toEqual(["m.room.message"]);
+    } finally {
+      client.stopSyncWithoutPersist();
+    }
+  });
+
+  it("clears exhausted decrypt retries when the bridge stops", async () => {
+    vi.useFakeTimers();
+    const cryptoStateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "matrix-sdk-stop-exhausted-retry-"),
+    );
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
+    });
+    const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
+
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+        cryptoListeners.set(eventName, listener);
+      }),
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+      requestOwnUserVerification: vi.fn(async () => null),
+    }));
+
+    const encrypted = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+
+    await client.start();
+    matrixJsClient.emit("event", encrypted);
+    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+
+    await vi.advanceTimersByTimeAsync(200_000);
+    expect(encrypted.attemptDecryption).toHaveBeenCalledTimes(8);
+
+    client.stopWithoutPersist();
+    encrypted.attemptDecryption.mockClear();
+    encrypted.onAttemptDecryption(() => {
+      encrypted.markDecrypted({
+        type: "m.room.message",
+        content: {
+          msgtype: "m.text",
+          body: "hello",
+        },
+      });
+    });
+
+    const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
+    expect(trigger).toBeTypeOf("function");
+    trigger?.();
+    await Promise.resolve();
+
+    expect(encrypted.attemptDecryption).not.toHaveBeenCalled();
+  });
+
+  it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
+    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-duplicate-retry-"));
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+      cryptoDatabasePrefix: path.basename(cryptoStateDir),
     });
     const delivered: string[] = [];
     const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
@@ -1198,7 +1370,7 @@ describe("MatrixClient event bridge", () => {
     });
 
     const releaseRetryRef: { current?: () => void } = {};
-    matrixJsClient.decryptEventIfNeeded = vi.fn(
+    encrypted.onAttemptDecryption(
       async () =>
         await new Promise<void>((resolve) => {
           releaseRetryRef.current = () => {
@@ -1209,19 +1381,24 @@ describe("MatrixClient event bridge", () => {
     );
 
     await client.start();
-    matrixJsClient.emit("event", encrypted);
-    encrypted.emit("decrypted", encrypted, new Error("missing room key"));
+    try {
+      matrixJsClient.emit("event", encrypted);
+      encrypted.emit("decrypted", encrypted, new Error("missing room key"));
 
-    const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
-    expect(trigger).toBeTypeOf("function");
-    trigger?.();
-    trigger?.();
-    await Promise.resolve();
+      const trigger = cryptoListeners.get("crypto.keyBackupDecryptionKeyCached");
+      expect(trigger).toBeTypeOf("function");
+      trigger?.();
+      trigger?.();
+      await Promise.resolve();
 
-    expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
-    releaseRetryRef.current?.();
-    await Promise.resolve();
-    expect(delivered).toEqual(["m.room.message"]);
+      expect(encrypted.attemptDecryption).toHaveBeenCalledTimes(1);
+      releaseRetryRef.current?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(delivered).toEqual(["m.room.message"]);
+    } finally {
+      client.stopSyncWithoutPersist();
+    }
   });
 
   it("emits room.invite when a membership invite targets the current user", async () => {
