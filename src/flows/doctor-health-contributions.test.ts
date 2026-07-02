@@ -104,6 +104,10 @@ const mocks = vi.hoisted(() => ({
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
+  collectLegacyCronStoreHealthFindings: vi.fn(async () => []),
+  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => undefined),
+  maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
+  noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
   ),
@@ -352,6 +356,13 @@ vi.mock("../commands/doctor-device-pairing.js", () => ({
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../commands/doctor/cron/index.js", () => ({
+  collectLegacyCronStoreHealthFindings: mocks.collectLegacyCronStoreHealthFindings,
+  collectLegacyWhatsAppCrontabHealthWarning: mocks.collectLegacyWhatsAppCrontabHealthWarning,
+  maybeRepairLegacyCronStore: mocks.maybeRepairLegacyCronStore,
+  noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
+}));
+
 vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
@@ -559,6 +570,14 @@ describe("doctor health contributions", () => {
     mocks.noteWhatsappResponsivenessHealth.mockResolvedValue(undefined);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
+    mocks.collectLegacyCronStoreHealthFindings.mockReset();
+    mocks.collectLegacyCronStoreHealthFindings.mockResolvedValue([]);
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockReset();
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValue(undefined);
+    mocks.maybeRepairLegacyCronStore.mockReset();
+    mocks.maybeRepairLegacyCronStore.mockResolvedValue(undefined);
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockReset();
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
@@ -1859,6 +1878,52 @@ describe("doctor health contributions", () => {
       cfg: ctx.cfg,
       healthOk: false,
     });
+  });
+
+  it("keeps legacy cron store opt-in for default lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-cron");
+    expect(contribution.healthCheckIds).toEqual([
+      "core/doctor/legacy-whatsapp-crontab",
+      "core/doctor/legacy-cron-store",
+    ]);
+
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const cronStoreCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/legacy-cron-store",
+    );
+    expect(cronStoreCheck).toMatchObject({ defaultEnabled: false });
+    expect(cronStoreCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { cron: { store: "/tmp/openclaw-cron/jobs.json" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [cronStoreCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
+
+    mocks.collectLegacyCronStoreHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/legacy-cron-store",
+        severity: "warning",
+        message: "Legacy JSON cron store was found.",
+        path: "/tmp/openclaw-cron/jobs.json",
+        requirement: "legacy-cron-store",
+      },
+    ]);
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-cron-store"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
+    });
+    expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {

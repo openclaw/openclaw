@@ -1733,7 +1733,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({

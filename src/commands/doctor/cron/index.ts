@@ -13,6 +13,7 @@ import {
   saveCronJobsStoreWithMetadata,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import {
@@ -98,6 +99,26 @@ export type LegacyCronRepairResult = {
   changes: string[];
   warnings: string[];
 };
+
+const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
+
+function legacyCronStoreFinding(params: {
+  readonly message: string;
+  readonly path: string;
+  readonly requirement: string;
+  readonly fixHint?: string;
+}): HealthFinding {
+  return {
+    checkId: LEGACY_CRON_STORE_CHECK_ID,
+    severity: "warning",
+    message: params.message,
+    path: params.path,
+    requirement: params.requirement,
+    fixHint:
+      params.fixHint ??
+      `Run ${formatCliCommand("openclaw doctor --fix")} to normalize legacy cron storage.`,
+  };
+}
 
 async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
@@ -281,6 +302,137 @@ async function applyLegacyCronStoreRepair(params: {
   }
 
   return { changes, warnings };
+}
+
+export async function collectLegacyCronStoreHealthFindings(params: {
+  cfg: OpenClawConfig;
+}): Promise<readonly HealthFinding[]> {
+  let state: LegacyCronRepairState | null;
+  try {
+    state = await loadLegacyCronRepairState({ cfg: params.cfg });
+  } catch (err) {
+    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    return [
+      legacyCronStoreFinding({
+        message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "cron-store-readable",
+        fixHint: [
+          `Fix the file's permissions or contents and re-run ${formatCliCommand("openclaw doctor")}.`,
+          "Later health checks will continue.",
+          `Details: ${errorMessage(err)}`,
+        ].join(" "),
+      }),
+    ];
+  }
+  if (!state) {
+    return [];
+  }
+
+  const findings: HealthFinding[] = [];
+  const {
+    storePath,
+    quarantinePath,
+    legacyStoreDetected,
+    legacyRunLogDetected,
+    legacyImportCount,
+    sqliteProjectionBackfillCount,
+    rawJobs,
+  } = state;
+
+  try {
+    const quarantine = await loadCronQuarantineFile(quarantinePath);
+    if (quarantine.jobs.length > 0) {
+      findings.push(
+        legacyCronStoreFinding({
+          message: `${pluralize(quarantine.jobs.length, "quarantined cron job row")} found at ${shortenHomePath(quarantinePath)}.`,
+          path: quarantinePath,
+          requirement: "quarantined-cron-rows",
+          fixHint: `Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+        }),
+      );
+    }
+  } catch (err) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        path: quarantinePath,
+        requirement: "cron-quarantine-readable",
+        fixHint: `Fix the quarantine file's permissions or contents. Details: ${errorMessage(err)}`,
+      }),
+    );
+  }
+
+  if (legacyStoreDetected) {
+    findings.push(
+      legacyCronStoreFinding({
+        message:
+          legacyImportCount > 0
+            ? `${pluralize(legacyImportCount, "legacy JSON cron job")} will be imported into SQLite.`
+            : `Legacy JSON cron store was found at ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "legacy-cron-store",
+      }),
+    );
+  }
+  if (legacyRunLogDetected) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy JSON cron run logs will be imported into SQLite for ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "legacy-cron-run-logs",
+      }),
+    );
+  }
+
+  if (rawJobs.length === 0) {
+    return findings;
+  }
+
+  const normalized = normalizeStoredCronJobs(rawJobs);
+  for (const line of formatLegacyIssuePreview(normalized.issues)) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: line.replace(/^- /u, ""),
+        path: storePath,
+        requirement: "legacy-cron-store-shape",
+      }),
+    );
+  }
+
+  if (sqliteProjectionBackfillCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
+        path: storePath,
+        requirement: "sqlite-projection-backfill",
+      }),
+    );
+  }
+
+  const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  if (notifyCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(notifyCount, "job")} still uses legacy notify webhook fallback.`,
+        path: storePath,
+        requirement: "legacy-notify-fallback",
+      }),
+    );
+  }
+
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
+  if (dreamingStaleCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
+        path: storePath,
+        requirement: "legacy-dreaming-payload",
+      }),
+    );
+  }
+
+  return findings;
 }
 
 export async function repairLegacyCronStoreWithoutPrompt(params: {
