@@ -1887,20 +1887,34 @@ async function agentCommandInternal(
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.provider &&
               modelOverride === autoFallbackPrimaryProbe.model;
+            const isFallbackRetry = fallbackAttemptIndex > 0;
+            fallbackAttemptIndex += 1;
+            // SCRUM-3256: on a fallback retry, a prior candidate may have cleared a
+            // poisoned CLI session in the shared sessionStore (reused-session turn
+            // death -- see attempt-execution.ts's "CLI session cleared after failed
+            // reused turn"). sessionEntryForAttempt is a snapshot captured once
+            // before this fallback loop began, so it still carries the dead
+            // binding; without this re-read, the next candidate resumes the
+            // already-cleared session and fails near-instantly, cascading a single
+            // transient death into "All models failed" across every remaining
+            // model. Re-read the live store entry for fallback retries only --
+            // the primary attempt (isFallbackRetry === false) is unaffected.
+            const liveSessionEntry =
+              isFallbackRetry && sessionStore
+                ? (sessionStore[sessionKey ?? sessionId] ?? sessionEntryForAttempt)
+                : sessionEntryForAttempt;
             const attemptSessionEntry =
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.fallbackProvider &&
               !isAutoFallbackPrimaryProbeCandidate
                 ? sessionEntry
-                : sessionEntryForAttempt;
+                : liveSessionEntry;
             if (isAutoFallbackPrimaryProbeCandidate) {
               markAutoFallbackPrimaryProbe({
                 probe: autoFallbackPrimaryProbe,
                 sessionKey,
               });
             }
-            const isFallbackRetry = fallbackAttemptIndex > 0;
-            fallbackAttemptIndex += 1;
             opts.onActiveModelSelected?.({
               provider: providerOverride,
               model: modelOverride,

@@ -448,7 +448,13 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
-  it("clears reused Claude CLI session IDs after AbortError without retrying", async () => {
+  it("clears reused Claude CLI session IDs after AbortError, then retries once with a fresh session (SCRUM-3256)", async () => {
+    // SCRUM-3256: a ~600s CLI turn-timeout raises AbortError on a reused session.
+    // Clearing the poisoned binding without retrying used to surface the error
+    // straight to the caller -- in a model-fallback dispatch, the *next*
+    // candidate would then resume the same now-cleared/dead session and fail
+    // near-instantly too, cascading into "All models failed". The outer catch
+    // now retries once in-process with a brand-new session before giving up.
     const sessionKey = "agent:main:direct:cli-abort";
     const cliSessionId = "abort-poisoned-session";
     await writeClaudeCliAssistantTranscript(cliSessionId);
@@ -457,19 +463,24 @@ describe("CLI attempt execution", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
     runCliAgentMock.mockRejectedValueOnce(abortError);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("hello after abort retry"));
 
-    await expect(
-      runClaudeCliAttempt({
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        body: "resume after abort",
-        runId: "run-cli-abort",
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "resume after abort",
+      runId: "run-cli-abort",
+    });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    // The retry must not resume the dead session -- it starts fresh.
+    const secondCallArg = requireRecord(
+      runCliAgentMock.mock.calls[1]?.[0],
+      "second run CLI agent argument",
+    );
+    expect(secondCallArg.cliSessionId).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -481,6 +492,44 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears reused Claude CLI session IDs after an unknown-reason FailoverError, then retries once with a fresh session (SCRUM-3256)", async () => {
+    // SCRUM-3256: reason=unknown is explicitly outside cli-runner.ts's narrow
+    // internal shouldRetryFreshCliSessionAfterFailover allowlist (it only
+    // retries unknown when error.code === "cli_unknown_empty_failure"), so this
+    // is the exact class of failure the RCA found falling through to "All
+    // models failed" with no recovery. The outer-catch retry closes that gap.
+    const sessionKey = "agent:main:direct:cli-unknown";
+    const cliSessionId = "unknown-poisoned-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-unknown", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("unknown failure", {
+        reason: "unknown",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("hello after unknown-reason retry"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "resume after unknown failure",
+      runId: "run-cli-unknown",
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    const secondCallArg = requireRecord(
+      runCliAgentMock.mock.calls[1]?.[0],
+      "second run CLI agent argument",
+    );
+    expect(secondCallArg.cliSessionId).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("clears reused Claude CLI session IDs before a fresh retry after timeout failover", async () => {
