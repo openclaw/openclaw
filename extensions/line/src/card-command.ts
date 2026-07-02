@@ -261,8 +261,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const bubble = createReceiptCard({ title, items, total, footer });
             return buildLineReply({
               flexMessage: {
-                altText: `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`.slice(
-                  0,
+                altText: truncateUtf16Safe(
+                  `${title}: ${items.map((i) => `${i.name} ${i.value}`).join(", ")}`,
                   400,
                 ),
                 contents: bubble,
