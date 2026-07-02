@@ -8,6 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
@@ -50,6 +51,7 @@ type StreamingStartOptions = {
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
+const FEISHU_STREAMING_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -117,13 +119,17 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
-    code: number;
-    msg: string;
-    tenant_access_token?: string;
-    expire?: number;
-  };
-  await release();
+  let data: { code: number; msg: string; tenant_access_token?: string; expire?: number };
+  try {
+    data = await readProviderJsonResponse<{
+      code: number;
+      msg: string;
+      tenant_access_token?: string;
+      expire?: number;
+    }>(response, "Feishu streaming token", { maxBytes: FEISHU_STREAMING_RESPONSE_LIMIT_BYTES });
+  } finally {
+    await release();
+  }
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
   }
@@ -280,12 +286,16 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
-      code: number;
-      msg: string;
-      data?: { card_id: string };
-    };
-    await releaseCreate();
+    let createData: { code: number; msg: string; data?: { card_id: string } };
+    try {
+      createData = await readProviderJsonResponse<{
+        code: number;
+        msg: string;
+        data?: { card_id: string };
+      }>(createRes, "Feishu create card", { maxBytes: FEISHU_STREAMING_RESPONSE_LIMIT_BYTES });
+    } finally {
+      await releaseCreate();
+    }
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
