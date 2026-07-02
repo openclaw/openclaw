@@ -1013,3 +1013,24 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("user: /new");
   });
 });
+
+describe("shortenHomePath sibling protection", () => {
+  it("preserves sibling paths that share a home prefix", async () => {
+    vi.stubEnv("HOME", "/home/user");
+    vi.stubEnv("USERPROFILE", "");
+    vi.stubEnv("OPENCLAW_HOME", "");
+    try {
+      const { shortenHomePath } = await import("../../../utils.js");
+      // Sibling path must not be corrupted by home-path shortening
+      expect(shortenHomePath("/home/user2/.openclaw/state/memory/test.md")).toBe(
+        "/home/user2/.openclaw/state/memory/test.md",
+      );
+      // Home-relative path must still be shortened correctly
+      expect(shortenHomePath("/home/user/.openclaw/state/memory/test.md")).toBe(
+        "~/.openclaw/state/memory/test.md",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
