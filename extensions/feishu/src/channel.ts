@@ -87,13 +87,7 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
-import {
-  isFeishuGroupChatType,
-  type FeishuConfig,
-  type FeishuMessageInfo,
-  type FeishuProbeResult,
-  type ResolvedFeishuAccount,
-} from "./types.js";
+import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
   const media = params.media;
@@ -781,42 +775,12 @@ function assertFeishuProvidedReadTargetAllowed(params: {
   });
 }
 
-function assertFeishuMessageReadTargetAllowed(params: {
+function assertFeishuMessageIdReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
-  message: FeishuMessageInfo | null;
-  trustedDirectId?: string;
-}) {
-  if (!params.message) {
-    throw new Error("Feishu read target chat is not allowed.");
-  }
-  if (params.trustedDirectId && !isFeishuGroupChatType(params.message.chatType)) {
-    assertFeishuTrustedDirectReadTargetAllowed({
-      account: params.account,
-      directId: params.trustedDirectId,
-    });
-    return;
-  }
-  assertFeishuReadTargetAllowed({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: params.message.chatId,
-  });
-}
-
-async function assertFeishuMessageIdReadTargetAllowed(params: {
-  cfg: ClawdbotConfig;
-  account: ResolvedFeishuAccount;
-  accountId?: string;
-  messageId: string;
   requestedTarget?: FeishuReadTarget;
   requestedChatTrusted?: boolean;
-  getMessageFeishu: (args: {
-    cfg: ClawdbotConfig;
-    messageId: string;
-    accountId?: string;
-  }) => Promise<FeishuMessageInfo | null>;
-}): Promise<FeishuMessageInfo | undefined> {
+}) {
   const trustedDirectId =
     params.requestedTarget?.kind === "direct" ? params.requestedTarget.id : undefined;
   if (params.requestedTarget?.kind === "direct") {
@@ -833,31 +797,20 @@ async function assertFeishuMessageIdReadTargetAllowed(params: {
         directId: trustedDirectId,
       });
     }
-  } else {
-    assertFeishuProvidedReadTargetAllowed({
-      cfg: params.cfg,
-      account: params.account,
-      target: params.requestedTarget,
-    });
+    return;
   }
+
+  assertFeishuProvidedReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    target: params.requestedTarget,
+  });
   if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
-    return undefined;
+    return;
   }
   if (!params.requestedChatTrusted) {
     throw new Error("Feishu read target chat is not allowed.");
   }
-  const message = await params.getMessageFeishu({
-    cfg: params.cfg,
-    messageId: params.messageId,
-    accountId: params.accountId,
-  });
-  assertFeishuMessageReadTargetAllowed({
-    cfg: params.cfg,
-    account: params.account,
-    message,
-    trustedDirectId,
-  });
-  return message ?? undefined;
 }
 
 function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
@@ -1107,21 +1060,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu read requires messageId.");
             }
             const { getMessageFeishu } = await loadFeishuChannelRuntime();
-            const verifiedMessage = await assertFeishuMessageIdReadTargetAllowed({
+            assertFeishuMessageIdReadTargetAllowed({
               cfg: ctx.cfg,
               account,
-              messageId,
-              accountId: ctx.accountId ?? undefined,
-              getMessageFeishu,
               ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
             });
-            const message =
-              verifiedMessage ??
-              (await getMessageFeishu({
-                cfg: ctx.cfg,
-                messageId,
-                accountId: ctx.accountId ?? undefined,
-              }));
+            const message = await getMessageFeishu({
+              cfg: ctx.cfg,
+              messageId,
+              accountId: ctx.accountId ?? undefined,
+            });
             if (!message) {
               return {
                 isError: true,
@@ -1378,14 +1326,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               if (!emoji) {
                 throw new Error("Emoji is required to remove a Feishu reaction.");
               }
-              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
+              const { listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              await assertFeishuMessageIdReadTargetAllowed({
+              assertFeishuMessageIdReadTargetAllowed({
                 cfg: ctx.cfg,
                 account,
-                messageId,
-                accountId: ctx.accountId ?? undefined,
-                getMessageFeishu,
                 ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
               });
               const matches = await listReactionsFeishu({
@@ -1412,14 +1357,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
                 );
               }
-              const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
+              const { listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              await assertFeishuMessageIdReadTargetAllowed({
+              assertFeishuMessageIdReadTargetAllowed({
                 cfg: ctx.cfg,
                 account,
-                messageId,
-                accountId: ctx.accountId ?? undefined,
-                getMessageFeishu,
                 ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
               });
               const reactions = await listReactionsFeishu({
@@ -1454,13 +1396,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!messageId) {
               throw new Error("Feishu reactions lookup requires messageId.");
             }
-            const { getMessageFeishu, listReactionsFeishu } = await loadFeishuChannelRuntime();
-            await assertFeishuMessageIdReadTargetAllowed({
+            const { listReactionsFeishu } = await loadFeishuChannelRuntime();
+            assertFeishuMessageIdReadTargetAllowed({
               cfg: ctx.cfg,
               account,
-              messageId,
-              accountId: ctx.accountId ?? undefined,
-              getMessageFeishu,
               ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
             });
             const reactions = await listReactionsFeishu({
