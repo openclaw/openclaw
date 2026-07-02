@@ -273,6 +273,37 @@ describe("applyPluginAutoEnable channels", () => {
       );
     });
 
+    it("keeps built-in channel enablement when a same-id plugin does not claim the channel", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            telegram: {
+              botToken: "token",
+            },
+          },
+        },
+        candidates: [
+          {
+            pluginId: "telegram",
+            kind: "channel-configured",
+            channelId: "telegram",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "telegram",
+            channels: ["unrelated-channel"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.telegram?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.telegram).toBeUndefined();
+      expect(result.changes).toContain("Telegram configured, enabled automatically.");
+    });
+
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
       const result = applyWithApnChannelConfig();
 
