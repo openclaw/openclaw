@@ -1,5 +1,6 @@
 // Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
+import { Agent } from "undici";
 import type {
   CacheControlEphemeral,
   ContentBlockParam,
@@ -920,6 +921,18 @@ function createClient(
   dynamicHeaders?: Record<string, string>,
   sessionId?: string,
 ): { client: Anthropic; isOAuthToken: boolean } {
+  // Configure undici Agent with extended keep-alive to prevent socket failures
+  // Fixes #87407: UND_ERR_SOCKET from keep-alive timeout on long-running gateways
+  const agent = new Agent({
+    keepAliveTimeout: 60_000, // 60 seconds (default 4s)
+    keepAliveMaxTimeout: 600_000, // 10 minutes (default 10min, explicit)
+    pipelining: 4, // Better throughput
+    connectTimeout: 15_000, // 15 seconds
+    bodyTimeout: 600_000, // 10 minutes
+    allowH2: false, // Disable HTTP/2 for compatibility
+    connections: 20, // Limit connections per origin
+  });
+
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
   const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
@@ -937,6 +950,7 @@ function createClient(
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
       dangerouslyAllowBrowser: true,
+      fetchOptions: { dispatcher: agent },
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -959,6 +973,7 @@ function createClient(
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
+      fetchOptions: { dispatcher: agent },
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -1002,6 +1017,7 @@ function createClient(
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
+      fetchOptions: { dispatcher: agent },
       defaultHeaders: mergeHeaders(
         {
           accept: "application/json",
@@ -1028,6 +1044,7 @@ function createClient(
     authToken: null,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
+    fetchOptions: { dispatcher: agent },
     defaultHeaders: mergeHeaders(
       {
         accept: "application/json",
