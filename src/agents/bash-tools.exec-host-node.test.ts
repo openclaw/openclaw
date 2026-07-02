@@ -683,7 +683,11 @@ describe("executeNodeHostCommand", () => {
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
     });
-    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+    const followupCalls = sendExecApprovalFollowupResultMock.mock.calls as unknown as [
+      unknown,
+      string,
+    ][];
+    const message = followupCalls[0]?.[1];
     if (typeof message !== "string") {
       throw new Error("expected follow-up message");
     }
