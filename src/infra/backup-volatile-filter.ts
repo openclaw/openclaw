@@ -1,4 +1,4 @@
-// Filters volatile files from backup manifests.
+// Filters volatile paths from backup manifests.
 import path from "node:path";
 
 /**
@@ -12,7 +12,48 @@ import path from "node:path";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const STATE_RUNTIME_SUFFIXES = [".sock", ".pid", ".tmp"];
+const STATE_TRANSIENT_SIDE_EFFECT_SUFFIXES = [
+  ".lock",
+  ".partial",
+  ".journal",
+  ".wal",
+  ".shm",
+  "-journal",
+  "-wal",
+  "-shm",
+];
+const AGENT_RUNTIME_VOLATILE_DIRS = new Set([
+  ".tmp",
+  "cache",
+  "shell-snapshots",
+  "shell_snapshots",
+  "tmp",
+]);
+const BROWSER_USER_DATA_CACHE_DIRS = new Set([
+  "Application Cache",
+  "Cache",
+  "CacheStorage",
+  "Code Cache",
+  "DawnCache",
+  "GPUCache",
+  "GraphiteDawnCache",
+  "GrShaderCache",
+  "ScriptCache",
+  "ShaderCache",
+]);
+const STATE_TRANSIENT_SIDE_EFFECT_ROOTS = [
+  ".tmp",
+  "cache",
+  "delivery-queue",
+  "downloads",
+  "ipc",
+  "locks",
+  "run",
+  "runs",
+  "session-delivery-queue",
+  "tmp",
+];
 
 function normalizePosix(input: string): string {
   if (!input) {
@@ -36,8 +77,23 @@ function hasExtension(filePosix: string, extensions: readonly string[]): boolean
   return extensions.includes(ext);
 }
 
-function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): boolean {
-  return extensions.has(path.posix.extname(filePosix).toLowerCase());
+function hasSuffixInSet(filePosix: string, suffixes: readonly string[]): boolean {
+  const lower = filePosix.toLowerCase();
+  return suffixes.some((suffix) => lower.endsWith(suffix));
+}
+
+function isSqliteSidecarPath(filePosix: string): boolean {
+  const lower = filePosix.toLowerCase();
+  for (const suffix of ["-journal", "-shm", "-wal"]) {
+    if (lower.endsWith(suffix)) {
+      return lower.slice(0, -suffix.length).endsWith(".sqlite");
+    }
+  }
+  return false;
+}
+
+function isUnderStateChild(filePosix: string, stateDirPosix: string, childName: string): boolean {
+  return isUnder(filePosix, path.posix.join(stateDirPosix, childName));
 }
 
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
@@ -48,6 +104,50 @@ function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string):
   const relative = path.posix.relative(agentsRoot, filePosix);
   const parts = relative.split("/").filter(Boolean);
   return parts.length >= 3 && parts[1] === "sessions";
+}
+
+function isAgentRuntimeVolatilePath(filePosix: string, stateDirPosix: string): boolean {
+  const agentsRoot = path.posix.join(stateDirPosix, "agents");
+  if (!isUnder(filePosix, agentsRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(agentsRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  return parts.length >= 3 && parts[1] === "agent" && AGENT_RUNTIME_VOLATILE_DIRS.has(parts[2]);
+}
+
+function isBrowserUserDataCachePath(filePosix: string, stateDirPosix: string): boolean {
+  const browserRoot = path.posix.join(stateDirPosix, "browser");
+  if (!isUnder(filePosix, browserRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(browserRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  const userDataIndex = parts.indexOf("user-data");
+  if (userDataIndex === -1) {
+    return false;
+  }
+  const userDataParts = parts.slice(userDataIndex + 1);
+  if (userDataParts.some((part) => BROWSER_USER_DATA_CACHE_DIRS.has(part))) {
+    return true;
+  }
+  const webApplicationsIndex = userDataParts.indexOf("Web Applications");
+  return (
+    webApplicationsIndex !== -1 &&
+    userDataParts.slice(webApplicationsIndex + 1).includes("Resources")
+  );
+}
+
+function isStateTransientSideEffectPath(filePosix: string, stateDirPosix: string): boolean {
+  if (
+    isSqliteSidecarPath(filePosix) ||
+    !hasSuffixInSet(filePosix, STATE_TRANSIENT_SIDE_EFFECT_SUFFIXES)
+  ) {
+    return false;
+  }
+  return STATE_TRANSIENT_SIDE_EFFECT_ROOTS.some((root) =>
+    isUnderStateChild(filePosix, stateDirPosix, root),
+  );
 }
 
 function filePathCandidates(input: string): string[] {
@@ -67,15 +167,20 @@ type VolatileFilterPlan = {
 
 /**
  * Returns true if the given absolute path should be skipped during backup
- * because it is a live-mutation target.
+ * because it is disposable runtime/cache state or a live-mutation target.
  *
  * Rules:
  *   - `{stateDir}/sessions/**`/`*.{jsonl,log}` (legacy)
  *   - `{stateDir}/agents/<agentId>/sessions/**`/`*.{jsonl,log}`
+ *   - `{stateDir}/agents/<agentId>/agent/{tmp,.tmp,cache,shell-snapshots,shell_snapshots}/**`
+ *   - `{stateDir}/cache/{shell-snapshots,shell_snapshots}/**`
+ *   - browser user-data cache directories such as `Cache`, `Code Cache`, and `GPUCache`
+ *   - `{stateDir}/archived/**`
  *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
  *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
+ *   - transient-root side effects such as cache/queue `*.{lock,partial,journal,wal,shm}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
@@ -102,6 +207,26 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         return true;
       }
 
+      if (isAgentRuntimeVolatilePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      for (const shellSnapshotDir of ["shell-snapshots", "shell_snapshots"]) {
+        const shellSnapshotRoot = path.posix.join(stateDirPosix, "cache", shellSnapshotDir);
+        if (isUnder(filePosix, shellSnapshotRoot)) {
+          return true;
+        }
+      }
+
+      if (isBrowserUserDataCachePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      const archivedRoot = path.posix.join(stateDirPosix, "archived");
+      if (isUnder(filePosix, archivedRoot)) {
+        return true;
+      }
+
       const cronRunsRoot = path.posix.join(stateDirPosix, "cron", "runs");
       if (isUnder(filePosix, cronRunsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;
@@ -122,9 +247,13 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
+      if (isUnder(filePosix, stateDirPosix) && hasSuffixInSet(filePosix, STATE_RUNTIME_SUFFIXES)) {
+        return true;
+      }
+
       if (
         isUnder(filePosix, stateDirPosix) &&
-        hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS)
+        isStateTransientSideEffectPath(filePosix, stateDirPosix)
       ) {
         return true;
       }
