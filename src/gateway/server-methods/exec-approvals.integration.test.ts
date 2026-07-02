@@ -153,14 +153,43 @@ describe("exec-approvals node preflight (real gateway)", () => {
 
   test("pre-paired capable node connects and appears in node.list", () => {
     // The capable node was pre-paired via approveNodePairing with
-    // operator.admin scope, matching the admin-required pairing scope
-    // for exec-approvals commands (verified in node-pairing-authz.test.ts).
+    // operator.admin scope (superset of the required write scope).
     // The node connected successfully and reconcileNodePairingOnConnect
     // found the paired entry, so effectiveCommands include exec-approvals.
     expect(capableNodeId).toBeTruthy();
     // The limited node also connects but without pre-pairing.
     expect(limitedNodeId).toBeTruthy();
     expect(limitedNodeId).not.toBe(capableNodeId);
+  });
+
+  test("pre-paired capable node succeeds on exec.approvals.node.get", async () => {
+    const res = await rpcReq<{ hash?: string; file?: unknown }>(
+      gateway.ws,
+      "exec.approvals.node.get",
+      { nodeId: capableNodeId },
+    );
+
+    console.log(JSON.stringify(res, null, 2));
+
+    expect(res.ok).toBe(true);
+    expect(res.payload).toBeDefined();
+    // The executing node returns the current approvals file shape for
+    // a freshly paired node — a valid response proves the preflight
+    // allowlist includes system.execApprovals.get for declared-capable
+    // desktop nodes.
+  });
+
+  test("pre-paired capable node succeeds on exec.approvals.node.set with empty file", async () => {
+    const res = await rpcReq<{ hash?: string }>(gateway.ws, "exec.approvals.node.set", {
+      nodeId: capableNodeId,
+      file: { version: 1, agents: {} },
+    });
+
+    console.log(JSON.stringify(res, null, 2));
+
+    // set succeeds because the capable node declares system.execApprovals.set
+    // in its effective command surface and the preflight allowlist includes it.
+    expect(res.ok).toBe(true);
   });
 
   // ---- unknown-node scenarios ----
