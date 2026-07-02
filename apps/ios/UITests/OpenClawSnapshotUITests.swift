@@ -280,6 +280,55 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.waitForValue("System", of: row)
     }
 
+    func testChatReturnsToOriginatingControlDetail() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Control proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "control",
+            initialDestination: "activity",
+            name: "control-chat-return"))
+
+        let chatTab = try XCTUnwrap(self.app?.tabBars.buttons["Chat"])
+        let controlTab = try XCTUnwrap(self.app?.tabBars.buttons["Control"])
+        let recentActivity = try XCTUnwrap(self.app?.staticTexts["Recent activity"])
+        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "control-activity-before-chat")
+
+        let activityChat = try self.controlDetailChatButton(above: chatTab)
+        activityChat.tap()
+        XCTAssertTrue(chatTab.isSelected)
+
+        let returnButton = try XCTUnwrap(self.app?.buttons["OpenClawChatBackToControlDetailButton"])
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 5))
+        XCTAssertEqual(returnButton.label, "Back to Activity")
+        self.attachScreenshot(named: "chat-return-to-activity")
+
+        returnButton.tap()
+        XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
+        XCTAssertTrue(controlTab.isSelected)
+        self.attachScreenshot(named: "control-activity-after-chat")
+
+        try self.controlDetailChatButton(above: chatTab).tap()
+        XCTAssertTrue(chatTab.isSelected)
+        controlTab.tap()
+        XCTAssertTrue(self.app?.navigationBars["Control"].waitForExistence(timeout: 8) == true)
+        let overview = try XCTUnwrap(self.app?.buttons["Overview"])
+        XCTAssertTrue(overview.exists)
+        self.attachScreenshot(named: "control-tab-returns-to-root")
+
+        overview.tap()
+        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
+        let agentSession = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Molty").firstMatch)
+        XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
+        agentSession.tap()
+
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 8))
+        XCTAssertEqual(returnButton.label, "Back to Overview")
+        self.attachScreenshot(named: "chat-session-return-to-overview")
+        returnButton.tap()
+        XCTAssertTrue(self.app?.navigationBars["Overview"].waitForExistence(timeout: 8) == true)
+    }
+
     func testAgentUsesToolbarFilter() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -357,6 +406,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", value),
             object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed)
+    }
+
+    private func controlDetailChatButton(above chatTab: XCUIElement) throws -> XCUIElement {
+        let buttons = try XCTUnwrap(self.app?.buttons.matching(NSPredicate(format: "label == 'Chat'")))
+        return try XCTUnwrap(buttons.allElementsBoundByIndex.first { $0.frame.maxY < chatTab.frame.minY })
     }
 
     private func launchPairedLiveGatewayApp(

@@ -191,7 +191,9 @@ struct SwiftUIRenderSmokeTests {
             let root = RootTabsPhoneControlHub(
                 groups: RootTabs.phoneControlGroups,
                 initialDestination: nil,
-                openRootDestination: { _ in })
+                navigationRequest: nil,
+                openRootDestination: { _ in },
+                openChatFromControlDetail: { _ in })
                 .environment(appModel)
 
             _ = Self.host(root)
@@ -203,7 +205,9 @@ struct SwiftUIRenderSmokeTests {
         let root = RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            navigationRequest: nil,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
