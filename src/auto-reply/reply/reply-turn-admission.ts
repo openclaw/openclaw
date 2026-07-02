@@ -37,7 +37,7 @@ export async function admitReplyTurn(params: {
   waitForActive?: boolean;
 }): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
-  const waitTimeoutMs =
+  const baseWaitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
   while (true) {
@@ -64,7 +64,7 @@ export async function admitReplyTurn(params: {
         }
         const followupAdmission = await waitForReplyRunFollowupAdmission(
           params.sessionKey,
-          waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+          baseWaitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
           { signal: params.upstreamAbortSignal },
         );
         if (!followupAdmission.settled) {
@@ -87,15 +87,29 @@ export async function admitReplyTurn(params: {
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, waitTimeoutMs, {
+      // A healthy active run makes a visible turn queue behind it indefinitely.
+      // A superseded run whose abort was already signalled is being torn down;
+      // it must not block a newer visible turn forever if teardown never reaches
+      // completion and leaves the lane wedged until restart clears memory.
+      const activeRunSuperseded = activeOperation?.abortSignal.aborted === true;
+      const activeRunWaitTimeoutMs =
+        baseWaitTimeoutMs ?? (activeRunSuperseded ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
+      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, activeRunWaitTimeoutMs, {
         signal: params.upstreamAbortSignal,
       });
       if (!ended) {
-        return {
-          status: "skipped",
-          reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
-          activeOperation,
-        };
+        if (isAbortSignalAborted(params.upstreamAbortSignal)) {
+          return { status: "skipped", reason: "aborted", activeOperation };
+        }
+        // If the still-active run was already superseded and failed to release
+        // its lane, force-clear the dead operation so this visible turn can
+        // take over. Healthy active runs remain protected.
+        if (activeOperation && activeOperation.abortSignal.aborted) {
+          sessionId = activeOperation.sessionId;
+          activeOperation.fail("run_failed");
+          continue;
+        }
+        return { status: "skipped", reason: "active-run", activeOperation };
       }
       if (activeOperation) {
         sessionId = activeOperation.sessionId;
