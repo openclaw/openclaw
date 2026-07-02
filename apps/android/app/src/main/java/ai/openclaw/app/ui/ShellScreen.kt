@@ -135,9 +135,7 @@ fun ShellScreen(
   val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
   ClawDesignTheme(dark = shellDark) {
-    var activeTab by rememberSaveable { mutableStateOf(Tab.Overview) }
-    var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
-    var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
+    val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var voiceScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
@@ -148,31 +146,28 @@ fun ShellScreen(
       val destination = requestedHomeDestination ?: return@LaunchedEffect
       // HomeDestination is a one-shot command from launch intents and settings
       // actions; consume it after translating to local shell state.
-      activeTab =
+      nav.selectTab(
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
           HomeDestination.Chat -> Tab.Chat
           HomeDestination.Voice -> Tab.Voice
           HomeDestination.Screen -> Tab.Chat
           HomeDestination.Settings -> Tab.Settings
-        }
-      if (destination == HomeDestination.Settings) {
-        settingsRoute = SettingsRoute.Home
-        returnToOverviewFromSettings = false
-      }
+        },
+      )
       viewModel.clearRequestedHomeDestination()
     }
 
-    LaunchedEffect(activeTab, runtimeInitialized) {
-      val voiceScreenActive = activeTab == Tab.Voice
+    LaunchedEffect(nav.activeTab, runtimeInitialized) {
+      val voiceScreenActive = nav.activeTab == Tab.Voice
       if (voiceScreenActive || voiceScreenWasActive || runtimeInitialized) {
         viewModel.setVoiceScreenActive(voiceScreenActive)
       }
       voiceScreenWasActive = voiceScreenActive
     }
 
-    BackHandler(enabled = activeTab != Tab.Overview) {
-      activeTab = Tab.Overview
+    BackHandler(enabled = nav.activeTab != Tab.Overview) {
+      nav.back()
     }
 
     BackHandler(enabled = commandOpen) {
@@ -191,85 +186,54 @@ fun ShellScreen(
         if (showBottomNav) {
           ClawBottomNav(
             items = shellNavTabs.map { ClawNavItem(key = it.key, label = it.label, icon = it.icon) },
-            selectedKey = if (activeTab in shellNavTabs) activeTab.key else Tab.Overview.key,
+            selectedKey = if (nav.activeTab in shellNavTabs) nav.activeTab.key else Tab.Overview.key,
             onSelect = { key ->
-              val next = shellNavTabs.firstOrNull { it.key == key } ?: Tab.Overview
-              if (next == Tab.Settings) {
-                settingsRoute = SettingsRoute.Home
-                returnToOverviewFromSettings = false
-              }
-              activeTab = next
+              nav.selectTab(shellNavTabs.firstOrNull { it.key == key } ?: Tab.Overview)
             },
           )
         }
       },
     ) { shellPadding ->
       Box(modifier = Modifier.fillMaxSize().padding(shellPadding)) {
-        when (activeTab) {
+        when (nav.activeTab) {
           Tab.Overview ->
             OverviewScreen(
               viewModel = viewModel,
-              onSelectTab = { activeTab = it },
-              onOpenSettingsRoute = {
-                settingsRoute = it
-                returnToOverviewFromSettings = true
-                activeTab = Tab.Settings
-              },
+              onSelectTab = nav::selectTab,
+              onOpenSettingsRoute = nav::openSettingsRoute,
               onOpenCommand = { commandOpen = true },
             )
           Tab.Chat ->
             ChatShellScreen(
               viewModel = viewModel,
-              onVoice = { activeTab = Tab.Voice },
-              onOpenSessions = { activeTab = Tab.Sessions },
-              onOpenGatewaySettings = {
-                settingsRoute = SettingsRoute.Gateway
-                returnToOverviewFromSettings = false
-                activeTab = Tab.Settings
-              },
+              onVoice = { nav.selectTab(Tab.Voice) },
+              onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
+              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
           Tab.Voice ->
             VoiceShellScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
-              onOpenGatewaySettings = {
-                settingsRoute = SettingsRoute.Gateway
-                returnToOverviewFromSettings = false
-                activeTab = Tab.Settings
-              },
-              onOpenVoiceSettings = {
-                settingsRoute = SettingsRoute.Voice
-                returnToOverviewFromSettings = false
-                activeTab = Tab.Settings
-              },
+              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
+              onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
             )
           Tab.ProvidersModels ->
             ProvidersModelsScreen(
               viewModel = viewModel,
-              onBack = { activeTab = Tab.Overview },
+              onBack = nav::back,
             )
           Tab.Sessions ->
             SessionsScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
-              onOpenChat = { activeTab = Tab.Chat },
+              onOpenChat = { nav.selectTab(Tab.Chat) },
             )
           Tab.Settings ->
             SettingsShellScreen(
               viewModel = viewModel,
-              route = settingsRoute,
-              onRouteChange = {
-                settingsRoute = it
-                returnToOverviewFromSettings = false
-              },
-              onRouteBack = {
-                settingsRoute = SettingsRoute.Home
-                if (returnToOverviewFromSettings) {
-                  returnToOverviewFromSettings = false
-                  activeTab = Tab.Overview
-                }
-              },
-              onBackHome = { activeTab = Tab.Overview },
+              route = nav.settingsRoute,
+              onRouteChange = nav::openSettingsRouteFromHome,
+              onBack = nav::back,
               onOpenCommand = { commandOpen = true },
             )
         }
@@ -279,30 +243,28 @@ fun ShellScreen(
             viewModel = viewModel,
             onDismiss = { commandOpen = false },
             onOpenChat = {
-              activeTab = Tab.Chat
+              nav.selectTab(Tab.Chat)
               commandOpen = false
             },
             onOpenVoice = {
-              activeTab = Tab.Voice
+              nav.selectTab(Tab.Voice)
               commandOpen = false
             },
             onOpenSessions = {
-              activeTab = Tab.Sessions
+              nav.openDetailTab(Tab.Sessions)
               commandOpen = false
             },
             onOpenProviders = {
-              activeTab = Tab.ProvidersModels
+              nav.openDetailTab(Tab.ProvidersModels)
               commandOpen = false
             },
             onOpenSettings = {
-              settingsRoute = SettingsRoute.Home
-              returnToOverviewFromSettings = false
-              activeTab = Tab.Settings
+              nav.openSettingsRoute(SettingsRoute.Home)
               commandOpen = false
             },
             onOpenSession = { sessionKey ->
               viewModel.switchChatSession(sessionKey)
-              activeTab = Tab.Chat
+              nav.selectTab(Tab.Chat)
               commandOpen = false
             },
           )
@@ -1373,8 +1335,7 @@ private fun SettingsShellScreen(
   viewModel: MainViewModel,
   route: SettingsRoute,
   onRouteChange: (SettingsRoute) -> Unit,
-  onRouteBack: () -> Unit,
-  onBackHome: () -> Unit,
+  onBack: () -> Unit,
   onOpenCommand: () -> Unit,
 ) {
   val displayName by viewModel.displayName.collectAsState()
@@ -1412,12 +1373,11 @@ private fun SettingsShellScreen(
     }
   }
 
-  BackHandler(enabled = route != SettingsRoute.Home) {
-    onRouteBack()
-  }
-
+  // System Back for settings routes is owned by the shell-level BackHandler, which
+  // unwinds cross-tab opens to their originating tab via ShellNavigation. A local
+  // BackHandler here would shadow it and strand cross-tab opens on Settings Home.
   if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onBack)
     return
   }
 
@@ -1434,8 +1394,8 @@ private fun SettingsShellScreen(
         ) {
           ClawPlainIconButton(
             icon = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back to home",
-            onClick = onBackHome,
+            contentDescription = "Back",
+            onClick = onBack,
           )
           Text(text = "Settings", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
