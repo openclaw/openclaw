@@ -10,7 +10,7 @@ export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 export type ControlUiBootstrapConfig = {
   basePath: string;
   assistantName: string;
-  assistantAvatar: string;
+  assistantAvatar: string | null;
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;

@@ -192,7 +192,10 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "./types.ts";
-import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
+import {
+  isRenderableControlUiAvatarUrl,
+  resolveAssistantTextAvatar,
+} from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -1417,14 +1420,17 @@ export function renderApp(state: AppViewState) {
   const chatAssistantAvatarReason = localAssistantAvatarOverride
     ? null
     : (state.chatAvatarReason ?? state.assistantAvatarReason ?? null);
-  const chatAssistantAvatarMissing =
-    chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
+  const assistantTextAvatar = localAssistantAvatarOverride
+    ? null
+    : resolveAssistantTextAvatar(state.assistantAvatar);
+  const chatAssistantAvatarRejected = chatAssistantAvatarStatus === "none" && !assistantTextAvatar;
   const effectiveAssistantAvatar =
-    localAssistantAvatarOverride ?? (chatAssistantAvatarMissing ? null : state.assistantAvatar);
+    localAssistantAvatarOverride ??
+    (chatAssistantAvatarRejected ? null : (assistantTextAvatar ?? state.assistantAvatar));
   const chatAvatarUrl =
     localAssistantAvatarOverride ??
     state.chatAvatarUrl ??
-    (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
+    (chatAssistantAvatarRejected ? null : (assistantAvatarUrl ?? null));
   const configAssistantAvatarStatus = localAssistantAvatarOverride
     ? "data"
     : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
@@ -1433,19 +1439,26 @@ export function renderApp(state: AppViewState) {
     : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
   const configAssistantAvatarSource =
     localAssistantAvatarOverride ?? state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
-  const configAssistantAvatarMissing =
-    configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
   const configAssistantAvatar =
     localAssistantAvatarOverride ??
-    (configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
-      ? null
+    (configAssistantAvatarStatus === "none" || configAssistantAvatarStatus === "local"
+      ? assistantTextAvatar
       : state.assistantAvatar);
+  const configIdentityAvatarUrl =
+    configAssistantAvatarStatus !== "none" &&
+    state.assistantAvatar &&
+    isRenderableControlUiAvatarUrl(state.assistantAvatar)
+      ? state.assistantAvatar
+      : assistantAvatarUrl;
   const configAssistantAvatarUrl =
     localAssistantAvatarOverride ??
-    (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
-      : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
+    state.chatAvatarUrl ??
+    (configAssistantAvatarStatus === "none"
+      ? null
+      : (configIdentityAvatarUrl ??
+        (configAssistantAvatarStatus === "local" && state.assistantAgentId
+          ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
+          : null)));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);

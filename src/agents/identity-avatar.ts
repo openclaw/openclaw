@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AVATAR_MAX_BYTES,
@@ -14,6 +15,8 @@ import {
   isWindowsAbsolutePath,
   isPathWithinRoot,
   isSupportedLocalAvatarExtension,
+  looksLikeAvatarPath,
+  resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
@@ -25,7 +28,7 @@ import { resolveAgentIdentity } from "./identity.js";
 // shared avatar policy limits.
 export type AgentAvatarResolution =
   | { kind: "none"; reason: string; source?: string }
-  | { kind: "local"; filePath: string; source: string }
+  | { kind: "local"; filePath: string; workspaceRoot: string; source: string }
   | { kind: "remote"; url: string; source: string }
   | { kind: "data"; url: string; source: string };
 
@@ -77,7 +80,7 @@ function resolveExistingPath(value: string): string {
 function resolveLocalAvatarPath(params: {
   raw: string;
   workspaceDir: string;
-}): { ok: true; filePath: string } | { ok: false; reason: string } {
+}): { ok: true; filePath: string; workspaceRoot: string } | { ok: false; reason: string } {
   const workspaceRoot = resolveExistingPath(params.workspaceDir);
   const raw = params.raw;
   const resolved =
@@ -104,7 +107,7 @@ function resolveLocalAvatarPath(params: {
   } catch {
     return { ok: false, reason: "missing" };
   }
-  return { ok: true, filePath: realPath };
+  return { ok: true, filePath: realPath, workspaceRoot };
 }
 
 function isSafeRelativeAvatarSource(source: string): boolean {
@@ -145,6 +148,95 @@ export function resolvePublicAgentAvatarSource(
   return isSafeRelativeAvatarSource(source) ? source : undefined;
 }
 
+function readLocalAvatarDataUrl(params: {
+  filePath: string;
+  workspaceRoot: string;
+}): string | undefined {
+  try {
+    const opened = openRootFileSync({
+      absolutePath: params.filePath,
+      rootPath: params.workspaceRoot,
+      rootRealPath: params.workspaceRoot,
+      boundaryLabel: "workspace root",
+      maxBytes: AVATAR_MAX_BYTES,
+      skipLexicalRootCheck: true,
+    });
+    if (!opened.ok) {
+      return undefined;
+    }
+    try {
+      const buffer = fs.readFileSync(opened.fd);
+      const mime = resolveAvatarMime(params.filePath);
+      return `data:${mime};base64,${buffer.toString("base64")}`;
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve a verified avatar into a browser-renderable public URL. */
+export function resolveAgentAvatarUrl(resolved: AgentAvatarResolution): string | undefined {
+  if (resolved.kind === "remote" || resolved.kind === "data") {
+    return resolved.url;
+  }
+  if (resolved.kind === "local") {
+    return readLocalAvatarDataUrl({
+      filePath: resolved.filePath,
+      workspaceRoot: resolved.workspaceRoot,
+    });
+  }
+  return undefined;
+}
+
+/** Resolve a single configured avatar source into a browser-renderable public URL. */
+export function resolveAgentAvatarUrlFromSource(
+  cfg: OpenClawConfig,
+  agentId: string,
+  source: string | null | undefined,
+): string | undefined {
+  const normalized = normalizeOptionalString(source) ?? null;
+  if (!normalized) {
+    return undefined;
+  }
+  if (isAvatarHttpUrl(normalized) || isAvatarDataUrl(normalized)) {
+    return normalized;
+  }
+  const resolved = resolveLocalAvatarPath({
+    raw: normalized,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  });
+  if (!resolved.ok) {
+    return undefined;
+  }
+  return readLocalAvatarDataUrl({
+    filePath: resolved.filePath,
+    workspaceRoot: resolved.workspaceRoot,
+  });
+}
+
+/** Resolve the public identity avatar value, preserving text fallbacks only for non-path values. */
+export function resolveAgentAvatarDisplayValue(
+  resolved: AgentAvatarResolution,
+  fallback: string | null | undefined,
+): string | undefined {
+  const url = resolveAgentAvatarUrl(resolved);
+  if (url) {
+    return url;
+  }
+  const normalized = normalizeOptionalString(fallback) ?? null;
+  if (
+    !normalized ||
+    isAvatarHttpUrl(normalized) ||
+    isAvatarDataUrl(normalized) ||
+    looksLikeAvatarPath(normalized)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
 /** Resolve the effective avatar for an agent, including config and IDENTITY.md. */
 export function resolveAgentAvatar(
   cfg: OpenClawConfig,
@@ -166,5 +258,10 @@ export function resolveAgentAvatar(
   if (!resolved.ok) {
     return { kind: "none", reason: resolved.reason, source };
   }
-  return { kind: "local", filePath: resolved.filePath, source };
+  return {
+    kind: "local",
+    filePath: resolved.filePath,
+    workspaceRoot: resolved.workspaceRoot,
+    source,
+  };
 }

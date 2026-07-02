@@ -9,7 +9,11 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
+import {
+  resolveAgentAvatar,
+  resolveAgentAvatarDisplayValue,
+  resolvePublicAgentAvatarSource,
+} from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -960,15 +964,18 @@ export async function handleControlUiHttpRequest(
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : DEFAULT_ASSISTANT_IDENTITY;
+    const avatarResolution = config
+      ? resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true })
+      : null;
     const avatarValue = resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
+      avatar: avatarResolution
+        ? resolveAgentAvatarDisplayValue(avatarResolution, identity.avatar)
+        : identity.avatar,
       agentId: identity.agentId,
       basePath,
     });
     const avatarMeta = config
-      ? controlUiAvatarResolutionMeta(
-          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
-        )
+      ? controlUiAvatarResolutionMeta(avatarResolution)
       : controlUiAvatarResolutionMeta(null);
     if (req.method === "HEAD") {
       res.statusCode = 200;
@@ -980,7 +987,7 @@ export async function handleControlUiHttpRequest(
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAvatar: avatarValue ?? null,
       assistantAvatarSource: avatarMeta.avatarSource,
       assistantAvatarStatus: avatarMeta.avatarStatus,
       assistantAvatarReason: avatarMeta.avatarReason,
