@@ -137,6 +137,14 @@ function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unkno
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
 
+function isOpenAICompatibleApi(api: string | undefined): boolean {
+  // Only skip the legacy adapter when the provider explicitly uses an
+  // OpenAI-compatible API.  Non-OpenAI providers (ollama, anthropic, …)
+  // own their adapter paths and handle baseUrl internally.
+  if (!api) return false;
+  return api === "openai" || api === "openai-completions" || api === "openai-responses";
+}
+
 function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -146,10 +154,15 @@ function getAdapter(
     // When a built-in adapter matches (e.g. "openai") but the provider config has
     // a custom base URL, skip the legacy adapter so memory embeddings use the
     // generic provider path which respects the configured endpoint.
-    const providerConfig = config?.models?.providers?.[id];
+    // Only do this for explicitly OpenAI-compatible APIs — non-OpenAI providers
+    // own their adapter paths (auth, SSRF, cache identity) and handle baseUrl
+    // internally.
+    const providerConfig = config?.models?.providers?.[id] as
+      | { baseUrl?: string; api?: string }
+      | undefined;
     if (providerConfig) {
       const hasCustomBaseUrl = Boolean(providerConfig.baseUrl?.trim());
-      if (!hasCustomBaseUrl) {
+      if (!hasCustomBaseUrl || !isOpenAICompatibleApi(providerConfig.api)) {
         return adapter;
       }
     } else {
@@ -183,11 +196,16 @@ export function resolveEmbeddingProviderFallbackModel(
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
   const legacyAdapter = getLegacyMemoryEmbeddingProvider(providerId, config);
-  // Skip built-in adapter when provider has a custom base URL.
-  const providerConfig = config?.models?.providers?.[providerId];
-  const skipLegacy = legacyAdapter && providerConfig && Boolean(
-    providerConfig.baseUrl?.trim(),
-  );
+  // Skip built-in adapter only for explicitly OpenAI-compatible providers
+  // with a custom base URL.  Non-OpenAI providers handle baseUrl internally.
+  const providerConfig = config?.models?.providers?.[providerId] as
+    | { baseUrl?: string; api?: string }
+    | undefined;
+  const skipLegacy =
+    legacyAdapter &&
+    providerConfig &&
+    Boolean(providerConfig.baseUrl?.trim()) &&
+    isOpenAICompatibleApi(providerConfig.api);
   const adapter = skipLegacy
     ? getEmbeddingProvider(providerId, config)
     : (legacyAdapter ?? getEmbeddingProvider(providerId, config));
