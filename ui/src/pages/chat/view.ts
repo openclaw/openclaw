@@ -1,17 +1,12 @@
 // Control UI view renders chat screen content.
 import { html, nothing, type TemplateResult } from "lit";
-import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
-import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
-import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons, type IconName } from "../../components/icons.ts";
-import { handleMarkdownCodeBlockCopy } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "../../lib/chat/chat-types.ts";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
@@ -22,21 +17,10 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
-import {
-  buildCachedChatItems,
-  coalesceStreamRuns,
-  deletedChatItemsSignature,
-  getExpandedToolCards,
-  resetChatThreadState,
-  stableBooleanMapSignature,
-  syncToolCardExpansionState,
-} from "./chat-thread.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   clickComposerFileInput,
@@ -52,7 +36,6 @@ import {
   renderFallbackIndicator,
 } from "./components/chat-composer-controls.ts";
 import {
-  renderRealtimeTalkConversation,
   renderRealtimeTalkOptions,
   type RealtimeTalkOptions,
 } from "./components/chat-realtime-controls.ts";
@@ -62,27 +45,23 @@ import type {
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import "./components/chat-sidebar.ts";
-import { DeletedMessages } from "./deleted-messages.ts";
-import { exportChatMarkdown } from "./export.ts";
 import {
-  getAssistantAttachmentAvailabilityRenderVersion,
-  renderMessageGroup,
-  renderStreamGroup,
-} from "./grouped-render.ts";
+  isChatThreadSearchOpen,
+  renderChatPinnedMessages,
+  renderChatSearchBar,
+  renderChatThread,
+  resetChatThreadPresentationState,
+  toggleChatThreadSearch,
+} from "./components/chat-thread.ts";
+import { exportChatMarkdown } from "./export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import { PinnedMessages } from "./pinned-messages.ts";
 import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { renderSessionWorkspaceRail, type SessionWorkspaceProps } from "./session-workspace.ts";
 import { renderSideResult, type ChatSideResult } from "./side-result.ts";
 import "../../components/resizable-divider.ts";
-
-function getPinnedMessageSummary(message: unknown): string {
-  return extractTextCached(message) ?? "";
-}
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
@@ -171,7 +150,6 @@ export type ChatProps = {
   onAssistantAttachmentLoaded?: () => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
-  onAssistantAttachmentLoaded?: () => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -220,29 +198,8 @@ export type ChatProps = {
   sessionWorkspace?: SessionWorkspaceProps;
 };
 
-const pinnedMessagesMap = new Map<string, PinnedMessages>();
-const deletedMessagesMap = new Map<string, DeletedMessages>();
 const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
 const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
-const INITIAL_CHAT_HISTORY_RENDER_WINDOW = 30;
-const CHAT_HISTORY_RENDER_WINDOW_BATCH = 30;
-const CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX = 48;
-
-function getPinnedMessages(sessionKey: string): PinnedMessages {
-  return getOrCreateSessionCacheValue(
-    pinnedMessagesMap,
-    sessionKey,
-    () => new PinnedMessages(sessionKey),
-  );
-}
-
-function getDeletedMessages(sessionKey: string): DeletedMessages {
-  return getOrCreateSessionCacheValue(
-    deletedMessagesMap,
-    sessionKey,
-    () => new DeletedMessages(sessionKey),
-  );
-}
 
 type PendingClearedSubmittedDraft = {
   key: string;
@@ -258,23 +215,9 @@ interface ChatEphemeralState {
   slashMenuArgItems: string[];
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
-  searchOpen: boolean;
-  searchQuery: string;
-  pinnedExpanded: boolean;
   composerComposing: boolean;
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
-  historyRenderSessionKey: string | null;
-  historyRenderMessagesRef: unknown[] | null;
-  historyRenderMessageCount: number;
-  historyRenderLimit: number;
-  historyRenderLastScrollTop: number | null;
-  historyRenderExpansionFrame: number | null;
-  historyRenderAnchorAdjustment: {
-    scrollHeight: number;
-    scrollTop: number;
-  } | null;
-  historyRenderAnchorFrame: number | null;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -287,20 +230,9 @@ function createChatEphemeralState(): ChatEphemeralState {
     slashMenuArgItems: [],
     slashMenuExpanded: false,
     slashCommandRefreshPending: false,
-    searchOpen: false,
-    searchQuery: "",
-    pinnedExpanded: false,
     composerComposing: false,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
-    historyRenderSessionKey: null,
-    historyRenderMessagesRef: null,
-    historyRenderMessageCount: 0,
-    historyRenderLimit: 0,
-    historyRenderLastScrollTop: null,
-    historyRenderExpansionFrame: null,
-    historyRenderAnchorAdjustment: null,
-    historyRenderAnchorFrame: null,
   };
 }
 
@@ -363,154 +295,8 @@ function suppressStaleSubmittedDraftReplay(
  * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
-  if (vs.historyRenderExpansionFrame != null) {
-    cancelAnimationFrame(vs.historyRenderExpansionFrame);
-  }
-  if (vs.historyRenderAnchorFrame != null) {
-    cancelAnimationFrame(vs.historyRenderAnchorFrame);
-  }
   Object.assign(vs, createChatEphemeralState());
-  resetChatThreadState();
-}
-
-function resolveChatHistoryRenderCap(messageCount: number): number {
-  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
-}
-
-function shouldRenderFullChatHistoryWindow(messageCount: number): boolean {
-  return (
-    messageCount <= INITIAL_CHAT_HISTORY_RENDER_WINDOW ||
-    (vs.searchOpen && vs.searchQuery.trim().length > 0)
-  );
-}
-
-function resolveChatHistoryRenderWindow(props: ChatProps): number {
-  const messages = Array.isArray(props.messages) ? props.messages : [];
-  const cap = resolveChatHistoryRenderCap(messages.length);
-  const sessionChanged = vs.historyRenderSessionKey !== props.sessionKey;
-  const refChanged = vs.historyRenderMessagesRef !== messages;
-  const previousCount = vs.historyRenderMessageCount;
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    vs.historyRenderLastScrollTop = null;
-  }
-
-  if (cap === 0) {
-    vs.historyRenderSessionKey = props.sessionKey;
-    vs.historyRenderMessagesRef = messages;
-    vs.historyRenderMessageCount = messages.length;
-    vs.historyRenderLimit = 0;
-    vs.historyRenderLastScrollTop = null;
-    return 0;
-  }
-
-  if (shouldRenderFullChatHistoryWindow(messages.length)) {
-    vs.historyRenderSessionKey = props.sessionKey;
-    vs.historyRenderMessagesRef = messages;
-    vs.historyRenderMessageCount = messages.length;
-    vs.historyRenderLimit = cap;
-    return cap;
-  }
-
-  if (sessionChanged || (refChanged && previousCount === 0)) {
-    vs.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
-  } else if (refChanged) {
-    const grewBy = messages.length - previousCount;
-    if (vs.historyRenderLimit >= previousCount) {
-      vs.historyRenderLimit = cap;
-    } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
-      vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + grewBy);
-    } else {
-      vs.historyRenderLimit = Math.min(
-        Math.max(vs.historyRenderLimit, INITIAL_CHAT_HISTORY_RENDER_WINDOW),
-        cap,
-      );
-    }
-  }
-
-  vs.historyRenderSessionKey = props.sessionKey;
-  vs.historyRenderMessagesRef = messages;
-  vs.historyRenderMessageCount = messages.length;
-  vs.historyRenderLimit = Math.min(Math.max(1, vs.historyRenderLimit), cap);
-  return vs.historyRenderLimit;
-}
-
-function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => void) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  const scrollTop = Math.max(0, target.scrollTop);
-  const previousScrollTop = vs.historyRenderLastScrollTop;
-  vs.historyRenderLastScrollTop = scrollTop;
-  const distanceFromBottom = Math.max(0, target.scrollHeight - scrollTop - target.clientHeight);
-  const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isBottomAutoScroll =
-    scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
-  const isTopScrollUp =
-    isTop &&
-    (scrollTop === 0 ||
-      (!isBottomAutoScroll && (previousScrollTop == null || scrollTop < previousScrollTop)));
-  if (!isTopScrollUp) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
-  if (vs.historyRenderLimit >= cap) {
-    return;
-  }
-  vs.historyRenderAnchorAdjustment = {
-    scrollHeight: target.scrollHeight,
-    scrollTop,
-  };
-  scheduleChatHistoryRenderAnchorPreservation(target);
-  vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH);
-  requestUpdate();
-}
-
-function scheduleChatHistoryRenderAnchorPreservation(thread: HTMLElement) {
-  const adjustment = vs.historyRenderAnchorAdjustment;
-  if (!adjustment || vs.historyRenderAnchorFrame != null) {
-    return;
-  }
-  vs.historyRenderAnchorFrame = requestAnimationFrame(() => {
-    vs.historyRenderAnchorFrame = null;
-    vs.historyRenderAnchorAdjustment = null;
-    const heightDelta = thread.scrollHeight - adjustment.scrollHeight;
-    if (heightDelta <= 0) {
-      return;
-    }
-    thread.scrollTop = adjustment.scrollTop + heightDelta;
-  });
-}
-
-function scheduleChatHistoryRenderWindowFill(
-  thread: HTMLElement | null,
-  requestUpdate: () => void,
-  scrollToBottom: () => void,
-) {
-  if (!thread || vs.historyRenderExpansionFrame != null) {
-    return;
-  }
-  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
-  if (vs.historyRenderLimit >= cap) {
-    return;
-  }
-  vs.historyRenderExpansionFrame = requestAnimationFrame(() => {
-    vs.historyRenderExpansionFrame = null;
-    const nextCap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
-    if (vs.historyRenderLimit >= nextCap) {
-      return;
-    }
-    const canScroll = thread.scrollHeight - thread.clientHeight > 1;
-    if (canScroll) {
-      return;
-    }
-    vs.historyRenderLimit = Math.min(
-      nextCap,
-      vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
-    );
-    requestUpdate();
-    scrollToBottom();
-  });
+  resetChatThreadPresentationState();
 }
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
@@ -844,112 +630,6 @@ function exportMarkdown(props: ChatProps): void {
   exportChatMarkdown(props.messages, props.assistantName);
 }
 
-function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
-  if (!vs.searchOpen) {
-    return nothing;
-  }
-  return html`
-    <div class="agent-chat__search-bar">
-      ${icons.search}
-      <input
-        type="text"
-        placeholder="Search messages..."
-        aria-label="Search messages"
-        .value=${vs.searchQuery}
-        @input=${(e: Event) => {
-          vs.searchQuery = (e.target as HTMLInputElement).value;
-          requestUpdate();
-        }}
-      />
-      <openclaw-tooltip content="Close search">
-        <button
-          class="btn btn--ghost"
-          aria-label="Close search"
-          @click=${() => {
-            vs.searchOpen = false;
-            vs.searchQuery = "";
-            requestUpdate();
-          }}
-        >
-          ${icons.x}
-        </button>
-      </openclaw-tooltip>
-    </div>
-  `;
-}
-
-function renderPinnedSection(
-  props: ChatProps,
-  pinned: PinnedMessages,
-  requestUpdate: () => void,
-): TemplateResult | typeof nothing {
-  const userRoleLabel = resolveLocalUserName({
-    name: props.userName ?? null,
-    avatar: props.userAvatar ?? null,
-  });
-  const messages = Array.isArray(props.messages) ? props.messages : [];
-  const entries: Array<{ index: number; text: string; role: string }> = [];
-  for (const idx of pinned.indices) {
-    const msg = messages[idx] as Record<string, unknown> | undefined;
-    if (!msg) {
-      continue;
-    }
-    const text = getPinnedMessageSummary(msg);
-    const role = typeof msg.role === "string" ? msg.role : "unknown";
-    entries.push({ index: idx, text, role });
-  }
-  if (entries.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="agent-chat__pinned">
-      <button
-        class="agent-chat__pinned-toggle"
-        aria-expanded=${vs.pinnedExpanded}
-        @click=${() => {
-          vs.pinnedExpanded = !vs.pinnedExpanded;
-          requestUpdate();
-        }}
-      >
-        ${icons.bookmark} ${entries.length} pinned
-        <span class="collapse-chevron ${vs.pinnedExpanded ? "" : "collapse-chevron--collapsed"}"
-          >${icons.chevronDown}</span
-        >
-      </button>
-      ${vs.pinnedExpanded
-        ? html`
-            <div class="agent-chat__pinned-list">
-              ${entries.map(
-                ({ index, text, role }) => html`
-                  <div class="agent-chat__pinned-item">
-                    <span class="agent-chat__pinned-role"
-                      >${role === "user" ? userRoleLabel : "Assistant"}</span
-                    >
-                    <span class="agent-chat__pinned-text"
-                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
-                    >
-                    <openclaw-tooltip content="Unpin">
-                      <button
-                        class="btn btn--ghost"
-                        aria-label="Unpin"
-                        @click=${() => {
-                          pinned.unpin(index);
-                          requestUpdate();
-                        }}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  </div>
-                `,
-              )}
-            </div>
-          `
-        : nothing}
-    </div>
-  `;
-}
-
 function renderSlashMenu(
   requestUpdate: () => void,
   props: ChatProps,
@@ -1086,60 +766,6 @@ function renderSlashMenu(
   `;
 }
 
-let activeReplyContextMenu: HTMLElement | null = null;
-let contextMenuDocumentClickHandler: ((e: MouseEvent) => void) | null = null;
-let contextMenuKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
-
-function removeReplyContextMenu() {
-  activeReplyContextMenu?.remove();
-  activeReplyContextMenu = null;
-  document.querySelector(".chat-reply-context-menu")?.remove();
-  if (contextMenuDocumentClickHandler) {
-    document.removeEventListener("click", contextMenuDocumentClickHandler);
-    contextMenuDocumentClickHandler = null;
-  }
-  if (contextMenuKeydownHandler) {
-    document.removeEventListener("keydown", contextMenuKeydownHandler);
-    contextMenuKeydownHandler = null;
-  }
-}
-
-function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
-  const source = `${senderLabel ?? ""}\n${text}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `reply:${(hash >>> 0).toString(16)}`;
-}
-
-function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", "Reply to message");
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "16");
-  icon.setAttribute("height", "16");
-  icon.setAttribute("fill", "currentColor");
-  icon.setAttribute("stroke", "none");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
-  icon.appendChild(path);
-
-  const label = document.createElement("span");
-  label.textContent = "Reply";
-
-  button.append(icon, label);
-  button.addEventListener("click", onClick);
-  return button;
-}
-
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected && props.canSend;
   const isBusy = props.sending || props.stream !== null;
@@ -1156,16 +782,8 @@ export function renderChat(props: ChatProps) {
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
-  const assistantIdentity = {
-    name: props.assistantName,
-    avatar: resolveAssistantDisplayAvatar(props),
-  };
   const visibleDraft = props.draft;
   let composerTextarea: HTMLTextAreaElement | null = null;
-  const pinned = getPinnedMessages(props.sessionKey);
-  const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
   const composerControls = props.composerControls;
@@ -1181,297 +799,43 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const displayStream = props.stream ?? null;
-  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
-  const handleChatContextMenu = (e: MouseEvent, p: ChatProps) => {
-    const bubble = (e.target as HTMLElement).closest(".chat-bubble");
-    if (!bubble) {
-      return;
-    }
-    if (typeof p.onSetReply !== "function") {
-      return;
-    }
-    const group = bubble.closest(".chat-group");
-    if (!group) {
-      return;
-    }
-    // Skip streaming messages and reading indicators
-    if (
-      group.querySelector(".chat-reading-indicator") ||
-      group.querySelector(".chat-bubble.streaming")
-    ) {
-      return;
-    }
-    const senderEl = group.querySelector(".chat-sender-name");
-    const senderLabel = senderEl?.textContent?.trim() ?? undefined;
-    const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
-    if (!text) {
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const messageId =
-      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
-    removeReplyContextMenu();
-    const menu = document.createElement("div");
-    menu.className = "chat-reply-context-menu";
-    menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", "Message actions");
-    menu.style.left = `${e.clientX}px`;
-    menu.style.top = `${e.clientY}px`;
-    const button = createReplyContextMenuButton(() => {
-      p.onSetReply?.({ messageId, text, senderLabel });
-      removeReplyContextMenu();
-      composerTextarea?.focus();
-    });
-    menu.append(button);
-    document.body.appendChild(menu);
-    activeReplyContextMenu = menu;
-    // Clamp menu position within the viewport
-    const menuRect = menu.getBoundingClientRect();
-    let left = e.clientX;
-    let top = e.clientY;
-    if (left + menuRect.width > window.innerWidth) {
-      left = window.innerWidth - menuRect.width - 8;
-    }
-    if (top + menuRect.height > window.innerHeight) {
-      top = window.innerHeight - menuRect.height - 8;
-    }
-    menu.style.left = `${Math.max(0, left)}px`;
-    menu.style.top = `${Math.max(0, top)}px`;
-    button.focus();
-    requestAnimationFrame(() => {
-      if (!menu.isConnected || activeReplyContextMenu !== menu) {
-        return;
-      }
-      contextMenuDocumentClickHandler = (ev: MouseEvent) => {
-        if (!menu.contains(ev.target as Node | null)) {
-          removeReplyContextMenu();
-        }
-      };
-      const handleKeydown = (ev: KeyboardEvent) => {
-        if (ev.key === "Escape") {
-          ev.preventDefault();
-          ev.stopPropagation();
-          removeReplyContextMenu();
-          composerTextarea?.focus();
-        }
-      };
-      contextMenuKeydownHandler = handleKeydown;
-      document.addEventListener("click", contextMenuDocumentClickHandler);
-      document.addEventListener("keydown", handleKeydown);
-    });
-  };
-  const handleChatThreadScroll = (event: Event) => {
-    maybeExpandChatHistoryRenderWindow(event, requestUpdate);
-    props.onChatScroll?.(event);
-  };
-
-  const chatItems = buildCachedChatItems({
+  const thread = renderChatThread({
     sessionKey: props.sessionKey,
+    loading: props.loading,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
-    stream: displayStream,
+    stream: props.stream,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
+    showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
-    searchOpen: vs.searchOpen,
-    searchQuery: vs.searchQuery,
-    historyRenderLimit,
+    sessions: props.sessions,
+    assistantName: props.assistantName,
+    assistantAvatar: props.assistantAvatar,
+    assistantAvatarUrl: props.assistantAvatarUrl,
+    userName: props.userName,
+    userAvatar: props.userAvatar,
+    basePath: props.basePath,
+    fullMessageAgentId: props.fullMessageAgentId,
+    localMediaPreviewRoots: props.localMediaPreviewRoots,
+    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
+    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+    embedSandboxMode: props.embedSandboxMode,
+    allowExternalEmbedUrls: props.allowExternalEmbedUrls,
+    autoExpandToolCalls: props.autoExpandToolCalls,
+    realtimeTalkConversation: props.realtimeTalkConversation,
+    onOpenSidebar: props.onOpenSidebar,
+    onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+    onRequestUpdate: requestUpdate,
+    onScrollToBottom: props.onScrollToBottom,
+    onChatScroll: props.onChatScroll,
+    onDraftChange: props.onDraftChange,
+    onSend: props.onSend,
+    onSetReply: props.onSetReply,
+    onFocusComposer: () => composerTextarea?.focus(),
   });
-  syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
-  const expandedToolCards = getExpandedToolCards(props.sessionKey);
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
-    requestUpdate();
-  };
-  const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
-  const threadContextWindow =
-    activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
-
-  const thread = html`
-    <div
-      class="chat-thread"
-      role="log"
-      aria-live="polite"
-      ${ref((element) => {
-        const threadElement = element instanceof HTMLElement ? element : null;
-        scheduleChatHistoryRenderWindowFill(
-          threadElement,
-          requestUpdate,
-          props.onScrollToBottom ?? (() => {}),
-        );
-      })}
-      @scroll=${handleChatThreadScroll}
-      @click=${handleMarkdownCodeBlockCopy}
-      @contextmenu=${(e: MouseEvent) => handleChatContextMenu(e, props)}
-    >
-      <div class="chat-thread-inner">
-        ${showLoadingSkeleton
-          ? html`
-              <div class="chat-loading-skeleton" aria-label="Loading chat">
-                <div class="chat-line assistant">
-                  <div class="chat-msg">
-                    <div class="chat-bubble">
-                      <div
-                        class="skeleton skeleton-line skeleton-line--long"
-                        style="margin-bottom: 8px"
-                      ></div>
-                      <div
-                        class="skeleton skeleton-line skeleton-line--medium"
-                        style="margin-bottom: 8px"
-                      ></div>
-                      <div class="skeleton skeleton-line skeleton-line--short"></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="chat-line user" style="margin-top: 12px">
-                  <div class="chat-msg">
-                    <div class="chat-bubble">
-                      <div class="skeleton skeleton-line skeleton-line--medium"></div>
-                    </div>
-                  </div>
-                </div>
-                <div class="chat-line assistant" style="margin-top: 12px">
-                  <div class="chat-msg">
-                    <div class="chat-bubble">
-                      <div
-                        class="skeleton skeleton-line skeleton-line--long"
-                        style="margin-bottom: 8px"
-                      ></div>
-                      <div class="skeleton skeleton-line skeleton-line--short"></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `
-          : nothing}
-        ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
-        ${isEmpty && vs.searchOpen
-          ? html` <div class="agent-chat__empty">No matching messages</div> `
-          : nothing}
-        ${guard(
-          [
-            chatItems,
-            deletedChatItemsSignature(deleted, chatItems),
-            stableBooleanMapSignature(expandedToolCards),
-            getAssistantAttachmentAvailabilityRenderVersion(),
-            props.sessionKey,
-            props.fullMessageAgentId,
-            showReasoning,
-            props.showToolCalls,
-            Boolean(props.autoExpandToolCalls),
-            props.assistantName,
-            assistantIdentity.avatar,
-            props.userName,
-            props.userAvatar,
-            props.basePath,
-            (props.localMediaPreviewRoots ?? []).join("\u0000"),
-            props.assistantAttachmentAuthToken,
-            props.canvasPluginSurfaceUrl,
-            props.embedSandboxMode ?? "scripts",
-            props.allowExternalEmbedUrls ?? false,
-            threadContextWindow,
-          ],
-          () =>
-            repeat(
-              coalesceStreamRuns(chatItems),
-              (item) => item.key,
-              (item) => {
-                if (item.kind === "divider") {
-                  return html`
-                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                        <span class="chat-divider__line"></span>
-                        <span class="chat-divider__label">${item.label}</span>
-                        <span class="chat-divider__line"></span>
-                      </div>
-                      ${item.description || item.action
-                        ? html`
-                            <div class="chat-divider__details">
-                              ${item.description
-                                ? html`<span class="chat-divider__description">
-                                    ${item.description}
-                                  </span>`
-                                : nothing}
-                              ${item.action?.kind === "session-checkpoints" &&
-                              props.onOpenSessionCheckpoints
-                                ? html`
-                                    <button
-                                      type="button"
-                                      class="btn btn--subtle btn--sm chat-divider__action"
-                                      @click=${() => props.onOpenSessionCheckpoints?.()}
-                                    >
-                                      ${item.action.label}
-                                    </button>
-                                  `
-                                : nothing}
-                            </div>
-                          `
-                        : nothing}
-                    </div>
-                  `;
-                }
-                if (item.kind === "stream-run") {
-                  return renderStreamGroup(item.parts, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    assistant: assistantIdentity,
-                    basePath: props.basePath,
-                    authToken: props.assistantAttachmentAuthToken ?? null,
-                  });
-                }
-                if (item.kind === "group") {
-                  if (deleted.has(item.key)) {
-                    return nothing;
-                  }
-                  return renderMessageGroup(item, {
-                    onOpenSidebar: props.onOpenSidebar,
-                    sessionKey: props.sessionKey,
-                    agentId: props.fullMessageAgentId,
-                    showReasoning,
-                    showToolCalls: props.showToolCalls,
-                    autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                    isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                    onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                      expandedToolCards.set(
-                        messageId,
-                        !(expanded ?? expandedToolCards.get(messageId) ?? false),
-                      );
-                      requestUpdate();
-                    },
-                    isToolExpanded: (toolCardId: string) =>
-                      expandedToolCards.get(toolCardId) ?? false,
-                    onToggleToolExpanded: toggleToolCardExpanded,
-                    onRequestUpdate: requestUpdate,
-                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-                    assistantName: props.assistantName,
-                    assistantAvatar: assistantIdentity.avatar,
-                    userName: props.userName ?? null,
-                    userAvatar: props.userAvatar ?? null,
-                    basePath: props.basePath,
-                    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    contextWindow: threadContextWindow,
-                    onDelete: () => {
-                      deleted.delete(item.key);
-                      requestUpdate();
-                    },
-                  });
-                }
-                return nothing;
-              },
-            ),
-        )}
-        ${renderRealtimeTalkConversation(props)}
-      </div>
-    </div>
-  `;
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
@@ -1566,7 +930,7 @@ export function renderChat(props: ChatProps) {
       }
     }
 
-    if (e.key === "Escape" && props.sideResult && !vs.searchOpen) {
+    if (e.key === "Escape" && props.sideResult && !isChatThreadSearchOpen()) {
       e.preventDefault();
       props.onDismissSideResult?.();
       return;
@@ -1601,11 +965,7 @@ export function renderChat(props: ChatProps) {
     // Cmd+F for search
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f") {
       e.preventDefault();
-      vs.searchOpen = !vs.searchOpen;
-      if (!vs.searchOpen) {
-        vs.searchQuery = "";
-      }
-      requestUpdate();
+      toggleChatThreadSearch(requestUpdate);
       return;
     }
 
@@ -1967,7 +1327,16 @@ export function renderChat(props: ChatProps) {
             `
           : nothing
       }
-      ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
+      ${renderChatSearchBar(requestUpdate)}
+      ${renderChatPinnedMessages(
+        {
+          sessionKey: props.sessionKey,
+          messages: props.messages,
+          userName: props.userName,
+          userAvatar: props.userAvatar,
+        },
+        requestUpdate,
+      )}
 
       <div
         class="chat-workbench ${
