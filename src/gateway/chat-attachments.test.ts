@@ -523,3 +523,30 @@ describe("attachment validation", () => {
     }
   });
 });
+
+describe("parseMessageWithAttachments large payload regression (issue #99163)", () => {
+  it("processes ~2MB PNG screenshot without RangeError", async () => {
+    // Regression: a ~2MB clipboard PNG encodes to ~2.7M base64 chars.
+    // canonicalizeBase64 used char-by-char concatenation creating a deep V8
+    // cons-string that overflowed the stack on flatten. The full
+    // parseMessageWithAttachments pipeline (sniff → size check → offload)
+    // must complete without RangeError.
+    const pngBytes = Buffer.alloc(2_000_000);
+    pngBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    pngBytes.write("IHDR", 12, "ascii");
+    const base64 = pngBytes.toString("base64");
+    expect(base64.length).toBeGreaterThan(2_600_000);
+
+    const parsed = await parseMessageWithAttachments(
+      "see this screenshot",
+      [{ type: "image", mimeType: "image/png", fileName: "screenshot.png", content: base64 }],
+      { log: { warn: () => {} } },
+    );
+
+    // 2MB exceeds OFFLOAD_THRESHOLD_BYTES (2_000_000) so it should offload.
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+    expect(parsed.images).toHaveLength(0);
+    expect(saveMediaBufferMock).toHaveBeenCalledOnce();
+  });
+});

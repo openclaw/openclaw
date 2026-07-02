@@ -50,9 +50,17 @@ function isBase64DataChar(code: number): boolean {
 /**
  * Normalizes and validates a base64 string, returning canonical no-whitespace
  * base64 only when the input has valid alphabet, padding, and length.
+ *
+ * Implementation note: we accumulate characters into an array and join once
+ * at the end instead of using `cleaned += base64[i]` in a loop. Repeated
+ * string concatenation creates a deeply nested V8 cons-string tree; for
+ * large payloads (~2.7M chars from a 2MB clipboard PNG) V8 overflows the
+ * call stack when it later tries to flatten the tree (e.g. during `.slice()`
+ * or `Buffer.from(..., "base64")`). Array join produces a flat string in O(n)
+ * without deep recursion.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  let cleaned = "";
+  const parts: string[] = [];
   let padding = 0;
   let sawPadding = false;
   for (let i = 0; i < base64.length; i += 1) {
@@ -66,17 +74,18 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-      cleaned += "=";
+      parts.push("=");
       continue;
     }
     if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
     }
-    cleaned += base64[i];
+    parts.push(base64[i]);
   }
-  if (!cleaned) {
+  if (parts.length === 0) {
     return undefined;
   }
+  let cleaned = parts.join("");
   const remainder = cleaned.length % 4;
   if (remainder !== 0) {
     if (sawPadding || remainder === 1) {
