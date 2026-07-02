@@ -425,6 +425,85 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("keeps a synthetic-placeholder marker with visible final text out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          finalAssistantVisibleText: "Here is the requested answer.",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps a synthetic-placeholder marker with a visible payload out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        payloads: [{ text: "Here is the requested answer." }],
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("preserves hook block results with a synthetic-placeholder marker", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          error: {
+            kind: "hook_block",
+            message: "Blocked by hook",
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps fallback-safe incomplete turns ahead of synthetic-placeholder classification", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        payloads: [{ isError: true, text: "Agent couldn't generate a response." }],
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent couldn't generate a response.",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "Agent couldn't generate a response.",
+      reason: "format",
+      code: "incomplete_result",
+      preserveResultOnExhaustion: true,
+      preserveResultPriority: 1,
+    });
+  });
+
   it("keeps explicit silent terminal replies out of fallback", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",

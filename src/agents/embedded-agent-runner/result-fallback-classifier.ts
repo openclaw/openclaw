@@ -89,6 +89,29 @@ function hasNonTextVisiblePayloadContent(
   );
 }
 
+/**
+ * True when the run surfaced user-facing assistant output (non-silent final text or a visible
+ * payload) that should be delivered instead of retried on a fallback model.
+ *
+ * Shared by the synthetic-placeholder guard and the generic visible-output guard so a
+ * marked-but-visible turn (e.g. a `<synthetic>` placeholder followed by a real non-empty Claude
+ * result) is never misclassified as an empty result and retried.
+ */
+function hasVisibleUserFacingReply(result: EmbeddedAgentRunResult): boolean {
+  const finalVisibleText = result.meta.finalAssistantVisibleText;
+  if (
+    typeof finalVisibleText === "string" &&
+    finalVisibleText.trim().length > 0 &&
+    !isSilentReplyPayloadText(finalVisibleText)
+  ) {
+    return true;
+  }
+  return hasVisibleAgentPayload(result, {
+    includeErrorPayloads: false,
+    includeReasoningPayloads: false,
+  });
+}
+
 function classifyGenericExternalRunFailurePayload(params: {
   provider: string;
   model: string;
@@ -195,13 +218,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasCommittedOutboundDeliveryEvidence(params.result)) {
     return null;
   }
-  if (params.result.meta.terminalReplyKind === "synthetic-placeholder") {
-    return {
-      message: `${params.provider}/${params.model} ended with a synthetic placeholder and no visible assistant reply`,
-      reason: "format",
-      code: "empty_result",
-    };
-  }
   if (params.result.meta.error?.kind === "hook_block") {
     // Hook blocks intentionally suppress normal agent output. Retrying on another model would
     // bypass a policy decision rather than recover a malformed model result.
@@ -216,19 +232,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (genericExternalFailureClassification) {
     return genericExternalFailureClassification;
   }
-  if (
-    typeof params.result.meta.finalAssistantVisibleText === "string" &&
-    params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
-    !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
-  ) {
-    return null;
-  }
-  if (
-    hasVisibleAgentPayload(params.result, {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    })
-  ) {
+  if (hasVisibleUserFacingReply(params.result)) {
     return null;
   }
 
@@ -244,6 +248,16 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       code: "incomplete_result",
       preserveResultOnExhaustion: true,
       preserveResultPriority: params.result.meta.error?.terminalPresentation === true ? 1 : 0,
+    };
+  }
+  if (
+    params.result.meta.terminalReplyKind === "synthetic-placeholder" &&
+    !hasVisibleUserFacingReply(params.result)
+  ) {
+    return {
+      message: `${params.provider}/${params.model} ended with a synthetic placeholder and no visible assistant reply`,
+      reason: "format",
+      code: "empty_result",
     };
   }
   const harnessClassification = classifyHarnessResult({
