@@ -222,6 +222,16 @@ Pinned delivery with explicit JSON:
 }
 ```
 
+Plugin decorators:
+
+Plugins that need to add generic outbound UI should use the
+`outbound_payload_decorating` hook and return portable `presentationBlocks`.
+Core appends those blocks before channel rendering and never lets decorators
+replace the payload, cancel delivery, or overwrite existing interactive
+controls. If the response path already attached hidden `outboundMetadata`
+metadata, decorators can consume it directly instead of making another model
+call.
+
 ## Renderer contract
 
 Channel plugins declare render support on their outbound adapter:

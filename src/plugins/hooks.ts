@@ -34,6 +34,9 @@ import type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
   PluginHookReplyPayload,
+  PluginHookOutboundPayloadDecoratingContext,
+  PluginHookOutboundPayloadDecoratingEvent,
+  PluginHookOutboundPayloadDecoratingResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -108,6 +111,9 @@ export type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
   PluginHookReplyPayload,
+  PluginHookOutboundPayloadDecoratingContext,
+  PluginHookOutboundPayloadDecoratingEvent,
+  PluginHookOutboundPayloadDecoratingResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -1157,6 +1163,75 @@ export function createHookRunner(
   }
 
   /**
+   * Run outbound_payload_decorating hook.
+   * Allows plugins to append portable presentation blocks without replacing
+   * the outbound payload, cancelling delivery, or taking over channel controls.
+   */
+  async function runOutboundPayloadDecorating(
+    event: PluginHookOutboundPayloadDecoratingEvent,
+    ctx: PluginHookOutboundPayloadDecoratingContext,
+  ): Promise<PluginHookOutboundPayloadDecoratingResult | undefined> {
+    const hooks = getHooksForName(registry, "outbound_payload_decorating");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(
+      `[hooks] running outbound_payload_decorating (${hooks.length} handlers, sequential)`,
+    );
+
+    let outboundMetadata = event.outboundMetadata;
+    let result: PluginHookOutboundPayloadDecoratingResult | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handler = hook.handler as (
+          event: PluginHookOutboundPayloadDecoratingEvent,
+          ctx: PluginHookOutboundPayloadDecoratingContext,
+        ) => Promise<PluginHookOutboundPayloadDecoratingResult | void>;
+        const promise = Promise.resolve(
+          handler(
+            {
+              ...event,
+              payload: toPluginReplyPayload(event.payload as ReplyPayload),
+              outboundMetadata,
+            },
+            ctx,
+          ),
+        );
+        const timeoutMs = getModifyingHookTimeoutMs("outbound_payload_decorating", hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        if (!handlerResult) {
+          continue;
+        }
+
+        outboundMetadata = handlerResult.outboundMetadata ?? outboundMetadata;
+        const presentationBlocks = [
+          ...(result?.decorations?.presentationBlocks ?? []),
+          ...(handlerResult.decorations?.presentationBlocks ?? []),
+        ];
+        result = {
+          ...(presentationBlocks.length > 0
+            ? { decorations: { presentationBlocks } }
+            : result?.decorations
+              ? { decorations: result.decorations }
+              : {}),
+          ...(outboundMetadata ? { outboundMetadata } : {}),
+        };
+      } catch (err) {
+        handleHookError({
+          hookName: "outbound_payload_decorating",
+          pluginId: hook.pluginId,
+          error: err,
+        });
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1647,6 +1722,7 @@ export function createHookRunner(
     runBeforeDispatch,
     runReplyDispatch,
     runReplyPayloadSending,
+    runOutboundPayloadDecorating,
     runMessageSending,
     runMessageSent,
     // Tool hooks

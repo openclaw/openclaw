@@ -1,6 +1,6 @@
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ReplyPayload, ReplyPayloadOutboundMetadata } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
   ReplyDispatcher,
@@ -10,6 +10,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { MessagePresentationBlock } from "../interactive/payload.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -97,6 +98,7 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "reply_payload_sending"
+  | "outbound_payload_decorating"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
@@ -144,6 +146,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_received",
   "message_sending",
   "reply_payload_sending",
+  "outbound_payload_decorating",
   "message_sent",
   "before_tool_call",
   "after_tool_call",
@@ -604,6 +607,31 @@ export type PluginHookReplyPayloadSendingResult = {
   payload?: PluginHookReplyPayload;
   cancel?: boolean;
   reason?: string;
+};
+
+export type PluginHookOutboundPayloadDecoratingEvent = {
+  payload: PluginHookReplyPayload;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+  sessionKey?: string;
+  runId?: string;
+  outboundMetadata?: ReplyPayloadOutboundMetadata;
+};
+
+export type PluginHookOutboundPayloadDecoratingContext = PluginHookMessageContext;
+
+export type PluginHookOutboundPayloadDecoratingResult = {
+  decorations?: {
+    /**
+     * Portable presentation blocks appended after the outbound payload's
+     * existing presentation. Core owns final channel adaptation.
+     */
+    presentationBlocks?: readonly MessagePresentationBlock[];
+  };
+  outboundMetadata?: ReplyPayloadOutboundMetadata;
 };
 
 export type PluginHookToolKind = "code_mode_exec";
@@ -1158,6 +1186,13 @@ export type PluginHookHandlerMap = {
   ) =>
     | Promise<PluginHookReplyPayloadSendingResult | void>
     | PluginHookReplyPayloadSendingResult
+    | void;
+  outbound_payload_decorating: (
+    event: PluginHookOutboundPayloadDecoratingEvent,
+    ctx: PluginHookOutboundPayloadDecoratingContext,
+  ) =>
+    | Promise<PluginHookOutboundPayloadDecoratingResult | void>
+    | PluginHookOutboundPayloadDecoratingResult
     | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
