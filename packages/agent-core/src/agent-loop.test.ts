@@ -888,9 +888,7 @@ describe("runAgentLoop tool-name alias resolution", () => {
       execute,
       parameters: Type.Object({}),
     };
-    const resolveDeferredTool = vi
-      .fn<Parameters<NonNullable<AgentLoopConfig["resolveDeferredTool"]>>, Promise<AgentTool>>()
-      .mockResolvedValue(deferredTool);
+    const resolveDeferredTool = vi.fn(async () => deferredTool);
 
     const messages = await runAgentLoop(
       [{ role: "user", content: "search deferred", timestamp: Date.now() }],
@@ -932,9 +930,7 @@ describe("runAgentLoop tool-name alias resolution", () => {
       execute,
       parameters: Type.Object({}),
     };
-    const resolveDeferredTool = vi
-      .fn<Parameters<NonNullable<AgentLoopConfig["resolveDeferredTool"]>>, Promise<AgentTool>>()
-      .mockResolvedValue(unrelatedTool);
+    const resolveDeferredTool = vi.fn(async () => unrelatedTool);
 
     const messages = await runAgentLoop(
       [{ role: "user", content: "search", timestamp: Date.now() }],
