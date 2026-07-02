@@ -90,12 +90,6 @@ const mocks = vi.hoisted(() => ({
       requirement: hit.reason,
     }),
   ),
-  channelPluginBlockerHitToRepairEffect: vi.fn((hit: { channelId: string; pluginId: string }) => ({
-    kind: "other" as const,
-    action: "would-require-channel-plugin-activation",
-    target: `${hit.pluginId} for channels.${hit.channelId}`,
-    dryRunSafe: true,
-  })),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -300,7 +294,6 @@ vi.mock("../commands/doctor-device-pairing.js", () => ({
 vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
-  channelPluginBlockerHitToRepairEffect: mocks.channelPluginBlockerHitToRepairEffect,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -480,7 +473,6 @@ describe("doctor health contributions", () => {
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
-    mocks.channelPluginBlockerHitToRepairEffect.mockClear();
   });
 
   afterEach(() => {
@@ -1365,61 +1357,6 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
-  });
-
-  it("previews channel plugin blocker activation work during dry-run repair", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const blockerCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/channel-plugin-blockers",
-    );
-    if (blockerCheck?.repair === undefined) {
-      throw new Error("expected channel plugin blocker repair hook");
-    }
-    const hit = {
-      channelId: "discord",
-      pluginId: "discord",
-      reason: "missing explicit enablement" as const,
-    };
-    mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([hit]);
-
-    const cfg = { channels: { discord: { enabled: true } } };
-    const result = await blockerCheck.repair(
-      {
-        cfg,
-        mode: "fix",
-        dryRun: true,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      },
-      [
-        {
-          checkId: "core/doctor/channel-plugin-blockers",
-          severity: "warning",
-          message: "channels.discord blocked",
-          path: "channels.discord",
-          target: "discord",
-          requirement: "missing explicit enablement",
-        },
-      ],
-    );
-
-    expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(cfg, process.env);
-    expect(mocks.channelPluginBlockerHitToRepairEffect).toHaveBeenCalledWith(
-      hit,
-      expect.any(Number),
-      expect.any(Array),
-    );
-    expect(result).toMatchObject({
-      status: "repaired",
-      changes: [],
-      effects: [
-        {
-          kind: "other",
-          action: "would-require-channel-plugin-activation",
-          target: "discord for channels.discord",
-          dryRunSafe: true,
-        },
-      ],
-    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {
