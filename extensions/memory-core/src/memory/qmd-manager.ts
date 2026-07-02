@@ -2722,15 +2722,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     let parsedUnknown: unknown;
     try {
       parsedUnknown = JSON.parse(result.stdout);
-    } catch (err) {
+    } catch {
       // mcporter (subprocess) can emit non-JSON stdout when output is truncated
       // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
-      // killed early. Wrap the SyntaxError so callers get a typed domain error.
-      // The message stays generic on purpose: JSON.parse's SyntaxError message
-      // embeds a snippet of the raw input, which is surfaced before session
-      // visibility filtering and could leak sensitive content. The original
-      // error is preserved as `cause` for developer diagnostics only.
-      throw new Error("qmd mcporter returned non-JSON stdout", { cause: err });
+      // killed early. Wrap the failure so callers get a typed domain error.
+      // The thrown Error and its cause both carry generic messages on purpose:
+      // errors.ts formatErrorMessage walks the .cause chain into the user-visible
+      // path, so the JSON.parse SyntaxError (whose message embeds a raw stdout
+      // snippet) must not sit on .cause, or that snippet leaks to the user.
+      throw new Error("qmd mcporter returned non-JSON stdout", {
+        cause: new Error("mcporter stdout was not valid JSON"),
+      });
     }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
