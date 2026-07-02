@@ -139,7 +139,6 @@ type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
-<<<<<<< HEAD
 type MemorySessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
 
 type MemoryReindexRetryState = {
@@ -150,49 +149,6 @@ type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
-=======
-/**
- * Stale-orphan threshold: files younger than this are considered potentially
- * active and are left alone. Only artifacts older than this are cleaned up.
- */
-const STALE_INDEX_AGE_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Remove stale backup (.backup-*) and temp (.tmp-*) SQLite files left behind
- * by interrupted atomic reindex swaps. Only removes artifacts older than
- * STALE_INDEX_AGE_MS to avoid deleting a live temp DB belonging to another
- * concurrent process (e.g., openclaw memory index --force).
- */
-function cleanupStaleIndexFiles(dbPath: string): void {
-  const dir = path.dirname(dbPath);
-  const baseName = path.basename(dbPath);
-  const now = Date.now();
-  try {
-    const entries = fsSync.readdirSync(dir);
-    for (const entry of entries) {
-      if (
-        (entry.startsWith(`${baseName}.backup-`) ||
-          entry.startsWith(`${baseName}.tmp-`)) &&
-        !entry.endsWith("-wal") &&
-        !entry.endsWith("-shm")
-      ) {
-        const fullPath = path.join(dir, entry);
-        try {
-          const stat = fsSync.statSync(fullPath);
-          // Only remove files older than the staleness threshold.
-          // This avoids racing with a concurrent reindex process.
-          if (now - stat.mtimeMs < STALE_INDEX_AGE_MS) continue;
-          fsSync.unlinkSync(fullPath);
-        } catch {
-          // File may be locked on Windows — skip and try next sync.
-        }
-      }
-    }
-  } catch {
-    // Directory read failed — skip cleanup silently.
-  }
-}
->>>>>>> 3b54bbe771 (fix(memory-core): WAL checkpoint after writeMeta + stale index file cleanup)
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
@@ -2461,8 +2417,6 @@ export abstract class MemoryManagerSyncOps {
       });
     }
     const vectorReady = await this.ensureVectorReady();
-    // Clean up stale backup/temp files from interrupted atomic reindexes.
-    cleanupStaleIndexFiles(resolveUserPath(this.settings.store.path));
     const meta = this.readMeta();
     const targetSessionFiles = await this.combineTargetSessionFiles({
       sessions: params?.sessions,
