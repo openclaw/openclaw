@@ -1848,16 +1848,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             await import("../commands/doctor-heartbeat-template-repair.js");
           return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
         },
-        async repair(ctx, findings) {
-          const { repairHeartbeatTemplateHealthFindings } =
-            await import("../commands/doctor-heartbeat-template-repair.js");
-          return await repairHeartbeatTemplateHealthFindings({
-            cfg: ctx.cfg,
-            findings,
-            dryRun: ctx.dryRun,
-            diff: ctx.diff,
-          });
-        },
       },
       run: runHeartbeatTemplateRepairHealth,
     }),
