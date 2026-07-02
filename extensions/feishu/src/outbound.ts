@@ -4,8 +4,8 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
-  hasRenderedCommandAction,
   interactiveReplyToPresentation,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
@@ -319,6 +319,33 @@ function buildFeishuPayloadCard(params: {
       : {}),
     body: { elements },
   });
+}
+
+/**
+ * Check whether any presentation block contains a visible command action
+ * that would be rendered as copyable text in the fallback output.
+ *
+ * Must match the same conditions used by the shared
+ * {@link renderMessagePresentationFallbackText} so that Feishu comment-thread
+ * guidance is only shown when a copyable command is actually rendered.
+ */
+function hasRenderedCommandAction(
+  blocks: readonly MessagePresentationBlock[] | undefined,
+): boolean {
+  return (
+    blocks?.some(
+      (block) =>
+        block.type === "buttons" &&
+        block.buttons.some(
+          (button) =>
+            !button.disabled &&
+            button.action?.type === "command" &&
+            !button.url &&
+            !button.webApp?.url &&
+            !button.web_app?.url,
+        ),
+    ) ?? false
+  );
 }
 
 function renderFeishuPresentationPayload({
