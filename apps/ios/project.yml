@@ -60,6 +60,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+      - path: Sources/Fonts
+        buildPhase: resources
     resources:
       - path: Resources/Localizable.xcstrings
     dependencies:
@@ -149,6 +151,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+          - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - "$(OPENCLAW_APP_BUNDLE_ID).bgrefresh"
@@ -172,6 +175,21 @@ targets:
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - PlusJakartaSans-Light.ttf
+          - PlusJakartaSans-Regular.ttf
+          - PlusJakartaSans-Medium.ttf
+          - PlusJakartaSans-SemiBold.ttf
+          - PlusJakartaSans-Bold.ttf
+          - PlusJakartaSans-ExtraBold.ttf
+          - DMSans-Light.ttf
+          - DMSans-Regular.ttf
+          - DMSans-Italic.ttf
+          - DMSans-Medium.ttf
+          - DMSans-SemiBold.ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
         UISupportedInterfaceOrientations:

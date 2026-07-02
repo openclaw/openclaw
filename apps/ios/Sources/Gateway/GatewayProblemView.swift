@@ -89,12 +89,12 @@ struct GatewayProblemDetailsSheet: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(self.problem.title)
-                            .font(.title3.weight(.semibold))
+                            .font(OpenClawType.title3)
                         Text(self.problem.message)
-                            .font(.body)
+                            .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
                         Text(self.ownerSummary)
-                            .font(.footnote.weight(.semibold))
+                            .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -104,7 +104,7 @@ struct GatewayProblemDetailsSheet: View {
                 if let requestId = self.problem.requestId {
                     Section("Request") {
                         Text(verbatim: requestId)
-                            .font(.system(.body, design: .monospaced))
+                            .font(OpenClawType.mono)
                             .textSelection(.enabled)
                         Button("Copy request ID") {
                             UIPasteboard.general.string = requestId
@@ -116,7 +116,7 @@ struct GatewayProblemDetailsSheet: View {
                 if let actionCommand = self.problem.actionCommand {
                     Section("Gateway command") {
                         Text(verbatim: actionCommand)
-                            .font(.system(.body, design: .monospaced))
+                            .font(OpenClawType.mono)
                             .textSelection(.enabled)
                         Button("Copy command") {
                             UIPasteboard.general.string = actionCommand
@@ -131,7 +131,7 @@ struct GatewayProblemDetailsSheet: View {
                             Label("Open docs", systemImage: "book")
                         }
                         Text(verbatim: docsURL.absoluteString)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -140,7 +140,7 @@ struct GatewayProblemDetailsSheet: View {
                 if let technicalDetails = self.problem.technicalDetails {
                     Section("Technical details") {
                         Text(verbatim: technicalDetails)
-                            .font(.system(.footnote, design: .monospaced))
+                            .font(OpenClawType.monoFootnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -149,7 +149,7 @@ struct GatewayProblemDetailsSheet: View {
                 if let copyFeedback {
                     Section {
                         Text(copyFeedback)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }

@@ -16,9 +16,9 @@ extension SettingsProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -96,9 +96,9 @@ extension SettingsProTab {
             ProIconBadge(systemName: icon, color: color)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -119,11 +119,11 @@ extension SettingsProTab {
     func detailRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -388,7 +388,11 @@ extension SettingsProTab {
         } else {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
-            self.locationStatusText = "Location permission was not granted."
+            if mode == .always {
+                self.locationStatusText = "Always Allow was not granted. Open iOS Settings → OpenClaw → Location to enable it."
+            } else {
+                self.locationStatusText = "Location permission was not granted. Check iOS Settings → OpenClaw → Location."
+            }
         }
     }
 

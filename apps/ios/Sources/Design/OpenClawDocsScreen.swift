@@ -112,15 +112,15 @@ struct OpenClawDocsScreen: View {
                 ProIconBadge(systemName: icon, color: OpenClawBrand.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.bold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)

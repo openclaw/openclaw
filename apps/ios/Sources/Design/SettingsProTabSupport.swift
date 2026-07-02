@@ -35,7 +35,7 @@ struct SettingsApprovalRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: self.item.icon)
-                .font(.caption.weight(.bold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
                 .background {
@@ -44,16 +44,16 @@ struct SettingsApprovalRow: View {
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.item.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.item.detail)
-                    .font(.caption2.weight(.medium))
+                    .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(self.item.priority)
-                .font(.caption.weight(.bold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(self.item.color)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
@@ -297,7 +297,7 @@ private struct SettingsGatewayStatesPreview: View {
     {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             content()
         }
@@ -343,11 +343,11 @@ private struct SettingsGatewayStatesPreview: View {
     private func factRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption.weight(.medium))
+                .font(OpenClawType.captionMedium)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -371,7 +371,7 @@ private struct SettingsGatewayStatesPreview: View {
                     self.previewButton("Connect", systemImage: "link", isBusy: false)
                 }
                 Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
         }
