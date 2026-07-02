@@ -141,11 +141,17 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   // Bounded read: allocate a buffer of MAX+1 so a full buffer means the
   // file exceeds the limit.  This caps memory even for special files like
   // /dev/zero whose stat.size is 0 but produce unbounded reads.
+  // Loop because fs.readSync may return a short read (fewer bytes than
+  // requested) on some filesystems; a single read would silently truncate.
   const fd = fs.openSync(pathname, "r");
   const buf = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1);
   let bytesRead = 0;
   try {
-    bytesRead = fs.readSync(fd, buf, 0, MAX_BATCH_FILE_BYTES + 1, 0);
+    while (bytesRead < buf.length) {
+      const result = fs.readSync(fd, buf, bytesRead, buf.length - bytesRead, null);
+      if (result === 0) break; // EOF
+      bytesRead += result;
+    }
   } finally {
     fs.closeSync(fd);
   }
