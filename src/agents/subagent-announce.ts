@@ -323,6 +323,14 @@ async function rejectCrossSessionTargetingForSubagentDispatch(params: {
 async function drainChildContinuationQueue(params: {
   childSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  /**
+   * Fallback in-memory fold of the settled child's own run cost, passed ONLY
+   * when the durable persist of that cost into the child entry failed (see the
+   * accumulation block in runSubagentAnnounceFlow). 0 in the normal path — the
+   * drain then reads the post-run basis straight from the persisted child entry,
+   * so the two are never combined and the basis is never double-counted (#1144).
+   */
+  additionalChainTokens?: number;
 }): Promise<void> {
   let cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
   try {
@@ -371,15 +379,22 @@ async function drainChildContinuationQueue(params: {
       | ContinuationChainSource
       | undefined;
     const dispatchConfig = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
-    // The settled child's own run cost was folded into the child entry's
-    // durable `continuationChainTokens` at accumulation time (see
-    // runSubagentAnnounceFlow below), so this live drain, the hedge re-arm, and
-    // restart recovery all read the SAME post-run cost basis. An earlier
-    // in-memory fold here diverged from the persisted value: recovery re-drove a
-    // child-queued delayed delegate on the stale pre-run total, and a second
-    // drain in the same settle could re-fold on top of an already-persisted
-    // total (#1144).
-    const chainState = loadContinuationChainState(childEntry);
+    // The settled child's own run cost is normally folded into the child entry's
+    // durable `continuationChainTokens` at accumulation time, so this drain, the
+    // hedge re-arm, and restart recovery all read the SAME post-run cost basis
+    // from the persisted entry. `additionalChainTokens` is non-zero ONLY as the
+    // persist-failure fallback: it re-applies the run cost in memory here so the
+    // cost cap still enforces this turn even when the durable write did not land
+    // (fails closed). Normal path passes 0, so the two are never combined (#1144).
+    const baseChainState = loadContinuationChainState(childEntry);
+    const chainState =
+      params.additionalChainTokens && params.additionalChainTokens > 0
+        ? {
+            ...baseChainState,
+            accumulatedChainTokens:
+              baseChainState.accumulatedChainTokens + params.additionalChainTokens,
+          }
+        : baseChainState;
     const dispatchResult = await dispatchToolDelegates({
       sessionKey: params.childSessionKey,
       chainState,
@@ -1013,6 +1028,15 @@ export async function runSubagentAnnounceFlow(params: {
     const childTask = params.task ?? "";
     const isContinuationChainDelegate = CONTINUATION_CHAIN_HOP_PATTERN.test(childTask);
     let accumulatedChildTokens = 0;
+    // #1144: the child's own run cost is normally persisted into the child
+    // entry's `continuationChainTokens` below, and the drain reads that durable
+    // basis (single source of truth, no in-memory fold). If that persist FAILS,
+    // the persisted basis is stale (missing this run), so fall back to folding
+    // the run cost into the drain's in-memory cost basis instead — the live cost
+    // cap then still enforces against the post-run total. Stays 0 when the
+    // persist succeeds, so the basis is never double-counted in the normal path;
+    // a fallback double-count would only over-estimate cost (fails closed).
+    let childChainTokensToFold = 0;
     if (continuationEnabled && isContinuationChainDelegate) {
       let childEntry = readSessionEntryByKey(params.childSessionKey);
       const hasTokenData =
@@ -1085,8 +1109,12 @@ export async function runSubagentAnnounceFlow(params: {
           });
           invalidateSessionEntry(params.childSessionKey);
         } catch (err) {
+          // Durable persist failed: the child entry's continuationChainTokens is
+          // stale (missing this run's cost). Fold it into the live drain's cost
+          // basis instead so the cost cap still enforces this turn (fails closed).
+          childChainTokensToFold = accumulatedChildTokens;
           defaultRuntime.log(
-            `[subagent-chain-hop] Failed to persist child chain cost for ${params.childSessionKey}: ${String(err)}`,
+            `[subagent-chain-hop] Failed to persist child chain cost for ${params.childSessionKey}; folding ${accumulatedChildTokens} into the live drain cost basis: ${String(err)}`,
           );
         }
       }
@@ -1098,13 +1126,16 @@ export async function runSubagentAnnounceFlow(params: {
     // on the parent triggers agent-runner dispatch — stalling the two-hop chain.
     // Runs AFTER the child-token accumulation above, which persists the child's
     // own run cost into the child entry's durable `continuationChainTokens`, so
-    // this drain reads the post-run cost basis from the persisted entry and a
+    // this drain reads the post-run cost basis from the persisted entry. If that
+    // persist failed, childChainTokensToFold carries the run cost so the drain
+    // still enforces the cost cap against the post-run total (fails closed) — a
     // child run that pushed the chain over costCapTokens cannot launch another
     // delegate on stale cost (#1144).
     // RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4.
     await drainChildContinuationQueue({
       childSessionKey: params.childSessionKey,
       requesterOrigin: targetRequesterOrigin,
+      additionalChainTokens: childChainTokensToFold,
     });
 
     // --- Consume tool-dispatched delegates from the completing subagent ---
@@ -1333,6 +1364,7 @@ export async function runSubagentAnnounceFlow(params: {
               void drainChildContinuationQueue({
                 childSessionKey: params.childSessionKey,
                 requesterOrigin: targetRequesterOrigin,
+                additionalChainTokens: childChainTokensToFold,
               }).catch((err: unknown) => {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
