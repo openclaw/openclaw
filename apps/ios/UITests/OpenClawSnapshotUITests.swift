@@ -54,6 +54,44 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
+    func testSettingsBackReturnsToOriginatingPhoneTab() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone settings navigation only")
+
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-settings-back"))
+
+        let gatewaySettings = try XCTUnwrap(self.app?.buttons["chat-gateway-status"])
+        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 8))
+        gatewaySettings.tap()
+        let gatewayNavigationBar = try XCTUnwrap(self.app?.navigationBars["Gateway"])
+        XCTAssertTrue(gatewayNavigationBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(self.app?.tabBars.buttons["Chat"].isSelected == true)
+        self.attachScreenshot(named: "chat-gateway-origin-stack")
+
+        gatewayNavigationBar.buttons["BackButton"].tap()
+        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 5))
+        XCTAssertTrue(self.app?.tabBars.buttons["Chat"].isSelected == true)
+        self.attachScreenshot(named: "chat-after-settings-back")
+
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "talk",
+            initialDestination: "talk",
+            name: "talk-settings-back"))
+
+        let voiceSettings = try XCTUnwrap(self.app?.buttons["talk-voice-settings-control"])
+        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 8))
+        voiceSettings.tap()
+        let voiceNavigationBar = try XCTUnwrap(self.app?.navigationBars["Voice & Talk"])
+        XCTAssertTrue(voiceNavigationBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(self.app?.tabBars.buttons["Talk"].isSelected == true)
+
+        voiceNavigationBar.buttons["BackButton"].tap()
+        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 5))
+        XCTAssertTrue(self.app?.tabBars.buttons["Talk"].isSelected == true)
+    }
+
     func testChatComposerStartsCompactAndGrowsWithDraft() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone composer proof only")
         self.launchApp(for: ScreenshotTarget(
