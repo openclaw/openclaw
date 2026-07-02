@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { statSessionEntrySync } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type {
   MemorySource,
   MemorySyncParams,
@@ -23,7 +24,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { statSessionEntrySync } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
@@ -213,7 +213,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     this.sessionUnsubscribe = null;
   }
 
-  protected subscribeSessionTranscriptUpdates(
+  protected override subscribeSessionTranscriptUpdates(
     listener: (update: MemorySessionTranscriptUpdate) => void,
   ): () => void {
     transcriptUpdateListener = listener;

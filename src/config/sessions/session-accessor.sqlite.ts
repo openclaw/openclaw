@@ -996,9 +996,9 @@ export function readSqliteTranscriptStatsSync(
       .where("session_id", "=", resolved.sessionId),
   );
   return {
-    eventCount: Number(row?.event_count ?? 0),
-    maxSeq: Number(row?.max_seq ?? 0),
-    sizeBytes: Number(row?.size_bytes ?? 0),
+    eventCount: row?.event_count ?? 0,
+    maxSeq: row?.max_seq ?? 0,
+    sizeBytes: row?.size_bytes ?? 0,
   };
 }
 

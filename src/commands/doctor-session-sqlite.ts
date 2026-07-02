@@ -626,7 +626,7 @@ function archiveLegacySessionStore(
   activeRun: ActiveSessionSqliteMigrationRun | undefined,
 ): string | undefined {
   if (!fs.existsSync(target.storePath)) {
-    return;
+    return undefined;
   }
   try {
     const archivePath = moveSessionJsonlToArchive({
