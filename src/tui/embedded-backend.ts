@@ -384,8 +384,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
     const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
-    const queuedAfter =
-      question || stopCommand ? undefined : this.findQueuedSessionRunPromise(runScope);
+    const queuedAfter = question || stopCommand ? undefined : this.findQueuedLocalRunPromise();
     if (stopCommand) {
       this.abortSessionRuns(runScope);
       return { runId };
@@ -789,13 +788,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
   }
 
-  private findQueuedSessionRunPromise(params: {
-    sessionKey: string;
-    agentId?: string;
-  }): QueuedSessionRun | undefined {
+  private findQueuedLocalRunPromise(): QueuedSessionRun | undefined {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.isBtw) {
+      if (!run.isBtw) {
         const promise = this.runPromises.get(runId);
         if (promise) {
           queuedAfter = { run, promise };

@@ -1054,6 +1054,94 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("queues different-session sends behind active local runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const first = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    const second = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "first",
+      runId: "run-local-first",
+    });
+
+    await backend.sendChat({
+      sessionKey: "agent:research:main",
+      message: "second",
+      runId: "run-local-second",
+    });
+    await flushMicrotasks();
+
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+    await vi.waitFor(() => {
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    });
+
+    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+    await flushMicrotasks();
+  });
+
+  it("does not queue local /btw runs behind active local runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const first = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+    runBtwSideQuestionMock.mockResolvedValueOnce({ text: "side result" });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {
+        [sessionKey]: {
+          sessionId: `session-${sessionKey}`,
+          updatedAt: Date.now(),
+        },
+      },
+      entry: {
+        sessionId: `session-${sessionKey}`,
+        updatedAt: Date.now(),
+      },
+    }));
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "first",
+      runId: "run-local-first",
+    });
+
+    await backend.sendChat({
+      sessionKey: "agent:research:main",
+      message: "/btw can this run now?",
+      runId: "run-local-btw",
+    });
+    await flushMicrotasks();
+
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1);
+    });
+
+    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+    await flushMicrotasks();
+  });
+
   it("does not queue stop commands behind active local runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
@@ -1250,7 +1338,7 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("runs selected-agent global sends independently across agents", async () => {
+  it("queues selected-agent global sends behind active local runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
       payloads: Array<{ text: string }>;
@@ -1279,9 +1367,13 @@ describe("EmbeddedTuiBackend", () => {
       runId: "run-local-work-global",
     });
 
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 
     first.resolve({ payloads: [{ text: "main done" }], meta: {} });
+    await vi.waitFor(() => {
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    });
+
     second.resolve({ payloads: [{ text: "work done" }], meta: {} });
     await flushMicrotasks();
   });
@@ -1322,9 +1414,13 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     expect(firstAbortListener).not.toHaveBeenCalled();
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 
     first.resolve({ payloads: [{ text: "main done" }], meta: {} });
+    await vi.waitFor(() => {
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    });
+
     stop.resolve({ payloads: [{ text: "work stop" }], meta: {} });
     await flushMicrotasks();
   });
