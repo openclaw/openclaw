@@ -5,6 +5,8 @@ import OpenClawProtocol
 import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
+private let defaultChatSendAgentTimeoutMs = 300_000
+private let defaultChatSendRequestTimeoutMs = 30000
 
 enum GatewayAgentChannel: String, Codable, CaseIterable {
     case last
@@ -80,6 +82,7 @@ actor GatewayConnection {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case chatAbort = "chat.abort"
+        case agentWait = "agent.wait"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
@@ -648,6 +651,32 @@ extension GatewayConnection {
 
     // MARK: - Chat
 
+    struct AgentWaitCompletion: Decodable, Equatable {
+        let runId: String?
+        let status: String?
+        let error: String?
+
+        var completed: Bool {
+            switch (self.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "ok", "completed", "success", "succeeded":
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    func agentWait(runId rawRunId: String, timeoutMs: Int) async throws -> AgentWaitCompletion {
+        let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await self.requestDecoded(
+            method: .agentWait,
+            params: [
+                "runId": AnyCodable(runId),
+                "timeoutMs": AnyCodable(timeoutMs),
+            ],
+            timeoutMs: Double(max(1, Int(ceil(Double(timeoutMs) / 1000.0)) + 5) * 1000))
+    }
+
     func chatHistory(
         sessionKey: String,
         limit: Int? = nil,
@@ -671,7 +700,7 @@ extension GatewayConnection {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
-        timeoutMs: Int = 30000) async throws -> OpenClawChatSendResponse
+        timeoutMs: Int = defaultChatSendAgentTimeoutMs) async throws -> OpenClawChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         var params: [String: AnyCodable] = [
@@ -701,7 +730,7 @@ extension GatewayConnection {
         return try await self.requestDecoded(
             method: .chatSend,
             params: params,
-            timeoutMs: Double(timeoutMs))
+            timeoutMs: Double(defaultChatSendRequestTimeoutMs))
     }
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {
