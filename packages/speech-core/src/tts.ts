@@ -329,8 +329,11 @@ function applyVoiceModelToSpeechProviderConfig(params: {
   };
 }
 
-function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
-  return listSpeechProviders(cfg).toSorted((left, right) => {
+function sortSpeechProvidersForAutoSelection(
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+) {
+  return [...(providers ?? listSpeechProviders(cfg))].toSorted((left, right) => {
     const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) {
@@ -338,6 +341,28 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
     }
     return left.id.localeCompare(right.id);
   });
+}
+
+function canonicalizeSpeechProviderIdFromInventory(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+) {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  if (!providers) {
+    return canonicalizeSpeechProviderId(providerId, cfg);
+  }
+  return (
+    providers.find(
+      (provider) =>
+        normalizeSpeechProviderId(provider.id) === normalized ||
+        (provider.aliases?.some((alias) => normalizeSpeechProviderId(alias) === normalized) ??
+          false),
+    )?.id ?? normalized
+  );
 }
 
 function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -1000,17 +1025,24 @@ function shouldDeliverTtsAsVoice(params: {
   return params.voiceCompatible === true || delivery.transcodesAudio === true;
 }
 
-export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
+export function resolveTtsProviderOrder(
+  primary: TtsProvider,
+  cfg?: OpenClawConfig,
+  providers?: readonly SpeechProviderPlugin[],
+): TtsProvider[] {
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
-  const normalizedPrimary = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
+  const normalizedPrimary =
+    canonicalizeSpeechProviderIdFromInventory(primary, effectiveCfg, providers) ?? primary;
   const ordered = new Set<TtsProvider>([normalizedPrimary]);
   for (const ref of resolveVoiceModelRefs(effectiveCfg?.agents?.defaults?.voiceModel)) {
-    const provider = canonicalizeSpeechProviderId(ref.provider, effectiveCfg) ?? ref.provider;
+    const provider =
+      canonicalizeSpeechProviderIdFromInventory(ref.provider, effectiveCfg, providers) ??
+      ref.provider;
     if (provider !== normalizedPrimary) {
       ordered.add(provider);
     }
   }
-  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, providers)) {
     const normalized = provider.id;
     if (normalized !== normalizedPrimary) {
       ordered.add(normalized);

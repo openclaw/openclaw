@@ -114,6 +114,7 @@ const {
   getTtsPersona,
   getTtsProvider,
   maybeApplyTtsToPayload,
+  resolveTtsProviderOrder,
   resolveTtsConfig,
   synthesizeSpeech,
   textToSpeechTelephony,
@@ -418,6 +419,26 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
     expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("resolves provider fallback order from an existing provider inventory", () => {
+    installSpeechProviders([createMockSpeechProvider("unused", { autoSelectOrder: 1 })]);
+    listSpeechProvidersMock.mockClear();
+    getSpeechProviderMock.mockClear();
+    const providers = [
+      createMockSpeechProvider("openai", {
+        aliases: ["OPENAI-ALIAS"],
+        autoSelectOrder: 5,
+      }),
+      createMockSpeechProvider("google", { autoSelectOrder: 1 }),
+      createMockSpeechProvider("elevenlabs", { autoSelectOrder: 3 }),
+    ];
+
+    const order = resolveTtsProviderOrder("  OPENAI-ALIAS  ", undefined, providers);
+
+    expect(order).toEqual(["openai", "google", "elevenlabs"]);
+    expect(listSpeechProvidersMock).not.toHaveBeenCalled();
+    expect(getSpeechProviderMock).not.toHaveBeenCalled();
   });
 
   it("caps oversized provider default TTS timeouts before synthesis", async () => {
