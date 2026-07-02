@@ -299,7 +299,7 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
-  it("keeps turn-source delivery route visible when approval clients are already available", async () => {
+  it("reports an active approval client instead of the manual turn-source route", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -333,17 +333,13 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
-    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
-      turnSourceChannel: "feishu",
-      turnSourceAccountId: "work",
-      approvalKind: "exec",
-    });
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
         id: "approval-with-client",
         status: "accepted",
-        deliveryRoute: "turn-source",
+        deliveryRoute: "approval-client",
       }),
       undefined,
     );

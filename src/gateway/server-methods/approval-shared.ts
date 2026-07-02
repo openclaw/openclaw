@@ -465,9 +465,10 @@ export async function handlePendingApprovalRequest<
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = suppressDelivery ? false : params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
-  // Visible approval clients may still skip a native request, so keep the
-  // turn-source route explicit for timeout guidance when no delivery confirms.
+  // A turn-source route can approve without an active approval client, so keep
+  // the record alive when the originating channel/account can still receive it.
   const hasTurnSourceRoute =
+    !hasApprovalClients &&
     !delivered &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
@@ -476,10 +477,10 @@ export async function handlePendingApprovalRequest<
     });
   const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
     ? "forwarder"
-    : hasTurnSourceRoute
-      ? "turn-source"
-      : hasApprovalClients
-        ? "approval-client"
+    : hasApprovalClients
+      ? "approval-client"
+      : hasTurnSourceRoute
+        ? "turn-source"
         : "none";
 
   if (
