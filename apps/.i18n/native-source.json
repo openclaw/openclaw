@@ -4891,7 +4891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 224,
+      "line": 221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Speaking · waiting for reply",
       "surface": "android",
@@ -4899,7 +4899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 224,
+      "line": 221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Speaking…",
       "surface": "android",
@@ -4907,7 +4907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 418,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Mic off",
       "surface": "android",
@@ -4915,7 +4915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 418,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Mic off · sending…",
       "surface": "android",
@@ -4923,7 +4923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Listening · sending queued voice",
       "surface": "android",
@@ -4931,7 +4931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
       "source": "Sending queued voice",
       "surface": "android",
@@ -4939,7 +4939,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 132,
+      "line": 130,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -4947,7 +4947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 342,
+      "line": 340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -4955,7 +4955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 342,
+      "line": 340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -4963,7 +4963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1629,
+      "line": 1600,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -4971,7 +4971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1629,
+      "line": 1600,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
