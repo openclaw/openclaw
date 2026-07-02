@@ -346,7 +346,7 @@ struct OpenClawChatComposer: View {
                             // Bottom-aligned so the button stays put while the
                             // field grows; the inset matches the centered resting
                             // position at the one-line minimum height.
-                            .padding(.bottom, (self.cleanEditorMinHeight - self.cleanIconControlSize) / 2)
+                                .padding(.bottom, (self.cleanEditorMinHeight - self.cleanIconControlSize) / 2)
                     }
                 }
                 .padding(.leading, 14)
