@@ -151,6 +151,8 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  /** Container-side workspace dir (e.g. "/workspace" for Docker, "/sandbox" for OpenShell). */
+  containerWorkdir?: string;
 }): Promise<string> {
   const raw = params.media.trim();
   if (!raw) {
@@ -160,10 +162,13 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   let candidate = raw;
+  const containerWorkdir =
+    (params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\/+$/, "") || "/";
   if (/^file:\/\//i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -180,6 +185,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -215,9 +221,15 @@ async function assertNoManagedMediaAliasEscape(params: {
   });
 }
 
+function isContainerWorkspacePath(normalizedPath: string, containerWorkdir?: string): boolean {
+  const workdir = (containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\/+$/, "") || "/";
+  return normalizedPath === workdir || normalizedPath.startsWith(`${workdir}/`);
+}
+
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -235,35 +247,35 @@ function mapContainerWorkspaceFileUrl(params: {
   if (hasEncodedFileUrlSeparator(parsed.pathname)) {
     return undefined;
   }
-  // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
-  // Windows hosts can still accept file:///workspace/... media references.
+  // Sandbox paths are Linux-style (/workspace/*, /sandbox/*, etc.). Parse the URL
+  // path directly so Windows hosts can still accept container file:// URLs.
   let normalizedPathname: string;
   try {
     normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
   } catch {
     return undefined;
   }
-  if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
-  ) {
+  if (!isContainerWorkspacePath(normalizedPathname, params.containerWorkdir)) {
     return undefined;
   }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  const workdir = params.containerWorkdir;
+  if (normalized === workdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = `${workdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }

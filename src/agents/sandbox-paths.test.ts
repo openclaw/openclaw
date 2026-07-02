@@ -201,6 +201,77 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it.each([
+    {
+      name: "/sandbox absolute path",
+      media: "/sandbox/output/image.png",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "/sandbox/ absolute path with trailing slash",
+      media: "/sandbox/output/image.png",
+      containerWorkdir: "/sandbox/",
+    },
+    {
+      name: "file:///sandbox URL",
+      media: "file:///sandbox/output/image.png",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "file:///sandbox/ URL with trailing slash",
+      media: "file:///sandbox/output/image.png",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("maps $name into sandbox root", async ({ media, containerWorkdir }) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media,
+        sandboxRoot: sandboxDir,
+        containerWorkdir,
+      });
+      expect(result).toBe(path.join(sandboxDir, "output", "image.png"));
+    });
+  });
+
+  it.each([
+    { name: "/sandbox root", media: "/sandbox", containerWorkdir: "/sandbox" },
+    {
+      name: "/sandbox/ root with trailing slash",
+      media: "/sandbox",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("maps $name to sandbox root", async ({ media, containerWorkdir }) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media,
+        sandboxRoot: sandboxDir,
+        containerWorkdir,
+      });
+      expect(result).toBe(sandboxDir);
+    });
+  });
+
+  it.each([
+    {
+      name: "/sandboxer prefix",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "/sandboxer prefix with trailing-slash workdir",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("rejects $name as outside sandbox", async ({ containerWorkdir }) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "/sandboxer/secret",
+          sandboxRoot: sandboxDir,
+          containerWorkdir,
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
+
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({
