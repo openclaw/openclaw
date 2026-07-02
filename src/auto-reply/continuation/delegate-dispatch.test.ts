@@ -658,6 +658,34 @@ describe("tool delegate dispatch contract", () => {
     );
   });
 
+  it("dispatchQueuedRegardlessOfDelay force-dispatches a not-yet-due delegate (fail-closed persist-failure path) (#1144)", async () => {
+    const sessionKey = "session-force-dispatch-delayed";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+
+    // Without the override, an unmatured delegate is left queued (not dispatched).
+    const held = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    expect(held.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // With the override, it dispatches immediately despite the unelapsed delay —
+    // used when the child chain-cost persist failed so a delayed delegate is not
+    // left durably queued to recover on a stale cost basis.
+    const forced = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      dispatchQueuedRegardlessOfDelay: true,
+    });
+    expect(forced.dispatched).toBe(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
   it("honors resolved run config and delegate slots already consumed this turn", async () => {
     const sessionKey = "session-delegate-cap-reserved";
     for (let index = 0; index < 3; index++) {

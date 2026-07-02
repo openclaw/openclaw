@@ -220,6 +220,7 @@ type ContinuationDispatchModule = {
     chainState: ContinuationChainState;
     ctx: ContinuationDispatchContext;
     maxChainLength: number;
+    dispatchQueuedRegardlessOfDelay?: boolean;
   }) => Promise<{
     dispatched: number;
     rejected: number;
@@ -331,6 +332,14 @@ async function drainChildContinuationQueue(params: {
    * so the two are never combined and the basis is never double-counted (#1144).
    */
   additionalChainTokens?: number;
+  /**
+   * Fail-closed with `additionalChainTokens`: when the durable child chain-cost
+   * persist failed, dispatch queued delegates immediately (ignore their delay)
+   * on the in-memory folded basis instead of leaving delayed ones durably
+   * queued, where restart recovery would rebuild their cost basis from the stale
+   * child entry and under-enforce the cost cap (#1144).
+   */
+  dispatchRegardlessOfDelay?: boolean;
 }): Promise<void> {
   let cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
   try {
@@ -406,6 +415,7 @@ async function drainChildContinuationQueue(params: {
         agentThreadId: params.requesterOrigin?.threadId,
       },
       maxChainLength: dispatchConfig.maxChainLength,
+      ...(params.dispatchRegardlessOfDelay ? { dispatchQueuedRegardlessOfDelay: true } : {}),
     });
 
     // Persist the advanced child chain state after delegate drain. Without
@@ -1128,14 +1138,17 @@ export async function runSubagentAnnounceFlow(params: {
     // own run cost into the child entry's durable `continuationChainTokens`, so
     // this drain reads the post-run cost basis from the persisted entry. If that
     // persist failed, childChainTokensToFold carries the run cost so the drain
-    // still enforces the cost cap against the post-run total (fails closed) — a
-    // child run that pushed the chain over costCapTokens cannot launch another
-    // delegate on stale cost (#1144).
+    // still enforces the cost cap against the post-run total (fails closed), AND
+    // dispatchRegardlessOfDelay force-dispatches the child's queued delegates
+    // immediately rather than leaving delayed ones durably queued — where restart
+    // recovery would rebuild their basis from the stale child entry and
+    // under-enforce the cap (#1144).
     // RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4.
     await drainChildContinuationQueue({
       childSessionKey: params.childSessionKey,
       requesterOrigin: targetRequesterOrigin,
       additionalChainTokens: childChainTokensToFold,
+      dispatchRegardlessOfDelay: childChainTokensToFold > 0,
     });
 
     // --- Consume tool-dispatched delegates from the completing subagent ---

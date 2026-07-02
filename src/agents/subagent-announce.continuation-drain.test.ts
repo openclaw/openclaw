@@ -1012,9 +1012,13 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
     const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
       chainState?: { accumulatedChainTokens?: number };
+      dispatchQueuedRegardlessOfDelay?: boolean;
     };
     expect(call?.chainState?.accumulatedChainTokens).toBe(555_000);
     expect(call?.chainState?.accumulatedChainTokens).toBeGreaterThan(500_000);
+    // Persist failed → force-dispatch queued delegates immediately so a delayed
+    // one is not left durably queued to recover on the stale child basis.
+    expect(call?.dispatchQueuedRegardlessOfDelay).toBe(true);
   });
 
   it("routes a delayed bracket delegate through the durable pending store, not a volatile timer (#1144)", async () => {

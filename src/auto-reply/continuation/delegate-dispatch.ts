@@ -229,6 +229,14 @@ export async function dispatchToolDelegates(params: {
   recoverRunningDelegates?: boolean;
   includeRunningUpdatedAtOrBefore?: number;
   /**
+   * Dispatch queued delegates immediately even if their `delayMs` has not
+   * elapsed. Fail-closed lever for the child chain-cost persist-failure path:
+   * a delayed delegate left durably queued would recover from the stale child
+   * entry and under-enforce the cost cap, so dispatch it now on the correct
+   * in-memory folded basis instead (#1144).
+   */
+  dispatchQueuedRegardlessOfDelay?: boolean;
+  /**
    * Optional callback used by hedge-fired dispatches, where there is no
    * enclosing runner finalize frame to persist the advanced chain state.
    */
@@ -239,6 +247,7 @@ export async function dispatchToolDelegates(params: {
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
+    ignoreDelay: params.dispatchQueuedRegardlessOfDelay === true,
   });
 
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they

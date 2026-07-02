@@ -472,7 +472,19 @@ export function listPendingDelegateSessionKeysForRecovery(): string[] {
 
 export function consumePendingDelegates(
   sessionKey: string,
-  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+  options: {
+    includeRunning?: boolean;
+    includeRunningUpdatedAtOrBefore?: number;
+    /**
+     * Dispatch queued delegates immediately even if their `delayMs` has not
+     * elapsed. Used as a fail-closed lever when the child chain-cost persist
+     * failed: rather than leave a delayed delegate durably queued (where restart
+     * recovery would rebuild its cost basis from the stale child entry and
+     * under-enforce the cost cap), dispatch it now on the correct in-memory
+     * folded basis (#1144).
+     */
+    ignoreDelay?: boolean;
+  } = {},
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
   const now = Date.now();
@@ -499,8 +511,9 @@ export function consumePendingDelegates(
     // response-finalize (or the hedge timer armed by the dispatch caller)
     // re-checks them. Honors `delayMs` on the tool path without threading a
     // wake-pathway timer (which would change `mode=silent` semantics).
+    // `ignoreDelay` overrides this for the fail-closed persist-failure path.
     const dueAt = delegateDueAt(flow, state);
-    if (now < dueAt) {
+    if (!options.ignoreDelay && now < dueAt) {
       continue;
     }
 
