@@ -65,7 +65,9 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
-    runtime.error("Non-interactive mode requires --yes.");
+    runtime.error(
+      `Non-interactive mode requires --yes. Re-run ${formatCliCommand("openclaw reset --scope <scope> --yes")} to proceed without prompts.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -73,7 +75,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   let scope = opts.scope;
   if (!scope) {
     if (!interactive) {
-      runtime.error("Non-interactive mode requires --scope.");
+      runtime.error(
+        `Non-interactive mode requires --scope. Use "config", "config+creds+sessions", or "full". Re-run ${formatCliCommand("openclaw reset --scope config+creds+sessions --yes")} for a credentials + sessions reset.`,
+      );
       runtime.exit(1);
       return;
     }
@@ -107,7 +111,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (!["config", "config+creds+sessions", "full"].includes(scope)) {
-    runtime.error('Invalid --scope. Expected "config", "config+creds+sessions", or "full".');
+    runtime.error(
+      `Invalid --scope. Use "config", "config+creds+sessions", or "full". Re-run ${formatCliCommand("openclaw reset --scope config+creds+sessions --yes")} for a credentials + sessions reset.`,
+    );
     runtime.exit(1);
     return;
   }

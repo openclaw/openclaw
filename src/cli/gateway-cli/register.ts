@@ -140,6 +140,12 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
       return parsed;
     }
   }
+  const wasProvided = raw !== undefined && raw !== null && raw !== "";
+  if (wasProvided) {
+    defaultRuntime.error(
+      `Invalid --days value: ${String(raw)}. Using default ${fallback}. Use a positive integer, for example --days 7.`,
+    );
+  }
   return fallback;
 }
 
@@ -152,6 +158,12 @@ function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
     if (parsed !== undefined) {
       return parsed;
     }
+  }
+  const wasProvided = raw !== undefined && raw !== null && raw !== "";
+  if (wasProvided) {
+    defaultRuntime.error(
+      `Invalid --timeout value: ${String(raw)}. Using default ${fallback}ms. Use a positive integer, for example --timeout 30000.`,
+    );
   }
   return fallback;
 }

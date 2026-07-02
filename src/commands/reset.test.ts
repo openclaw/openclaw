@@ -1,5 +1,6 @@
 // Reset command tests cover cleanup runtime behavior, workspace attestations, and reset prompts.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
@@ -64,5 +65,42 @@ describe("resetCommand", () => {
       runtime,
       { dryRun: true },
     );
+  });
+
+  it("rejects non-interactive mode without --yes and includes recovery hint", async () => {
+    await expect(
+      resetCommand(runtime, { nonInteractive: true }),
+    ).rejects.toThrow("exit 1");
+
+    const errorCalls = (runtime.error as MockFn<(...args: unknown[]) => void>).mock.calls;
+    const messages = errorCalls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes("--yes"))).toBe(true);
+    expect(messages.some((m) => m.includes("openclaw reset --scope"))).toBe(true);
+  });
+
+  it("rejects non-interactive mode without --scope and lists valid scopes", async () => {
+    await expect(
+      resetCommand(runtime, { nonInteractive: true, yes: true }),
+    ).rejects.toThrow("exit 1");
+
+    const errorCalls = (runtime.error as MockFn<(...args: unknown[]) => void>).mock.calls;
+    const messages = errorCalls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes("--scope"))).toBe(true);
+    expect(messages.some((m) => m.includes("config+creds+sessions"))).toBe(true);
+  });
+
+  it("rejects invalid --scope value and includes recovery command", async () => {
+    await expect(
+      resetCommand(runtime, {
+        scope: "invalid" as "config",
+        nonInteractive: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    const errorCalls = (runtime.error as MockFn<(...args: unknown[]) => void>).mock.calls;
+    const messages = errorCalls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes("Invalid --scope"))).toBe(true);
+    expect(messages.some((m) => m.includes("openclaw reset --scope"))).toBe(true);
   });
 });
