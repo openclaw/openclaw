@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./stri
 import type { SessionsListResult } from "./types.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
+  // Western platforms
   imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
@@ -12,6 +13,26 @@ const CHANNEL_LABELS: Record<string, string> = {
   matrix: "Matrix",
   email: "Email",
   sms: "SMS",
+  // Chinese platforms
+  feishu: "Feishu",
+  wechat: "WeChat",
+  wecom: "WeCom",
+  qqbot: "QQ",
+  dingtalk: "DingTalk",
+  // Other platforms
+  line: "LINE",
+  msteams: "Teams",
+  mattermost: "Mattermost",
+  "nextcloud-talk": "Nextcloud Talk",
+  irc: "IRC",
+  nostr: "Nostr",
+  "synology-chat": "Synology Chat",
+  tlon: "Tlon",
+  twitch: "Twitch",
+  zalo: "Zalo",
+  zalouser: "Zalo",
+  raft: "Raft",
+  googlechat: "Google Chat",
 };
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
@@ -120,4 +141,25 @@ export function isCronSessionKey(key: string): boolean {
   }
   const rest = parts.slice(2).join(":");
   return rest.startsWith("cron:");
+}
+
+/**
+ * Format a session key for compact display in views where space is limited
+ * (activity log, exec approval). Long machine-generated identifiers are
+ * truncated to keep the UI readable; the full key is preserved via the
+ * `title` attribute at each display site.
+ *
+ * Callers that need the full identifier for disambiguation (chat picker,
+ * sidebar, overview cards) should use {@link parseSessionKey} directly.
+ */
+export function formatSessionKeyForDisplay(key: string): string {
+  const { fallbackName } = parseSessionKey(key);
+  // Truncate only the identifier portion within "Channel · identifier" patterns.
+  const MAX_ID_DISPLAY = 20;
+  return fallbackName.replace(/ · (.+)$/, (_match, identifier) => {
+    if (identifier.length > MAX_ID_DISPLAY) {
+      return ` · ${identifier.slice(0, 12)}…`;
+    }
+    return ` · ${identifier}`;
+  });
 }

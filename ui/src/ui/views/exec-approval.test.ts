@@ -310,7 +310,7 @@ describe("approval and confirmation modals", () => {
     ).toEqual([
       { label: "主机", value: "gateway" },
       { label: "代理", value: "main" },
-      { label: "会话", value: "main" },
+      { label: "会话", value: "Main Session" },
       { label: "CWD", value: "/tmp/project" },
       { label: "已解析", value: "/tmp/project" },
       { label: "安全", value: "workspace-write" },
