@@ -24,6 +24,7 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { sendReplyOrFallbackDirect } from "./send.js";
 import {
   assertFeishuMessageApiSuccess,
   resolveFeishuReceiptKind,
@@ -520,9 +521,18 @@ export async function sendImageFeishu(params: {
   imageKey: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const {
+    cfg,
+    to,
+    imageKey,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
@@ -531,21 +541,21 @@ export async function sendImageFeishu(params: {
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: "image",
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu image reply failed",
-      { includeNestedErrorLogId: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId, "media");
+    return sendReplyOrFallbackDirect(client, {
+      replyToMessageId,
+      replyInThread,
+      allowTopLevelReplyFallback,
+      content,
+      msgType: "image",
+      directParams: {
+        receiveId,
+        receiveIdType,
+        content,
+        msgType: "image",
+      },
+      directErrorPrefix: "Feishu image send failed",
+      replyErrorPrefix: "Feishu image reply failed",
+    });
   }
 
   const response = await requestFeishuApi(
@@ -576,9 +586,18 @@ export async function sendFileFeishu(params: {
   msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const {
+    cfg,
+    to,
+    fileKey,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
@@ -588,21 +607,21 @@ export async function sendFileFeishu(params: {
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: msgType,
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu file reply failed",
-      { includeNestedErrorLogId: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
+    return sendReplyOrFallbackDirect(client, {
+      replyToMessageId,
+      replyInThread,
+      allowTopLevelReplyFallback,
+      content,
+      msgType,
+      directParams: {
+        receiveId,
+        receiveIdType,
+        content,
+        msgType,
+      },
+      directErrorPrefix: "Feishu file send failed",
+      replyErrorPrefix: "Feishu file reply failed",
+    });
   }
 
   const response = await requestFeishuApi(
@@ -858,6 +877,7 @@ export async function sendMediaFeishu(params: {
   fileName?: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
@@ -872,6 +892,7 @@ export async function sendMediaFeishu(params: {
     fileName,
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     accountId,
     mediaLocalRoots,
     audioAsVoice,
@@ -923,6 +944,7 @@ export async function sendMediaFeishu(params: {
       imageKey,
       replyToMessageId,
       replyInThread,
+      allowTopLevelReplyFallback,
       accountId,
     });
     return {
@@ -946,6 +968,7 @@ export async function sendMediaFeishu(params: {
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     accountId,
   });
   return {
