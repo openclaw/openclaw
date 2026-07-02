@@ -1351,7 +1351,7 @@ describe("applyPluginAutoEnable core", () => {
         },
       ],
       manifestRegistry: makeRegistry([
-        { id: "mattermost", origin: "npm", channels: ["mattermost"] },
+        { id: "mattermost", origin: "global", channels: ["mattermost"] },
       ]),
     });
 
