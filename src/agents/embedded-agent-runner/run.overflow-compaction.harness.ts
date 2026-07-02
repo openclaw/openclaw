@@ -585,6 +585,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     normalizeUsage: vi.fn((usage?: unknown) =>
       usage && typeof usage === "object" ? usage : undefined,
     ),
+    hasNonzeroUsage: vi.fn(
+      (usage?: { total?: number; input?: number; output?: number }) =>
+        (usage?.total ?? 0) > 0 || (usage?.input ?? 0) > 0 || (usage?.output ?? 0) > 0,
+    ),
     derivePromptTokens: vi.fn(
       (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
         usage

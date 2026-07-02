@@ -42,6 +42,14 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import {
+  hasNonzeroUsage,
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type AssistantUsageSnapshot,
+  type NormalizedUsage,
+  type UsageLike,
+} from "./usage.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -78,6 +86,36 @@ function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined):
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+function preservePendingAssistantUsage(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantUsage">,
+  message: AssistantMessage,
+): AssistantMessage {
+  if (!hasNonzeroUsage(state.pendingAssistantUsage)) {
+    return message;
+  }
+  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
+  if (hasNonzeroUsage(messageUsage)) {
+    return message;
+  }
+  message.usage = toAssistantUsageSnapshot(state.pendingAssistantUsage);
+  return message;
+}
+
+function toAssistantUsageSnapshot(usage: NormalizedUsage): AssistantUsageSnapshot {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: usage.total ?? input + output + cacheRead + cacheWrite,
+    cost: makeZeroUsageSnapshot().cost,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -964,7 +1002,7 @@ export function handleMessageEnd(
     return;
   }
 
-  const assistantMessage = msg;
+  const assistantMessage = preservePendingAssistantUsage(ctx.state, msg);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);

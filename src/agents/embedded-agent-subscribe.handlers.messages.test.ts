@@ -1028,6 +1028,52 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("preserves pending nonzero usage when the final assistant snapshot is zeroed", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Need send." }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(
+      firstMockArg(
+        ctx.noteLastAssistant as unknown as { mock: { calls: unknown[][] } },
+        "last assistant",
+      ),
+    ).toMatchObject({
+      usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
+    });
+    expect(message).toMatchObject({
+      usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith({
+      input: 7,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+    expect(ctx.commitAssistantUsage).toHaveBeenCalled();
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({

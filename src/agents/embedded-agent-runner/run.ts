@@ -140,7 +140,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { derivePromptTokens, hasNonzeroUsage, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -2319,12 +2319,27 @@ async function runEmbeddedAgentInternal(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          const currentAttemptAssistantUsage = normalizeUsage(
+            currentAttemptAssistant?.usage as UsageLike,
+          );
+          const promptCacheLastCallUsage = normalizeUsage(
+            attempt.promptCache?.lastCallUsage as UsageLike,
+          );
+          const usableLastAssistantUsage = hasNonzeroUsage(lastAssistantUsage)
+            ? lastAssistantUsage
+            : undefined;
+          const latestCallUsage =
+            usableLastAssistantUsage ??
+            (hasNonzeroUsage(currentAttemptAssistantUsage)
+              ? currentAttemptAssistantUsage
+              : undefined) ??
+            (hasNonzeroUsage(promptCacheLastCallUsage) ? promptCacheLastCallUsage : undefined);
+          const attemptUsage = attempt.attemptUsage ?? latestCallUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
-          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastRunPromptUsage = latestCallUsage;
+          lastTurnTotal = latestCallUsage?.total;
           // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
           // pure helper below so it stays unit-testable; the run loop just
           // feeds it the latest attempt outcome and bails through the
@@ -3557,7 +3572,8 @@ async function runEmbeddedAgentInternal(
           }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage:
+              lastRunPromptUsage ?? (sessionLastAssistant?.usage as UsageLike | undefined),
             lastRunPromptUsage,
             lastTurnTotal,
           });
