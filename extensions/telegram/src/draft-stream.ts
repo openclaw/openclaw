@@ -59,6 +59,13 @@ export type TelegramDraftStream = {
   discard?: () => Promise<void>;
   /** Return the current preview message id after pending updates settle. */
   materialize?: () => Promise<number | undefined>;
+  /**
+   * Collapse the preview in place: edit the existing window message so its
+   * content becomes `preview`, then stop without deleting. Used at end-of-turn
+   * so the streaming window becomes the summary bar (no delete + repost, which
+   * scroll-jumps the client). Returns the message id if the edit landed.
+   */
+  finalizeToPreview: (preview: TelegramDraftPreview) => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
@@ -587,6 +594,28 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
+  const finalizeToPreview = async (
+    preview: TelegramDraftPreview,
+  ): Promise<number | undefined> => {
+    // Settle pending updates so we edit the real, current window message.
+    streamState.final = true;
+    await loop.flush();
+    const text = preview.text.trimEnd();
+    // No live window message to edit (never rendered, or already torn down):
+    // nothing to collapse in place — caller falls back to a fresh bar post.
+    if (typeof streamMessageId !== "number" || !text) {
+      return undefined;
+    }
+    // Replace the whole message with the bar line: edits diff from a zero
+    // offset, not from the streamed prefix.
+    deliveredTextOffset = 0;
+    lastSentPreviewKey = "";
+    lastRequestedText = text;
+    lastRequestedPreview = { ...preview, text };
+    await sendOrEditStreamMessage(text);
+    return streamMessageId;
+  };
+
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
@@ -601,6 +630,7 @@ export function createTelegramDraftStream(params: {
     stop,
     discard,
     materialize,
+    finalizeToPreview,
     forceNewMessage,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };

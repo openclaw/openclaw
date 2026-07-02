@@ -14,6 +14,9 @@ type TestDraftStream = {
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
   materialize: ReturnType<typeof vi.fn<() => Promise<number | undefined>>>;
+  finalizeToPreview: ReturnType<
+    typeof vi.fn<(preview: TelegramDraftPreview) => Promise<number | undefined>>
+  >;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   setMessageId: (value: number | undefined) => void;
@@ -66,6 +69,15 @@ export function createTestDraftStream(params?: {
       await params?.onDiscard?.();
     }),
     materialize: vi.fn().mockImplementation(async () => messageId),
+    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
+      if (messageId == null) {
+        return undefined;
+      }
+      previewRevision += 1;
+      lastDeliveredText = preview.text.trimEnd();
+      stopped = true;
+      return messageId;
+    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
@@ -113,6 +125,14 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     stop: vi.fn().mockResolvedValue(undefined),
     discard: vi.fn().mockResolvedValue(undefined),
     materialize: vi.fn().mockImplementation(async () => activeMessageId),
+    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
+      if (activeMessageId == null) {
+        return undefined;
+      }
+      previewRevision += 1;
+      lastDeliveredText = preview.text.trimEnd();
+      return activeMessageId;
+    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
       visibleSinceMs = undefined;

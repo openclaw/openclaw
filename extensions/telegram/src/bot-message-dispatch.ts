@@ -900,7 +900,14 @@ export const dispatchTelegramMessage = async ({
     agentId: route.agentId,
     loadFreshSessionEntry,
   });
-  const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
+  // Progress mode's ephemeral working-lane window IS the streaming mechanism and
+  // is independent of reasoning persistence (Discord keeps its window alive
+  // regardless of /reasoning). Only non-progress modes upgrade reasoning-on to
+  // block streaming. Forcing block streaming in progress mode killed the whole
+  // window (no commentary/tool lanes, no collapse bar) and suppressed all
+  // streamed output for message_tool_only providers.
+  const forceBlockStreamingForReasoning =
+    resolvedReasoningLevel === "on" && streamMode !== "progress";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
   const rawReplyQuoteText =
@@ -1087,13 +1094,15 @@ export const dispatchTelegramMessage = async ({
   });
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
-  // While the durable verbose lane is active, the ephemeral draft yields its
-  // commentary lines so they render once. Tool/plan status lines keep the
-  // draft: they have no durable counterpart in streamed runs.
+  // While the durable verbose lane is active it owns EVERY progress surface
+  // (commentary, tool, plan, command output, patch summaries), posting each as
+  // its own persistent message. The ephemeral window must therefore render none
+  // of them, or each renders twice (invariant: persistent message XOR window).
   let verboseProgressActive: () => boolean = () => false;
   const canPushStreamToolProgress = () =>
     Boolean(
       answerLane.stream &&
+      !verboseProgressActive() &&
       !answerLane.finalized &&
       !finalAnswerDeliveryStarted &&
       !finalAnswerDelivered,
@@ -1130,6 +1139,7 @@ export const dispatchTelegramMessage = async ({
   };
   const markProgressFinalDelivered = () => {
     finalAnswerDelivered = true;
+    sawProgressFinal = true;
     progressDraft.markFinalReplyDelivered();
   };
   const resetProgressDraftState = () => {
@@ -1561,6 +1571,11 @@ export const dispatchTelegramMessage = async ({
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
+  // A final answer was produced this turn (in-band or out-of-band). Out-of-band
+  // finals (message_tool_only / codex) never flow through
+  // deliverProgressModeFinalAnswer, so the collapse bar must be posted from the
+  // cleanup fallback instead — see the finally block.
+  let sawProgressFinal = false;
   let skippedDuplicateAnswerBlockDraftDelivery = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -1901,44 +1916,82 @@ export const dispatchTelegramMessage = async ({
       await emitPreviewFinalizedHook(result);
       return result.kind !== "skipped";
     };
-    // Post-turn collapse summary (Discord parity): when the progress window
-    // collapses at end-of-turn, post a one-line activity digest as a durable
-    // standalone message, then the final answer posts below it so the timeline
-    // reads thoughts/tools → summary → answer. Emitted at most once per turn,
-    // only for a non-error final, and only when the window actually rendered
-    // (rv mode delivers everything durably and the window stays empty — no bar).
-    const deliverProgressCollapseSummary = async () => {
+    // The one-line activity digest for the collapse bar, or undefined when the
+    // window never rendered (rv mode delivers everything durably — no bar) or
+    // the summary was already emitted this turn.
+    const resolveProgressCollapseSummaryLine = (): string | undefined => {
       if (progressSummaryDelivered) {
-        return;
+        return undefined;
       }
       progressSummaryDelivered = true;
       if (!progressDraftEverRendered) {
-        return;
+        return undefined;
       }
       const line = formatTelegramProgressSummaryLine(
         progressSummary.counts(),
         Date.now() - progressSummaryStartedAt,
       );
+      return line || undefined;
+    };
+    // Post-turn collapse summary (Discord parity) as a durable standalone
+    // message. Used when there is no live window to collapse in place — the
+    // final answer posts below so the timeline reads thoughts/tools → summary →
+    // answer. Emitted at most once per turn.
+    const deliverProgressCollapseSummary = async () => {
+      const line = resolveProgressCollapseSummaryLine();
       if (!line) {
         return;
       }
       await sendPayload({ text: line }, { durable: true });
     };
+    // Collapse the live window IN PLACE into the summary bar: edit the existing
+    // window message so its content becomes the bar line, keeping it on screen.
+    // Mirrors Discord — deleting the window and reposting the bar scroll-jumps
+    // the Telegram client and flashes the window away. Returns true when the
+    // window was collapsed in place; false when there is no bar (nothing
+    // streamed) or no live window message, so the caller tears the window down.
+    const collapseProgressWindowIntoSummary = async (): Promise<boolean> => {
+      const line = resolveProgressCollapseSummaryLine();
+      if (!line) {
+        return false;
+      }
+      const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line));
+      if (typeof messageId === "number") {
+        return true;
+      }
+      // No live window to edit (rv mode, never rendered): keep the bar as a
+      // fresh durable post so the timeline still shows the collapse summary.
+      await sendPayload({ text: line }, { durable: true });
+      return false;
+    };
     const deliverProgressModeFinalAnswer = async (
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
-      if (activeAnswerDraftIsToolProgressOnly) {
-        await rotateAnswerLaneAfterToolProgress();
-      } else {
-        await answerLane.stream?.clear();
-        resetDraftLaneState(answerLane);
-      }
+      // Collapse the window into the bar in place BEFORE resetting lane state
+      // (which drops the stream's message id). Error finals get no summary
+      // (Discord parity). When nothing collapsed in place, tear the window down
+      // so a stale progress box does not linger above the final answer.
+      const collapsedInPlace =
+        payload.isError === true ? false : await collapseProgressWindowIntoSummary();
       if (payload.isError === true) {
-        // Error finals get no collapse summary (Discord parity); mark it handled.
         progressSummaryDelivered = true;
+      }
+      if (!collapsedInPlace) {
+        if (activeAnswerDraftIsToolProgressOnly) {
+          await rotateAnswerLaneAfterToolProgress();
+        } else {
+          await answerLane.stream?.clear();
+          resetDraftLaneState(answerLane);
+        }
       } else {
-        await deliverProgressCollapseSummary();
+        if (activeAnswerDraftIsToolProgressOnly) {
+          resetAnswerToolProgressDraft();
+          suppressProgressDraftState();
+          rotateAnswerLaneWhenQueuedBlocksSettle = false;
+        }
+        answerLane.stream?.forceNewMessage();
+        resetDraftLaneState(answerLane);
       }
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
       if (!delivered) {
@@ -2521,7 +2574,10 @@ export const dispatchTelegramMessage = async ({
                     // own durable messages and must NOT also feed the bar (invariant:
                     // persistent message XOR bar count — D2).
                     if (payload.phase === "start") {
-                      if (verboseProgressActive() || !canPushStreamToolProgress()) {
+                      // canPushStreamToolProgress() is false under verbose, so this
+                      // also closes bursts (never counting the tool) when the durable
+                      // lane owns the tool message (invariant: persistent XOR window).
+                      if (!canPushStreamToolProgress()) {
                         progressSummary.closeReasoningBurst();
                         progressSummary.closeCommentaryBurst();
                       } else {
@@ -2682,6 +2738,12 @@ export const dispatchTelegramMessage = async ({
         return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
+      // Out-of-band finals (message_tool_only) never run the in-band final-delivery
+      // path, so record the final from the dispatch counts for the cleanup-time
+      // collapse-bar fallback.
+      if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
+        sawProgressFinal = true;
+      }
       suppressSilentReplyFallback =
         turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
@@ -2709,6 +2771,20 @@ export const dispatchTelegramMessage = async ({
         } else {
           await stream.clear();
         }
+      }
+      // Fallback collapse summary (Discord parity): finals that bypass
+      // deliverProgressModeFinalAnswer — notably message_tool_only/codex turns
+      // whose final is delivered out-of-band — still collapse here. The internal
+      // once-guard and progressDraftEverRendered check keep this from
+      // double-posting or firing when the window never rendered.
+      if (
+        streamMode === "progress" &&
+        sawProgressFinal &&
+        !dispatchError &&
+        !hadErrorReplyFailureOrSkip &&
+        !isDispatchSuperseded()
+      ) {
+        await deliverProgressCollapseSummary();
       }
     }
   } finally {
