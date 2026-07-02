@@ -47,17 +47,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun onboardingBackStateClearsScannerOriginAfterBack() {
-    assertEquals(
-      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true, setupCodeEntryOpenedFromScanner = false),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.EnterSetupCode,
-        setupCodeEntryOpenedFromScanner = true,
-      ),
-    )
-  }
-
-  @Test
   fun recoveryBackRestoresInlineScannerOnlyForScannerConnections() {
     assertEquals(
       OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = true),
@@ -587,6 +576,48 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayAuthDetailExplainsOlderGatewayProtocolMismatch() {
+    assertEquals(
+      "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry. (app protocol v6, gateway protocol v5).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 6,
+          clientMaxProtocol = 6,
+          expectedProtocol = 5,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailExplainsIncompatibleProtocolMismatch() {
+    assertEquals(
+      "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry. (app protocols v4-v6).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 4,
+          clientMaxProtocol = 6,
+          expectedProtocol = null,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
       "Gateway authentication is not configured. Edit this connection and try again.",
@@ -745,14 +776,6 @@ class OnboardingFlowLogicTest {
         state = GatewayRecoveryUiState.Finishing,
         statusText = "Connected (node offline)",
       ),
-    )
-  }
-
-  @Test
-  fun recoveryProgressDoesNotRenderSeparateNodeApprovalDots() {
-    assertEquals(
-      emptyList<GatewayRecoveryProgressItem>(),
-      gatewayRecoveryProgressItems(state = GatewayRecoveryUiState.NodeCapabilityApprovalPending),
     )
   }
 
