@@ -75,10 +75,10 @@ export type {
 } from "./session-cost-usage.types.js";
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
+// direct DeepSeek V4 placeholder zero-cost usage is now estimated from tokens, so a
+// warm cache from a pre-change build would otherwise keep reporting $0 totals.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1153,6 +1153,30 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+const isDirectDeepSeekV4ModelRef = (params: { provider?: string; model?: string }): boolean => {
+  const provider = normalizeOptionalString(params.provider)?.toLowerCase();
+  const model = normalizeOptionalString(params.model);
+  if (provider !== "deepseek" || !model) {
+    return false;
+  }
+  const modelId = (model.split("/").at(-1) ?? model).toLowerCase();
+  return DEEPSEEK_V4_MODEL_IDS.has(modelId);
+};
+
+const shouldRecomputeRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costTotal: number | undefined;
+  model?: string;
+  provider?: string;
+  usage: NormalizedUsage;
+}): boolean =>
+  params.costTotal === 0 &&
+  isDirectDeepSeekV4ModelRef(params) &&
+  isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1256,6 +1280,20 @@ async function scanTranscriptFile(params: {
         // the flat-rate cost that the transport layer wrote into the transcript.
         // Clear costBreakdown so downstream aggregation uses the recomputed total
         // instead of the stale flat-rate breakdown from the transport layer.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (
+        shouldRecomputeRecordedZeroCost({
+          usage: entry.usage,
+          cost,
+          costTotal: entry.costTotal,
+          provider: entry.provider,
+          model: entry.model,
+        })
+      ) {
+        // Direct DeepSeek V4 transcripts can contain placeholder zero costs even
+        // though catalog pricing is known. Keep recorded zeros authoritative by
+        // default so provider-billed $0 totals, such as OpenRouter, stay intact.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
@@ -2748,13 +2786,22 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
-            cost = breakdown.total;
-          } else {
-            const costConfig = resolveCost({
+          const costConfig = resolveCost({
+            provider: message.provider as string | undefined,
+            model: message.model as string | undefined,
+          });
+          if (
+            breakdown?.total !== undefined &&
+            !shouldRecomputeRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costTotal: breakdown.total,
               provider: message.provider as string | undefined,
               model: message.model as string | undefined,
-            });
+            })
+          ) {
+            cost = breakdown.total;
+          } else {
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
         }
