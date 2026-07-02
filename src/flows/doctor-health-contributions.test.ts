@@ -1247,6 +1247,56 @@ describe("doctor health contributions", () => {
     }
   });
 
+  it("threads dry-run legacy plugin dependency cleanup through the structured check", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync("/tmp/openclaw-legacy-plugin-deps-repair-");
+    const stateDir = `${tempDir}/state`;
+    const legacyRuntimeRoot = `${stateDir}/plugin-runtime-deps`;
+    fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const contributionChecks = await resolveDoctorContributionHealthChecks();
+      const check = contributionChecks.find(
+        (entry) => entry.id === "core/doctor/legacy-plugin-dependencies",
+      );
+      expect(check?.repair).toBeDefined();
+
+      const result = await check!.repair!(
+        {
+          cfg: {},
+          mode: "fix",
+          dryRun: true,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        },
+        [
+          {
+            checkId: "core/doctor/legacy-plugin-dependencies",
+            severity: "warning",
+            message: `Legacy plugin dependency state remains at ${legacyRuntimeRoot}.`,
+            target: legacyRuntimeRoot,
+            path: legacyRuntimeRoot,
+            requirement: "legacy-plugin-dependency-state-removed",
+          },
+        ],
+      );
+
+      expect(result.effects).toContainEqual({
+        kind: "state",
+        action: "would-remove-legacy-plugin-dependency-state",
+        target: legacyRuntimeRoot,
+        dryRunSafe: false,
+      });
+      expect(fs.existsSync(legacyRuntimeRoot)).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps state integrity opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const stateIntegrityCheck = contributionChecks.find(
