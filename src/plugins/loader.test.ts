@@ -4897,6 +4897,76 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
   });
 
+  it("reports missing config instead of required-property errors for plugins with required config fields", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "required-config",
+      filename: "required-config.cjs",
+      body: `module.exports = { id: "required-config", register() {} };`,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          serverUrl: { type: "string" },
+          apiKey: { type: "string" },
+        },
+        required: ["serverUrl", "apiKey"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          "required-config": { enabled: true },
+        },
+      },
+    });
+
+    const requiredConfig = registry.plugins.find((entry) => entry.id === "required-config");
+    expect(requiredConfig?.status).toBe("error");
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "required-config",
+      message: "missing config",
+    });
+  });
+
+  it("accepts valid config for plugins with required config fields", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "required-config-valid",
+      filename: "required-config-valid.cjs",
+      body: `module.exports = { id: "required-config-valid", register() {} };`,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          serverUrl: { type: "string" },
+          apiKey: { type: "string" },
+        },
+        required: ["serverUrl", "apiKey"],
+      },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          "required-config-valid": {
+            enabled: true,
+            config: { serverUrl: "https://example.com", apiKey: "secret" },
+          },
+        },
+      },
+    });
+
+    const requiredConfigValid = registry.plugins.find((entry) => entry.id === "required-config-valid");
+    expect(requiredConfigValid?.status).toBe("loaded");
+    expect(registry.diagnostics.filter((d) => d.pluginId === "required-config-valid")).toHaveLength(0);
+  });
+
   it("repairs incomplete registered channel metadata before storing registry entries", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -1673,6 +1673,9 @@ function validatePluginConfig(params: {
     }
     return { ok: false, errors: ["<root>: config must be empty"] };
   }
+  if (value === undefined && pluginSchemaHasRequiredProperties(schema)) {
+    return { ok: false, errors: ["missing config"] };
+  }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
     schema,
@@ -1684,6 +1687,43 @@ function validatePluginConfig(params: {
     return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
+}
+
+function pluginSchemaHasRequiredProperties(schema: Record<string, unknown>): boolean {
+  if (Array.isArray(schema.required) && schema.required.length > 0) {
+    return true;
+  }
+  if (typeof schema.minProperties === "number" && schema.minProperties > 0) {
+    return true;
+  }
+  if ("dependentRequired" in schema) {
+    return true;
+  }
+  if ("dependencies" in schema) {
+    return true;
+  }
+  if (Array.isArray(schema.allOf)) {
+    for (const sub of schema.allOf) {
+      if (typeof sub === "object" && sub !== null && pluginSchemaHasRequiredProperties(sub as Record<string, unknown>)) {
+        return true;
+      }
+    }
+  }
+  if (Array.isArray(schema.anyOf)) {
+    for (const sub of schema.anyOf) {
+      if (typeof sub === "object" && sub !== null && pluginSchemaHasRequiredProperties(sub as Record<string, unknown>)) {
+        return true;
+      }
+    }
+  }
+  if (Array.isArray(schema.oneOf)) {
+    for (const sub of schema.oneOf) {
+      if (typeof sub === "object" && sub !== null && pluginSchemaHasRequiredProperties(sub as Record<string, unknown>)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
