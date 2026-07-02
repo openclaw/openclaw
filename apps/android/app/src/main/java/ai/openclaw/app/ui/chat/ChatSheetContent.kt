@@ -172,6 +172,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     }
 
     ChatMessageListCard(
+      sessionKey = sessionKey,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
