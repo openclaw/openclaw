@@ -942,6 +942,35 @@ export function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 
+/**
+ * Returns true when user-configured MCP servers may be attached to the Codex
+ * app-server thread for this turn.
+ *
+ * This is deliberately decoupled from `shouldEnableCodexAppServerNativeToolSurface`.
+ * Native code mode (Codex's built-in shell/filesystem/apply_patch surface) is a
+ * dangerous, sandbox-sensitive capability that must stay fail-closed on a literal
+ * `*` allowlist. Attaching user MCP servers is a separate, narrower capability:
+ * which servers (and tools) actually become reachable is decided downstream by the
+ * allowlist-aware projection (`buildCodexUserMcpServersThreadConfigPatch`), so this
+ * gate only answers the orthogonal question "is it safe to attach external MCP
+ * servers at all this turn?" — i.e. not a memory-flush run, and OpenClaw sandboxing
+ * (if active) can be honored. The allowlist itself never widens the native surface.
+ */
+export function shouldEnableUserMcpServersForCodexAppServer(
+  params: EmbeddedRunAttemptParams,
+  sandbox?: OpenClawSandboxContext,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+    sandboxExecServerEnabled?: boolean;
+  } = {},
+): boolean {
+  if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
+}
+
 /** Forces message delivery through the message tool when the source channel requires it. */
 export function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (

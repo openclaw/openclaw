@@ -1,7 +1,10 @@
 /** Tests projecting OpenClaw user MCP servers into Codex app-server config. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildCodexUserMcpServersThreadConfigPatch } from "./bundle-mcp-codex.js";
+import {
+  buildCodexUserMcpServersThreadConfigPatch,
+  resolveCodexMcpServerAllow,
+} from "./bundle-mcp-codex.js";
 
 describe("buildCodexUserMcpServersThreadConfigPatch", () => {
   it("returns undefined when cfg has no mcp.servers (regression: #80814)", () => {
@@ -280,5 +283,133 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["one", "two"]);
     expect(patch!.mcp_servers.one).toMatchObject({ command: "one" });
     expect(patch!.mcp_servers.two).toMatchObject({ command: "two" });
+  });
+
+  describe("allowlist-aware server projection", () => {
+    const twoServerCfg = {
+      mcp: {
+        servers: {
+          opik: { transport: "stdio", command: "opik" },
+          notion: { transport: "stdio", command: "notion" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    it("attaches every enabled server when toolsAllow is undefined (no restriction)", () => {
+      const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, {
+        toolsAllow: undefined,
+      });
+      expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["notion", "opik"]);
+    });
+
+    it("attaches every server for a wildcard allowlist", () => {
+      const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, {
+        toolsAllow: ["*"],
+      });
+      expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["notion", "opik"]);
+    });
+
+    it("attaches only the server referenced by a server-scoped glob", () => {
+      const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, {
+        toolsAllow: ["opik__*"],
+      });
+      expect(Object.keys(patch!.mcp_servers)).toEqual(["opik"]);
+      // A server glob grants every tool, so no enabled_tools filter is emitted.
+      expect(patch!.mcp_servers.opik).not.toHaveProperty("enabled_tools");
+    });
+
+    it("scopes an attached server to exact tools via enabled_tools", () => {
+      const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, {
+        toolsAllow: ["opik__list", "opik__read", "notion__api-post-search"],
+      });
+      expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["notion", "opik"]);
+      expect(patch!.mcp_servers.opik).toMatchObject({ enabled_tools: ["list", "read"] });
+      expect(patch!.mcp_servers.notion).toMatchObject({ enabled_tools: ["api-post-search"] });
+    });
+
+    it("does not set enabled_tools for a wildcard allowlist", () => {
+      const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, { toolsAllow: ["*"] });
+      expect(patch!.mcp_servers.opik).not.toHaveProperty("enabled_tools");
+      expect(patch!.mcp_servers.notion).not.toHaveProperty("enabled_tools");
+    });
+
+    it("matches the provider-safe (sanitized) server name, not the raw config key", () => {
+      const cfg = {
+        mcp: {
+          servers: {
+            "Outlook Graph": { transport: "stdio", command: "outlook" },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      // The model-facing prefix is `outlook-graph__`, so that is what the operator
+      // writes in the allowlist — the raw "Outlook Graph" key must still resolve.
+      const patch = buildCodexUserMcpServersThreadConfigPatch(cfg, {
+        toolsAllow: ["outlook-graph__*"],
+      });
+      expect(Object.keys(patch!.mcp_servers)).toEqual(["Outlook Graph"]);
+    });
+
+    it("does not let a disabled server's name collision shift an enabled server's prefix", () => {
+      // "atlas" (disabled) and "Atlas" (enabled) both reserve the lowercase name
+      // "atlas". If the disabled one reserves first, the enabled one is pushed to
+      // "Atlas-2" and the operator's `atlas__*` allowlist no longer matches it. The
+      // disabled server must be skipped before any name is reserved.
+      const cfg = {
+        mcp: {
+          servers: {
+            atlas: { enabled: false, transport: "stdio", command: "old" },
+            Atlas: { transport: "stdio", command: "new" },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const patch = buildCodexUserMcpServersThreadConfigPatch(cfg, { toolsAllow: ["atlas__*"] });
+      expect(Object.keys(patch!.mcp_servers)).toEqual(["Atlas"]);
+    });
+
+    it("honors bundle-mcp and group:plugins as attach-all entries", () => {
+      for (const token of ["bundle-mcp", "group:plugins"]) {
+        const patch = buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, {
+          toolsAllow: [token],
+        });
+        expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["notion", "opik"]);
+      }
+    });
+
+    it("returns undefined when the allowlist references no configured server", () => {
+      expect(
+        buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, { toolsAllow: ["message"] }),
+      ).toBeUndefined();
+      expect(
+        buildCodexUserMcpServersThreadConfigPatch(twoServerCfg, { toolsAllow: [] }),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("resolveCodexMcpServerAllow", () => {
+    it("includes all tools when the allowlist is undefined", () => {
+      expect(resolveCodexMcpServerAllow("opik", undefined)).toEqual({ include: true });
+    });
+
+    it("includes all tools for wildcard, bundle-mcp, group:plugins, or a server glob", () => {
+      expect(resolveCodexMcpServerAllow("opik", ["*"])).toEqual({ include: true });
+      expect(resolveCodexMcpServerAllow("opik", ["bundle-mcp"])).toEqual({ include: true });
+      expect(resolveCodexMcpServerAllow("opik", ["group:plugins"])).toEqual({ include: true });
+      expect(resolveCodexMcpServerAllow("opik", ["opik__*"])).toEqual({ include: true });
+      expect(resolveCodexMcpServerAllow("opik", [" Opik__* "])).toEqual({ include: true }); // trims/lowercases
+    });
+
+    it("scopes to named tools for exact tool tokens", () => {
+      expect(resolveCodexMcpServerAllow("opik", ["opik__list", "opik__read"])).toEqual({
+        include: true,
+        toolNames: ["list", "read"],
+      });
+    });
+
+    it("excludes a server with no matching token", () => {
+      expect(resolveCodexMcpServerAllow("opik", ["notion__*"])).toEqual({ include: false });
+      expect(resolveCodexMcpServerAllow("opik", ["message"])).toEqual({ include: false });
+      expect(resolveCodexMcpServerAllow("opik", ["opik__"])).toEqual({ include: false }); // bare prefix, no tool
+      expect(resolveCodexMcpServerAllow("opik", [])).toEqual({ include: false });
+    });
   });
 });
