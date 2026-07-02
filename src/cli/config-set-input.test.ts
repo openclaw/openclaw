@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseBatchSource } from "./config-set-input.js";
+import { MAX_BATCH_FILE_BYTES, parseBatchSource } from "./config-set-input.js";
 
 function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: string) => T): T {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -103,6 +103,39 @@ describe("config set input parsing", () => {
           batchFile: batchPath,
         }),
       ).toThrow("--batch-file must be a JSON array.");
+    });
+  });
+
+  it("rejects oversized --batch-file payloads", () => {
+    const largeContent = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1, "x");
+    withBatchFile("openclaw-config-set-input-large-", largeContent.toString(), (batchPath) => {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Batch file too large");
+    });
+  });
+
+  it("accepts --batch-file payload at the exact size limit", () => {
+    // Build a valid entry at exactly MAX_BATCH_FILE_BYTES
+    // Template: [{"path":"p","value":"PAD"}]
+    // Prefix: 22 bytes, suffix: 3 bytes, so PAD = MAX - 25 = 1,048,551 bytes
+    const padLen = MAX_BATCH_FILE_BYTES - 25;
+    const content = `[{"path":"p","value":"${"x".repeat(padLen)}"}]`;
+    expect(content.length).toBe(MAX_BATCH_FILE_BYTES);
+    withBatchFile("openclaw-config-set-input-at-limit-", content, (batchPath) => {
+      const parsed = parseBatchSource({ batchFile: batchPath });
+      expect(parsed).toHaveLength(1);
+      expect(parsed![0].path).toBe("p");
+      expect(typeof parsed![0].value).toBe("string");
+      expect((parsed![0].value as string).length).toBe(padLen);
+    });
+  });
+
+  it("rejects zero-size batch files with parse error, not size error", () => {
+    // A zero-size / empty file (stat.size === 0) should fail because it's
+    // not valid JSON, not because of a size check.  Special files such as
+    // /dev/zero present the same surface: stat appears small but read is
+    // unbounded if not capped at the read call itself.
+    withBatchFile("openclaw-config-set-input-empty-", "", (batchPath) => {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Failed to parse");
     });
   });
 });

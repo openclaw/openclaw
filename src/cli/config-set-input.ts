@@ -6,6 +6,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 
+export const MAX_BATCH_FILE_BYTES = 1_048_576; // 1 MB
+
 export type ConfigSetOptions = {
   strictJson?: boolean;
   /** @deprecated Use strictJson. */
@@ -136,6 +138,28 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const raw = fs.readFileSync(pathname, "utf8");
+  // Bounded read: allocate a buffer of MAX+1 so a full buffer means the
+  // file exceeds the limit.  This caps memory even for special files like
+  // /dev/zero whose stat.size is 0 but produce unbounded reads.
+  // Loop because fs.readSync may return a short read (fewer bytes than
+  // requested) on some filesystems; a single read would silently truncate.
+  const fd = fs.openSync(pathname, "r");
+  const buf = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1);
+  let bytesRead = 0;
+  try {
+    while (bytesRead < buf.length) {
+      const result = fs.readSync(fd, buf, bytesRead, buf.length - bytesRead, null);
+      if (result === 0) break; // EOF
+      bytesRead += result;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (bytesRead > MAX_BATCH_FILE_BYTES) {
+    throw new Error(
+      `Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES.toLocaleString("en-US")} bytes / 1 MB)`,
+    );
+  }
+  const raw = buf.toString("utf8", 0, bytesRead);
   return parseBatchEntries(raw, "--batch-file");
 }
