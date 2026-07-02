@@ -61,7 +61,7 @@ export function buildGoogleProvider(): ProviderPlugin {
           choiceLabel: "Google Gemini API key",
           groupId: "google",
           groupLabel: "Google",
-          groupHint: "Gemini API key + OAuth",
+          groupHint: "Gemini API key",
         },
       }),
     ],

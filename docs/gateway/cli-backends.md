@@ -65,6 +65,10 @@ gateway host, OpenClaw now auto-loads the owning bundled plugin when your config
 explicitly references that backend in a model ref or under
 `agents.defaults.cliBackends`.
 
+<Note>
+The bundled Google Gemini CLI backend is an opt-in exception. Direct bundled runtime registration for `google-gemini-cli` requires setting `OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1` in the Gateway or daemon environment before OpenClaw starts. Without that flag, setup-registry compatibility can still preserve stored `google-gemini-cli` auth-profile routing, but full bundled runtime provider/backend discovery stays on the API-backed `google` path.
+</Note>
+
 ## Using it as a fallback
 
 Add a CLI backend to your fallback list so it only runs when primary models fail:

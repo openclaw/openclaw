@@ -1442,6 +1442,7 @@
                   "providers/github-copilot",
                   "providers/gmi",
                   "providers/google",
+                  "providers/google-provider-rebuild",
                   "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
