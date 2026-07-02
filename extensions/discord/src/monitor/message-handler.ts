@@ -158,14 +158,14 @@ export function createDiscordMessageHandler(
     cfg: params.cfg,
     channel: "discord",
     buildKey: (entry) => {
-      const message = entry.data.message;
-      const authorId = entry.data.author?.id;
+      const message = entry.data?.message;
+      const authorId = entry.data?.author?.id;
       if (!message || !authorId) {
         return null;
       }
       const channelId = resolveDiscordMessageChannelId({
         message,
-        eventChannelId: entry.data.channel_id,
+        eventChannelId: entry.data?.channel_id,
       });
       if (!channelId) {
         return null;
@@ -230,11 +230,15 @@ export function createDiscordMessageHandler(
           return;
         }
         const combinedBaseText = entries
-          .map((entry) =>
-            resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-          )
+          .map((entry) => {
+            const msg = entry.data?.message;
+            return msg ? resolveDiscordMessageText(msg, { includeForwarded: false }) : null;
+          })
           .filter(Boolean)
           .join("\n");
+        if (!last.data?.message) {
+          return;
+        }
         const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
           ...Object.getOwnPropertyDescriptors(last.data.message),
           content: { value: combinedBaseText, enumerable: true, configurable: true },
