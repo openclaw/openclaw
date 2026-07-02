@@ -249,7 +249,11 @@ export type QaDockerRunCommand = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /** Minimal fetch-like health probe used by QA Docker runtime helpers. */
-export type QaDockerFetchLike = (input: string) => Promise<{ ok: boolean }>;
+export type QaDockerFetchResponse = {
+  ok: boolean;
+  body?: { cancel?: () => unknown } | null;
+};
+export type QaDockerFetchLike = (input: string) => Promise<QaDockerFetchResponse>;
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 
@@ -484,12 +488,21 @@ function parseDockerComposePsRows(stdout: string) {
 }
 
 async function isQaDockerHealthy(url: string, fetchImpl: QaDockerFetchLike) {
+  let response: QaDockerFetchResponse | undefined;
   try {
-    const response = await fetchImpl(url);
+    response = await fetchImpl(url);
     return response.ok;
   } catch {
     return false;
+  } finally {
+    await releaseQaDockerFetchResponse(response);
   }
+}
+
+async function releaseQaDockerFetchResponse(response: QaDockerFetchResponse | undefined) {
+  try {
+    await response?.body?.cancel?.();
+  } catch {}
 }
 
 /** Create Docker command, health-check, and compose helpers for QA harnesses. */
@@ -548,14 +561,17 @@ export function createQaDockerRuntime(params: {
     let lastError: unknown = null;
 
     while (Date.now() < deadline) {
+      let response: QaDockerFetchResponse | undefined;
       try {
-        const response = await deps.fetchImpl(url);
+        response = await deps.fetchImpl(url);
         if (response.ok) {
           return;
         }
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
+      } finally {
+        await releaseQaDockerFetchResponse(response);
       }
       await deps.sleepImpl(pollMs);
     }

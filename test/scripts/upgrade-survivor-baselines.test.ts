@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mjs";
+import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mjs";
 
 function withReleaseFixture<T>(releases: unknown[], fn: (file: string) => T): T {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-upgrade-baselines-"));
@@ -28,6 +28,11 @@ function withJsonFixture<T>(name: string, contents: unknown, fn: (file: string) 
 }
 
 describe("scripts/resolve-upgrade-survivor-baselines", () => {
+  it("rejects short flag values before resolving baselines", () => {
+    expect(() => parseArgs(["--fallback", "-h"])).toThrow("missing value for --fallback");
+    expect(() => parseArgs(["--github-output", "-h"])).toThrow("missing value for --github-output");
+  });
+
   it("keeps the single fallback baseline when no expanded request is provided", () => {
     expect(resolveBaselines(new Map([["fallback", "2026.4.23"]]))).toEqual(["openclaw@2026.4.23"]);
   });

@@ -87,16 +87,16 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 ## Execution styles
 
-| Style           | `--session` value   | Runs in                  | Best for                        |
-| --------------- | ------------------- | ------------------------ | ------------------------------- |
-| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
-| Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
+| Style           | `--session` value   | Runs in                  | Best for                       |
+| --------------- | ------------------- | ------------------------ | ------------------------------ |
+| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events       |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores     |
+| Current session | `current`           | Detached cron run        | Context-aware recurring work   |
+| Custom session  | `session:custom-id` | Detached cron run        | Targeting a known chat/session |
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Current** and **custom** session jobs (`current`, `session:xxx`) can use the selected chat/session for delivery context and safe preference seeding, but each run still executes in a detached cron session so scheduled work does not block or pollute the live conversation transcript.
 
     Main-session cron events are self-contained system-event reminders. They do
     not automatically include the default heartbeat prompt's "Read
@@ -105,8 +105,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
     agent's own instructions.
 
   </Accordion>
-  <Accordion title="What 'fresh session' means for isolated jobs">
-    For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+  <Accordion title="What 'fresh session' means for detached jobs">
+    For isolated, current-session, and custom-session jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides. Detached runs do not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Put durable recurring-work state in the prompt, workspace files, tools, or the system the job operates on rather than relying on a live chat transcript as cron memory.
   </Accordion>
   <Accordion title="Runtime cleanup">
     For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
@@ -157,11 +157,20 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 <ParamField path="--model" type="string">
   Model override; uses the selected allowed model for the job.
 </ParamField>
+<ParamField path="--fallbacks" type="string">
+  Per-job fallback model list, for example `--fallbacks openrouter/gpt-4.1-mini,openai/gpt-5`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+</ParamField>
+<ParamField path="--clear-fallbacks" type="boolean">
+  On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot be combined with `--fallbacks`.
+</ParamField>
 <ParamField path="--clear-model" type="boolean">
   On `cron edit`, removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if set, otherwise the agent/default model). Cannot be combined with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override.
+</ParamField>
+<ParamField path="--clear-thinking" type="boolean">
+  On `cron edit`, removes the per-job thinking override so the job follows normal cron thinking precedence. Cannot be combined with `--thinking`.
 </ParamField>
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
@@ -183,7 +192,7 @@ Model-selection precedence for isolated jobs is:
 3. User-selected stored cron session model override
 4. Agent/default model selection
 
-Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction.
+Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction. Auto mode uses the selected model's `params.fastAutoOnSeconds` cutoff when present, defaulting to 60 seconds.
 
 If an isolated run hits a live model-switch handoff, cron retries with the switched provider/model and persists that live selection for the active run before retrying. When the switch also carries a new auth profile, cron persists that auth profile override for the active run too. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping forever.
 
@@ -478,7 +487,7 @@ Model override note:
 - API `cron.update` payload patches can set `model: null` to clear a stored job model override.
 - `openclaw cron edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot be combined with `--model`.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
-- Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
+- `openclaw cron add|edit --fallbacks ...` sets payload `fallbacks`, replacing configured fallbacks for that job; `--fallbacks ""` disables fallback and makes the run strict. `openclaw cron edit <job-id> --clear-fallbacks` clears the per-job override.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
 
 </Note>

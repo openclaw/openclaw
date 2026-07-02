@@ -292,8 +292,12 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "session.jsonl",
+        sessionEntry: {
+          sessionFile: "session.jsonl",
+          sessionId: "sess-1",
+        },
         sessionId: "sess-1",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
@@ -855,6 +859,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("allows managed inbound image paths before validating explicit roots", async () => {
+    const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
+    await fs.mkdir(path.dirname(inboundPath), { recursive: true });
+    await fs.writeFile(inboundPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [inboundPath],
+        stateDir,
+        localRoots: [path.parse(stateDir).root],
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(requireBlock(blocks).type).toBe("image");
+    });
+  });
+
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");
@@ -1064,8 +1086,12 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
       {
         agentId: undefined,
-        sessionFile: "/tmp/sess-main.jsonl",
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: path.join(stateDir, "gateway-sessions.json"),
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),

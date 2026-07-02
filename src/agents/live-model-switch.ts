@@ -1,18 +1,22 @@
 /**
  * Resolves and persists live-session model switch requests.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { EmbeddedRunModelSwitchRequest } from "./embedded-agent-runner/runs.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+export type LiveSessionModelSelection = {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
@@ -39,10 +43,12 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -122,8 +128,8 @@ export function hasDifferentLiveSessionModelSelection(
  * set so the switch fires on the next clean retry opportunity — even if that
  * falls into a subsequent user turn.
  *
- * This replaces the previous approach that used an in-memory map
- * (`consumeEmbeddedRunModelSwitch`) which could not distinguish between
+ * This replaces the previous approach that used an in-memory run-state map,
+ * which could not distinguish between
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
@@ -145,11 +151,13 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
     clone: false,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -206,10 +214,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
-  });
+  await patchSessionEntry(
+    { storePath, sessionKey },
+    (entry) => {
+      const next = { ...entry };
+      delete next.liveModelSwitchPending;
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }

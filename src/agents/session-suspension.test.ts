@@ -40,10 +40,10 @@ async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLa
 
 describe("session suspension", () => {
   afterEach(async () => {
-    const { cancelLaneAutoResume } = await import("./session-suspension.js");
-    cancelLaneAutoResume(CommandLane.Main);
-    cancelLaneAutoResume(CommandLane.Cron);
-    cancelLaneAutoResume(CommandLane.CronNested);
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      vi.clearAllTimers();
+    }
     vi.useRealTimers();
     sessionStoreMocks.applySessionStoreEntryPatch.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();

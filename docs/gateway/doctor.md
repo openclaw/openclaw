@@ -104,6 +104,7 @@ Examples:
 openclaw doctor --lint
 openclaw doctor --lint --severity-min warning
 openclaw doctor --lint --json
+openclaw doctor --lint --all
 openclaw doctor --lint --only core/doctor/gateway-config --json
 ```
 
@@ -111,7 +112,7 @@ JSON output includes:
 
 - `ok`: whether any visible finding met the selected severity threshold
 - `checksRun`: number of health checks executed
-- `checksSkipped`: checks skipped by `--only` or `--skip`
+- `checksSkipped`: checks skipped by the selected profile, `--only`, or `--skip`
 - `findings`: structured diagnostics with `checkId`, `severity`, `message`, and
   optional `path`, `line`, `column`, `ocPath`, and `fixHint`
 
@@ -122,11 +123,13 @@ Exit codes:
 - `2`: command/runtime failure before lint findings could be emitted
 
 Use `--severity-min info|warning|error` to control both what is printed and what
-causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
+causes a non-zero lint exit. Use `--all` to run the complete lint inventory,
+including deeper opt-in checks excluded from the default automation set. Use `--only <id>` for narrow preflight gates and
 `--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
 lint run active.
-Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
-must be paired with `--lint`; regular doctor and repair runs reject them.
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and
+`--skip` must be paired with `--lint`; regular doctor and repair runs reject
+them.
 
 ## What it does (summary)
 
@@ -160,7 +163,6 @@ must be paired with `--lint`; regular doctor and repair runs reject them.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
-    - Extra workspace dir detection (`~/openclaw`).
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -397,6 +399,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O and lock/sync races.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD or eMMC-backed random I/O can be slower and wear faster under session and credential writes.
+    - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state with its WAL/journal sidecars will disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
     - **Transcript mismatch**: warns when recent session entries have missing transcript files.
     - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).
@@ -468,14 +471,14 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and legacy dirs)">
+  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
     Doctor prints a summary of the workspace state for the default agent:
 
     - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
-    - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories exist alongside the current workspace.
     - **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any errors; reports bundle plugin capabilities.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
+    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">

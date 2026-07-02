@@ -6,6 +6,7 @@ import {
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnPromoteStandaloneTextToolCalls,
+  wrapStreamFnSanitizeMalformedToolCalls,
 } from "./attempt.tool-call-normalization.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -1079,6 +1080,96 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
   });
 });
 
+describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("keeps valid non-Responses replay inputs pass-through", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+      } as never,
+    ];
+    const baseFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) =>
+      createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: "ok" },
+      }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["image_generate"]),
+      undefined,
+      "openai",
+    );
+
+    void wrapped({ api: "openai" } as never, { messages } as never, {} as never);
+
+    const forwardedContext = baseFn.mock.calls[0]?.[1] as {
+      messages?: AgentMessage[];
+    };
+    expect(forwardedContext.messages).toBe(messages);
+  });
+
+  it("repairs OpenAI Responses pairing even when replay inputs do not change", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_mock_image_generate_2",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+      } as never,
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Worked: the QA lighthouse image completed.",
+      } as never,
+    ];
+    const baseFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) =>
+      createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: "ok" },
+      }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["image_generate"]),
+      undefined,
+      "openai",
+    );
+
+    void wrapped({ api: "openai-responses" } as never, { messages } as never, {} as never);
+
+    const forwardedContext = baseFn.mock.calls[0]?.[1] as {
+      messages?: AgentMessage[];
+    };
+    expect(forwardedContext.messages?.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(forwardedContext.messages?.[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call_mock_image_generate_2",
+      toolName: "image_generate",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+  });
+});
+
 describe("sanitizeOpenAIResponsesReplayForStream", () => {
   it("normalizes live responses continuations before pi-ai splits ids", () => {
     const longCallId = `call_${"x".repeat(120)}`;
@@ -1137,5 +1228,83 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     ];
 
     expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
+  });
+
+  it("repairs dangling OpenAI Responses tool calls from async resume replay", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: "Image generation check. Generate an image of a QA lighthouse.",
+      } as never,
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_mock_image_generate_1",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+      } as never,
+      {
+        role: "toolResult",
+        toolCallId: "call_mock_image_generate_1",
+        toolName: "image_generate",
+        content: [{ type: "text", text: "Background task started for image generation." }],
+        isError: false,
+      } as never,
+      {
+        role: "custom",
+        content: "Image generation started; wait for completion.",
+      } as never,
+      {
+        role: "user",
+        content: "The image is ready for the original chat.",
+      } as never,
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_mock_image_generate_2",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+      } as never,
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Worked: the QA lighthouse image completed.",
+      } as never,
+    ];
+
+    const out = sanitizeOpenAIResponsesReplayForStream(messages);
+    const danglingAssistant = out[5] as AssistantMessage;
+    const danglingToolCall = danglingAssistant.content.find(
+      (block) =>
+        Boolean(block) &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "toolCall",
+    ) as { id?: string } | undefined;
+    const danglingResult = out[6] as Extract<AgentMessage, { role: "toolResult" }>;
+
+    expect(out.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "custom",
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(danglingResult.toolCallId).toBe(danglingToolCall?.id);
+    expect(danglingResult.toolName).toBe("image_generate");
+    expect(danglingResult.isError).toBe(true);
+    expect(danglingResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 });

@@ -47,8 +47,11 @@ import {
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -64,6 +67,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+  normalizeOptionalAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
@@ -267,7 +271,6 @@ type AcpSpawnInitializedRuntime = {
   runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
 
@@ -444,8 +447,11 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
-  const parentEntry = sessionStore[params.parentSessionKey];
+  const parentEntry = loadSessionEntry({
+    storePath,
+    sessionKey: params.parentSessionKey,
+    clone: false,
+  });
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
   return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
 }
@@ -531,14 +537,6 @@ function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   return Array.from(ids);
 }
 
-function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAgentId(trimmed);
-}
-
 function summarizeError(err: unknown): string {
   return formatErrorMessage(err);
 }
@@ -602,23 +600,26 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
   storePath: string;
   agentId: string;
   threadId?: string | number;
   stage: "spawn" | "thread-bind";
 }): Promise<SessionEntry | undefined> {
   try {
-    const resolvedSessionFile = await resolveSessionTranscriptFile({
+    const resolvedSessionFile = await resolveSessionTranscriptRuntimeTarget({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
       storePath: params.storePath,
       agentId: params.agentId,
       threadId: params.threadId,
     });
-    return resolvedSessionFile.sessionEntry;
+    return (
+      loadSessionEntry({
+        storePath: params.storePath,
+        sessionKey: resolvedSessionFile.sessionKey,
+        clone: false,
+      }) ?? params.sessionEntry
+    );
   } catch (error) {
     log.warn(
       `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
@@ -971,9 +972,8 @@ function validateAcpResumeSessionOwnership(params: {
   }
 
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
-    const acp = readAcpSessionMeta({ sessionKey });
+  for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+    const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
     }
@@ -1071,14 +1071,16 @@ async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  let sessionEntry: SessionEntry | undefined = sessionStore[params.sessionKey];
+  let sessionEntry = loadSessionEntry({
+    storePath,
+    sessionKey: params.sessionKey,
+    clone: false,
+  });
   const sessionId = sessionEntry?.sessionId;
   if (sessionId) {
     sessionEntry = await persistAcpSpawnSessionFileBestEffort({
       sessionId,
       sessionKey: params.sessionKey,
-      sessionStore,
       storePath,
       sessionEntry,
       agentId: params.targetAgentId,
@@ -1105,7 +1107,6 @@ async function initializeAcpSpawnRuntime(params: {
     },
     sessionId,
     sessionEntry,
-    sessionStore,
     storePath,
   };
 }
@@ -1177,7 +1178,6 @@ async function bindPreparedAcpThread(params: {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
         sessionKey: params.sessionKey,
-        sessionStore: params.initializedRuntime.sessionStore,
         storePath: params.initializedRuntime.storePath,
         sessionEntry,
         agentId: params.targetAgentId,
@@ -1539,16 +1539,19 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  const parentAgentId = parentSessionKey
+    ? resolveAgentIdFromSessionKey(parentSessionKey)
+    : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
-          loadSessionStore(
-            resolveStorePath(cfg.session?.store, {
-              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
-            }),
-          )[parentSessionKey],
+          loadSessionEntry({
+            sessionKey: parentSessionKey,
+            ...(parentAgentId ? { agentId: parentAgentId } : {}),
+            clone: false,
+          }),
         )
       : undefined;
 

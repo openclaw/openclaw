@@ -21,10 +21,12 @@ private struct DeviceAuthStoreFile: Codable {
 }
 
 public enum DeviceAuthStore {
-    private static let fileName = "device-auth.json"
-
-    public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
-        guard let store = readStore(), store.deviceId == deviceId else { return nil }
+    public static func loadToken(
+        deviceId: String,
+        role: String,
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceAuthEntry?
+    {
+        guard let store = readStore(profile: profile), store.deviceId == deviceId else { return nil }
         let role = self.normalizeRole(role)
         return store.tokens[role]
     }
@@ -33,10 +35,11 @@ public enum DeviceAuthStore {
         deviceId: String,
         role: String,
         token: String,
-        scopes: [String] = []) -> DeviceAuthEntry
+        scopes: [String] = [],
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceAuthEntry
     {
         let normalizedRole = self.normalizeRole(role)
-        var next = self.readStore()
+        var next = self.readStore(profile: profile)
         if next?.deviceId != deviceId {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
         }
@@ -50,17 +53,25 @@ public enum DeviceAuthStore {
         }
         next?.tokens[normalizedRole] = entry
         if let store = next {
-            self.writeStore(store)
+            self.writeStore(store, profile: profile)
         }
         return entry
     }
 
-    public static func clearToken(deviceId: String, role: String) {
-        guard var store = readStore(), store.deviceId == deviceId else { return }
+    public static func clearToken(
+        deviceId: String,
+        role: String,
+        profile: GatewayDeviceIdentityProfile = .primary)
+    {
+        guard var store = readStore(profile: profile), store.deviceId == deviceId else { return }
         let normalizedRole = self.normalizeRole(role)
         guard store.tokens[normalizedRole] != nil else { return }
         store.tokens.removeValue(forKey: normalizedRole)
-        self.writeStore(store)
+        self.writeStore(store, profile: profile)
+    }
+
+    public static func clearAll(profile: GatewayDeviceIdentityProfile = .primary) {
+        try? FileManager.default.removeItem(at: self.fileURL(profile: profile))
     }
 
     private static func normalizeRole(_ role: String) -> String {
@@ -74,14 +85,14 @@ public enum DeviceAuthStore {
         return Array(Set(trimmed)).sorted()
     }
 
-    private static func fileURL() -> URL {
+    private static func fileURL(profile: GatewayDeviceIdentityProfile) -> URL {
         DeviceIdentityPaths.stateDirURL()
             .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(self.fileName, isDirectory: false)
+            .appendingPathComponent(profile.authFileName, isDirectory: false)
     }
 
-    private static func readStore() -> DeviceAuthStoreFile? {
-        let url = self.fileURL()
+    private static func readStore(profile: GatewayDeviceIdentityProfile) -> DeviceAuthStoreFile? {
+        let url = self.fileURL(profile: profile)
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
             return nil
@@ -90,8 +101,8 @@ public enum DeviceAuthStore {
         return decoded
     }
 
-    private static func writeStore(_ store: DeviceAuthStoreFile) {
-        let url = self.fileURL()
+    private static func writeStore(_ store: DeviceAuthStoreFile, profile: GatewayDeviceIdentityProfile) {
+        let url = self.fileURL(profile: profile)
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),

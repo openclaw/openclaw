@@ -1,5 +1,5 @@
 // Resolution helpers derive media-understanding timeouts, prompts, byte/char
-// caps, scope decisions, model entries, concurrency, and active-model fallback.
+// caps, scope decisions, model entries, and concurrency.
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -19,7 +19,6 @@ import {
   DEFAULT_PROMPT,
 } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
@@ -152,47 +151,4 @@ export function resolveConcurrency(cfg: OpenClawConfig): number {
     return Math.floor(configured);
   }
   return DEFAULT_MEDIA_CONCURRENCY;
-}
-
-/** Adds the active chat model as a provider fallback when enabled media has no explicit entries. */
-export function resolveEntriesWithActiveFallback(params: {
-  cfg: OpenClawConfig;
-  capability: MediaUnderstandingCapability;
-  config?: MediaUnderstandingConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-  activeModel?: { provider: string; model?: string };
-}): MediaUnderstandingModelConfig[] {
-  const entries = resolveModelEntries({
-    cfg: params.cfg,
-    capability: params.capability,
-    config: params.config,
-    providerRegistry: params.providerRegistry,
-  });
-  if (entries.length > 0) {
-    return entries;
-  }
-  // Active chat model fallback is opt-in and only valid when its provider has
-  // declared the requested media capability.
-  if (params.config?.enabled !== true) {
-    return entries;
-  }
-  const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) {
-    return entries;
-  }
-  const activeProvider = normalizeMediaProviderId(activeProviderRaw);
-  if (!activeProvider) {
-    return entries;
-  }
-  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
-  if (!capabilities || !capabilities.includes(params.capability)) {
-    return entries;
-  }
-  return [
-    {
-      type: "provider",
-      provider: activeProvider,
-      model: params.activeModel?.model,
-    },
-  ];
 }

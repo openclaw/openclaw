@@ -16,6 +16,7 @@ export async function uploadBatchJsonlFile(params: {
   requests: unknown[];
   errorPrefix: string;
   maxResponseBytes?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const baseUrl = normalizeBatchBaseUrl(params.client);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
@@ -31,6 +32,7 @@ export async function uploadBatchJsonlFile(params: {
     url: `${baseUrl}/files`,
     ssrfPolicy: params.client.ssrfPolicy,
     fetchImpl: params.client.fetchImpl,
+    signal: params.signal,
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.client, { json: false }),
@@ -38,12 +40,13 @@ export async function uploadBatchJsonlFile(params: {
     },
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
-        const text = await readResponseTextSnippet(fileRes);
+        const text = await readResponseTextSnippet(fileRes, { signal: params.signal });
         throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
       }
       return (await readResponseJsonWithLimit(fileRes, {
         errorPrefix: params.errorPrefix,
         maxBytes: params.maxResponseBytes,
+        signal: params.signal,
       })) as { id?: string };
     },
   });

@@ -62,6 +62,13 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
+import {
+  readConfigHealthStateFromStore,
+  writeConfigHealthStateToStore,
+  type ConfigHealthEntry,
+  type ConfigHealthFingerprint,
+  type ConfigHealthState,
+} from "./io.health-state.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
@@ -159,35 +166,8 @@ type ShippedPluginInstallConfigReadMigration = {
   persistedRootRaw?: string;
 };
 
-const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
 const warnedFutureTouchedVersions = new Set<string>();
-
-type ConfigHealthFingerprint = {
-  hash: string;
-  bytes: number;
-  mtimeMs: number | null;
-  ctimeMs: number | null;
-  dev: string | null;
-  ino: string | null;
-  mode: number | null;
-  nlink: number | null;
-  uid: number | null;
-  gid: number | null;
-  hasMeta: boolean;
-  gatewayMode: string | null;
-  observedAt: string;
-};
-
-type ConfigHealthEntry = {
-  lastKnownGood?: ConfigHealthFingerprint;
-  lastPromotedGood?: ConfigHealthFingerprint;
-  lastObservedSuspiciousSignature?: string | null;
-};
-
-type ConfigHealthState = {
-  entries?: Record<string, ConfigHealthEntry>;
-};
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
@@ -328,6 +308,11 @@ function assertBaseSnapshotStillCurrent(
       currentHash: null,
       retryable: false,
     });
+  }
+  // Unreadable snapshots cannot be re-read for freshness; the write guard rejects
+  // them before commit unless the caller explicitly requests a destructive write.
+  if (snapshot.readError) {
+    return;
   }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
   let currentRaw: string | null = null;
@@ -494,10 +479,6 @@ function containsConfigIncludeDirective(value: unknown): boolean {
   return Object.values(value).some((item) => containsConfigIncludeDirective(item));
 }
 
-function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return path.join(resolveStateDir(env, homedir), "logs", CONFIG_HEALTH_STATE_FILENAME);
-}
-
 function normalizeStatNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -527,6 +508,7 @@ function resolveConfigStatMetadata(
 
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
+  unreadableBefore: boolean;
   previousBytes: number | null;
   nextBytes: number | null;
   hasMetaBefore: boolean;
@@ -536,6 +518,9 @@ function resolveConfigWriteSuspiciousReasons(params: {
   const reasons: string[] = [];
   if (!params.existsBefore) {
     return reasons;
+  }
+  if (params.unreadableBefore) {
+    reasons.push("unreadable-config-before-write");
   }
   if (
     typeof params.previousBytes === "number" &&
@@ -560,60 +545,29 @@ function resolveConfigWriteBlockingReasons(
 ): string[] {
   return suspicious.filter(
     (reason) =>
+      reason === "unreadable-config-before-write" ||
       (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
       reason === "gateway-mode-removed",
   );
 }
 
 async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<ConfigHealthState> {
-  try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
-    const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
-    return {};
-  }
+  return readConfigHealthStateFromStore(deps);
 }
 
 function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthState {
-  try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
-    const raw = deps.fs.readFileSync(healthPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
-    return {};
-  }
+  return readConfigHealthStateFromStore(deps);
 }
 
 async function writeConfigHealthState(
   deps: Required<ConfigIoDeps>,
   state: ConfigHealthState,
 ): Promise<void> {
-  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
-  try {
-    await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
-    await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  } catch (err) {
-    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
-  }
+  writeConfigHealthStateToStore(deps, state);
 }
 
 function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigHealthState): void {
-  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
-  try {
-    deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
-    deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  } catch (err) {
-    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
-  }
+  writeConfigHealthStateToStore(deps, state);
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
@@ -1110,6 +1064,18 @@ function findJsonRootSuffix(
   return null;
 }
 
+function warnOnConfigPermissionHardeningFailure(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  context: string;
+  error: unknown;
+}): void {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  params.deps.logger.warn(
+    `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`,
+  );
+}
+
 async function persistPrefixedConfigRecovery(params: {
   deps: Required<ConfigIoDeps>;
   configPath: string;
@@ -1127,7 +1093,14 @@ async function persistPrefixedConfigRecovery(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch((error: unknown) => {
+    warnOnConfigPermissionHardeningFailure({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "prefix recovery",
+      error,
+    });
+  });
   params.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${params.configPath}` +
       (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
@@ -1385,6 +1358,7 @@ function createConfigFileSnapshot(params: {
   valid: boolean;
   runtimeConfig: OpenClawConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigFileSnapshot["issues"];
   warnings: ConfigFileSnapshot["warnings"];
   legacyIssues: LegacyConfigIssue[];
@@ -1402,6 +1376,7 @@ function createConfigFileSnapshot(params: {
     runtimeConfig,
     config: runtimeConfig,
     hash: params.hash,
+    ...(params.readError ? { readError: params.readError } : {}),
     issues: params.issues,
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
@@ -2177,6 +2152,7 @@ export function createConfigIO(
           valid: false,
           runtimeConfig: fallbackSourceConfig,
           hash: fallbackHash,
+          ...(fallbackRaw === null ? { readError: { code: nodeErr?.code ?? null } } : {}),
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
@@ -2512,6 +2488,7 @@ export function createConfigIO(
     const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
+      unreadableBefore: snapshot.readError != null,
       previousBytes,
       nextBytes,
       hasMetaBefore,

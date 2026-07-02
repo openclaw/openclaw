@@ -36,6 +36,24 @@ describe("createWebChannelStatusController", () => {
     expect(last.lastTransportActivityAt).toBe(3000);
   });
 
+  it("publishes busy state for pending inbound work", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteBusy(true, 2000);
+    controller.noteBusy(false, 3000);
+
+    const busy = patches.at(-2)!;
+    expect(busy.busy).toBe(true);
+    expect(busy.lastRunActivityAt).toBe(2000);
+    expect(busy.healthState).toBe("healthy");
+
+    const idle = patches.at(-1)!;
+    expect(idle.busy).toBe(false);
+    expect(idle.lastRunActivityAt).toBe(3000);
+  });
+
   it("does not set lastTransportActivityAt on noteWatchdogStale", () => {
     const patches: Record<string, unknown>[] = [];
     const controller = createWebChannelStatusController((s) => patches.push({ ...s }));

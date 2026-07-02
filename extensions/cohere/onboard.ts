@@ -18,10 +18,6 @@ const coherePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyCohereProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return coherePresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyCohereConfig(cfg: OpenClawConfig): OpenClawConfig {
   return coherePresetAppliers.applyConfig(cfg);
 }

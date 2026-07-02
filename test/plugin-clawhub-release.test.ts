@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
   buildOpenClawReleaseClawHubRuntimeState,
@@ -120,16 +120,48 @@ describe("collectClawHubPublishablePluginPackages", () => {
 describe("OpenClaw dual-published plugin metadata", () => {
   const dualPublishedPlugins = [
     {
+      extensionId: "cohere",
+      packageName: "@openclaw/cohere-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/cohere-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/cohere-provider",
+      },
+    },
+    {
       extensionId: "diagnostics-otel",
       packageName: "@openclaw/diagnostics-otel",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-otel",
+      },
     },
     {
       extensionId: "diagnostics-prometheus",
       packageName: "@openclaw/diagnostics-prometheus",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/diagnostics-prometheus",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
+        npmSpec: "@openclaw/diagnostics-prometheus",
+      },
+    },
+    {
+      extensionId: "gmi",
+      packageName: "@openclaw/gmi-provider",
+      install: {
+        clawhubSpec: "clawhub:@openclaw/gmi-provider",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.8",
+        npmSpec: "@openclaw/gmi-provider",
+      },
     },
   ] as const;
 
-  it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
+  it("keeps dual-published plugins selectable through both ClawHub and npm release paths", () => {
     const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
     const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
       packageNames,
@@ -149,6 +181,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
           install?: {
             clawhubSpec?: string;
             defaultChoice?: string;
+            minHostVersion?: string;
             npmSpec?: string;
           };
           release?: {
@@ -158,12 +191,7 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toEqual({
-        clawhubSpec: `clawhub:${plugin.packageName}`,
-        defaultChoice: "npm",
-        minHostVersion: ">=2026.4.25",
-        npmSpec: plugin.packageName,
-      });
+      expect(packageJson.openclaw?.install).toEqual(plugin.install);
       expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
@@ -371,6 +399,219 @@ describe("collectPluginClawHubReleasePlan", () => {
     ]);
   });
 
+  it("cancels unused ClawHub package and version response bodies", async () => {
+    const repoDir = createTempPluginRepo();
+    const canceled: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(requestUrl);
+
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              canceled.push("package");
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              canceled.push("version");
+            },
+          }),
+          { status: 404 },
+        );
+      }
+
+      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+    };
+
+    await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(canceled).toEqual(["package", "version"]);
+  });
+
+  it("retries a rate-limited trusted publisher lookup", async () => {
+    const repoDir = createTempPluginRepo();
+    let trustedPublisherRequests = 0;
+    let rateLimitedBodyCanceled = false;
+    let firstTrustedPublisherRequestAt: number | undefined;
+    let retryTrustedPublisherRequestAt: number | undefined;
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        trustedPublisherRequests += 1;
+        if (trustedPublisherRequests === 1) {
+          firstTrustedPublisherRequestAt = Date.now();
+          return new Response(
+            new ReadableStream({
+              cancel() {
+                rateLimitedBodyCanceled = true;
+              },
+            }),
+            { status: 429 },
+          );
+        }
+        retryTrustedPublisherRequestAt = Date.now();
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(trustedPublisherRequests).toBe(2);
+    expect(rateLimitedBodyCanceled).toBe(true);
+    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
+      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
+    );
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+
+  it("honors an HTTP-date Retry-After header", async () => {
+    const repoDir = createTempPluginRepo();
+    const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse(retryAfter) - 1_000);
+    let trustedPublisherRequests = 0;
+    let firstTrustedPublisherRequestAt: number | undefined;
+    let retryTrustedPublisherRequestAt: number | undefined;
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        trustedPublisherRequests += 1;
+        if (trustedPublisherRequests === 1) {
+          firstTrustedPublisherRequestAt = performance.now();
+          return new Response("", { status: 429, headers: { "retry-after": retryAfter } });
+        }
+        retryTrustedPublisherRequestAt = performance.now();
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    try {
+      await collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(trustedPublisherRequests).toBe(2);
+    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
+      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
+    );
+  });
+
+  it("falls back to the bounded retry schedule for an excessive Retry-After header", async () => {
+    const repoDir = createTempPluginRepo();
+    let trustedPublisherRequests = 0;
+    let firstTrustedPublisherRequestAt: number | undefined;
+    let retryTrustedPublisherRequestAt: number | undefined;
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        trustedPublisherRequests += 1;
+        if (trustedPublisherRequests === 1) {
+          firstTrustedPublisherRequestAt = Date.now();
+          return new Response("", { status: 429, headers: { "retry-after": "999999999999" } });
+        }
+        retryTrustedPublisherRequestAt = Date.now();
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(trustedPublisherRequests).toBe(2);
+    expect(retryTrustedPublisherRequestAt).toBeGreaterThanOrEqual(
+      (firstTrustedPublisherRequestAt ?? Number.POSITIVE_INFINITY) + 900,
+    );
+  });
+
   it("routes missing package rows to bootstrap candidates instead of normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl } = createClawHubPlanFetch({
@@ -444,6 +685,32 @@ describe("collectPluginClawHubReleasePlan", () => {
       packageName: "@openclaw/demo-plugin",
       version: "2026.4.1",
     });
+  });
+
+  it("keeps ClawHub trusted publisher timeouts active while reading response bodies", async () => {
+    const repoDir = createTempPluginRepo();
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = new URL(requestUrl);
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+    };
+
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        fetchImpl,
+        registryBaseUrl: "https://clawhub.ai",
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("ClawHub request timed out after 5ms");
   });
 
   it("routes environment-pinned trusted publisher config out of normal candidates", async () => {
@@ -880,6 +1147,49 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
+  it("prints help before package or ClawHub checks", () => {
+    const output = execFileSync(
+      "bash",
+      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--help"],
+      {
+        encoding: "utf8",
+      },
+    );
+
+    expect(output.trim()).toBe(
+      "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+    );
+  });
+
+  it("rejects option-like package dirs before package or ClawHub checks", () => {
+    expect(() =>
+      execFileSync(
+        "bash",
+        [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--dry-run", "--wat"],
+        {
+          encoding: "utf8",
+        },
+      ),
+    ).toThrow("unexpected plugin ClawHub package-dir option: --wat");
+  });
+
+  it("rejects extra arguments before package or ClawHub checks", () => {
+    expect(() =>
+      execFileSync(
+        "bash",
+        [
+          join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
+          "--dry-run",
+          "extensions/demo-plugin",
+          "extra",
+        ],
+        {
+          encoding: "utf8",
+        },
+      ),
+    ).toThrow("unexpected plugin ClawHub publish argument: extra");
+  });
+
   it("previews the publish command through the ClawHub CLI dry-run preflight", () => {
     const repoDir = createTempPluginRepo();
     const binDir = join(repoDir, "bin");

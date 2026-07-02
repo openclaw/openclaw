@@ -19,6 +19,8 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["account/read", "allowed-control-plane"],
   ["app/list", "allowed-control-plane"],
   ["config/mcpServer/reload", "allowed-control-plane"],
+  ["config/read", "allowed-control-plane"],
+  ["config/value/write", "allowed-control-plane"],
   ["environment/add", "allowed-control-plane"],
   ["experimentalFeature/enablement/set", "allowed-control-plane"],
   ["feedback/upload", "allowed-control-plane"],

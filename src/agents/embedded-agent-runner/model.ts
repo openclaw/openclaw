@@ -455,8 +455,6 @@ function findInlineModelMatch(params: {
   );
 }
 
-export { buildInlineProviderModels };
-
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -1915,11 +1913,21 @@ function buildMissingProviderModelRegistrationHint(params: {
     return undefined;
   }
   const agentModelKey = modelKey(params.provider, params.modelId);
-  if (
-    !configuredModels[agentModelKey] &&
-    !configuredModels[`${params.provider}/${params.modelId}`]
-  ) {
+  const configuredEntry =
+    configuredModels[agentModelKey] ?? configuredModels[`${params.provider}/${params.modelId}`];
+  if (!configuredEntry) {
     return undefined;
+  }
+  // Models bound to an agent runtime (e.g. "codex") draw their catalog from that
+  // runtime and its linked account, not from models.providers[].models[].
+  // Advising a models.providers[] registration here is actively misleading: it
+  // makes resolution "succeed" only for the request to be rejected later by the
+  // runtime/provider (e.g. OpenAI returns 400 "model is not supported when using
+  // Codex with a ChatGPT account" once a deprecated model id is no longer
+  // offered). Point the user at the runtime's live catalog instead.
+  const agentRuntimeId = configuredEntry.agentRuntime?.id;
+  if (agentRuntimeId) {
+    return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;
   }
   const providerConfig = findNormalizedProviderValue(
     params.cfg?.models?.providers,

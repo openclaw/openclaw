@@ -9,7 +9,7 @@ import {
   resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
-import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type NodeInstallPlan = {
   programArguments: string[];
@@ -33,11 +33,12 @@ export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
   port: number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
-  runtime: NodeDaemonRuntime;
+  runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
@@ -51,6 +52,7 @@ export async function buildNodeInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
     port: params.port,
+    contextPath: params.contextPath,
     tls: params.tls,
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,

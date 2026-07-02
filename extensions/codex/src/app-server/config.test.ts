@@ -28,6 +28,10 @@ function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
 }
 
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -411,6 +415,65 @@ describe("Codex app-server config", () => {
       remoteAppsSubstrate: "preconfigured",
       remoteWorkspaceRoot: "/home/oai/openclaw-workspaces",
     });
+  });
+
+  it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: " resolved-capability-token ",
+          headers: {
+            " x-codex-client-session-token ": " resolved-session-token ",
+            Authorization: " Bearer explicit-token ",
+          },
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      authToken: "resolved-capability-token",
+      headers: {
+        "x-codex-client-session-token": "resolved-session-token",
+        Authorization: "Bearer explicit-token",
+      },
+    });
+  });
+
+  it("rejects unresolved app-server auth token SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: envRef("CODEX_APP_SERVER_TOKEN"),
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.authToken: unresolved SecretRef "env:default:CODEX_APP_SERVER_TOKEN"',
+    );
+  });
+
+  it("rejects unresolved app-server header SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: "capability-token",
+            headers: {
+              "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.headers.x-codex-client-session-token: unresolved SecretRef "env:default:CODEX_CLIENT_SESSION_TOKEN"',
+    );
   });
 
   it("treats IPv6 loopback websocket app-servers as local loopback", () => {
@@ -1129,11 +1192,59 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("parses ask native Codex plugin destructive policy", () => {
+    const config = readCodexPluginConfig({
+      appServer: { mode: "guardian" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            allow_destructive_actions: "auto",
+          },
+        },
+      },
+    });
+
+    expect(config.appServer?.mode).toBe("guardian");
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("ask");
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "ask",
+      pluginPolicies: [
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask",
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        },
+      ],
+    });
+  });
+
   it("rejects unsupported native Codex plugin destructive policy strings", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "ask",
+        allow_destructive_actions: "always",
         plugins: {
           slack: {
             marketplaceName: "openai-curated",
@@ -2312,6 +2423,47 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("derives distinct shared-client keys for distinct headers without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer first",
+        "x-codex-client-session-token": "session-first",
+      },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer second",
+        "x-codex-client-session-token": "session-second",
+      },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        headers: {
+          Authorization: "Bearer first",
+          "x-codex-client-session-token": "session-first",
+        },
+      }),
+    ).toEqual(first);
+    expect(first).not.toContain("Bearer first");
+    expect(first).not.toContain("session-first");
+    expect(second).not.toContain("Bearer second");
+    expect(second).not.toContain("session-second");
   });
 
   it("keeps secret-derived shared-client keys stable across module reloads", async () => {

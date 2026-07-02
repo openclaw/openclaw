@@ -9,12 +9,13 @@ read_when:
 The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 access hundreds of models through a single endpoint.
 
-| Property      | Value                            |
-| ------------- | -------------------------------- |
-| Provider      | `vercel-ai-gateway`              |
-| Auth          | `AI_GATEWAY_API_KEY`             |
-| API           | Anthropic Messages compatible    |
-| Model catalog | Auto-discovered via `/v1/models` |
+| Property      | Value                                  |
+| ------------- | -------------------------------------- |
+| Provider      | `vercel-ai-gateway`                    |
+| Package       | `@openclaw/vercel-ai-gateway-provider` |
+| Auth          | `AI_GATEWAY_API_KEY`                   |
+| API           | Anthropic Messages compatible          |
+| Model catalog | Auto-discovered via `/v1/models`       |
 
 <Tip>
 OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
@@ -26,6 +27,11 @@ OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/vercel-ai-gateway-provider
+    ```
+  </Step>
   <Step title="Set the API key">
     Run onboarding and choose the AI Gateway auth option:
 

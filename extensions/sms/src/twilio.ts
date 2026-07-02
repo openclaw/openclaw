@@ -11,6 +11,9 @@ const TWILIO_MESSAGING_URL = "https://messaging.twilio.com/v1";
 const TWILIO_API_HOSTNAME = "api.twilio.com";
 const TWILIO_MESSAGING_HOSTNAME = "messaging.twilio.com";
 const TWILIO_API_TIMEOUT_MS = 30_000;
+const TWILIO_API_SUCCESS_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
+const TWILIO_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const TRUNCATED_RESPONSE_SUFFIX = "... [truncated]";
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
@@ -265,6 +268,61 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
+function appendTruncatedResponseSuffix(text: string): string {
+  return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
+}
+
+async function readTwilioApiResponseText(response: Response): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const maxBytes = response.ok
+    ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
+    : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
+  const truncateOnLimit = !response.ok;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let totalBytes = 0;
+  let text = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      if (!value?.byteLength) {
+        continue;
+      }
+
+      const remainingBytes = maxBytes - totalBytes;
+      if (value.byteLength > remainingBytes) {
+        const clipped = remainingBytes > 0 ? value.slice(0, remainingBytes) : undefined;
+        if (truncateOnLimit) {
+          if (clipped) {
+            text += decoder.decode(clipped, { stream: true });
+          }
+          await reader.cancel().catch(() => undefined);
+          return appendTruncatedResponseSuffix(text + decoder.decode());
+        }
+        await reader.cancel().catch(() => undefined);
+        throw new Error(
+          `Twilio SMS API response body too large: ${totalBytes + value.byteLength} bytes ` +
+            `(limit: ${maxBytes} bytes)`,
+        );
+      }
+
+      text += decoder.decode(value, { stream: true });
+      totalBytes += value.byteLength;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
 function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) {
     return {};
@@ -298,7 +356,7 @@ async function requestTwilioApi(params: {
     return {
       ok: response.ok,
       status: response.status,
-      text: await response.text(),
+      text: await readTwilioApiResponseText(response),
     };
   }
 
@@ -314,7 +372,7 @@ async function requestTwilioApi(params: {
     return {
       ok: guarded.response.ok,
       status: guarded.response.status,
-      text: await guarded.response.text(),
+      text: await readTwilioApiResponseText(guarded.response),
     };
   } finally {
     await guarded.release();
@@ -366,7 +424,12 @@ function parseTwilioListPayload<T>(
   if (!text.trim()) {
     return [];
   }
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
   if (!parsed || typeof parsed !== "object") {
     return [];
   }
@@ -424,7 +487,12 @@ export async function retrieveTwilioMessagingService(params: {
   if (!response.ok) {
     throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
   }
-  const parsed: unknown = JSON.parse(response.text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.text);
+  } catch {
+    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }

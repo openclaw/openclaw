@@ -1,10 +1,10 @@
 import Foundation
+import OpenClawProtocol
 import Testing
 @testable import OpenClawKit
-import OpenClawProtocol
 
-private extension NSLock {
-    func withLock<T>(_ body: () -> T) -> T {
+extension NSLock {
+    fileprivate func withLock<T>(_ body: () -> T) -> T {
         self.lock()
         defer { self.unlock() }
         return body()
@@ -18,7 +18,9 @@ private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecke
         self.callbacks = callbacks
     }
 
-    var state: URLSessionTask.State { .running }
+    var state: URLSessionTask.State {
+        .running
+    }
 
     func resume() {}
 
@@ -50,15 +52,18 @@ private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecke
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let connectError: [String: Any]?
     private var _state: URLSessionTask.State = .suspended
     private var connectRequestId: String?
     private var connectAuth: [String: Any]?
+    private var connectDevice: [String: Any]?
     private var receivePhase = 0
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
 
-    init(helloAuth: [String: Any]? = nil) {
+    init(helloAuth: [String: Any]? = nil, connectError: [String: Any]? = nil) {
         self.helloAuth = helloAuth
+        self.connectError = connectError
     }
 
     var state: URLSessionTask.State {
@@ -73,7 +78,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         _ = (closeCode, reason)
         self.state = .canceling
-        let handler = self.lock.withLock { () -> (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)? in
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
         }
@@ -92,16 +100,23 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
            obj["method"] as? String == "connect",
            let id = obj["id"] as? String
         {
-            let auth = ((obj["params"] as? [String: Any])?["auth"] as? [String: Any]) ?? [:]
+            let params = obj["params"] as? [String: Any]
+            let auth = (params?["auth"] as? [String: Any]) ?? [:]
+            let device = params?["device"] as? [String: Any]
             self.lock.withLock {
                 self.connectRequestId = id
                 self.connectAuth = auth
+                self.connectDevice = device
             }
         }
     }
 
     func latestConnectAuth() -> [String: Any]? {
         self.lock.withLock { self.connectAuth }
+    }
+
+    func latestConnectDevice() -> [String: Any]? {
+        self.lock.withLock { self.connectDevice }
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
@@ -120,9 +135,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         for _ in 0..<50 {
             let id = self.lock.withLock { self.connectRequestId }
             if let id {
+                if let connectError {
+                    return .data(Self.connectErrorData(id: id, error: connectError))
+                }
                 return .data(Self.connectOkData(id: id, auth: self.helloAuth))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        if let connectError {
+            return .data(Self.connectErrorData(id: "connect", error: connectError))
         }
         return .data(Self.connectOkData(id: "connect", auth: self.helloAuth))
     }
@@ -134,7 +155,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitReceiveFailure() {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)? in
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
             self._state = .canceling
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
@@ -175,7 +199,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "policy": [
                 "maxPayload": 1,
                 "maxBufferedBytes": 1,
-                "tickIntervalMs": 30_000,
+                "tickIntervalMs": 30000,
             ],
             "auth": [:],
         ]
@@ -190,16 +214,28 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
+
+    private static func connectErrorData(id: String, error: [String: Any]) -> Data {
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": false,
+            "error": error,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+    }
 }
 
 private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let connectError: [String: Any]?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var makeCount = 0
 
-    init(helloAuth: [String: Any]? = nil) {
+    init(helloAuth: [String: Any]? = nil, connectError: [String: Any]? = nil) {
         self.helloAuth = helloAuth
+        self.connectError = connectError
     }
 
     func snapshotMakeCount() -> Int {
@@ -214,7 +250,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         _ = url
         return self.lock.withLock {
             self.makeCount += 1
-            let task = FakeGatewayWebSocketTask(helloAuth: self.helloAuth)
+            let task = FakeGatewayWebSocketTask(helloAuth: self.helloAuth, connectError: self.connectError)
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
         }
@@ -223,20 +259,25 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
 
 private actor SeqGapProbe {
     private var saw = false
-    func mark() { self.saw = true }
-    func value() -> Bool { self.saw }
+    func mark() {
+        self.saw = true
+    }
+
+    func value() -> Bool {
+        self.saw
+    }
 }
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test
-    func websocketPingIgnoresDuplicateSuccessCallbacks() async throws {
+    func `websocket ping ignores duplicate success callbacks`() async throws {
         let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
         try await WebSocketTaskBox(task: task).sendPing()
     }
 
     @Test
-    func websocketPingIgnoresDuplicateCallbacksAfterFirstError() async throws {
+    func `websocket ping ignores duplicate callbacks after first error`() async throws {
         let firstError = URLError(.networkConnectionLost)
         let task = DoubleCallbackPingWebSocketTask(callbacks: [firstError, nil])
 
@@ -249,7 +290,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func scannedSetupCodePrefersBootstrapAuthOverStoredDeviceToken() async throws {
+    func `scanned setup code prefers bootstrap auth over stored device token`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -284,7 +325,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: true)
 
         try await gateway.connect(
-            url: URL(string: "ws://example.invalid")!,
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             bootstrapToken: "fresh-bootstrap-token",
             password: nil,
@@ -305,7 +346,74 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func passwordTakesPrecedenceOverBootstrapToken() async throws {
+    func `share extension identity profile uses separate node identity and token store`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: primaryIdentity.deviceId,
+            role: "node",
+            token: "primary-node-token")
+
+        let session = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "share-node-token",
+            "role": "node",
+            "scopes": [],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "node",
+            clientDisplayName: "OpenClaw Share",
+            deviceIdentityProfile: .shareExtension,
+            includeDeviceIdentity: true)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: "shared-password",
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let shareDevice = try #require(session.latestTask()?.latestConnectDevice())
+        let shareDeviceId = try #require(shareDevice["id"] as? String)
+        #expect(shareDeviceId != primaryIdentity.deviceId)
+        #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?
+            .token == "primary-node-token")
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node") == nil)
+        #expect(
+            DeviceAuthStore
+                .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==
+                "share-node-token")
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `password takes precedence over bootstrap token`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
@@ -320,7 +428,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: false)
 
         try await gateway.connect(
-            url: URL(string: "ws://example.invalid")!,
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             bootstrapToken: "stale-bootstrap-token",
             password: "shared-password",
@@ -341,7 +449,67 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func changedSessionBoxRebuildsExistingGatewayChannel() async throws {
+    func `connect failure preserves protocol mismatch details`() async throws {
+        let session = FakeGatewayWebSocketSession(connectError: [
+            "code": "INVALID_REQUEST",
+            "message": "protocol mismatch",
+            "details": [
+                "code": "PROTOCOL_MISMATCH",
+                "clientMinProtocol": 4,
+                "clientMaxProtocol": 4,
+                "expectedProtocol": 5,
+                "minimumProbeProtocol": 4,
+            ],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: "shared-token",
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+            Issue.record("connect unexpectedly succeeded")
+        } catch let error as GatewayConnectAuthError {
+            #expect(error.detail == .protocolMismatch)
+            #expect(error.clientMinProtocol == 4)
+            #expect(error.clientMaxProtocol == 4)
+            #expect(error.expectedProtocol == 5)
+            #expect(error.minimumProbeProtocol == 4)
+
+            let problem = GatewayConnectionProblemMapper.map(error: error)
+            #expect(problem?.kind == .protocolMismatch)
+            #expect(problem?.owner == .iphone)
+            #expect(problem?
+                .message == "This app is older than the gateway. Update OpenClaw on this device, then retry.")
+            #expect(problem?.pauseReconnect == true)
+            #expect(problem?.retryable == false)
+        } catch {
+            Issue.record("unexpected error type: \(error)")
+        }
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `changed session box rebuilds existing gateway channel`() async throws {
         let firstSession = FakeGatewayWebSocketSession()
         let secondSession = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -357,7 +525,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: false)
 
         try await gateway.connect(
-            url: URL(string: "wss://example.invalid")!,
+            url: #require(URL(string: "wss://example.invalid")),
             token: "shared-token",
             bootstrapToken: nil,
             password: nil,
@@ -370,7 +538,7 @@ struct GatewayNodeSessionTests {
             })
 
         try await gateway.connect(
-            url: URL(string: "wss://example.invalid")!,
+            url: #require(URL(string: "wss://example.invalid")),
             token: "shared-token",
             bootstrapToken: nil,
             password: nil,
@@ -389,7 +557,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func bootstrapHelloStoresAdditionalDeviceTokens() async throws {
+    func `bootstrap hello stores additional device tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -440,7 +608,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: true)
 
         try await gateway.connect(
-            url: URL(string: "wss://example.invalid")!,
+            url: #require(URL(string: "wss://example.invalid")),
             token: nil,
             bootstrapToken: "fresh-bootstrap-token",
             password: nil,
@@ -468,7 +636,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func nonBootstrapHelloStoresPrimaryDeviceTokenButNotAdditionalBootstrapTokens() async throws {
+    func `non bootstrap hello stores primary device token but not additional bootstrap tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -509,7 +677,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: true)
 
         try await gateway.connect(
-            url: URL(string: "wss://example.invalid")!,
+            url: #require(URL(string: "wss://example.invalid")),
             token: "shared-token",
             bootstrapToken: nil,
             password: nil,
@@ -530,7 +698,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func untrustedBootstrapHelloDoesNotPersistBootstrapHandoffTokens() async throws {
+    func `untrusted bootstrap hello does not persist bootstrap handoff tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -574,7 +742,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: true)
 
         try await gateway.connect(
-            url: URL(string: "ws://example.invalid")!,
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             bootstrapToken: "fresh-bootstrap-token",
             password: nil,
@@ -593,25 +761,25 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func normalizeCanvasHostUrlPreservesExplicitSecureCanvasPort() {
-        let normalized = canonicalizeCanvasHostUrl(
+    func `normalize canvas host url preserves explicit secure canvas port`() throws {
+        let normalized = try canonicalizeCanvasHostUrl(
             raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com")!)
+            activeURL: #require(URL(string: "wss://gateway.example.com")))
 
         #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
     }
 
     @Test
-    func normalizeCanvasHostUrlBackfillsGatewayHostForLoopbackCanvas() {
-        let normalized = canonicalizeCanvasHostUrl(
+    func `normalize canvas host url backfills gateway host for loopback canvas`() throws {
+        let normalized = try canonicalizeCanvasHostUrl(
             raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com:7443")!)
+            activeURL: #require(URL(string: "wss://gateway.example.com:7443")))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
     }
 
     @Test
-    func invokeWithTimeoutReturnsUnderlyingResponseBeforeTimeout() async {
+    func `invoke with timeout returns underlying response before timeout`() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(
             request: request,
@@ -619,8 +787,7 @@ struct GatewayNodeSessionTests {
             onInvoke: { req in
                 #expect(req.id == "1")
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: "{}", error: nil)
-            }
-        )
+            })
 
         #expect(response.ok == true)
         #expect(response.error == nil)
@@ -628,7 +795,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func invokeWithTimeoutReturnsTimeoutError() async {
+    func `invoke with timeout returns timeout error`() async {
         let request = BridgeInvokeRequest(id: "abc", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(
             request: request,
@@ -636,8 +803,7 @@ struct GatewayNodeSessionTests {
             onInvoke: { _ in
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
                 return BridgeInvokeResponse(id: "abc", ok: true, payloadJSON: "{}", error: nil)
-            }
-        )
+            })
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -645,7 +811,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func invokeWithTimeoutZeroDisablesTimeout() async {
+    func `invoke with timeout zero disables timeout`() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(
             request: request,
@@ -653,15 +819,14 @@ struct GatewayNodeSessionTests {
             onInvoke: { req in
                 try? await Task.sleep(nanoseconds: 5_000_000)
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
-            }
-        )
+            })
 
         #expect(response.ok == true)
         #expect(response.error == nil)
     }
 
     @Test
-    func emitsSyntheticSeqGapAfterReconnectSnapshot() async throws {
+    func `emits synthetic seq gap after reconnect snapshot`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
@@ -687,7 +852,7 @@ struct GatewayNodeSessionTests {
         }
 
         try await gateway.connect(
-            url: URL(string: "ws://example.invalid")!,
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             bootstrapToken: nil,
             password: nil,

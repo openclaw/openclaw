@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkQQBotMarkdownText,
   createQQBotMarkdownChunker,
+  testing,
   type QQBotBaseMarkdownChunker,
 } from "./markdown-table-chunking.js";
 
@@ -44,6 +45,15 @@ describe("chunkQQBotMarkdownText", () => {
     expect(
       chunker.chunkText(["|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"), 120),
     ).toEqual([["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n")]);
+  });
+
+  it("confirms a table when the separator uses one or two dashes, not only three", () => {
+    // GFM delimiter cells need only one or more dashes; a sub-3-dash separator previously failed
+    // recognition, so the header and all rows but the last were silently dropped on send.
+    for (const separator of ["|--|--|", "|-|-|", "|:--|--:|"]) {
+      const text = ["| Id | Value |", separator, "| 1 | alpha |", "| 2 | beta |"].join("\n");
+      expect(chunkQQBotMarkdownText(text, 200, baseChunker)).toEqual([text]);
+    }
   });
 
   it("flushes a possible table header as text when the next block is not a separator", () => {
@@ -250,5 +260,26 @@ describe("chunkQQBotMarkdownText", () => {
       ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
       "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
     ]);
+  });
+});
+
+describe("table-cell splitting", () => {
+  it("treats a backslash-escaped pipe as literal cell content, not a delimiter", () => {
+    // GFM: `\|` inside a cell is a literal "|", so this row has two cells, not
+    // three. Splitting on every "|" previously mis-counted columns, so the
+    // oversized-row fallback rendered the trailing content under the wrong header.
+    expect(testing.splitTableCells("| a \\| b | c |")).toEqual(["a | b", "c"]);
+  });
+
+  it("leaves ordinary rows unchanged", () => {
+    expect(testing.splitTableCells("| a | b |")).toEqual(["a", "b"]);
+  });
+
+  it("unescapes a literal backslash and still splits on the following pipe", () => {
+    expect(testing.splitTableCells("| a \\\\ | b |")).toEqual(["a \\", "b"]);
+  });
+
+  it("handles escaped pipes in partial (unterminated) rows", () => {
+    expect(testing.splitPartialTableCells("| a \\| b")).toEqual(["a | b"]);
   });
 });

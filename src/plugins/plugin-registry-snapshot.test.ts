@@ -9,12 +9,17 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import type { PluginCandidate } from "./discovery.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import {
+  markRetainedManagedNpmInstall,
+  RETAINED_MANAGED_NPM_INSTALL_MARKER,
+} from "./managed-npm-retention.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -435,6 +440,69 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
     const whatsappPlugin = requirePluginRecord(result.snapshot.plugins, "whatsapp");
     expect(whatsappPlugin.origin).toBe("global");
+  });
+
+  it("does not recover retained managed npm generations as install records", async () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.6.10-beta.1",
+    });
+    await markRetainedManagedNpmInstall({
+      packageDir: codexDir,
+      pluginId: "codex",
+      retainedAt: "2026-06-21T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeUndefined();
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.snapshot.installRecords.codex).toBeUndefined();
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).not.toContain("codex");
+  });
+
+  it("does not trust package-owned retained npm marker files during recovery", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.6.10-beta.1",
+    });
+    fs.writeFileSync(
+      path.join(codexDir, RETAINED_MANAGED_NPM_INSTALL_MARKER),
+      '{"version":1,"pluginId":"codex"}\n',
+      "utf8",
+    );
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeDefined();
   });
 
   it("keeps vanished recovered install records on the persisted fast path", () => {

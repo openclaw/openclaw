@@ -34,6 +34,8 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleEntries,
+  pruneStaleModelRunEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -337,7 +339,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
-function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
+export function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
   if (!snapshot || snapshot.resolvedSkills === undefined) {
     return entry;
@@ -436,9 +438,24 @@ export function loadSessionStore(
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+    let modelRunPruned = 0;
     let pruned = 0;
     let capped = 0;
-    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    if (maintenance.mode === "enforce") {
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      if (
+        shouldRunModelRunPrune({
+          maintenance,
+          entryCount: beforeCount,
+        })
+      ) {
+        modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+          log: false,
+          preserveKeys: preserveSessionKeys,
+        });
+      }
+    }
+    if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
@@ -456,12 +473,13 @@ export function loadSessionStore(
         : 0;
     }
     const afterCount = Object.keys(store).length;
-    if (pruned > 0 || capped > 0) {
+    if (modelRunPruned > 0 || pruned > 0 || capped > 0) {
       serializedFromDisk = undefined;
       log.info("applied load-time maintenance to session store", {
         storePath,
         before: beforeCount,
         after: afterCount,
+        modelRunPruned,
         pruned,
         capped,
         maxEntries: maintenance.maxEntries,

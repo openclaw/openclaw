@@ -1,6 +1,7 @@
 // Detects and decodes Windows console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -49,7 +50,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
     return cachedWindowsConsoleEncoding;
   }
   try {
-    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+    const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],

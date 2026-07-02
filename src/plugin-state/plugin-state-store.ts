@@ -37,7 +37,6 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateDatabase,
-  closePluginStateSqliteStore,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
@@ -463,13 +462,6 @@ export function createPluginStateSyncKeyedStore<T>(
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
-}
-
-/** Opens an async plugin-state namespace for a trusted core owner id. */
-export function createCorePluginStateKeyedStore<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
-): PluginStateKeyedStore<T> {
-  return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

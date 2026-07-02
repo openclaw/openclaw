@@ -15,6 +15,11 @@ function makeTempRoot(): string {
   return root;
 }
 
+function expectNoNodeStack(stderr: string): void {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -86,6 +91,11 @@ describe("check-cli-startup-memory", () => {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000.5",
       }),
     ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
+        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
     expect(
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000",
@@ -97,8 +107,10 @@ describe("check-cli-startup-memory", () => {
     for (const args of [
       ["--json"],
       ["--json", "--summary"],
+      ["--json", "-h"],
       ["--summary"],
       ["--summary", "--json"],
+      ["--summary", "-h"],
     ]) {
       expect(() => testing.parseArgs(args)).toThrow(/--(?:json|summary) requires a path/u);
     }
@@ -123,6 +135,18 @@ describe("check-cli-startup-memory", () => {
 
     expect(result.status).not.toBe(0);
     expect(readdirSync(tempRoot)).toEqual([]);
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--wat"], {
+      cwd: path.resolve(__dirname, "..", ".."),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown option: --wat");
+    expectNoNodeStack(result.stderr);
   });
 
   it("times out startup probes instead of hanging indefinitely", () => {
@@ -193,5 +217,43 @@ describe("check-cli-startup-memory", () => {
         },
       ),
     ).toThrow("--help did not report max RSS");
+  });
+
+  it("passes the generated RSS hook as a Node import URL", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const tempRoot = makeTempRoot();
+    const seenArgs: string[][] = [];
+
+    const result = testing.runStartupMemoryCheck(
+      [
+        "--json",
+        path.join(tempRoot, "startup-memory.json"),
+        "--summary",
+        path.join(tempRoot, "summary.md"),
+      ],
+      {
+        platform: "linux",
+        spawnSync: (_command: string, args: string[]) => {
+          seenArgs.push(args);
+          return {
+            error: null,
+            signal: null,
+            status: 0,
+            stderr: "__OPENCLAW_MAX_RSS_KB__=1024\n",
+            stdout: "",
+          };
+        },
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    expect(seenArgs).toHaveLength(testing.cases.length);
+    for (const args of seenArgs) {
+      expect(args[0]).toBe("--import");
+      expect(args[1]).toMatch(/^file:/u);
+    }
   });
 });

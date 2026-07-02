@@ -39,10 +39,12 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -275,10 +277,11 @@ export async function resolveTelegramInboundBody(params: {
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
+  const richText = resolveTelegramRichMessageText(msg);
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
+    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
     return null;
@@ -366,9 +369,12 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const explicitlyMentioned = botUsername
+    ? hasBotMention(msg, botUsername) ||
+      (richText ? hasBotMentionInText(richText, botUsername) : false)
+    : false;
   const computedWasMentioned = matchesMentionWithExplicit({
-    text: messageTextParts.text,
+    text: messageTextParts.text || richText || "",
     mentionRegexes,
     explicit: {
       hasAnyMention,

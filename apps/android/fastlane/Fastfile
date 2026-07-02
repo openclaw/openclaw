@@ -6,6 +6,7 @@ require "supply/client"
 
 default_platform(:android)
 
+ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
 DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
 DEFAULT_PLAY_TRACK = "internal"
 DEFAULT_PLAY_RELEASE_STATUS = "completed"
@@ -35,7 +36,7 @@ def env_present?(value)
 end
 
 def android_root
-  File.expand_path("..", __dir__)
+  File.expand_path("..", ANDROID_FASTLANE_ROOT)
 end
 
 def repo_root
@@ -147,7 +148,7 @@ def sync_android_versioning!
 end
 
 def android_release_notes_path
-  File.join(__dir__, "metadata", "android", "en-US", "release_notes.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "release_notes.txt")
 end
 
 def validate_android_release_notes!
@@ -157,7 +158,7 @@ def validate_android_release_notes!
 end
 
 def android_changelog_path(version_code)
-  File.join(__dir__, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
 end
 
 def sync_android_changelog!(version_code)
@@ -170,7 +171,7 @@ def sync_android_changelog!(version_code)
 end
 
 def play_metadata_path
-  File.join(__dir__, "metadata", "android")
+  File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
 def play_screenshot_paths
@@ -195,6 +196,58 @@ end
 
 def capture_android_screenshots!
   sh(shell_join(["bash", File.join(repo_root, "scripts", "android-screenshots.sh")]))
+end
+
+def mobile_release_ref_script
+  File.join(repo_root, "scripts", "mobile-release-ref.ts")
+end
+
+def release_git_sha
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+  UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
+  stdout.strip
+end
+
+def mobile_release_ref_command(command, platform:, version:, build: nil, version_code: nil, sha: nil)
+  args = [
+    "node",
+    "--import",
+    "tsx",
+    mobile_release_ref_script,
+    command,
+    "--platform",
+    platform,
+    "--version",
+    version,
+    "--root",
+    repo_root,
+  ]
+  args.push("--build", build.to_s) if build
+  args.push("--version-code", version_code.to_s) if version_code
+  args.push("--sha", sha.to_s) if sha
+  sh(shell_join(args))
+end
+
+def ensure_mobile_release_ref_available!(platform:, version:, build: nil, version_code: nil, sha: nil)
+  mobile_release_ref_command(
+    "preflight",
+    platform: platform,
+    version: version,
+    build: build,
+    version_code: version_code,
+    sha: sha
+  )
+end
+
+def record_mobile_release_ref!(platform:, version:, build: nil, version_code: nil, sha: nil)
+  mobile_release_ref_command(
+    "record",
+    platform: platform,
+    version: version,
+    build: build,
+    version_code: version_code,
+    sha: sha
+  )
 end
 
 def read_android_release_signing_properties!(path)
@@ -281,6 +334,13 @@ def upload_play_store_metadata!(version_metadata)
 end
 
 def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
+  release_sha = release_git_sha
+  ensure_mobile_release_ref_available!(
+    platform: "android",
+    version: version_metadata.fetch(:version),
+    version_code: version_metadata.fetch(:version_code),
+    sha: release_sha
+  )
   ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1" if upload_screenshots
   validate_android_screenshots!
   sync_android_changelog!(version_metadata.fetch(:version_code))
@@ -301,9 +361,18 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
     skip_upload_screenshots: !upload_screenshots,
     validate_only: play_validate_only?
   )
+
+  unless play_validate_only?
+    record_mobile_release_ref!(
+      platform: "android",
+      version: version_metadata.fetch(:version),
+      version_code: version_metadata.fetch(:version_code),
+      sha: release_sha
+    )
+  end
 end
 
-load_env_file(File.join(__dir__, ".env"))
+load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
 
 platform :android do
   desc "Validate Google Play API credentials"

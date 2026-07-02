@@ -10,10 +10,10 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { pickGatewaySelfPresence } from "../gateway-presence.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
-  pickGatewaySelfPresence,
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   type GatewayConfigSummary,

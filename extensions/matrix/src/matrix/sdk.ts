@@ -484,6 +484,39 @@ export class MatrixClient {
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
+      canUnlockSecretStorage: async () => {
+        const secretStorage = (
+          this.client as {
+            secretStorage?: Partial<
+              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
+            >;
+          }
+        ).secretStorage;
+        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
+        // without turning missing recovery access into a noisy caught TypeError.
+        if (
+          !secretStorage ||
+          typeof secretStorage.getDefaultKeyId !== "function" ||
+          typeof secretStorage.getKey !== "function" ||
+          typeof secretStorage.checkKey !== "function"
+        ) {
+          return false;
+        }
+        const defaultKeyId = await secretStorage.getDefaultKeyId();
+        if (!defaultKeyId) {
+          return false;
+        }
+        const keyTuple = await secretStorage.getKey(defaultKeyId);
+        const key = this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+        if (!keyTuple || !key) {
+          return false;
+        }
+        const keyInfo = keyTuple[1];
+        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+          return false;
+        }
+        return await secretStorage.checkKey(key, keyInfo);
+      },
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -496,7 +529,7 @@ export class MatrixClient {
         recoveryKeyStore: this.recoveryKeyStore,
         getRoomStateEvent: (roomId, eventType, stateKey = "") =>
           this.getRoomStateEvent(roomId, eventType, stateKey),
-        downloadContent: (mxcUrl) => this.downloadContent(mxcUrl),
+        downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
     if (!this.verificationSummaryListenerBound) {
@@ -747,13 +780,9 @@ export class MatrixClient {
           "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
         );
       } else {
-        // No password guard: passwordless token-auth bots should still attempt repair.
-        // UIA failures inside bootstrap() are caught below and logged as warnings.
+        // Forced reset validates the active SSSS recovery key before rotating local keys.
+        // Missing or stale recovery material fails without mutating crypto state.
         try {
-          // The repair path already force-resets cross-signing; allow secret storage
-          // recreation so the new keys can be persisted. Without this, a device that
-          // lost its recovery key enters a permanent failure loop because the new
-          // cross-signing keys have nowhere to be stored.
           const repaired = await cryptoBootstrapper.bootstrap(
             crypto,
             MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,

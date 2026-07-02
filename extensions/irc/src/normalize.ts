@@ -2,7 +2,6 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasIrcControlChars } from "./control-chars.js";
 import type { IrcInboundMessage } from "./types.js";
@@ -84,24 +83,4 @@ export function buildIrcAllowlistCandidates(
     candidates.add(`${nick}!${user}@${host}`);
   }
   return [...candidates];
-}
-
-export function resolveIrcAllowlistMatch(params: {
-  allowFrom: string[];
-  message: IrcInboundMessage;
-  allowNameMatching?: boolean;
-}): { allowed: boolean; source?: string } {
-  const allowFrom = new Set(normalizeStringEntriesLower(params.allowFrom));
-  if (allowFrom.has("*")) {
-    return { allowed: true, source: "wildcard" };
-  }
-  const candidates = buildIrcAllowlistCandidates(params.message, {
-    allowNameMatching: params.allowNameMatching,
-  });
-  for (const candidate of candidates) {
-    if (allowFrom.has(candidate)) {
-      return { allowed: true, source: candidate };
-    }
-  }
-  return { allowed: false };
 }

@@ -1,6 +1,7 @@
 // Channel MCP bridge tests cover request bridging between MCP and channel APIs.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
+import type { QueueEvent, WaitFilter } from "./channel-shared.js";
 
 const ONE_MINUTE_MS = 60 * 1_000;
 const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
@@ -11,9 +12,18 @@ const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 // exercise. Defined as a standalone shape (not an intersection with the class)
 // because mixing public/private constituents collapses to `never` under tsgo.
 type BridgeInternals = {
+  queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
   pendingSweepInterval: NodeJS.Timeout | null;
+  pollEvents: (
+    filter: WaitFilter,
+    limit?: number,
+  ) => {
+    events: QueueEvent[];
+    nextCursor: number;
+  };
+  waitForEvent: (filter: WaitFilter, timeoutMs?: number) => Promise<QueueEvent | null>;
   handleClaudePermissionRequest: (params: {
     requestId: string;
     toolName: string;
@@ -23,6 +33,11 @@ type BridgeInternals = {
   handleGatewayEvent: (event: {
     event: string;
     payload?: Record<string, unknown>;
+  }) => Promise<void>;
+  handleSessionMessageEvent: (payload: {
+    sessionKey: string;
+    senderIsOwner?: boolean;
+    message: { role: string; content: unknown };
   }) => Promise<void>;
   listPendingApprovals: () => unknown[];
   close: () => Promise<void>;
@@ -36,6 +51,72 @@ function makeBridge(verbose = false): BridgeInternals {
     verbose,
   }) as unknown as BridgeInternals;
 }
+
+describe("OpenClawChannelBridge — Claude permission authorization", () => {
+  test.each([
+    { name: "non-owner", senderIsOwner: false, role: "user" },
+    { name: "missing owner metadata", senderIsOwner: undefined, role: "user" },
+    { name: "assistant message", senderIsOwner: true, role: "assistant" },
+  ])("does not resolve a pending permission from a $name reply", async (reply) => {
+    const bridge = makeBridge();
+    const notification = vi.fn(async () => undefined);
+    bridge.server = { server: { notification } };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent({
+        sessionKey: "agent:main:telegram:group:-100123",
+        senderIsOwner: reply.senderIsOwner,
+        message: {
+          role: reply.role,
+          content: [{ type: "text", text: "yes abcde" }],
+        },
+      });
+
+      expect(notification).not.toHaveBeenCalled();
+      expect(bridge.pendingClaudePermissions.has("abcde")).toBe(true);
+      expect(bridge.queue.at(-1)).toMatchObject({ type: "message", text: "yes abcde" });
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("resolves a pending permission from an owner user reply", async () => {
+    const bridge = makeBridge();
+    const notification = vi.fn(async () => undefined);
+    bridge.server = { server: { notification } };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent({
+        sessionKey: "agent:main:telegram:group:-100123",
+        senderIsOwner: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "yes abcde" }],
+        },
+      });
+
+      expect(notification).toHaveBeenCalledWith({
+        method: "notifications/claude/channel/permission",
+        params: { request_id: "abcde", behavior: "allow" },
+      });
+      expect(bridge.pendingClaudePermissions.has("abcde")).toBe(false);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
 
 describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals memory bounds", () => {
   beforeEach(() => {
@@ -258,6 +339,49 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
         inputPreview: "{}",
       });
       expect(bridge.pendingSweepInterval).not.toBeNull();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("pollEvents clamps direct caller limits to the public MCP event window", async () => {
+    const bridge = makeBridge();
+    try {
+      for (let cursor = 1; cursor <= 250; cursor += 1) {
+        bridge.queue.push({
+          cursor,
+          type: "message",
+          sessionKey: "agent:main:main",
+          raw: { sessionKey: "agent:main:main" },
+        });
+      }
+
+      const result = bridge.pollEvents({ afterCursor: 0 }, 10_000);
+
+      expect(result.events).toHaveLength(200);
+      expect(result.nextCursor).toBe(200);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("waitForEvent clamps oversized direct caller timeouts before arming timers", async () => {
+    const bridge = makeBridge();
+    try {
+      let resolved = false;
+      const waited = bridge.waitForEvent({ afterCursor: 0 }, 3_000_000_000).then((event) => {
+        resolved = true;
+        return event;
+      });
+      await Promise.resolve();
+
+      vi.advanceTimersByTime(299_999);
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      vi.advanceTimersByTime(1);
+      await expect(waited).resolves.toBeNull();
+      expect(resolved).toBe(true);
     } finally {
       await bridge.close();
     }

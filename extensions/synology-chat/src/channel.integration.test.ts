@@ -1,5 +1,4 @@
 // Synology Chat tests cover channel.integration plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContextMock,
@@ -10,12 +9,6 @@ import {
   setSynologyRuntimeConfigForTest,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
-
-type _RegisteredRoute = {
-  path: string;
-  accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-};
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
 

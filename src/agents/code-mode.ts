@@ -305,11 +305,22 @@ class CodeModeLimitError extends ToolInputError {
   }
 }
 
+function isRuntimeInterruptedError(error: unknown): boolean {
+  return errorMessage(error) === "interrupted";
+}
+
 function codeModeFailureCode(error: unknown): CodeModeFailureCode {
   if (error instanceof CodeModeLimitError) {
     return error.code;
   }
+  if (isRuntimeInterruptedError(error)) {
+    return "timeout";
+  }
   return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
+function codeModeFailureMessage(error: unknown): string {
+  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
 }
 
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
@@ -505,7 +516,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
-        value = await params.runtime.describe(id, { includeMcp: false });
+        value = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         break;
       }
       case "call": {
@@ -513,7 +527,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id, { includeMcp: false });
+        const described = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
@@ -606,22 +623,24 @@ function failedCodeModeWorkerResult(
   };
 }
 
-function isQuickJsInterruptedWorkerError(error: unknown): boolean {
-  return String(error) === "interrupted";
-}
-
-function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+function normalizeCodeModeTimeoutResult<
+  T extends { status: string; code?: unknown; error?: unknown },
+>(result: T): T {
   if (
     result.status === "failed" &&
     result.code === "timeout" &&
-    isQuickJsInterruptedWorkerError(result.error)
+    !String(result.error).includes("timeout exceeded")
   ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
-    };
+    } as T;
   }
   return result;
+}
+
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  return normalizeCodeModeTimeoutResult(result);
 }
 
 async function runCodeModeWorker(
@@ -855,7 +874,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -889,7 +908,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -1094,7 +1113,7 @@ async function runWait(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
@@ -1135,14 +1154,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     ) => {
       const input = readCode(args);
       return jsonResult(
-        await runExec({
-          toolCallId,
-          ctx,
-          code: input.code,
-          language: input.language,
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runExec({
+            toolCallId,
+            ctx,
+            code: input.code,
+            language: input.language,
+            signal,
+            onUpdate,
+          }),
+        ),
       );
     },
   } as AnyAgentTool);
@@ -1160,13 +1181,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
-        await runWait({
-          toolCallId,
-          ctx,
-          runId: readRunId(args),
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runWait({
+            toolCallId,
+            ctx,
+            runId: readRunId(args),
+            signal,
+            onUpdate,
+          }),
+        ),
       ),
   } as AnyAgentTool);
   return [execTool, waitTool];

@@ -17,14 +17,21 @@ title: OpenClaw QA Scenario Pack
 #
 # - add `coverage.primary` IDs to each scenario's `scenario` block
 # - add `coverage.secondary` only when a scenario intentionally protects another behavior
-# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
+# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted
+#   as `namespace.behavior`, with dashes allowed inside each segment
 # - use the exact values listed under feature `coverageIds` in `taxonomy.yaml`
+# - taxonomy feature coverage IDs are exact proof targets, not aliases
+# - scenario primary can list multiple IDs only when this scenario is primary
+#   proof for each
 # - prefer reusing an existing coverage ID over minting a scenario-shaped ID
 # - avoid copying the scenario title into coverage IDs
 # - use `pnpm openclaw qa coverage` to render the current inventory
 # - use `scenario.execution.kind: vitest`, `playwright`, or `script`
 #   plus `scenario.execution.path` for native tests or evidence producers that
 #   provide evidence without a top-level `flow`
+# - use `scenario.execution.suiteIsolation: isolated` for flow scenarios that
+#   mutate gateway/runtime state in non-obvious ways; add `isolationReason`
+#   so reviewers know why the suite scheduler must not share the worker
 # - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
 #   `optional`, `live-only`, or `soak`
 # - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid

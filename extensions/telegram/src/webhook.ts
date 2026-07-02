@@ -33,11 +33,7 @@ import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guard
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import {
-  isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
-  isTelegramServerError,
-} from "./network-errors.js";
+import { isRetryableTelegramApiError } from "./network-errors.js";
 import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -415,13 +411,6 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     shutDown = true;
-    void withTelegramApiErrorLogging({
-      operation: "deleteWebhook",
-      runtime,
-      fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
-    }).catch(() => {
-      // withTelegramApiErrorLogging has already emitted the failure.
-    });
     server.close();
     void bot.stop();
     status.noteWebhookStop();
@@ -462,9 +451,7 @@ export async function startTelegramWebhook(opts: {
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
   const shouldRetryWebhookRegistration = (err: unknown): boolean =>
-    isRecoverableTelegramNetworkError(err, { context: "webhook" }) ||
-    isTelegramServerError(err) ||
-    isTelegramRateLimitError(err);
+    isRetryableTelegramApiError(err, { context: "webhook" });
   const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
     let attempt = firstAttempt;
     while (true) {

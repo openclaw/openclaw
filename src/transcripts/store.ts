@@ -150,14 +150,6 @@ export class TranscriptsStore {
     return session ? { session, sessionDir: dir } : undefined;
   }
 
-  /** Append an utterance by session id, creating a dated session directory if needed. */
-  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
-    const dir =
-      (await this.findSessionDir(sessionId)) ??
-      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
-    await this.appendUtteranceToDir(dir, sessionId, utterance);
-  }
-
   /** Append an utterance for an exact session descriptor. */
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
@@ -195,18 +187,6 @@ export class TranscriptsStore {
     return await this.readUtterancesFromDir(sessionDir, options);
   }
 
-  /** Read utterances by session id or qualified date/id selector. */
-  async readUtterances(
-    sessionId: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
-      return [];
-    }
-    return await this.readUtterancesFromDir(dir, options);
-  }
-
   private async readUtterancesFromDir(
     dir: string,
     options: { maxUtterances?: number } = {},
@@ -216,18 +196,29 @@ export class TranscriptsStore {
     if (maxUtterances !== undefined) {
       const utterances: TranscriptUtterance[] = [];
       try {
+        const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
-          input: createReadStream(transcriptPath, { encoding: "utf8" }),
+          input: stream,
           crlfDelay: Infinity,
         });
-        for await (const line of lines) {
-          if (!line) {
-            continue;
+        try {
+          for await (const line of lines) {
+            if (!line) {
+              continue;
+            }
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+            if (utterances.length > maxUtterances) {
+              // Stream and keep only the tail so large transcripts do not require full-file memory.
+              utterances.shift();
+            }
           }
-          utterances.push(JSON.parse(line) as TranscriptUtterance);
-          if (utterances.length > maxUtterances) {
-            // Stream and keep only the tail so large transcripts do not require full-file memory.
-            utterances.shift();
+        } finally {
+          lines.close();
+          stream.destroy();
+          if (!stream.closed) {
+            await new Promise<void>((resolve) => {
+              stream.once("close", () => resolve());
+            });
           }
         }
       } catch (err) {
