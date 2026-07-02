@@ -30,7 +30,6 @@ import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
-import { insertContextEngineReferenceContextMessage } from "../../../context-engine/reference-context.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
@@ -3474,14 +3473,8 @@ export async function runEmbeddedAttempt(
             const assembledMessages = transcriptPolicy.repairToolUseResultPairing
               ? repairAttemptToolUseResultPairing(assembled.messages, isOpenAIResponsesApi)
               : assembled.messages;
-            const assembledMessagesWithReferenceContext =
-              insertContextEngineReferenceContextMessage({
-                messages: assembledMessages,
-                referenceContext: assembled.referenceContext,
-                ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
-              });
-            if (assembledMessagesWithReferenceContext !== activeSession.messages) {
-              activeSession.agent.state.messages = assembledMessagesWithReferenceContext;
+            if (assembledMessages !== activeSession.messages) {
+              activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
             contextEngineAssemblySucceeded = true;

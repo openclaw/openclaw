@@ -25,7 +25,6 @@ export const OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST = {
   capabilities: [
     "bootstrap",
     "assemble-before-prompt",
-    "reference-context",
     "after-turn",
     "maintain",
     "compact",

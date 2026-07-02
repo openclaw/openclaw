@@ -213,6 +213,7 @@ import {
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
+  type CodexAdditionalContextMap,
   type CodexSandboxPolicy,
   type CodexTurnEnvironmentParams,
   type CodexServerNotification,
@@ -1004,6 +1005,7 @@ export async function runCodexAppServerAttempt(
   });
   let promptText = params.prompt;
   let promptContextRange: CodexProjectedContextRange | undefined;
+  let codexAdditionalContext: CodexAdditionalContextMap | undefined;
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
@@ -1026,6 +1028,7 @@ export async function runCodexAppServerAttempt(
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
+    codexAdditionalContext = projection.additionalContext;
     prePromptMessageCount = projection.prePromptMessageCount;
   };
   const applyActiveContextEngineProjection = async (
@@ -1099,6 +1102,7 @@ export async function runCodexAppServerAttempt(
     });
     promptText = projectionDecision.project ? projection.promptText : params.prompt;
     promptContextRange = projectionDecision.project ? projection.promptContextRange : undefined;
+    codexAdditionalContext = projection.additionalContext;
     developerInstructions = joinPresentSections(
       baseDeveloperInstructions,
       projection.developerInstructionAddition,
@@ -1317,6 +1321,7 @@ export async function runCodexAppServerAttempt(
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
+    codexAdditionalContext = projection.additionalContext;
     prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };
@@ -2748,6 +2753,7 @@ export async function runCodexAppServerAttempt(
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
+      additionalContext: codexAdditionalContext,
       model: thread.model,
       modelProvider: thread.modelProvider,
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,

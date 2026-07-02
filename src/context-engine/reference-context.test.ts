@@ -1,17 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentMessage } from "../agents/runtime/index.js";
-import {
-  insertContextEngineReferenceContextMessage,
-  renderContextEngineReferenceContext,
-} from "./reference-context.js";
-
-function userMessage(text: string, timestamp = 1): AgentMessage {
-  return {
-    role: "user",
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
-}
+import { renderContextEngineReferenceContext } from "./reference-context.js";
 
 describe("renderContextEngineReferenceContext", () => {
   it("renders reference context as lower-authority historical data", () => {
@@ -32,18 +20,14 @@ describe("renderContextEngineReferenceContext", () => {
     expect(rendered).toContain("The earlier task was about MCP image relays.");
   });
 
-  it("inserts the host-rendered message before a duplicated trailing prompt", () => {
-    const messages = [userMessage("old ask", 1), userMessage("current ask", 2)];
-    const result = insertContextEngineReferenceContextMessage({
-      messages,
-      prompt: "current ask",
-      referenceContext: [{ kind: "summary", content: "Reference only." }],
-      timestamp: 3,
-    });
+  it("bounds rendered reference context without creating a conversation message", () => {
+    const rendered = renderContextEngineReferenceContext(
+      [{ kind: "summary", content: "older ".repeat(100) + "latest reference" }],
+      { maxChars: 120, maxItemChars: 80 },
+    );
 
-    expect(result).toHaveLength(3);
-    expect(result[1]?.role).toBe("user");
-    expect(JSON.stringify(result[1])).toContain("OpenClaw reference context");
-    expect(result[2]).toBe(messages[1]);
+    expect(rendered).toBeDefined();
+    expect(rendered?.length).toBeLessThanOrEqual(120);
+    expect(rendered).toContain("truncated");
   });
 });

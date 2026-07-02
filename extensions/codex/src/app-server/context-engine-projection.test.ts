@@ -98,7 +98,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
-  it("projects referenceContext as a separate lower-authority context block", () => {
+  it("projects referenceContext as Codex additionalContext", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("assistant", "Earlier assistant answer")],
       originalHistoryMessages: [],
@@ -115,15 +115,23 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
 
     expect(result.promptText).toContain("OpenClaw assembled context for this turn:");
-    expect(result.promptText).toContain("OpenClaw reference context for this turn:");
-    expect(result.promptText).toContain("lower-authority historical data");
-    expect(result.promptText).toContain("kind: summary");
-    expect(result.promptText).toContain("Historical summary from the context engine.");
+    expect(result.promptText).not.toContain("OpenClaw reference context for this turn:");
+    expect(result.promptText).not.toContain("Historical summary from the context engine.");
     expect(result.promptText).toContain("Current user request:\ncurrent request");
-    expect(result.promptContextRange).toEqual({
-      start: 0,
-      end: result.promptText.indexOf("\n\nCurrent user request:"),
-    });
+    expect(result.promptContextRange).toBeDefined();
+    const projectedContext = result.promptText.slice(
+      result.promptContextRange?.start,
+      result.promptContextRange?.end,
+    );
+    expect(projectedContext).toContain("[assistant]\nEarlier assistant answer");
+    expect(projectedContext).not.toContain("Current user request:");
+    expect(result.additionalContext?.openclaw_reference_context?.kind).toBe("untrusted");
+    expect(result.additionalContext?.openclaw_reference_context?.value).toContain(
+      "OpenClaw reference context for this turn:",
+    );
+    expect(result.additionalContext?.openclaw_reference_context?.value).toContain(
+      "Historical summary from the context engine.",
+    );
   });
 
   it("preserves redacted tool payload context for thread bootstrap projections", () => {

@@ -83,6 +83,23 @@ describe("context engine host compatibility", () => {
     });
   });
 
+  it("requires native Codex for reference context", () => {
+    const engine = createEngine(["assemble-before-prompt", "reference-context"]);
+
+    assertContextEngineHostSupport({
+      contextEngine: engine,
+      operation: "agent-run",
+      host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+    });
+    expect(() =>
+      assertContextEngineHostSupport({
+        contextEngine: engine,
+        operation: "agent-run",
+        host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      }),
+    ).toThrow(/Missing host capabilities: reference-context/);
+  });
+
   it("allows native Codex to satisfy thread bootstrap projection", () => {
     assertContextEngineHostSupport({
       contextEngine: createEngine(["assemble-before-prompt", "thread-bootstrap-projection"]),

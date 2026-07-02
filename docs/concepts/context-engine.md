@@ -289,12 +289,13 @@ info: {
 }
 ```
 
-Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`
-and `reference-context`. Declare `reference-context` when the engine returns
-`referenceContext` and must rely on host-owned lower-authority rendering instead
-of encoding historical context as user messages. Generic CLI backends do not
-satisfy these agent-run assembly capabilities, so engines that require them are
-rejected before the CLI process starts.
+Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`.
+Native Codex app-server runs also satisfy `reference-context` by sending
+`referenceContext` through Codex `turn/start.additionalContext` as untrusted
+context instead of current user input. OpenClaw embedded runs do not advertise
+`reference-context` until they have an equivalent non-message lane. Generic CLI
+backends do not satisfy these agent-run assembly capabilities, so engines that
+require them are rejected before the CLI process starts.
 
 ### Failure isolation
 

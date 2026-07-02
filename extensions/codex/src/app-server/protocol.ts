@@ -118,6 +118,17 @@ export type CodexTurnEnvironmentParams = JsonObject & {
   cwd: string;
 };
 
+export type CodexAdditionalContextKind = "untrusted" | "application";
+
+export type CodexAdditionalContextEntry = JsonObject & {
+  value: string;
+  kind: CodexAdditionalContextKind;
+};
+
+export type CodexAdditionalContextMap = JsonObject & {
+  [sourceId: string]: CodexAdditionalContextEntry;
+};
+
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
@@ -247,6 +258,7 @@ export type CodexTurnStartParams = JsonObject & {
   effort?: string | null;
   personality?: CodexPersonality | null;
   environments?: CodexTurnEnvironmentParams[] | null;
+  additionalContext?: CodexAdditionalContextMap | null;
   collaborationMode?: {
     mode: "plan" | "default";
     settings: {

@@ -461,7 +461,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
-  it("projects context-engine referenceContext into the Codex turn input", async () => {
+  it("projects context-engine referenceContext into Codex additionalContext", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     SessionManager.open(sessionFile).appendMessage(
@@ -488,12 +488,27 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
+    const turnStartParams = requireRequestParams(harness, "turn/start");
     const inputText = getRequestInputText(harness);
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("OpenClaw reference context for this turn:");
-    expect(inputText).toContain("lower-authority historical data");
-    expect(inputText).toContain("Historical reference summary from lossless-claw.");
+    expect(inputText).not.toContain("OpenClaw reference context for this turn:");
+    expect(inputText).not.toContain("Historical reference summary from lossless-claw.");
     expect(inputText).toContain("Current user request:\nhello");
+    const additionalContext = requireRecord(
+      turnStartParams.additionalContext,
+      "turn/start additionalContext",
+    );
+    const referenceContext = requireRecord(
+      additionalContext.openclaw_reference_context,
+      "openclaw reference context",
+    );
+    expect(referenceContext.kind).toBe("untrusted");
+    expect(optionalString(referenceContext.value)).toContain(
+      "OpenClaw reference context for this turn:",
+    );
+    expect(optionalString(referenceContext.value)).toContain(
+      "Historical reference summary from lossless-claw.",
+    );
 
     await harness.completeTurn();
     await run;

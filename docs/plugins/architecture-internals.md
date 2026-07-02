@@ -1102,7 +1102,9 @@ payloads.
 or retrieved context. Use this for summaries, memories, or retrieval snippets
 that should be rendered as host-owned quoted reference data instead of fresh
 conversation messages. Engines that require this lane should declare the
-`reference-context` host capability for `agent-run`.
+`reference-context` host capability for `agent-run`; today that selects hosts
+with a protocol lane such as Codex `turn/start.additionalContext` and rejects
+embedded hosts that would otherwise have to encode the data as session messages.
 
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:

@@ -1,4 +1,3 @@
-import type { AgentMessage } from "../agents/runtime/index.js";
 import type { ContextEngineReferenceContextItem } from "./types.js";
 
 const REFERENCE_CONTEXT_HEADER = "OpenClaw reference context for this turn:";
@@ -36,32 +35,6 @@ export function renderContextEngineReferenceContext(
   return truncateOlderReferenceContext(rendered, maxChars);
 }
 
-export function insertContextEngineReferenceContextMessage(params: {
-  messages: AgentMessage[];
-  referenceContext: readonly ContextEngineReferenceContextItem[] | undefined;
-  prompt?: string;
-  timestamp?: number;
-  maxChars?: number;
-}): AgentMessage[] {
-  const rendered = renderContextEngineReferenceContext(params.referenceContext, {
-    ...(params.maxChars !== undefined ? { maxChars: params.maxChars } : {}),
-  });
-  if (!rendered) {
-    return params.messages;
-  }
-  const message: AgentMessage = {
-    role: "user",
-    content: [{ type: "text", text: rendered }],
-    timestamp: params.timestamp ?? Date.now(),
-  };
-  const insertionIndex = resolveReferenceContextInsertionIndex(params.messages, params.prompt);
-  return [
-    ...params.messages.slice(0, insertionIndex),
-    message,
-    ...params.messages.slice(insertionIndex),
-  ];
-}
-
 function renderReferenceContextItem(
   item: ContextEngineReferenceContextItem,
   index: number,
@@ -92,27 +65,6 @@ function renderReferenceContextSource(source: ContextEngineReferenceContextItem[
   } catch {
     return "[unserializable source omitted]";
   }
-}
-
-function resolveReferenceContextInsertionIndex(messages: AgentMessage[], prompt?: string): number {
-  const normalizedPrompt = prompt?.trim();
-  if (!normalizedPrompt) {
-    return messages.length;
-  }
-  const trailing = messages.at(-1);
-  if (trailing?.role !== "user") {
-    return messages.length;
-  }
-  return extractUserMessageText(trailing).trim() === normalizedPrompt
-    ? Math.max(0, messages.length - 1)
-    : messages.length;
-}
-
-function extractUserMessageText(message: Extract<AgentMessage, { role: "user" }>): string {
-  if (typeof message.content === "string") {
-    return message.content;
-  }
-  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
 function normalizeReferenceContextMaxChars(value: unknown): number {

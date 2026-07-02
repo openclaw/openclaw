@@ -51,6 +51,7 @@ import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
+  type CodexAdditionalContextMap,
   type CodexDynamicToolSpec,
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
@@ -1482,6 +1483,7 @@ export function buildTurnStartParams(
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    additionalContext?: CodexAdditionalContextMap;
     model?: string | null;
     modelProvider?: string | null;
     turnScopedDeveloperInstructions?: string;
@@ -1523,6 +1525,7 @@ export function buildTurnStartParams(
       readCodexSupportedReasoningEfforts(params.model?.compat),
     ),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...(options.additionalContext ? { additionalContext: options.additionalContext } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       model: modelSelection.model,
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
