@@ -268,7 +268,35 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-async function runCommand(
+// libuv reports a failed pre-exec `chdir(cwd)` as `spawn <argv0> ENOENT`, which
+// blames the shell/command instead of the missing working directory (#85202).
+// When the spawn cwd is set but is not a usable directory, name the real cause.
+// Diagnostic only: the run still fails closed — the cwd is never dropped to fall
+// back to the node's default directory.
+export function clarifyNodeExecCwdSpawnError(
+  error: NodeJS.ErrnoException,
+  cwd: string | undefined,
+): string {
+  const message = error.message;
+  if (!cwd || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
+    return message;
+  }
+  let stats: fs.Stats | undefined;
+  try {
+    stats = fs.statSync(cwd);
+  } catch {
+    stats = undefined;
+  }
+  // An existing directory means the cwd is fine and the ENOENT is about the
+  // executable itself; leave the original message untouched.
+  if (stats?.isDirectory()) {
+    return message;
+  }
+  const reason = stats ? "is not a directory" : "does not exist";
+  return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
+}
+
+export async function runCommand(
   argv: string[],
   cwd: string | undefined,
   env: Record<string, string> | undefined,
@@ -281,47 +309,8 @@ async function runCommand(
     let truncated = false;
     let timedOut = false;
     let settled = false;
-    const windowsEncoding = resolveWindowsConsoleEncoding();
-
-    const child = spawn(argv[0], argv.slice(1), {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
-    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
-      if (outputLen >= OUTPUT_CAP) {
-        truncated = true;
-        return;
-      }
-      const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      outputLen += slice.length;
-      if (target === "stdout") {
-        stdoutChunks.push(slice);
-      } else {
-        stderrChunks.push(slice);
-      }
-      if (chunk.length > remaining) {
-        truncated = true;
-      }
-    };
-
-    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
-    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
-
     let timer: NodeJS.Timeout | undefined;
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
+    const windowsEncoding = resolveWindowsConsoleEncoding();
 
     const finalize = (exitCode?: number, error?: string | null) => {
       if (settled) {
@@ -350,8 +339,57 @@ async function runCommand(
       });
     };
 
+    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
+    // synchronously instead of emitting `error`. Route it through the same
+    // fail-closed result so the node host reports the real cause rather than
+    // crashing on an unhandled rejection (runner.ts dispatches with `void`).
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(argv[0], argv.slice(1), {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (err) {
+      finalize(undefined, clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd));
+      return;
+    }
+
+    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
+      if (outputLen >= OUTPUT_CAP) {
+        truncated = true;
+        return;
+      }
+      const remaining = OUTPUT_CAP - outputLen;
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      outputLen += slice.length;
+      if (target === "stdout") {
+        stdoutChunks.push(slice);
+      } else {
+        stderrChunks.push(slice);
+      }
+      if (chunk.length > remaining) {
+        truncated = true;
+      }
+    };
+
+    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
+    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
+
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, timeoutMs);
+    }
+
     child.on("error", (err) => {
-      finalize(undefined, err.message);
+      finalize(undefined, clarifyNodeExecCwdSpawnError(err, cwd));
     });
     child.on("exit", (code) => {
       finalize(code === null ? undefined : code, null);

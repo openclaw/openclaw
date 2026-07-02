@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
-import { handleInvoke } from "./invoke.js";
+import { clarifyNodeExecCwdSpawnError, handleInvoke, runCommand } from "./invoke.js";
 
 describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
@@ -189,4 +189,83 @@ describe("node host invoke", () => {
     };
     expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
   });
+});
+
+describe("clarifyNodeExecCwdSpawnError", () => {
+  const enoent = (msg: string) =>
+    Object.assign(new Error(msg), { code: "ENOENT" }) as NodeJS.ErrnoException;
+
+  it("blames the missing working directory instead of the shell on chdir ENOENT", () => {
+    const cwd = path.join(os.tmpdir(), `node-exec-missing-${process.pid}-${Date.now()}`);
+    const clarified = clarifyNodeExecCwdSpawnError(enoent("spawn /bin/sh ENOENT"), cwd);
+    expect(clarified).toBe(
+      `node exec working directory does not exist on the node host: ${cwd} (os reported: spawn /bin/sh ENOENT)`,
+    );
+  });
+
+  it("flags a cwd that exists but is not a directory", () => {
+    const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);
+    fs.writeFileSync(file, "x");
+    try {
+      const err = Object.assign(new Error("spawn ENOTDIR"), {
+        code: "ENOTDIR",
+      }) as NodeJS.ErrnoException;
+      expect(clarifyNodeExecCwdSpawnError(err, file)).toBe(
+        `node exec working directory is not a directory on the node host: ${file} (os reported: spawn ENOTDIR)`,
+      );
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
+  });
+
+  it("preserves the original message when the cwd exists (genuine missing executable)", () => {
+    const message = "spawn /usr/bin/does-not-exist ENOENT";
+    expect(clarifyNodeExecCwdSpawnError(enoent(message), os.tmpdir())).toBe(message);
+  });
+
+  it("preserves the original message when no cwd was supplied", () => {
+    const message = "spawn /bin/sh ENOENT";
+    expect(clarifyNodeExecCwdSpawnError(enoent(message), undefined)).toBe(message);
+  });
+
+  it("ignores errors unrelated to the working directory", () => {
+    const err = Object.assign(new Error("spawn EACCES"), {
+      code: "EACCES",
+    }) as NodeJS.ErrnoException;
+    const cwd = path.join(os.tmpdir(), `node-exec-eacces-${process.pid}-${Date.now()}`);
+    expect(clarifyNodeExecCwdSpawnError(err, cwd)).toBe("spawn EACCES");
+  });
+});
+
+describe("runCommand working directory failures", () => {
+  it.runIf(process.platform !== "win32")(
+    "fails closed with a clarified message when the cwd does not exist (async spawn error)",
+    async () => {
+      const cwd = path.join(os.tmpdir(), `node-exec-run-missing-${process.pid}-${Date.now()}`);
+      const result = await runCommand(["/bin/sh", "-lc", "echo hi"], cwd, undefined, undefined);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(
+        `node exec working directory does not exist on the node host: ${cwd}`,
+      );
+      expect(result.error).toContain("ENOENT");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed without crashing when the cwd is a file (synchronous spawn throw)",
+    async () => {
+      const file = path.join(os.tmpdir(), `node-exec-run-file-${process.pid}-${Date.now()}.txt`);
+      fs.writeFileSync(file, "x");
+      try {
+        const result = await runCommand(["/bin/sh", "-lc", "echo hi"], file, undefined, undefined);
+        expect(result.success).toBe(false);
+        expect(result.error).toContain(
+          `node exec working directory is not a directory on the node host: ${file}`,
+        );
+        expect(result.error).toContain("ENOTDIR");
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
+    },
+  );
 });
