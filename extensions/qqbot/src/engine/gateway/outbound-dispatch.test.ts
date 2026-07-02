@@ -10,6 +10,18 @@ const sendVoiceMessageMock = vi.hoisted(() =>
 const sendMediaMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
+const sendC2CStreamMessageMock = vi.hoisted(() =>
+  vi.fn(async (_creds: unknown, _openid: string, req: unknown) => ({
+    id:
+      typeof req === "object" &&
+      req !== null &&
+      "stream_msg_id" in req &&
+      typeof req.stream_msg_id === "string"
+        ? req.stream_msg_id
+        : "stream-1",
+    timestamp: "2026-04-25T00:00:00.000Z",
+  })),
+);
 const sendTextMock = vi.hoisted(() =>
   vi.fn(async (..._params: unknown[]) => ({
     id: "text-1",
@@ -27,6 +39,9 @@ vi.mock("../messaging/sender.js", () => ({
     type: target.type === "group" ? "group" : target.type === "c2c" ? "c2c" : target.type,
     id: target.type === "group" ? target.groupOpenid : target.senderId,
   }),
+  getMessageApi: vi.fn(() => ({
+    sendC2CStreamMessage: sendC2CStreamMessageMock,
+  })),
   initApiConfig: vi.fn(),
   sendFileMessage: vi.fn(),
   sendImage: vi.fn(),
@@ -325,6 +340,78 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
+  it("strips echoed inbound metadata from direct block replies", async () => {
+    const echoedMetadataReply = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"qqbot:c2c:user-openid","inbound_event_kind":"user_request"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Alice","id":"user-openid"}',
+      "```",
+      "",
+      "Thread starter (untrusted, for context):",
+      "```json",
+      '{"body":"thread root"}',
+      "```",
+      "",
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      '{"body":"quoted message"}',
+      "```",
+      "",
+      "Forwarded message context (untrusted metadata):",
+      "```json",
+      '{"body":"forwarded message"}',
+      "```",
+      "",
+      "Chat history since last reply (untrusted, for context):",
+      "```json",
+      '{"items":["older context"]}',
+      "```",
+      "",
+      "final answer",
+    ].join("\n");
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: echoedMetadataReply }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps metadata-prefixed silent direct block replies suppressed", async () => {
+    const echoedSilentReply = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"qqbot:c2c:user-openid","inbound_event_kind":"user_request"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Alice","id":"user-openid"}',
+      "```",
+      "",
+      "NO_REPLY",
+    ].join("\n");
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: echoedSilentReply }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
+
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
   it("delivers text-only tool progress immediately in recommended C2C streaming mode", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
@@ -367,6 +454,74 @@ describe("dispatchOutbound", () => {
       "Working: checking logs",
       "final answer",
     ]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("strips echoed inbound metadata before official C2C streaming chunks", async () => {
+    const metadataOnly = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"qqbot:c2c:user-openid","inbound_event_kind":"user_request"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Alice","id":"user-openid"}',
+      "```",
+      "",
+      "Thread starter (untrusted, for context):",
+      "```json",
+      '{"body":"thread root"}',
+      "```",
+      "",
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      '{"body":"quoted message"}',
+      "```",
+      "",
+      "Forwarded message context (untrusted metadata):",
+      "```json",
+      '{"body":"forwarded message"}',
+      "```",
+      "",
+      "Chat history since last reply (untrusted, for context):",
+      "```json",
+      '{"items":["older context"]}',
+      "```",
+    ].join("\n");
+    const fullReply = [metadataOnly, "", "final answer"].join("\n");
+    const runtime = makeRuntime({
+      onDispatch: async ({ onSettled }) => {
+        const dispatch = runtime.channel.reply
+          .dispatchReplyWithBufferedBlockDispatcher as ReturnType<typeof vi.fn>;
+        const rawParams = dispatch.mock.calls.at(0)?.[0] as
+          | {
+              replyOptions?: {
+                onPartialReply?: (payload: { text?: string }) => Promise<void>;
+              };
+            }
+          | undefined;
+
+        await rawParams?.replyOptions?.onPartialReply?.({ text: metadataOnly });
+        expect(sendC2CStreamMessageMock).not.toHaveBeenCalled();
+
+        await rawParams?.replyOptions?.onPartialReply?.({ text: fullReply });
+        await onSettled?.();
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: true } },
+    });
+
+    const streamedTexts = sendC2CStreamMessageMock.mock.calls.map((call) => {
+      const req = call[2] as { content_raw?: string };
+      return req.content_raw;
+    });
+    expect(streamedTexts).toEqual(["final answer", "final answer"]);
+    expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
