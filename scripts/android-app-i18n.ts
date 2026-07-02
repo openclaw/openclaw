@@ -8,6 +8,7 @@ const ROOT = path.resolve(HERE, "..");
 const RESOURCE_ROOT = path.join(ROOT, "apps", "android", "app", "src", "main", "res");
 const SOURCE_ROOT = path.join(ROOT, "apps", "android", "app", "src", "main");
 const ANDROID_QUALIFIERS: Record<string, string> = {
+  id: "in",
   "zh-CN": "zh-rCN",
   "zh-TW": "zh-rTW",
   "pt-BR": "pt-rBR",

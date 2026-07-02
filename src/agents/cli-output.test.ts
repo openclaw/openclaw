@@ -5,6 +5,7 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  parseCliOutput,
   supportsCliJsonlToolEvents,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
@@ -34,6 +35,114 @@ describe("supportsCliJsonlToolEvents", () => {
 });
 
 describe("parseCliJson", () => {
+  it("classifies Claude is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: 'API Error: 400 {"error":{"message":"Bad request"}}',
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "Bad request",
+    });
+  });
+
+  it("classifies generic is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        is_error: true,
+        result: "429 rate limit exceeded",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "429 rate limit exceeded",
+    });
+  });
+
+  it("keeps successful JSON result message payloads as assistant text", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("does not classify null JSON result error fields as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        error: null,
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("classifies JSON status error result payloads as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        status: "error",
+        result: "rate limit",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "rate limit",
+    });
+  });
+
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
     const result = parseCliJson(
       [
@@ -752,6 +861,103 @@ describe("parseCliJsonl", () => {
 
     expect(result).toBe(message);
   });
+
+  it("classifies Claude is_error stream-json results as provider errors", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = parseCliJsonl(
+      jsonl,
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
+    });
+  });
+
+  it("uses Claude error subtypes when result text is absent", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-max-turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-max-turns",
+      usage: undefined,
+      errorText: "Claude CLI result subtype error_max_turns.",
+    });
+  });
+});
+
+describe("parseCliOutput", () => {
+  it("uses streamed Claude assistant text when the result envelope is missing", () => {
+    const raw = [
+      JSON.stringify({ type: "init", session_id: "session-stream-missing-result" }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "partial answer" },
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-stream-missing-result",
+      usage: undefined,
+    });
+  });
+
+  it("fails stream-json output without result or assistant text instead of returning raw JSONL", () => {
+    const raw = JSON.stringify({ type: "init", session_id: "session-empty" });
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-empty",
+      usage: undefined,
+      errorText: "CLI stream-json output ended without a result event.",
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
@@ -785,6 +991,66 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("uses streamed Claude assistant text when no result envelope arrives", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream-no-result" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "streamed answer" },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "streamed answer",
+      sessionId: "session-stream-no-result",
+      usage: undefined,
+    });
+  });
+
+  it("reports an output-limit error and ignores later chunks", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push("x".repeat(1025));
+    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
+    parser.finish();
+
+    expect(parser.getErrorText()).toBe(
+      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
+    );
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
+    });
   });
 
   it("streams Gemini message deltas and tool events", () => {

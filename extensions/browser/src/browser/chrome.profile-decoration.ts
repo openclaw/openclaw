@@ -38,6 +38,9 @@ function readNestedRecord(root: unknown, key: string): Record<string, unknown> |
 }
 
 function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
+  if (keys.length === 0) {
+    return;
+  }
   let node: Record<string, unknown> = obj;
   for (const key of keys.slice(0, -1)) {
     const next = node[key];
@@ -46,7 +49,7 @@ function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
     }
     node = node[key] as Record<string, unknown>;
   }
-  node[keys[keys.length - 1] ?? ""] = value;
+  node[keys[keys.length - 1]] = value;
 }
 
 function parseHexRgbToSignedArgbInt(hex: string): number | null {

@@ -59,6 +59,13 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
+const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
+  applies: false,
+  severity: "info" as const,
+  code: "windows_firewall_not_applicable",
+  message: "Windows LAN firewall diagnostics do not apply.",
+  details: [],
+}));
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn<
@@ -224,6 +231,10 @@ vi.mock("../../infra/tls/gateway.js", () => ({
   loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
 }));
 
+vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: (opts: unknown) => inspectWindowsGatewayFirewall(opts),
+}));
+
 vi.mock("./probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
 }));
@@ -281,6 +292,14 @@ describe("gatherDaemonStatus", () => {
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortConnections.mockClear();
+    inspectWindowsGatewayFirewall.mockClear();
+    inspectWindowsGatewayFirewall.mockResolvedValue({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    });
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -335,6 +354,31 @@ describe("gatherDaemonStatus", () => {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("includes Windows firewall diagnostics during deep LAN gateway status", async () => {
+    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
+    );
+    expect(status.gateway?.windowsFirewall).toMatchObject({
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+    });
   });
 
   it("falls back to probe version when server metadata is unavailable", async () => {
@@ -653,6 +697,7 @@ describe("gatherDaemonStatus", () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
+        bind: "lan",
         remote: { url: "wss://gateway.example" },
       },
     };
@@ -664,6 +709,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
     expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.connections).toBeUndefined();
     expect(status.pluginVersionDrift).toBeUndefined();

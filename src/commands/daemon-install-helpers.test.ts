@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { collectPreservedExistingServiceEnvVars } from "./daemon-install-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -1288,7 +1289,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
             },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
     });
 
     expect(plan.environment.TELEGRAM_DEFAULT_BOTTOKEN).toBe("telegram-shell-token");

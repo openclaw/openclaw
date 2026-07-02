@@ -79,12 +79,19 @@ struct AgentProTab: View {
             case .ready: "Ready"
             }
         }
+
+        var systemImage: String {
+            switch self {
+            case .all: "person.2"
+            case .online: "antenna.radiowaves.left.and.right"
+            case .ready: "checkmark.circle"
+            }
+        }
     }
 
     enum AgentLayout {
         static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
-        static let rowMinHeight: CGFloat = 72
         static let metricTileHeight: CGFloat = 94
     }
 
@@ -175,7 +182,7 @@ struct AgentProTab: View {
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                route == .agents || self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
+                route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
     }
 }

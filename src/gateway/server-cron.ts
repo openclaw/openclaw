@@ -473,38 +473,23 @@ export function buildGatewayCronService(params: {
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
-      let cleanupSessionKey = sessionKey;
-      const trackCleanupSessionKey = (execution?: { sessionKey?: string }) => {
-        const nextSessionKey = execution?.sessionKey?.trim();
-        if (nextSessionKey) {
-          cleanupSessionKey = nextSessionKey;
-        }
-      };
       try {
-        const result = await runCronIsolatedAgentTurn({
+        return await runCronIsolatedAgentTurn({
           cfg: runtimeConfig,
           deps: params.deps,
           job,
           message,
           abortSignal,
-          onExecutionStarted: (execution) => {
-            trackCleanupSessionKey(execution);
-            onExecutionStarted?.(execution);
-          },
-          onExecutionPhase: (execution) => {
-            trackCleanupSessionKey(execution);
-            onExecutionPhase?.(execution);
-          },
+          onExecutionStarted,
+          onExecutionPhase,
           onLaneWait,
           agentId,
           sessionKey,
           lane: "cron",
         });
-        trackCleanupSessionKey(result);
-        return result;
       } finally {
         await cleanupBrowserSessionsForLifecycleEnd({
-          sessionKeys: [cleanupSessionKey],
+          sessionKeys: [sessionKey],
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
