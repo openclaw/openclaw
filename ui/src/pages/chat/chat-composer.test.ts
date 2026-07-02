@@ -13,7 +13,7 @@ import {
   renderFallbackIndicator,
   resetContextNoticeThemeCacheForTest,
   type ChatRunControlsProps,
-} from "./components/chat-composer-controls.ts";
+} from "./components/chat-composer.ts";
 import { renderSideResult } from "./side-result.ts";
 
 vi.mock("../../components/icons.ts", () => ({

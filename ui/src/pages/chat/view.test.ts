@@ -27,7 +27,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
-import { renderChatQueue } from "./components/chat-composer-controls.ts";
+import { renderChatQueue } from "./components/chat-composer.ts";
 import { renderChatQuotaPill } from "./components/chat-controls.ts";
 import {
   renderChatModelControls,
@@ -450,10 +450,6 @@ function createChatHeaderState(
   return { state, request };
 }
 
-async function flushTasks() {
-  await vi.dynamicImportSettled();
-}
-
 function getChatModelSelect(container: Element): HTMLElement {
   const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
   expect(select).toBeInstanceOf(HTMLElement);
@@ -480,28 +476,8 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   };
 }
 
-function getChatSelectValue(control: HTMLElement): string {
-  return control.dataset.chatSelectValue ?? "";
-}
-
 function getChatThinkingValue(control: HTMLElement): string {
   return control.dataset.chatThinkingValue ?? "";
-}
-
-function clickChatModelOption(container: Element, value: string) {
-  const option = Array.from(
-    container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-  ).find((button) => button.dataset.chatModelOption === value);
-  expect(option).toBeInstanceOf(HTMLButtonElement);
-  option?.click();
-}
-
-function clickChatSpeedOption(container: Element, value: string) {
-  const option = Array.from(
-    container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-  ).find((button) => button.dataset.chatSpeedOption === value);
-  expect(option).toBeInstanceOf(HTMLButtonElement);
-  option?.click();
 }
 
 function getThinkingSelect(container: Element): HTMLElement {
