@@ -270,6 +270,32 @@ struct RootTabsSourceGuardTests {
         #expect(overviewRowsSource.matches(of: /.contentShape\(Rectangle\(\)\)/).count >= 2)
     }
 
+    @Test func `settings about page shows concise public device details`() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let aboutDestination = try Self.extract(
+            settingsSource,
+            from: "var aboutDestination: some View",
+            to: "func gatewayActionButton(")
+        let diagnosticsDestination = try Self.extract(
+            settingsSource,
+            from: "var diagnosticsDestination: some View",
+            to: "var privacyDestination: some View")
+
+        #expect(!aboutDestination.contains("detailStatusCard("))
+        #expect(aboutDestination.contains("self.detailListCard"))
+        #expect(aboutDestination.contains("self.detailRow(\"OpenClaw app version\""))
+        #expect(aboutDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(aboutDestination
+            .contains("self.detailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(!aboutDestination.contains("self.detailRow(\"Version\""))
+        #expect(!aboutDestination.contains("self.detailRow(\"Platform\""))
+        #expect(!aboutDestination.contains("self.detailRow(\"Model\""))
+        #expect(diagnosticsDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(diagnosticsDestination
+            .contains("self.detailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
+        #expect(diagnosticsDestination.contains("self.detailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+    }
+
     @Test func `routed headers use shared adaptive layout`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let featureChromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
