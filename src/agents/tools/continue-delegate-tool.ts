@@ -190,7 +190,8 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
-      const traceparent = formatActiveContinuationTraceparent();
+      const traceparent =
+        readStringParam(params, "traceparent") ?? formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
