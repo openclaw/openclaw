@@ -8,7 +8,10 @@ import {
   scopedAgentParamsForSession,
 } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { createChatModelOverride } from "../chat-model-ref.ts";
+import {
+  createChatModelOverride,
+  resolvePreferredServerChatModelValue,
+} from "../chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -42,7 +45,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import type { FastMode, GatewayThinkingLevelOption, SessionsListResult, SessionsPatchResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -1388,13 +1391,45 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      await client.request("sessions.patch", {
+      const patched = await client.request<SessionsPatchResult>("sessions.patch", {
         key: targetSessionKey,
         ...scopedAgentParamsForSession(state, targetSessionKey),
         model: nextModel || null,
       });
-      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
       await refreshSessionOptions(state);
+      // Reconcile the cached override when the user made an explicit (non-empty)
+      // model selection.  `patched.resolved` from the RPC carries the request-time
+      // resolution even before the sessions list is populated.  When the sessions
+      // list already has a row (existing session), prefer the refreshed row
+      // because it carries the final effective model after server-side fallback
+      // lifecycle hooks.  When the row is absent (new session, test scenarios),
+      // fall back to `patched.resolved` so the dropdown still shows the resolved
+      // model rather than getting blanked out.
+      if (nextModel) {
+        const row = state.sessionsResult?.sessions?.find(
+          (s) => s.key === targetSessionKey,
+        );
+        const resolvedModel =
+          row?.model ?? patched.resolved?.model ?? nextModel;
+        const resolvedProvider =
+          row?.modelProvider ?? patched.resolved?.modelProvider ?? "";
+        const resolvedValue = resolvePreferredServerChatModelValue(
+          resolvedModel,
+          resolvedProvider,
+          state.chatModelCatalog ?? [],
+        );
+        const resolvedOverride = createChatModelOverride(resolvedValue);
+        if (
+          JSON.stringify(resolvedOverride) !==
+          JSON.stringify(state.chatModelOverrides[targetSessionKey])
+        ) {
+          state.chatModelOverrides = {
+            ...state.chatModelOverrides,
+            [targetSessionKey]: resolvedOverride,
+          };
+        }
+      }
+      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
       return true;
     } catch (err) {
       // Roll back so the picker reflects the actual server model.
