@@ -534,7 +534,7 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
-  it("rejects stale reply session initialization when decision metadata changes", async () => {
+  it("commits reply session initialization despite active-turn metadata changes", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
       { sessionKey, storePath },
@@ -544,16 +544,16 @@ describe("session accessor file-backed seam", () => {
       },
     );
     const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
-    let concurrentUpdatedAt = 0;
     await sessionStore.updateSessionStore(storePath, (store) => {
       const current = store[sessionKey];
       if (!current) {
         throw new Error("expected existing session entry");
       }
-      concurrentUpdatedAt = current.updatedAt + 1;
       store[sessionKey] = {
         ...current,
-        updatedAt: concurrentUpdatedAt,
+        compactionCount: 1,
+        totalTokensFresh: false,
+        updatedAt: current.updatedAt + 1,
       };
     });
 
@@ -570,13 +570,21 @@ describe("session accessor file-backed seam", () => {
       storePath,
     });
 
-    expect(committed).toMatchObject({
-      ok: false,
-      reason: "stale-snapshot",
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      compactionCount: 1,
+      sessionId: "existing-session",
+      totalTokensFresh: false,
+      updatedAt: 30,
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      compactionCount: 1,
       sessionId: "existing-session",
-      updatedAt: concurrentUpdatedAt,
+      totalTokensFresh: false,
+      updatedAt: 30,
     });
   });
 
@@ -640,6 +648,63 @@ describe("session accessor file-backed seam", () => {
       sessionId: "existing-session",
       lastHeartbeatSentAt: 200,
       lastHeartbeatText: "heartbeat-2",
+    });
+  });
+
+  it("preserves concurrent optional additions when prepared fields are undefined", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        modelOverride: "channel-model",
+        modelOverrideSource: "user",
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+        modelOverride: undefined,
+        modelOverrideSource: undefined,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      modelOverride: "channel-model",
+      modelOverrideSource: "user",
+      sessionId: "existing-session",
+      updatedAt: 30,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      modelOverride: "channel-model",
+      modelOverrideSource: "user",
+      sessionId: "existing-session",
+      updatedAt: 30,
     });
   });
 

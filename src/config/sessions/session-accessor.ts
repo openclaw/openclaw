@@ -1174,20 +1174,28 @@ function sessionEntryFieldEqual(
   return Object.is(left, right) || isDeepStrictEqual(left, right);
 }
 
-const replySessionInitializationSafeMetadataKeys = [
-  "lastHeartbeatText",
-  "lastHeartbeatSentAt",
-  "pendingFinalDelivery",
-  "pendingFinalDeliveryCreatedAt",
-  "pendingFinalDeliveryLastAttemptAt",
-  "pendingFinalDeliveryAttemptCount",
-  "pendingFinalDeliveryLastError",
-  "pendingFinalDeliveryText",
-  "pendingFinalDeliveryContext",
-  "pendingFinalDeliveryIntentId",
-  "restartRecoveryDeliveryContext",
-  "restartRecoveryDeliveryRunId",
-] satisfies Array<keyof SessionEntry>;
+function sessionEntryFieldUnset(
+  hasValue: boolean,
+  value: SessionEntry[keyof SessionEntry],
+): boolean {
+  return !hasValue || value === undefined;
+}
+
+function sessionEntryFieldUnchanged(params: {
+  leftHasValue: boolean;
+  leftValue: SessionEntry[keyof SessionEntry];
+  rightHasValue: boolean;
+  rightValue: SessionEntry[keyof SessionEntry];
+}): boolean {
+  const { leftHasValue, leftValue, rightHasValue, rightValue } = params;
+  if (
+    sessionEntryFieldUnset(leftHasValue, leftValue) &&
+    sessionEntryFieldUnset(rightHasValue, rightValue)
+  ) {
+    return true;
+  }
+  return leftHasValue === rightHasValue && sessionEntryFieldEqual(leftValue, rightValue);
+}
 
 // Background activity can mutate non-identity fields after the initialization
 // snapshot. Carry forward only same-session changes; the prepared entry still
@@ -1214,10 +1222,18 @@ function mergeConcurrentReplySessionMetadata(params: {
     const currentValue = currentEntry[key];
     const snapshotValue = snapshotEntry[key];
     const preparedValue = preparedEntry[key];
-    const currentChanged =
-      currentHasValue !== snapshotHasValue || !sessionEntryFieldEqual(currentValue, snapshotValue);
-    const preparedKeptSnapshot =
-      preparedHasValue === snapshotHasValue && sessionEntryFieldEqual(preparedValue, snapshotValue);
+    const currentChanged = !sessionEntryFieldUnchanged({
+      leftHasValue: currentHasValue,
+      leftValue: currentValue,
+      rightHasValue: snapshotHasValue,
+      rightValue: snapshotValue,
+    });
+    const preparedKeptSnapshot = sessionEntryFieldUnchanged({
+      leftHasValue: preparedHasValue,
+      leftValue: preparedValue,
+      rightHasValue: snapshotHasValue,
+      rightValue: snapshotValue,
+    });
     if (currentChanged && preparedKeptSnapshot) {
       if (currentHasValue) {
         mergedFields[key] = currentValue;
@@ -1237,12 +1253,15 @@ function createReplySessionInitializationRevision(params: {
   if (!entry) {
     return JSON.stringify(null);
   }
-  // Compare decision-affecting persisted fields, while ignoring background
-  // delivery/heartbeat bookkeeping that the commit merge carries forward.
+  // The guard only rejects a true session-identity rebind. Same-session
+  // activity/context writes are merged below; comparing them here would reject
+  // before the merge can preserve the concurrent metadata.
   const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
-  const revisionEntry: SessionEntry = { ...projected };
-  for (const key of replySessionInitializationSafeMetadataKeys) {
-    delete revisionEntry[key];
+  const revisionEntry: Pick<SessionEntry, "sessionFile" | "sessionId"> = {
+    sessionId: projected.sessionId,
+  };
+  if (projected.sessionFile !== undefined) {
+    revisionEntry.sessionFile = projected.sessionFile;
   }
   return JSON.stringify(revisionEntry);
 }
