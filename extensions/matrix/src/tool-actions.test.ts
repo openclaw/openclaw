@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getMatrixMemberInfo: vi.fn(),
   getMatrixRoomInfo: vi.fn(),
   applyMatrixProfileUpdate: vi.fn(),
+  resolveMatrixRoomId: vi.fn(),
 }));
 
 vi.mock("./matrix/actions.js", () => {
@@ -30,6 +31,7 @@ vi.mock("./matrix/actions.js", () => {
 vi.mock("./matrix/send.js", () => {
   return {
     reactMatrixMessage: mocks.reactMatrixMessage,
+    resolveMatrixRoomId: mocks.resolveMatrixRoomId,
   };
 });
 
@@ -57,6 +59,18 @@ describe("handleMatrixAction pollVote", () => {
     });
     mocks.getMatrixMemberInfo.mockResolvedValue({ userId: "@u:example" });
     mocks.getMatrixRoomInfo.mockResolvedValue({ roomId: "!room:example" });
+    mocks.resolveMatrixRoomId.mockImplementation(
+      async (client: { resolveRoom?: (alias: string) => Promise<string | null> }, raw: string) => {
+        if (raw.startsWith("#")) {
+          const resolved = await client.resolveRoom?.(raw);
+          if (!resolved) {
+            throw new Error(`Matrix alias ${raw} could not be resolved`);
+          }
+          return resolved;
+        }
+        return raw;
+      },
+    );
     mocks.applyMatrixProfileUpdate.mockResolvedValue({
       accountId: "ops",
       displayName: "Ops Bot",
@@ -531,6 +545,67 @@ describe("handleMatrixAction pollVote", () => {
           roomId: "!other:example",
         },
         cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.getMatrixRoomInfo).not.toHaveBeenCalled();
+  });
+
+  it("allows room metadata reads when a configured Matrix alias resolves to the room id", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "#ops:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "channelInfo",
+        roomId: "!room:example",
+      },
+      cfg,
+      { client: client as never },
+    );
+
+    expect(client.resolveRoom).toHaveBeenCalledWith("#ops:example");
+    expect(mocks.getMatrixRoomInfo).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      client,
+    });
+  });
+
+  it("blocks room metadata reads when a disabled Matrix alias resolves under open policy", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          groups: {
+            "#ops:example": { enabled: false },
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "channelInfo",
+          roomId: "!room:example",
+        },
+        cfg,
+        { client: client as never },
       ),
     ).rejects.toThrow("Matrix read target room is not allowed.");
     expect(mocks.getMatrixRoomInfo).not.toHaveBeenCalled();

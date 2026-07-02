@@ -313,6 +313,26 @@ describe("msteamsPlugin message actions", () => {
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
+  it("blocks explicit read targets when env-only Teams inherits global open group defaults", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            defaults: {
+              groupPolicy: "open",
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
   it("allows explicit read targets inside the Teams route allowlist", async () => {
     await expectSuccessfulAction({
       mockFn: getMessageMSTeamsMock,

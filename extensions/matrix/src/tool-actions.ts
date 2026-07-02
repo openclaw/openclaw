@@ -33,8 +33,10 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import { withResolvedActionClient } from "./matrix/actions/client.js";
+import type { MatrixActionClientOpts } from "./matrix/actions/types.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
-import { reactMatrixMessage } from "./matrix/send.js";
+import { reactMatrixMessage, resolveMatrixRoomId } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
   createActionGate,
@@ -100,15 +102,55 @@ function resolveMatrixReadGroupPolicy(params: {
     : groupPolicy;
 }
 
-function assertMatrixReadTargetAllowed(params: {
+async function resolveMatrixReadRoomConfig(params: {
+  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  roomId: string;
+  clientOpts: MatrixActionClientOpts;
+}) {
+  const rooms = params.accountConfig.groups ?? params.accountConfig.rooms;
+  const roomConfig = resolveMatrixRoomConfig({
+    rooms,
+    roomId: params.roomId,
+    aliases: [],
+  });
+  if (roomConfig.matchSource === "direct") {
+    return roomConfig;
+  }
+  const aliasKeys = Object.keys(rooms ?? {}).filter((key) => key.trim().startsWith("#"));
+  if (aliasKeys.length === 0) {
+    return roomConfig;
+  }
+  const aliases = await withResolvedActionClient(params.clientOpts, async (client) => {
+    const resolvedAliases: string[] = [];
+    for (const alias of aliasKeys) {
+      try {
+        if ((await resolveMatrixRoomId(client, alias)) === params.roomId) {
+          resolvedAliases.push(alias);
+        }
+      } catch {
+        // Unresolvable aliases cannot authorize a concrete room target.
+      }
+    }
+    return resolvedAliases;
+  });
+  return resolveMatrixRoomConfig({ rooms, roomId: params.roomId, aliases });
+}
+
+async function assertMatrixReadTargetAllowed(params: {
   cfg: CoreConfig;
   accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  clientOpts: MatrixActionClientOpts;
   roomId?: string | null;
 }) {
   const roomId = params.roomId?.trim();
-  const rooms = params.accountConfig.groups ?? params.accountConfig.rooms;
   const groupPolicy = resolveMatrixReadGroupPolicy(params);
-  const roomConfig = roomId ? resolveMatrixRoomConfig({ rooms, roomId, aliases: [] }) : undefined;
+  const roomConfig = roomId
+    ? await resolveMatrixReadRoomConfig({
+        accountConfig: params.accountConfig,
+        clientOpts: params.clientOpts,
+        roomId,
+      })
+    : undefined;
   if (groupPolicy === "open") {
     if (roomConfig?.config && !roomConfig.allowed) {
       throw new Error("Matrix read target room is not allowed.");
@@ -186,7 +228,7 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[] } = {},
+  opts: { mediaLocalRoots?: readonly string[]; client?: MatrixActionClientOpts["client"] } = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -195,6 +237,7 @@ export async function handleMatrixAction(
   const clientOpts = {
     cfg,
     ...(accountId ? { accountId } : {}),
+    ...(opts.client ? { client: opts.client } : {}),
   };
 
   if (reactionActions.has(action)) {
@@ -208,7 +251,7 @@ export async function handleMatrixAction(
         removeErrorMessage: "Emoji is required to remove a Matrix reaction.",
       });
       if (remove || isEmpty) {
-        assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+        await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
         const result = await removeMatrixReactions(roomId, messageId, {
           ...clientOpts,
           emoji: remove ? emoji : undefined,
@@ -218,7 +261,7 @@ export async function handleMatrixAction(
       await reactMatrixMessage(roomId, messageId, emoji, clientOpts);
       return jsonResult({ ok: true, added: emoji });
     }
-    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+    await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });
@@ -309,7 +352,7 @@ export async function handleMatrixAction(
       }
       case "readMessages": {
         const roomId = readRoomId(params);
-        assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+        await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -336,7 +379,7 @@ export async function handleMatrixAction(
     }
     const roomId = readRoomId(params);
     if (action === "listPins") {
-      assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+      await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
     }
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
@@ -377,7 +420,7 @@ export async function handleMatrixAction(
     }
     const userId = readStringParam(params, "userId", { required: true });
     const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+    await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
     const result = await getMatrixMemberInfo(userId, {
       roomId: roomId ?? undefined,
       ...clientOpts,
@@ -390,7 +433,7 @@ export async function handleMatrixAction(
       throw new Error("Matrix room info is disabled.");
     }
     const roomId = readRoomId(params);
-    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+    await assertMatrixReadTargetAllowed({ cfg, accountConfig, clientOpts, roomId });
     const result = await getMatrixRoomInfo(roomId, clientOpts);
     return jsonResult({ ok: true, room: result });
   }
