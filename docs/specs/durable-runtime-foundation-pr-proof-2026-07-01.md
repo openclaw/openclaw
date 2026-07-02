@@ -31,6 +31,33 @@ is intentionally a local-first, opt-in runtime substrate:
 
 Focused validation observed on the PR2 branch:
 
+- Reviewer follow-up validation, rerun on 2026-07-02 after rebasing onto
+  upstream `origin/main` commit `133ce01e4a`:
+  - Code fix commit: `c6cf9d12c0` (`fix(durable): gate recovery and schema
+upgrades`). Later proof-doc updates are docs-only.
+  - Addressed reviewer P1: `startDurableRecoveryWorker` now uses the documented
+    `OPENCLAW_DURABLE_WORKER` opt-in gate instead of starting reconciliation
+    whenever `OPENCLAW_DURABLE_RUNTIME=1`.
+  - Regression proof: `src/durable/recovery.test.ts` advances fake timers with
+    `OPENCLAW_DURABLE_RUNTIME=1` and no worker flag, then asserts no shared
+    SQLite state file is created.
+  - Addressed reviewer P1: durable future-schema detection now runs immediately
+    after the `durable_schema_migrations` table is available and before any
+    `durable_runtime_*` table DDL or ALTER/backfill work.
+  - Regression proof: `src/durable/sqlite-store.test.ts` opens a DB stamped with
+    a newer durable schema version, expects rejection, and verifies no
+    `durable_runtime_*` tables were created before the throw.
+- Post-rebase validation:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/recovery.test.ts src/durable/sqlite-store.test.ts src/durable/worker.test.ts src/durable/agent-turn.test.ts src/durable/subagent.test.ts src/durable/fan-in.test.ts`
+    - 6 files, 36 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/durable.test.ts`
+    - 1 file, 2 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+    - 2 files, 4 tests passed.
+  - `node scripts/generate-docs-map.mjs --check`
+    - passed with `docs/docs_map.md is up to date`.
+  - `git diff --check origin/main HEAD`
+    - passed.
 - Latest reviewer recheck proof, rerun on 2026-07-02 against commit
   `46970927b04906d984e371ea510998ab723ffc7b`:
   - Disabled CLI inspection:
