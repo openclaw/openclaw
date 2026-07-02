@@ -67,7 +67,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 360,
+      "line": 496,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -75,7 +75,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1773,
+      "line": 1981,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -83,7 +83,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1775,
+      "line": 1983,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -91,7 +91,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1777,
+      "line": 1985,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -259,7 +259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1054,
+      "line": 1093,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -267,7 +267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1054,
+      "line": 1093,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
