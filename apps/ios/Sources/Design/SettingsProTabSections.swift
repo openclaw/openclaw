@@ -463,7 +463,7 @@ extension SettingsProTab {
             self.detailStatusCard(
                 icon: "bell",
                 title: "Notifications",
-                detail: self.notificationStatusDetail,
+                detail: "",
                 value: self.notificationStatusText,
                 color: self.notificationStatus.color)
 
@@ -488,16 +488,10 @@ extension SettingsProTab {
 
                     Divider()
 
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "network")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .frame(width: 22, height: 22)
-                        Text(self.notificationRelayDetail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text(self.notificationRelayDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)

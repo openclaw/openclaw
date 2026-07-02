@@ -17,10 +17,12 @@ extension SettingsProTab {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(.headline)
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 Spacer(minLength: 8)
                 ProValuePill(value: value, color: color)

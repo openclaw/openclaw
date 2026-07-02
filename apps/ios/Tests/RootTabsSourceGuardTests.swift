@@ -298,6 +298,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `settings privacy owns notification controls`() throws {
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
         let settingsList = try Self.extract(
             settingsSource,
             from: "var settingsListSection: some View",
@@ -322,8 +323,11 @@ struct RootTabsSourceGuardTests {
         #expect(notificationsRange.lowerBound < privacyCardRange.lowerBound)
         #expect(notificationsDestination.contains("self.notificationsSection"))
         #expect(notificationsSection.contains("title: \"Notifications\""))
+        #expect(notificationsSection.contains("detail: \"\""))
         #expect(notificationsSection.contains("self.handleNotificationAction()"))
         #expect(notificationsSection.contains("self.notificationRelayDetail"))
+        #expect(!notificationsSection.contains("systemName: \"network\""))
+        #expect(actionsSource.contains("if !detail.isEmpty"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
