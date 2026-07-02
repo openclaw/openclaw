@@ -19,6 +19,7 @@ import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
@@ -32,19 +33,19 @@ import {
   type ToolStreamEntry,
 } from "../../ui/app-tool-stream.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
-import { refreshChatAvatar } from "./chat-avatar.ts";
+import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import {
   handleChatGatewayEvent,
   handleChatSideResultGatewayEvent,
   type ChatEventPayload,
 } from "./chat-gateway.ts";
-import type { ChatMetadataResult, ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import {
+  flushChatQueueAfterIdleSessionReconciliation,
   handleSendChat,
   recordChatSendServerTiming,
-  refreshChat,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
@@ -76,7 +77,12 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
-import { handleAbortChat, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  handleAbortChat,
+  reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
+  reconcileChatRunLifecycle,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
 
@@ -405,6 +411,12 @@ type ChatRefreshOptions = {
   startup?: boolean;
 };
 
+type ChatStartupMetadataHandler = (params: {
+  client: GatewayBrowserClient;
+  agentId: string | null | undefined;
+  metadata: ChatMetadataResult | undefined;
+}) => void | Promise<void>;
+
 function scheduleChatMetadataRefresh(callback: () => void) {
   const requestIdleCallback =
     typeof globalThis.requestIdleCallback === "function" ? globalThis.requestIdleCallback : null;
@@ -496,6 +508,91 @@ async function refreshChatMetadata(host: ChatPageHost) {
       host.chatModelsLoading = false;
     }
   }
+}
+
+export async function refreshChat(
+  host: ChatPageHost,
+  opts?: ChatRefreshOptions & {
+    onStartupMetadata?: ChatStartupMetadataHandler;
+  },
+) {
+  const refreshedSessionKey = host.sessionKey;
+  const refreshedClient = host.client;
+  const refreshedAgentId = resolveAgentIdForSession(host);
+  const requestUpdate = () => host.requestUpdate?.();
+  const previousSessionsResult = host.sessionsResult;
+  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+    startup: opts?.startup === true,
+  });
+  const historyRefresh = historyLoad.finally(() => {
+    if (opts?.scheduleScroll !== false) {
+      scheduleChatScroll(host);
+    }
+    requestUpdate();
+  });
+  const sessionsRefresh = historyLoad.then((history) => {
+    if (!history?.sessionInfo) {
+      return;
+    }
+    const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
+      resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
+      selectedGlobalAgentId: refreshedAgentId,
+      showArchived: host.sessionsShowArchived,
+    });
+    const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
+    if (reconciled) {
+      host.sessionsResult = sessionsResult;
+    }
+    const sessionInfo = sessionsResult?.sessions.find(
+      (row) =>
+        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
+        row.key === refreshedSessionKey,
+    );
+    if (!sessionInfo) {
+      return;
+    }
+    const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
+      publishRunStatus: true,
+    });
+    if (!runReconciled) {
+      reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
+    }
+  });
+  const startupMetadataRefresh =
+    opts?.startup === true && opts.onStartupMetadata && refreshedClient
+      ? historyLoad.then((history) => {
+          if (
+            host.client !== refreshedClient ||
+            !host.connected ||
+            host.sessionKey !== refreshedSessionKey ||
+            resolveAgentIdForSession(host) !== refreshedAgentId
+          ) {
+            return;
+          }
+          return opts.onStartupMetadata?.({
+            client: refreshedClient,
+            agentId: refreshedAgentId,
+            metadata: history?.metadata,
+          });
+        })
+      : Promise.resolve();
+  flushChatQueueAfterIdleSessionReconciliation(
+    host,
+    refreshedSessionKey,
+    historyRefresh,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
+  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
+    requestUpdate,
+  );
+  void historyRefresh;
+  void secondaryRefresh;
+  if (opts?.awaitHistory === true) {
+    await historyRefresh;
+    return;
+  }
+  await Promise.resolve();
 }
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {

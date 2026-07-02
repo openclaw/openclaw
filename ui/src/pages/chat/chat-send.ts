@@ -44,14 +44,12 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import {
   clearChatHistory,
   loadChatHistory,
   type ChatEventPayload,
   type ChatHistoryResult,
-  type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
 import {
@@ -89,6 +87,8 @@ import {
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+
+export type ChatSlashAction = "new-session" | "export" | "refresh-tools-effective" | "refresh-chat";
 
 export type ChatHost = ChatInputHistoryState & {
   sessions: SessionCapability;
@@ -132,8 +132,7 @@ export type ChatHost = ChatInputHistoryState & {
   eventLogBuffer?: unknown[];
   eventLog?: unknown[];
   tab?: string;
-  /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string) => void | Promise<void>;
+  onSlashAction?: (action: ChatSlashAction) => void | Promise<void>;
   /** Selected message to reply to (right-click / keyboard shortcut). */
   chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
 };
@@ -141,12 +140,6 @@ export type ChatHost = ChatInputHistoryState & {
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
-
-export type ChatStartupMetadataHandler = (params: {
-  client: GatewayBrowserClient;
-  agentId: string | null | undefined;
-  metadata: ChatMetadataResult | undefined;
-}) => void | Promise<void>;
 
 function setChatError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -1941,7 +1934,7 @@ async function dispatchSlashCommand(
   }
 
   if (result.action === "refresh") {
-    await refreshChat(host);
+    await host.onSlashAction?.("refresh-chat");
   }
 
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
@@ -1956,92 +1949,6 @@ function injectCommandResult(host: ChatHost, content: string) {
       timestamp: Date.now(),
     },
   ];
-}
-
-export async function refreshChat(
-  host: ChatHost,
-  opts?: {
-    scheduleScroll?: boolean;
-    awaitHistory?: boolean;
-    startup?: boolean;
-    onStartupMetadata?: ChatStartupMetadataHandler;
-  },
-) {
-  const refreshedSessionKey = host.sessionKey;
-  const refreshedClient = host.client;
-  const refreshedAgentId = resolveAgentIdForSession(host);
-  const requestUpdate = () => host.requestUpdate?.();
-  const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState, {
-    startup: opts?.startup === true,
-  });
-  const historyRefresh = historyLoad.finally(() => {
-    if (opts?.scheduleScroll !== false) {
-      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-    }
-    requestUpdate();
-  });
-  const sessionsRefresh = historyLoad.then((history) => {
-    if (history?.sessionInfo) {
-      const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
-        resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
-        selectedGlobalAgentId: refreshedAgentId,
-        showArchived: host.sessionsShowArchived,
-      });
-      const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
-      if (reconciled) {
-        host.sessionsResult = sessionsResult;
-      }
-      const sessionInfo = sessionsResult?.sessions.find(
-        (row) =>
-          areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-          row.key === refreshedSessionKey,
-      );
-      if (sessionInfo) {
-        const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
-          publishRunStatus: true,
-        });
-        if (!runReconciled) {
-          reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
-        }
-      }
-    }
-  });
-  const startupMetadataRefresh =
-    opts?.startup === true && opts.onStartupMetadata && refreshedClient
-      ? historyLoad.then((history) => {
-          if (
-            host.client !== refreshedClient ||
-            !host.connected ||
-            host.sessionKey !== refreshedSessionKey ||
-            resolveAgentIdForSession(host) !== refreshedAgentId
-          ) {
-            return;
-          }
-          return opts.onStartupMetadata?.({
-            client: refreshedClient,
-            agentId: refreshedAgentId,
-            metadata: history?.metadata,
-          });
-        })
-      : Promise.resolve();
-  flushChatQueueAfterIdleSessionReconciliation(
-    host,
-    refreshedSessionKey,
-    historyRefresh,
-    sessionsRefresh,
-    previousSessionsResult,
-  );
-  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
-    requestUpdate,
-  );
-  void historyRefresh;
-  void secondaryRefresh;
-  if (opts?.awaitHistory === true) {
-    await historyRefresh;
-    return;
-  }
-  await Promise.resolve();
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

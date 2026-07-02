@@ -50,7 +50,7 @@ let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessa
 let navigateChatInputHistory: typeof import("./chat-send.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
-let refreshChat: typeof import("./chat-send.ts").refreshChat;
+let refreshChat: typeof import("./chat-state.ts").refreshChat;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
@@ -63,11 +63,11 @@ async function loadChatHelpers(): Promise<void> {
     handleSendChat,
     steerQueuedChatMessage,
     navigateChatInputHistory,
-    refreshChat,
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
   } = await import("./chat-send.ts"));
+  ({ refreshChat } = await import("./chat-state.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({ clearPendingQueueItemsForRun, removeQueuedMessage, markQueuedChatSendsWaitingForReconnect } =
     await import("./chat-queue.ts"));
