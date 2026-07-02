@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   acquireSessionWriteLock,
@@ -52,6 +53,7 @@ import {
   patchSessionEntry as patchFileSessionEntry,
   patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
+  projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
@@ -1155,45 +1157,94 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof SessionEntry> {
+  const keys = new Set<keyof SessionEntry>();
+  for (const entry of entries) {
+    for (const key of Object.keys(entry) as Array<keyof SessionEntry>) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
+function sessionEntryFieldEqual(
+  left: SessionEntry[keyof SessionEntry],
+  right: SessionEntry[keyof SessionEntry],
+): boolean {
+  return Object.is(left, right) || isDeepStrictEqual(left, right);
+}
+
+const replySessionInitializationSafeMetadataKeys = [
+  "lastHeartbeatText",
+  "lastHeartbeatSentAt",
+  "pendingFinalDelivery",
+  "pendingFinalDeliveryCreatedAt",
+  "pendingFinalDeliveryLastAttemptAt",
+  "pendingFinalDeliveryAttemptCount",
+  "pendingFinalDeliveryLastError",
+  "pendingFinalDeliveryText",
+  "pendingFinalDeliveryContext",
+  "pendingFinalDeliveryIntentId",
+  "restartRecoveryDeliveryContext",
+  "restartRecoveryDeliveryRunId",
+] satisfies Array<keyof SessionEntry>;
+
 // Background activity can mutate non-identity fields after the initialization
-// snapshot. Carry forward only those changes; the prepared entry still wins for
-// any field it explicitly modified relative to the snapshot. This preserves
-// heartbeat/delivery/context metadata without resurrecting fields that a reset
-// intentionally cleared (e.g. provider/model overrides on /new).
+// snapshot. Carry forward only same-session changes; the prepared entry still
+// wins for any field it explicitly modified relative to the snapshot. This
+// preserves heartbeat/delivery/context metadata without resurrecting fields that
+// a reset intentionally cleared or carrying old-session metadata into /new.
 function mergeConcurrentReplySessionMetadata(params: {
   currentEntry: SessionEntry;
   preparedEntry: SessionEntry;
   snapshotEntry?: SessionEntry;
 }): SessionEntry {
   const { currentEntry, preparedEntry, snapshotEntry } = params;
-  if (!snapshotEntry) {
+  if (!snapshotEntry || preparedEntry.sessionId !== snapshotEntry.sessionId) {
     return preparedEntry;
   }
-  const merged = { ...preparedEntry } as Record<string, unknown>;
-  for (const key of Object.keys(currentEntry)) {
-    const currentValue = (currentEntry as Record<string, unknown>)[key];
-    const snapshotValue = (snapshotEntry as Record<string, unknown>)[key];
-    const preparedValue = merged[key];
-    if (currentValue !== snapshotValue && preparedValue === snapshotValue) {
-      merged[key] = currentValue;
+  const merged: SessionEntry = { ...preparedEntry };
+  const mergedFields = merged as Partial<
+    Record<keyof SessionEntry, SessionEntry[keyof SessionEntry]>
+  >;
+  for (const key of collectSessionEntryKeys(currentEntry, preparedEntry, snapshotEntry)) {
+    const currentHasValue = Object.hasOwn(currentEntry, key);
+    const snapshotHasValue = Object.hasOwn(snapshotEntry, key);
+    const preparedHasValue = Object.hasOwn(preparedEntry, key);
+    const currentValue = currentEntry[key];
+    const snapshotValue = snapshotEntry[key];
+    const preparedValue = preparedEntry[key];
+    const currentChanged =
+      currentHasValue !== snapshotHasValue || !sessionEntryFieldEqual(currentValue, snapshotValue);
+    const preparedKeptSnapshot =
+      preparedHasValue === snapshotHasValue && sessionEntryFieldEqual(preparedValue, snapshotValue);
+    if (currentChanged && preparedKeptSnapshot) {
+      if (currentHasValue) {
+        mergedFields[key] = currentValue;
+      } else {
+        delete mergedFields[key];
+      }
     }
   }
-  return merged as SessionEntry;
+  return merged;
 }
 
 function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
 }): string {
-  void params.storePath;
-  const { entry } = params;
-  // Only session identity matters for the initialization guard. Other persisted
-  // fields (updatedAt, heartbeat/delivery metadata, context budgets, etc.) can
-  // change due to background activity without rotating the session, so comparing
-  // the full entry caused false-positive stale-snapshot conflicts.
-  return JSON.stringify(
-    entry ? { sessionId: entry.sessionId, sessionFile: entry.sessionFile } : null,
-  );
+  const { entry, storePath } = params;
+  if (!entry) {
+    return JSON.stringify(null);
+  }
+  // Compare decision-affecting persisted fields, while ignoring background
+  // delivery/heartbeat bookkeeping that the commit merge carries forward.
+  const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
+  const revisionEntry: SessionEntry = { ...projected };
+  for (const key of replySessionInitializationSafeMetadataKeys) {
+    delete revisionEntry[key];
+  }
+  return JSON.stringify(revisionEntry);
 }
 
 function resolveInitializedReplySessionEntry(params: {
@@ -1775,6 +1826,7 @@ export async function commitReplySessionInitialization(params: {
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
   sessionKey: string;
+  snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
   const committed = await updateSessionStore(
@@ -1822,7 +1874,7 @@ export async function commitReplySessionInitialization(params: {
         ? mergeConcurrentReplySessionMetadata({
             currentEntry,
             preparedEntry: sessionEntry,
-            snapshotEntry: params.previousEntry,
+            snapshotEntry: params.snapshotEntry ?? params.previousEntry,
           })
         : sessionEntry;
       if (params.retiredEntry) {

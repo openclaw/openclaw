@@ -534,6 +534,52 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("rejects stale reply session initialization when decision metadata changes", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+      },
+    );
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    let concurrentUpdatedAt = 0;
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      concurrentUpdatedAt = current.updatedAt + 1;
+      store[sessionKey] = {
+        ...current,
+        updatedAt: concurrentUpdatedAt,
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed).toMatchObject({
+      ok: false,
+      reason: "stale-snapshot",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "existing-session",
+      updatedAt: concurrentUpdatedAt,
+    });
+  });
+
   it("commits reply session initialization despite non-identity metadata changes", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
@@ -551,21 +597,22 @@ describe("session accessor file-backed seam", () => {
     // Background activity (heartbeat runner, delivery retry, etc.) can touch
     // metadata fields without rotating the session. The initialization guard
     // should only care about session identity, so this must not conflict.
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "existing-session",
-        updatedAt: 20,
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
         lastHeartbeatSentAt: 200,
         lastHeartbeatText: "heartbeat-2",
-      },
-    );
+      };
+    });
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
       expectedRevision: snapshot.revision,
-      previousEntry: snapshot.currentEntry,
       // The real caller builds the prepared entry from the snapshot, so it
       // inherits the pre-drift heartbeat values. The commit must still notice
       // the concurrent metadata change and preserve the newer values.
@@ -576,6 +623,7 @@ describe("session accessor file-backed seam", () => {
         lastHeartbeatText: "heartbeat-1",
       },
       sessionKey,
+      snapshotEntry: snapshot.currentEntry,
       storePath,
     });
 
@@ -593,6 +641,144 @@ describe("session accessor file-backed seam", () => {
       lastHeartbeatSentAt: 200,
       lastHeartbeatText: "heartbeat-2",
     });
+  });
+
+  it("does not restore pending final delivery metadata cleared after the snapshot", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "durable reply",
+        pendingFinalDeliveryCreatedAt: 11,
+        pendingFinalDeliveryLastAttemptAt: 12,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "previous failure",
+        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
+        pendingFinalDeliveryIntentId: "intent-1",
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    if (!snapshot.currentEntry) {
+      throw new Error("expected reply session initialization snapshot");
+    }
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        ...snapshot.currentEntry,
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const persisted = loadSessionEntry({ sessionKey, storePath });
+    expect(persisted?.pendingFinalDelivery).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("does not merge old-session delivery metadata into a rotated session", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "old-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "old reply",
+        pendingFinalDeliveryCreatedAt: 21,
+        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
+        pendingFinalDeliveryIntentId: "intent-old",
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "new-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("new-session");
+    expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const persisted = loadSessionEntry({ sessionKey, storePath });
+    expect(persisted?.sessionId).toBe("new-session");
+    expect(persisted?.pendingFinalDelivery).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
