@@ -180,11 +180,13 @@ function resolveOtelUrl(
     if (!options.rewriteSignalPath || endpointSignal === requestedSignal) {
       return endpoint;
     }
-    const rewrittenEndpoint = endpointWithoutQueryOrFragment.replace(
-      /\/v1\/(?:traces|metrics|logs)$/i,
-      `/${path}`,
-    );
-    return `${rewrittenEndpoint}${endpoint.slice(endpointWithoutQueryOrFragment.length)}`;
+    // Callers pre-normalize the shared endpoint (no trailing slash), so the
+    // `$`-anchored match sits at the end: slice it off, splice the requested
+    // signal path over it, and re-append the raw query/fragment verbatim
+    // rather than round-tripping through URL() (which would re-encode it).
+    const base = endpointWithoutQueryOrFragment.slice(0, -signalPathMatch[0].length);
+    const queryOrFragment = endpoint.slice(endpointWithoutQueryOrFragment.length);
+    return `${base}/${path}${queryOrFragment}`;
   }
   if (/[?#]/u.test(endpoint)) {
     try {
