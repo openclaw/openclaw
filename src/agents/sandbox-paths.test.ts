@@ -201,6 +201,51 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("maps container paths using custom containerWorkdir into sandbox root", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "/sandbox/output/image.png",
+        sandboxRoot: sandboxDir,
+        containerWorkdir: "/sandbox",
+      });
+      expect(result).toBe(path.join(sandboxDir, "output", "image.png"));
+    });
+  });
+
+  it("maps file:// URLs under custom containerWorkdir into sandbox root", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "file:///sandbox/output/image.png",
+        sandboxRoot: sandboxDir,
+        containerWorkdir: "/sandbox",
+      });
+      expect(result).toBe(path.join(sandboxDir, "output", "image.png"));
+    });
+  });
+
+  it("maps container root path with custom containerWorkdir", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "/sandbox",
+        sandboxRoot: sandboxDir,
+        containerWorkdir: "/sandbox",
+      });
+      expect(result).toBe(sandboxDir);
+    });
+  });
+
+  it("does not map paths under similarly named custom containerWorkdir roots", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "/sandboxer/secret",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
+
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({

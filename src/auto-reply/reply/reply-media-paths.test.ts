@@ -179,6 +179,37 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
+  it("maps OpenShell /sandbox container paths using configured containerWorkdir", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/sandbox",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["file:///sandbox/output/photo.png", "/sandbox/output/video.png"],
+    });
+
+    expectMedia(result, "/tmp/outbound-media/photo.png", [
+      "/tmp/outbound-media/photo.png",
+      "/tmp/outbound-media/video.png",
+    ]);
+    expectOutboundAttachmentCall(
+      0,
+      path.join("/tmp/sandboxes/session-1", "output", "photo.png"),
+      5 * 1024 * 1024,
+    );
+    expectOutboundAttachmentCall(
+      1,
+      path.join("/tmp/sandboxes/session-1", "output", "video.png"),
+      5 * 1024 * 1024,
+    );
+  });
+
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
