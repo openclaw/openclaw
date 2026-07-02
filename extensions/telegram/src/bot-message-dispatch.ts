@@ -2346,7 +2346,21 @@ export const dispatchTelegramMessage = async ({
                         !ownedByQueuedAnswerBlockRotation &&
                         segment.update.text.trimEnd() === answerLane.lastPartialText.trimEnd();
 
-                      if (skipTextOnlyBlock) {
+                      // Progress mode: the window is a pure activity log — interim
+                      // answer blocks (intermediate assistant messages before the
+                      // final) never render into it (Discord parity). Buffer the
+                      // block so it still feeds the final/collapse, and skip the
+                      // draft stream. Media/approval/button blocks fall through to
+                      // normal delivery (they are not plain interim prose).
+                      const suppressProgressAnswerBlock =
+                        streamMode === "progress" &&
+                        info.kind === "block" &&
+                        segment.lane === "answer" &&
+                        !reply.hasMedia &&
+                        !hasExecApprovalPayload(effectivePayload) &&
+                        telegramButtons === undefined;
+
+                      if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
                         // Keep duplicate blocks available for later rotation/finalization.
                         skippedDuplicateAnswerBlockDraftDelivery = true;
                         lastAnswerBlockPayload = effectivePayload;
@@ -2364,10 +2378,10 @@ export const dispatchTelegramMessage = async ({
                           lanePayload,
                           info.assistantMessageIndex,
                         );
-                        // Single stationary window in progress mode: interim answer
-                        // blocks never render into the window, so don't rotate it to
-                        // a fresh bubble for them — the one message stays put until
-                        // collapse. Non-progress modes keep the block rotation.
+                        // Single stationary window in progress mode: plain interim
+                        // answer blocks are already suppressed above, so only
+                        // media/approval/button blocks reach here in progress — they
+                        // still must not rotate the window to a fresh bubble.
                         if (
                           streamMode !== "progress" &&
                           shouldRotateQueuedBlock &&

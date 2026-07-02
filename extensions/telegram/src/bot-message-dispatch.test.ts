@@ -3241,6 +3241,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("never streams an interim answer block into the progress window (Discord parity)", async () => {
+    // Progress mode: the window is a pure activity log. An intermediate assistant
+    // answer block (info.kind === "block", before the final) must NOT render into
+    // the window; it is buffered and only the final answer is delivered below.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        // Intermediate assistant answer prose mid-turn.
+        await dispatcherOptions.deliver({ text: "Interim answer prose" }, { kind: "block" });
+        await dispatcherOptions.deliver({ text: "The real final answer." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // The interim block text never reached the window (neither update nor preview).
+    const windowTexts = [
+      ...answerDraftStream.update.mock.calls.map((call) => call[0] as string),
+      ...answerDraftStream.updatePreview.mock.calls.map(
+        (call) => (call[0] as { text?: string }).text ?? "",
+      ),
+    ];
+    expect(windowTexts.some((text) => text.includes("Interim answer prose"))).toBe(false);
+    // The final answer is delivered below the collapsed window.
+    const delivered = allDeliveredReplyTexts();
+    expect(delivered).toContain("The real final answer.");
+    expect(delivered.some((text) => text.includes("Interim answer prose"))).toBe(false);
+  });
+
   it("posts the collapse bar durably with no delete when the window has no live message", async () => {
     // When finalizeToPreview cannot edit in place (no live window message id),
     // the bar is still surfaced — as a durable post — and the window is NOT
