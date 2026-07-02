@@ -560,6 +560,13 @@ export async function prepareCliRunContext(
           }
         }
       : undefined;
+  const preparedBackendBeforeExecution =
+    preparedBackend.beforeExecution || preparedExecution?.beforeExecution
+      ? async () => {
+          await preparedBackend.beforeExecution?.();
+          await preparedExecution?.beforeExecution?.();
+        }
+      : undefined;
   const claudeSkillsPlugin = isSideQuestion
     ? { args: [], cleanup: async () => {} }
     : await prepareDeps.prepareClaudeCliSkillsPlugin({
@@ -596,6 +603,7 @@ export async function prepareCliRunContext(
         : {}),
     },
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
+    ...(preparedBackendBeforeExecution ? { beforeExecution: preparedBackendBeforeExecution } : {}),
     ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
   };
   const promptTools =
