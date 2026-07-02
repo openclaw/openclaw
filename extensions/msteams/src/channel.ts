@@ -25,6 +25,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -208,6 +209,12 @@ function resolveActionTarget(
       : (currentChannelId?.trim() ?? "");
 }
 
+function hasExplicitActionTarget(params: Record<string, unknown>): boolean {
+  return Boolean(
+    readOptionalTrimmedString(params, "to") ?? readOptionalTrimmedString(params, "target"),
+  );
+}
+
 function normalizeActionConversationTarget(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
   if (!normalized) {
@@ -215,6 +222,57 @@ function normalizeActionConversationTarget(raw?: string | null): string | undefi
   }
   const target = normalizeMSTeamsMessagingTarget(normalized) ?? normalized;
   return parseMSTeamsConversationId(target) ?? target.replace(/^(msteams|teams):/i, "").trim();
+}
+
+function normalizeMSTeamsDmTarget(raw?: string | null): string | undefined {
+  const target = normalizeActionConversationTarget(raw);
+  if (!target || !/^user:/i.test(target)) {
+    return undefined;
+  }
+  return normalizeOptionalLowercaseString(target.slice("user:".length));
+}
+
+function matchesMSTeamsDmAllowFrom(params: {
+  allowFrom?: Array<string | number>;
+  userId: string;
+}): boolean {
+  const userId = normalizeOptionalLowercaseString(params.userId);
+  if (!userId) {
+    return false;
+  }
+  for (const entry of params.allowFrom ?? []) {
+    const raw = normalizeOptionalString(String(entry));
+    if (!raw) {
+      continue;
+    }
+    if (raw === "*") {
+      return true;
+    }
+    const normalized = normalizeMSTeamsMessagingTarget(raw) ?? raw;
+    const entryId = normalized.replace(/^user:/i, "");
+    if (normalizeOptionalLowercaseString(entryId) === userId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMSTeamsDmReadTargetAllowed(params: {
+  cfg: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>;
+  userId: string;
+  targetTrusted: boolean;
+}): boolean {
+  const dmPolicy = params.cfg.dmPolicy ?? "pairing";
+  if (dmPolicy === "disabled") {
+    return false;
+  }
+  if (params.targetTrusted || dmPolicy === "open") {
+    return true;
+  }
+  return matchesMSTeamsDmAllowFrom({
+    allowFrom: params.cfg.allowFrom,
+    userId: params.userId,
+  });
 }
 
 function hasMatchingMSTeamsChannelRoute(params: {
@@ -244,8 +302,17 @@ function hasMatchingMSTeamsChannelRoute(params: {
 function isMSTeamsReadTargetAllowed(params: {
   cfg: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>;
   target: string;
+  targetTrusted?: boolean;
 }): boolean {
   const target = normalizeActionConversationTarget(params.target);
+  const dmUserId = normalizeMSTeamsDmTarget(params.target);
+  if (dmUserId) {
+    return isMSTeamsDmReadTargetAllowed({
+      cfg: params.cfg,
+      userId: dmUserId,
+      targetTrusted: params.targetTrusted === true,
+    });
+  }
   const directConversationId =
     parseMSTeamsConversationId(params.target) ??
     (!params.target.includes("/") &&
@@ -273,7 +340,7 @@ function isMSTeamsReadTargetAllowed(params: {
     }).allowed;
   }
 
-  if (!target || /^user:/i.test(target)) {
+  if (!target) {
     return true;
   }
   return hasMatchingMSTeamsChannelRoute({
@@ -286,6 +353,7 @@ function assertMSTeamsReadTargetAllowed(params: {
   cfg: OpenClawConfig;
   target?: string | null;
   enforce: boolean;
+  targetTrusted?: boolean;
 }) {
   if (!params.enforce) {
     return;
@@ -295,14 +363,18 @@ function assertMSTeamsReadTargetAllowed(params: {
   const groupPolicy =
     msteamsCfg?.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist";
   const routeAllowlistConfigured = Object.keys(msteamsCfg?.teams ?? {}).length > 0;
-  if (groupPolicy === "open" && !routeAllowlistConfigured) {
+  if (groupPolicy === "open" && !routeAllowlistConfigured && !normalizeMSTeamsDmTarget(target)) {
     return;
   }
   if (
     !target ||
     groupPolicy === "disabled" ||
     !msteamsCfg ||
-    !isMSTeamsReadTargetAllowed({ cfg: msteamsCfg, target })
+    !isMSTeamsReadTargetAllowed({
+      cfg: msteamsCfg,
+      target,
+      targetTrusted: params.targetTrusted,
+    })
   ) {
     throw new Error("Microsoft Teams read target is not allowed.");
   }
@@ -942,6 +1014,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: target.to,
                   enforce: true,
+                  targetTrusted: !hasExplicitActionTarget(ctx.params),
                 });
                 const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
                 const message = await getMessageMSTeams({
@@ -1004,6 +1077,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: to,
                   enforce: true,
+                  targetTrusted: !hasExplicitActionTarget(ctx.params),
                 });
                 const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
@@ -1078,6 +1152,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: target.to,
                   enforce: true,
+                  targetTrusted: !hasExplicitActionTarget(ctx.params),
                 });
                 const { listReactionsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listReactionsMSTeams({
@@ -1102,6 +1177,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   cfg: ctx.cfg,
                   target: to,
                   enforce: true,
+                  targetTrusted: !hasExplicitActionTarget(ctx.params),
                 });
                 const query = resolveActionQuery(ctx.params);
                 if (!query) {
@@ -1132,6 +1208,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               cfg: ctx.cfg,
               target: ctx.toolContext?.currentGraphChannelId ?? ctx.toolContext?.currentChannelId,
               enforce: true,
+              targetTrusted: true,
             });
             const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
             const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
