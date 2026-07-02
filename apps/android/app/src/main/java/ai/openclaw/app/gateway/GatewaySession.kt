@@ -180,7 +180,6 @@ class GatewaySession(
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
-  private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
@@ -389,7 +388,10 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
-    private val pendingIds = ConcurrentHashMap.newKeySet<String>()
+    // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+
+    private val pendingLock = Any()
     private val messagePumpJob =
       scope.launch(Dispatchers.IO) {
         for (text in incomingMessages) {
@@ -425,14 +427,7 @@ class GatewaySession(
       timeoutMs: Long,
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
-      pendingIds.add(id)
-      if (isClosed.get()) {
-        pending.remove(id)
-        pendingIds.remove(id)
-        throw IllegalStateException("Gateway closed")
-      }
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
         return withTimeout(timeoutMs) { deferred.await() }
@@ -440,7 +435,6 @@ class GatewaySession(
         throw IllegalStateException("request timeout")
       } finally {
         pending.remove(id)
-        pendingIds.remove(id)
       }
     }
 
@@ -451,19 +445,11 @@ class GatewaySession(
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
-      pendingIds.add(id)
-      if (isClosed.get()) {
-        pending.remove(id)
-        pendingIds.remove(id)
-        throw IllegalStateException("Gateway closed")
-      }
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
         pending.remove(id)
-        pendingIds.remove(id)
         throw err
       }
       scope.launch(Dispatchers.IO) {
@@ -482,9 +468,18 @@ class GatewaySession(
           }
         } finally {
           pending.remove(id)
-          pendingIds.remove(id)
         }
       }
+    }
+
+    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
+      val deferred = CompletableDeferred<RpcResponse>()
+      // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
+      synchronized(pendingLock) {
+        if (isClosed.get()) throw IllegalStateException("Gateway closed")
+        pending[id] = deferred
+      }
+      return deferred
     }
 
     suspend fun sendJson(obj: JsonObject) {
@@ -920,7 +915,6 @@ class GatewaySession(
           ErrorShape(code, msg, details)
         }
       pending.remove(id)?.complete(RpcResponse(id, ok, payloadJson, error))
-      pendingIds.remove(id)
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -1030,10 +1024,13 @@ class GatewaySession(
     }
 
     private fun failPending() {
-      for (id in pendingIds) {
-        pending.remove(id)?.cancel()
+      val waiters =
+        synchronized(pendingLock) {
+          pending.values.toList().also { pending.clear() }
+        }
+      for (waiter in waiters) {
+        waiter.cancel()
       }
-      pendingIds.clear()
     }
   }
 
