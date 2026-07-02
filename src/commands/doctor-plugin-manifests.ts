@@ -261,7 +261,7 @@ export async function repairLegacyPluginManifestContractFindings(params: {
     let before: string | undefined;
     if (params.diff === true) {
       try {
-        before = readFile(migration.manifestPath, "utf-8").toString();
+        before = readFile(migration.manifestPath, "utf-8");
         diffs.push(legacyPluginManifestMigrationToRepairDiff(migration, before));
       } catch (error) {
         warnings.push(

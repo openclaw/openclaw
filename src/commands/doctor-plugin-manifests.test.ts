@@ -190,8 +190,10 @@ describe("doctor plugin manifest legacy contract repair", () => {
       manifestRoots: [pluginsRoot],
     });
 
-    expect(migration).toBeDefined();
-    expect(legacyPluginManifestContractMigrationToHealthFinding(migration!)).toStrictEqual({
+    if (migration === undefined) {
+      throw new Error("expected legacy manifest migration");
+    }
+    expect(legacyPluginManifestContractMigrationToHealthFinding(migration)).toStrictEqual({
       checkId: "core/doctor/legacy-plugin-manifests",
       severity: "warning",
       message: "Plugin manifest openai uses legacy top-level capability keys.",
