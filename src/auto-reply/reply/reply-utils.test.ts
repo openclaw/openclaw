@@ -1035,6 +1035,29 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not emit quadruple newlines when chunks already carry their paragraph boundary (issue #42106)", async () => {
+    // Post-fix the block chunker attaches the consumed "\n\n" to each emitted
+    // chunk. Re-applying the "\n\n" joiner verbatim would yield "\n\n\n\n"; the
+    // coalescer must collapse the seam to exactly one paragraph separator.
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph\n\n" });
+    coalescer.enqueue({ text: "Second paragraph" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    for (const flushed of flushes) {
+      expect(flushed).not.toContain("\n\n\n\n");
+      expect(flushed).not.toContain("\n\n\n");
+    }
+    coalescer.stop();
+  });
+
   it("does not coalesce reasoning blocks into visible reply text", async () => {
     const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
     const coalescer = createBlockReplyCoalescer({
