@@ -30,7 +30,11 @@ import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -694,7 +698,8 @@ function toChatMessages(
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
     const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-    const hasImages = msg.content.some((part) => part.type === "image");
+    const imageBlocks = extractToolResultImageBlocks(msg.content);
+    const hasImages = imageBlocks.length > 0;
     const toolText = buildToolResultText(
       textResult,
       mediaPlaceholder,
@@ -703,11 +708,8 @@ function toChatMessages(
       msg.isError,
     );
     toolContent.push({ type: "text", text: toolText });
-    for (const part of msg.content) {
+    for (const part of imageBlocks) {
       if (!supportsImages) {
-        continue;
-      }
-      if (part.type !== "image") {
         continue;
       }
       toolContent.push({

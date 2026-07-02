@@ -16,7 +16,9 @@ import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/provider
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
+  isToolResultImageBlock,
   extractToolResultText,
+  normalizeToolResultBlocks,
 } from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
@@ -301,15 +303,11 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(content: readonly unknown[]) {
+function convertContentBlocks(content: unknown) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+  const contentBlocks = normalizeToolResultBlocks(content);
+  const hasImages = contentBlocks.some(isToolResultImageBlock);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -321,25 +319,24 @@ function convertContentBlocks(content: readonly unknown[]) {
       }
   > = [];
   let hasTextBlock = false;
-  for (const block of Array.isArray(content) ? content : []) {
+  for (const block of contentBlocks) {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const record = block as Record<string, unknown>;
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
       blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (!isToolResultImageBlock(block)) {
       continue;
     }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: typeof record.data === "string" ? record.data : "",
+        media_type: block.mimeType,
+        data: block.data,
       },
     });
   }

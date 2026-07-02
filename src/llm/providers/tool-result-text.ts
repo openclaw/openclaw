@@ -1,5 +1,6 @@
 import { redactSecrets, redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
+import type { ImageContent } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 const PROVIDER_TOOL_RESULT_MAX_CHARS = 8000;
@@ -28,7 +29,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeToolResultBlocks(blocks: unknown): readonly unknown[] {
+export function normalizeToolResultBlocks(blocks: unknown): readonly unknown[] {
   if (Array.isArray(blocks)) {
     return blocks;
   }
@@ -46,6 +47,19 @@ function primitiveToolResultText(value: unknown): string | undefined {
     return String(value);
   }
   return undefined;
+}
+
+export function isToolResultImageBlock(block: unknown): block is ImageContent {
+  return (
+    isRecord(block) &&
+    block.type === "image" &&
+    typeof block.mimeType === "string" &&
+    typeof block.data === "string"
+  );
+}
+
+export function extractToolResultImageBlocks(blocks: unknown): ImageContent[] {
+  return normalizeToolResultBlocks(blocks).filter(isToolResultImageBlock);
 }
 
 function readMimeType(value: unknown): string | undefined {
@@ -90,6 +104,12 @@ function redactStructuredTextValue(value: string): string {
   } catch {
     return redacted;
   }
+}
+
+function redactTextLikeStructuredField(value: string): string | undefined {
+  const redacted = redactInlineDataUris(redactStructuredTextValue(value));
+  const truncated = truncateProviderToolText(redacted);
+  return truncated ? sanitizeSurrogates(truncated) : undefined;
 }
 
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
@@ -202,7 +222,7 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
     for (const key of TEXT_FIELD_CANDIDATES) {
       const text = primitiveToolResultText(record[key]);
       if (text) {
-        return sanitizeSurrogates(text);
+        return redactTextLikeStructuredField(text);
       }
     }
   }

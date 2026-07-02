@@ -32,7 +32,11 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -281,7 +285,7 @@ export function convertMessages<T extends GoogleApiType>(
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter((c): c is ImageContent => c.type === "image")
+        ? extractToolResultImageBlocks(msg.content)
         : [];
 
       const hasText = textResult.length > 0;

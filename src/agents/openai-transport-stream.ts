@@ -29,6 +29,7 @@ import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
 import {
   describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
   extractToolResultText,
 } from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
@@ -1290,7 +1291,8 @@ function convertResponsesMessages(
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasImages = msg.content.some((item) => item.type === "image");
+      const imageBlocks = extractToolResultImageBlocks(msg.content);
+      const hasImages = imageBlocks.length > 0;
       const [callId] = msg.toolCallId.split("|");
       messages.push({
         type: "function_call_output",
@@ -1303,13 +1305,11 @@ function convertResponsesMessages(
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
+                ...imageBlocks.map((item) => ({
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:${item.mimeType};base64,${item.data}`,
+                })),
               ] as ResponseFunctionCallOutputItemList)
             : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });

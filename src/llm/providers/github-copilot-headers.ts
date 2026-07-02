@@ -1,5 +1,6 @@
 // GitHub Copilot header helpers build request headers for Copilot-backed providers.
 import type { Message } from "../types.js";
+import { extractToolResultImageBlocks } from "./tool-result-text.js";
 
 // Copilot expects X-Initiator to indicate whether the request is user-initiated
 // or agent-initiated (e.g. follow-up after assistant/tool messages).
@@ -14,8 +15,8 @@ export function hasCopilotVisionInput(messages: Message[]): boolean {
     if (msg.role === "user" && Array.isArray(msg.content)) {
       return msg.content.some((c) => c.type === "image");
     }
-    if (msg.role === "toolResult" && Array.isArray(msg.content)) {
-      return msg.content.some((c) => c.type === "image");
+    if (msg.role === "toolResult") {
+      return extractToolResultImageBlocks(msg.content).length > 0;
     }
     return false;
   });

@@ -174,6 +174,22 @@ describe("extractToolResultText", () => {
     expect(extractToolResultText({ output: "status card text" })).toBe("status card text");
     expect(extractToolResultText({ content: "config text" })).toBe("config text");
   });
+
+  it("redacts and truncates text-like fields from non-standard object tool results", () => {
+    const redactedText = extractToolResultText({
+      output:
+        '{"apiToken":"api-token-value-1234567890","safe":"ok","preview":"data:image/png;base64,abcdef"}',
+    });
+
+    expect(redactedText).toContain('"safe":"ok"');
+    expect(redactedText).toContain("[inline data URI:");
+    expect(redactedText).not.toContain("api-token-value-1234567890");
+    expect(redactedText).not.toContain("abcdef");
+
+    const truncatedText = extractToolResultText({ output: `${"x".repeat(8_200)}tail-marker` });
+    expect(truncatedText).toContain("…(truncated)…");
+    expect(truncatedText).not.toContain("tail-marker");
+  });
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
@@ -198,5 +214,11 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
+  });
+
+  it("describes single-object image tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder({ type: "image", mimeType: "image/png", data: "img" }),
+    ).toBe("(see attached image)");
   });
 });

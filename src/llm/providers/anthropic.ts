@@ -71,7 +71,9 @@ import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.j
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
+  isToolResultImageBlock,
   extractToolResultText,
+  normalizeToolResultBlocks,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -127,7 +129,7 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: readonly unknown[]):
+function convertContentBlocks(content: unknown):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -142,12 +144,8 @@ function convertContentBlocks(content: readonly unknown[]):
     > {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+  const contentBlocks = normalizeToolResultBlocks(content);
+  const hasImages = contentBlocks.some(isToolResultImageBlock);
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
@@ -167,29 +165,24 @@ function convertContentBlocks(content: readonly unknown[]):
   > = [];
   let hasTextBlock = false;
 
-  for (const block of Array.isArray(content) ? content : []) {
+  for (const block of contentBlocks) {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const record = block as Record<string, unknown>;
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
       blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (!isToolResultImageBlock(block)) {
       continue;
     }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp",
-        data: typeof record.data === "string" ? record.data : "",
+        media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+        data: block.data,
       },
     });
   }

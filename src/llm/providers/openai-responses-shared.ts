@@ -56,7 +56,11 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultImageBlocks,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -414,7 +418,8 @@ export function convertResponsesMessages<TApi extends Api>(
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
-      const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+      const imageBlocks = extractToolResultImageBlocks(msg.content);
+      const hasImages = imageBlocks.length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
@@ -435,14 +440,12 @@ export function convertResponsesMessages<TApi extends Api>(
           });
         }
 
-        for (const block of msg.content) {
-          if (block.type === "image") {
-            contentParts.push({
-              type: "input_image",
-              detail: "auto",
-              image_url: `data:${block.mimeType};base64,${block.data}`,
-            });
-          }
+        for (const block of imageBlocks) {
+          contentParts.push({
+            type: "input_image",
+            detail: "auto",
+            image_url: `data:${block.mimeType};base64,${block.data}`,
+          });
         }
 
         output = contentParts;
