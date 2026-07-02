@@ -771,7 +771,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(archivedDirectTranscripts.length).toBeGreaterThan(0);
   });
 
-  it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
+  it("sessions cleanup dry-run reports unreferenced artifacts outside SQLite row budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -803,9 +803,135 @@ describe("Integration: saveSessionStore with pruning", () => {
     if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
       throw new Error("expected disk budget cleanup summary");
     }
-    expect(diskBudgetSummary.removedFiles).toBe(1);
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    expect(diskBudgetSummary.removedFiles).toBe(0);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(1);
     await expectPathExists(oldOrphanTranscript);
+  });
+
+  it("sessions cleanup dry-run reports SQLite transcript row bytes for disk budget", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 500,
+          maxDiskBytes: 1_600,
+          highWaterBytes: 900,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const oldKey = "agent:main:explicit:old-budget";
+    const freshKey = "agent:main:explicit:fresh-budget";
+    await seedSqliteSessionStore(storePath, {
+      [oldKey]: { sessionId: "old-budget-session", updatedAt: now - DAY_MS },
+      [freshKey]: { sessionId: "fresh-budget-session", updatedAt: now },
+    });
+    await seedSqliteTranscriptMessage({
+      content: "old-" + "x".repeat(1_200),
+      sessionId: "old-budget-session",
+      sessionKey: oldKey,
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "fresh-" + "y".repeat(1_200),
+      sessionId: "fresh-budget-session",
+      sessionKey: freshKey,
+      storePath,
+    });
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, activeKey: freshKey },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    const diskBudgetSummary = preview?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected SQLite row-byte disk budget summary");
+    }
+    expect(diskBudgetSummary.totalBytesBefore).toBeGreaterThan(2_400);
+    expect(diskBudgetSummary.totalBytesAfter).toBeLessThan(diskBudgetSummary.totalBytesBefore);
+    expect(diskBudgetSummary.removedEntries).toBe(1);
+    expect(diskBudgetSummary.removedFiles).toBe(0);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.budgetEvictedKeys.has(oldKey)).toBe(true);
+    expect(preview?.budgetEvictedKeys.has(freshKey)).toBe(false);
+    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeDefined();
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "old-budget-session",
+        sessionKey: oldKey,
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("sessions cleanup apply reports SQLite disk-budget row eviction", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 500,
+          maxDiskBytes: 1_600,
+          highWaterBytes: 900,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const oldKey = "agent:main:explicit:old-apply-budget";
+    const freshKey = "agent:main:explicit:fresh-apply-budget";
+    await seedSqliteSessionStore(storePath, {
+      [oldKey]: { sessionId: "old-apply-budget-session", updatedAt: now - DAY_MS },
+      [freshKey]: { sessionId: "fresh-apply-budget-session", updatedAt: now },
+    });
+    await seedSqliteTranscriptMessage({
+      content: "old-" + "x".repeat(1_200),
+      sessionId: "old-apply-budget-session",
+      sessionKey: oldKey,
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "fresh-" + "y".repeat(1_200),
+      sessionId: "fresh-apply-budget-session",
+      sessionKey: freshKey,
+      storePath,
+    });
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, activeKey: freshKey },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const summary = applied.appliedSummaries[0];
+    const diskBudgetSummary = summary?.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected applied SQLite row-byte disk budget summary");
+    }
+    expect(diskBudgetSummary.removedEntries).toBe(1);
+    expect(diskBudgetSummary.removedFiles).toBe(0);
+    expect(summary?.appliedCount).toBe(1);
+    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey: freshKey })).toBeDefined();
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "old-apply-budget-session",
+        sessionKey: oldKey,
+        storePath,
+      }),
+    ).toEqual([]);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "fresh-apply-budget-session",
+        sessionKey: freshKey,
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {

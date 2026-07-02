@@ -9,9 +9,9 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  enforceSessionDiskBudget,
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
+  type SessionDiskBudgetSweepResult,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
 import { resolveStorePath } from "./paths.js";
@@ -19,6 +19,7 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   loadTranscriptEventsSync,
+  previewSessionDiskBudget,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
@@ -71,7 +72,7 @@ export type SessionCleanupSummary = {
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
-  diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
+  diskBudget: SessionDiskBudgetSweepResult | null;
   wouldMutate: boolean;
   applied?: true;
   appliedCount?: number;
@@ -422,33 +423,25 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
-  const beforeBudgetStore = cloneSessionStoreRecord(previewStore);
-  const budgetRemovedFilePaths = new Set<string>();
-  const diskBudget = await enforceSessionDiskBudget({
-    store: previewStore,
-    storePath: params.target.storePath,
-    activeSessionKey: params.activeKey,
-    preserveKeys: preserveSessionKeys,
-    maintenance: params.maintenance,
-    warnOnly: false,
-    dryRun: true,
-    onRemoveFile: (canonicalPath) => {
-      budgetRemovedFilePaths.add(canonicalPath);
-    },
-  });
+  const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
+    ? previewSessionDiskBudget({
+        agentId: params.target.agentId,
+        store: previewStore,
+        storePath: params.target.storePath,
+        activeSessionKey: params.activeKey,
+        preserveKeys: preserveSessionKeys,
+        maintenance: params.maintenance,
+      })
+    : { diskBudget: null, removedKeys: new Set<string>() };
+  const diskBudget = diskBudgetPreview.diskBudget;
   const unreferencedArtifacts = await pruneUnreferencedSessionArtifacts({
     store: previewStore,
     storePath: params.target.storePath,
     olderThanMs: params.maintenance.pruneAfterMs,
     dryRun: true,
-    excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
+    excludeCanonicalPaths: entryCleanupArtifactPaths,
   });
-  const budgetEvictedKeys = new Set<string>();
-  for (const key of Object.keys(beforeBudgetStore)) {
-    if (!Object.hasOwn(previewStore, key)) {
-      budgetEvictedKeys.add(key);
-    }
-  }
+  const budgetEvictedKeys = diskBudgetPreview.removedKeys;
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =

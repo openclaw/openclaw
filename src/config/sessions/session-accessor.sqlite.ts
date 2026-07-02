@@ -36,6 +36,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import type { SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import type {
   ExactSessionEntry,
   ForkSessionEntryFromParentTargetParams,
@@ -2066,9 +2067,25 @@ function applySqliteSessionDiskBudget(params: {
   preserveKeys: ReadonlySet<string>;
   rememberRemovedEntry: (removed: { key: string; entry: SessionEntry }) => void;
 }): void {
+  enforceSqliteSessionDiskBudgetInStore({
+    database: params.database,
+    store: params.store,
+    maintenance: params.maintenance,
+    preserveKeys: params.preserveKeys,
+    onRemoveEntry: params.rememberRemovedEntry,
+  });
+}
+
+function enforceSqliteSessionDiskBudgetInStore(params: {
+  database: OpenClawAgentDatabase;
+  store: Record<string, SessionEntry>;
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxDiskBytes" | "highWaterBytes">;
+  preserveKeys?: ReadonlySet<string>;
+  onRemoveEntry?: (removed: { key: string; entry: SessionEntry }) => void;
+}): SessionDiskBudgetSweepResult | null {
   const { maxDiskBytes, highWaterBytes } = params.maintenance;
   if (maxDiskBytes == null || highWaterBytes == null) {
-    return;
+    return null;
   }
   const rowBytes = readSqliteSessionRowBytes(params.database);
   let totalBytes = 0;
@@ -2091,9 +2108,20 @@ function applySqliteSessionDiskBudget(params: {
   for (const sessionId of sessionIdRefCounts.keys()) {
     totalBytes += rowBytes.transcriptBytesBySessionId.get(sessionId) ?? 0;
   }
+  const totalBytesBefore = totalBytes;
   if (totalBytes <= maxDiskBytes) {
-    return;
+    return {
+      totalBytesBefore,
+      totalBytesAfter: totalBytes,
+      removedFiles: 0,
+      removedEntries: 0,
+      freedBytes: 0,
+      maxBytes: maxDiskBytes,
+      highWaterBytes,
+      overBudget: false,
+    };
   }
+  let removedEntries = 0;
   const keys = Object.keys(params.store).toSorted((a, b) => {
     const aTime = getSqliteSessionEntryUpdatedAt(params.store[a]);
     const bTime = getSqliteSessionEntryUpdatedAt(params.store[b]);
@@ -2110,8 +2138,9 @@ function applySqliteSessionDiskBudget(params: {
     if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
       continue;
     }
-    params.rememberRemovedEntry({ key, entry });
+    params.onRemoveEntry?.({ key, entry });
     delete params.store[key];
+    removedEntries += 1;
     totalBytes -= entryBytesByKey.get(key) ?? 0;
     for (const sessionId of sessionIdsByKey.get(key) ?? []) {
       const nextRefCount = (sessionIdRefCounts.get(sessionId) ?? 0) - 1;
@@ -2123,6 +2152,54 @@ function applySqliteSessionDiskBudget(params: {
       totalBytes -= rowBytes.transcriptBytesBySessionId.get(sessionId) ?? 0;
     }
   }
+  return {
+    totalBytesBefore,
+    totalBytesAfter: totalBytes,
+    removedFiles: 0,
+    removedEntries,
+    freedBytes: Math.max(0, totalBytesBefore - totalBytes),
+    maxBytes: maxDiskBytes,
+    highWaterBytes,
+    overBudget: true,
+  };
+}
+
+export function previewSqliteSessionDiskBudget(params: {
+  agentId?: string;
+  activeSessionKey?: string;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxDiskBytes" | "highWaterBytes">;
+  preserveKeys?: ReadonlySet<string>;
+}): { diskBudget: SessionDiskBudgetSweepResult | null; removedKeys: Set<string> } {
+  const removedKeys = new Set<string>();
+  if (params.maintenance.maxDiskBytes == null || params.maintenance.highWaterBytes == null) {
+    return { diskBudget: null, removedKeys };
+  }
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: "",
+    storePath: params.storePath,
+  });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const baseKeys = collectSqliteSessionMaintenanceBaseKeys(
+    params.store,
+    params.activeSessionKey ?? "",
+  );
+  const preserveKeys =
+    baseKeys.length > 0 || params.preserveKeys
+      ? new Set([...(params.preserveKeys ?? []), ...baseKeys])
+      : undefined;
+  const diskBudget = enforceSqliteSessionDiskBudgetInStore({
+    database,
+    store: params.store,
+    maintenance: params.maintenance,
+    preserveKeys,
+    onRemoveEntry: ({ key }) => {
+      removedKeys.add(key);
+    },
+  });
+  return { diskBudget, removedKeys };
 }
 
 function readExactSessionEntryRow(
