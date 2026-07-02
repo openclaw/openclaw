@@ -868,7 +868,13 @@ function resolveAutoEnableChannelId(params: {
     (record) => record.id === params.entry.pluginId,
   );
   if (plugin && plugin.origin !== "bundled") {
-    return null;
+    if (params.entry.kind !== "channel-configured") {
+      return null;
+    }
+    const channelId = normalizeManifestChannelId(params.entry.channelId);
+    if ((plugin.channels ?? []).some((id) => normalizeManifestChannelId(id) === channelId)) {
+      return null;
+    }
   }
   const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
   if (builtInChannelId) {
