@@ -159,7 +159,7 @@ describe("generate-npm-shrinkwrap", () => {
     };
     const overrideRules = exactOverrideRulesFromOverrides({
       protobufjs: "8.4.0",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+      "node-domexception": "1.0.0",
     });
 
     expect(collectOverrideViolations(lockfile, overrideRules)).toHaveLength(2);
@@ -179,12 +179,12 @@ describe("generate-npm-shrinkwrap", () => {
         "node_modules/react": {
           version: "19.2.6",
         },
-        "node_modules/@nolyfill/domexception": {
-          version: "1.0.28",
+        "node_modules/node-domexception": {
+          version: "1.0.0",
         },
       },
     };
-    const pnpmPackages = new Set(["react@19.2.4", "@nolyfill/domexception@1.0.28"]);
+    const pnpmPackages = new Set(["react@19.2.4", "node-domexception@1.0.0"]);
 
     expect(collectPnpmLockViolations(lockfile, pnpmPackages)).toEqual([
       {

@@ -153,31 +153,31 @@ describe("package manager build policy", () => {
     });
   });
 
-  it("preserves npm alias pins when merging nested lock-derived pins", () => {
+  it("preserves version pins when merging nested lock-derived pins", () => {
     expect(
       mergeOverrides(
-        { "node-domexception": "npm:@nolyfill/domexception@1.0.28" },
-        { "node-domexception": { ".": "1.0.28", child: "2.0.0" } },
+        { "node-domexception": "1.0.0" },
+        { "node-domexception": { ".": "1.0.0", child: "2.0.0" } },
         {},
       ),
     ).toEqual({
       "node-domexception": {
-        ".": "npm:@nolyfill/domexception@1.0.28",
+        ".": "1.0.0",
         child: "2.0.0",
       },
     });
   });
 
-  it("preserves later npm alias pins when nested pins are already merged", () => {
+  it("preserves later version pins when nested pins are already merged", () => {
     expect(
       mergeOverrides(
-        { "node-domexception": { ".": "1.0.28", child: "2.0.0" } },
-        { "node-domexception": "npm:@nolyfill/domexception@1.0.28" },
+        { "node-domexception": { ".": "1.0.0", child: "2.0.0" } },
+        { "node-domexception": "1.0.0" },
         {},
       ),
     ).toEqual({
       "node-domexception": {
-        ".": "npm:@nolyfill/domexception@1.0.28",
+        ".": "1.0.0",
         child: "2.0.0",
       },
     });
