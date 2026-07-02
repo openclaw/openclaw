@@ -39,7 +39,7 @@ describe("zai model definitions", () => {
       input: ["text"],
       contextWindow: 1_000_000,
       maxTokens: 131_072,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
     });
   });
 
