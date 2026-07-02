@@ -103,12 +103,21 @@ export async function generateImage(
         timeoutMs: requestedTimeoutMs,
         providerDefaultTimeoutMs: provider.defaultTimeoutMs,
       });
+      const modelResolutions =
+        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+      const modeCapabilities = params.inputImages?.length
+        ? provider.capabilities.edit
+        : provider.capabilities.generate;
+      const inferredResolution =
+        modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+          ? undefined
+          : params.inferredResolution;
       const sanitized = resolveImageGenerationOverrides({
         provider,
         model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        resolution: params.resolution ?? inferredResolution,
         quality: params.quality,
         outputFormat: params.outputFormat,
         background: params.background,
@@ -143,6 +152,7 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,

@@ -195,9 +195,11 @@ function createToolWithPrimaryImageModel(
   extra?: {
     agentDir?: string;
     workspaceDir?: string;
+    fallbacks?: string[];
   },
 ) {
   ensureDefaultImageGenerationProvidersStubbed();
+  const { fallbacks, ...toolOptions } = extra ?? {};
   return requireImageGenerateTool(
     createImageGenerateTool({
       config: {
@@ -205,16 +207,20 @@ function createToolWithPrimaryImageModel(
           defaults: {
             imageGenerationModel: {
               primary,
+              ...(fallbacks ? { fallbacks } : {}),
             },
           },
         },
       },
-      ...extra,
+      ...toolOptions,
     }),
   );
 }
 
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
+  const maxDimension = Math.max(params?.width ?? 0, params?.height ?? 0);
+  const appliedResolution =
+    maxDimension >= 3000 ? "4K" : maxDimension >= 1500 ? "2K" : maxDimension > 0 ? "1K" : undefined;
   // Edit tests stub the whole media pipeline so assertions focus on tool input
   // shaping, provider choice, and saved-media metadata.
   const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -222,6 +228,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
     model: "gemini-3-pro-image-preview",
     attempts: [],
     ignoredOverrides: [],
+    ...(appliedResolution ? { appliedResolution } : {}),
     images: [
       {
         buffer: Buffer.from("png-out"),
@@ -256,6 +263,7 @@ function createFalEditProvider(params?: {
   models?: string[];
   supportsAspectRatio?: boolean;
   aspectRatios?: string[];
+  resolutionsByModel?: Record<string, ("1K" | "2K" | "4K")[]>;
 }) {
   return {
     id: "fal",
@@ -275,10 +283,13 @@ function createFalEditProvider(params?: {
         supportsAspectRatio: params?.supportsAspectRatio ?? false,
         supportsResolution: true,
       },
-      ...(params?.aspectRatios
+      ...(params?.aspectRatios || params?.resolutionsByModel
         ? {
             geometry: {
-              aspectRatios: params.aspectRatios,
+              ...(params.aspectRatios ? { aspectRatios: params.aspectRatios } : {}),
+              ...(params.resolutionsByModel
+                ? { resolutionsByModel: params.resolutionsByModel }
+                : {}),
             },
           }
         : {}),
@@ -1490,31 +1501,94 @@ describe("createImageGenerateTool", () => {
     expect(generateArgs.aspectRatio).toBe("2.35:1");
   });
 
-  it("does not infer edit resolution for fal Krea style references", async () => {
+  it.each(["krea/v2/medium/text-to-image", "google/nano-banana-2-lite"])(
+    "does not infer edit resolution when %s declares no resolution options",
+    async (model) => {
+      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+        createFalEditProvider({
+          defaultModel: model,
+          models: [model],
+          maxInputImages: 10,
+          supportsAspectRatio: true,
+          resolutionsByModel: { [model]: [] },
+        }),
+      ]);
+      const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+        provider: "fal",
+        model,
+        attempts: [],
+        ignoredOverrides: [],
+        images: [
+          {
+            buffer: Buffer.from("krea-style-out"),
+            mimeType: "image/png",
+            fileName: "krea-style.png",
+          },
+        ],
+      });
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+        kind: "image",
+        buffer: Buffer.from("style-ref"),
+        contentType: "image/png",
+      });
+      vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+        width: 2048,
+        height: 2048,
+      });
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+        path: "/tmp/krea-style.png",
+        id: "krea-style.png",
+        size: 14,
+        contentType: "image/png",
+      });
+
+      const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+        workspaceDir: process.cwd(),
+      });
+      await tool.execute("call-fal-krea-style", {
+        prompt: "Style-directed portrait",
+        image: "./fixtures/style.png",
+      });
+
+      const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+      expect(generateArgs.resolution).toBeUndefined();
+      expect(generateArgs.inferredResolution).toBe("2K");
+      expect(generateArgs.inputImages).toHaveLength(1);
+    },
+  );
+
+  it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
+    const fallbackModel = "google/nano-banana-2-lite";
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3-pro-image-preview",
+        models: ["gemini-3-pro-image-preview"],
+        capabilities: {
+          generate: { supportsResolution: true },
+          edit: { enabled: true, maxInputImages: 5, supportsResolution: true },
+          geometry: { resolutions: ["1K", "2K", "4K"] },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
       createFalEditProvider({
-        defaultModel: "krea/v2/medium/text-to-image",
-        models: ["krea/v2/medium/text-to-image"],
-        maxInputImages: 10,
-        supportsAspectRatio: true,
+        defaultModel: fallbackModel,
+        models: [fallbackModel],
+        resolutionsByModel: { [fallbackModel]: [] },
       }),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "fal",
-      model: "krea/v2/medium/text-to-image",
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
       attempts: [],
       ignoredOverrides: [],
-      images: [
-        {
-          buffer: Buffer.from("krea-style-out"),
-          mimeType: "image/png",
-          fileName: "krea-style.png",
-        },
-      ],
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
     });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
-      buffer: Buffer.from("style-ref"),
+      buffer: Buffer.from("reference"),
       contentType: "image/png",
     });
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
@@ -1522,23 +1596,57 @@ describe("createImageGenerateTool", () => {
       height: 2048,
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/krea-style.png",
-      id: "krea-style.png",
-      size: 14,
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 6,
       contentType: "image/png",
     });
 
-    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image", {
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
       workspaceDir: process.cwd(),
+      fallbacks: [`fal/${fallbackModel}`],
     });
-    await tool.execute("call-fal-krea-style", {
-      prompt: "Style-directed portrait",
-      image: "./fixtures/style.png",
+    await tool.execute("call-edit-with-resolutionless-fallback", {
+      prompt: "edit safely across fallbacks",
+      image: "./fixtures/reference.png",
     });
 
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.resolution).toBeUndefined();
-    expect(generateArgs.inputImages).toHaveLength(1);
+    expect(generateArgs.inferredResolution).toBe("2K");
+  });
+
+  it("accepts Grok-specific aspect ratios through image_generate", async () => {
+    const model = "xai/grok-imagine-image";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        supportsAspectRatio: true,
+        aspectRatios: ["1:1", "20:9"],
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model,
+      attempts: [],
+      ignoredOverrides: [],
+      images: [{ buffer: Buffer.from("grok-out"), mimeType: "image/png" }],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/grok.png",
+      id: "grok.png",
+      size: 8,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`);
+    await tool.execute("call-fal-grok-aspect", {
+      prompt: "wide landscape",
+      aspectRatio: "20:9",
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").aspectRatio).toBe("20:9");
   });
 
   it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
@@ -1779,14 +1887,16 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await tool.execute("call-edit", {
+    const result = await tool.execute("call-edit", {
       prompt: "Add a dramatic stormy sky but keep everything else identical.",
       image: "./fixtures/reference.png",
     });
 
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.aspectRatio).toBeUndefined();
-    expect(generateArgs.resolution).toBe("4K");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
+    expect(resultDetails(result).resolution).toBe("4K");
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -1977,6 +2087,7 @@ describe("createImageGenerateTool", () => {
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.modelOverride).toBeUndefined();
     expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -2219,7 +2330,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
     ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
+      "aspectRatio must be one of 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, or 1:8",
     );
   });
 

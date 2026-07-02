@@ -34,6 +34,8 @@ const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const FAL_KREA_2_MODEL_PREFIX = "krea/v2/";
 const FAL_KREA_2_MEDIUM_MODEL = "krea/v2/medium/text-to-image";
 const FAL_KREA_2_LARGE_MODEL = "krea/v2/large/text-to-image";
+const FAL_NANO_BANANA_2_LITE_MODEL = "google/nano-banana-2-lite";
+const FAL_GROK_IMAGINE_MODEL = "xai/grok-imagine-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
 const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 10;
 const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
@@ -246,7 +248,7 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
   // Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image) uses /edit and the same
   // aspect_ratio/image_urls contracts as Nano Banana 2. Its published schema
   // has no resolution field, so explicit resolution overrides fail locally.
-  if (model.startsWith("google/nano-banana-2-lite")) {
+  if (model.startsWith(FAL_NANO_BANANA_2_LITE_MODEL)) {
     return {
       geometry: "native_aspect_ratio",
       aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS,
@@ -263,7 +265,7 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
   // Grok Imagine (xAI) — text-to-image at /xai/grok-imagine-image, standard
   // edits at /xai/grok-imagine-image/edit. Explicit quality/edit model paths
   // remain unchanged. Accepts up to 3 reference images via image_urls.
-  if (model.startsWith("xai/grok-imagine-image")) {
+  if (model.startsWith(FAL_GROK_IMAGINE_MODEL)) {
     return {
       geometry: "native_aspect_ratio",
       aspectRatios: GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS,
@@ -635,7 +637,23 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           [FAL_KREA_2_LARGE_MODEL]: [],
         },
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
+        aspectRatiosByModel: {
+          [FAL_NANO_BANANA_2_LITE_MODEL]: [...NANO_BANANA_SUPPORTED_ASPECT_RATIOS],
+          [`${FAL_NANO_BANANA_2_LITE_MODEL}/edit`]: [...NANO_BANANA_SUPPORTED_ASPECT_RATIOS],
+          [FAL_GROK_IMAGINE_MODEL]: [...GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS],
+          [`${FAL_GROK_IMAGINE_MODEL}/edit`]: [...GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS],
+          [`${FAL_GROK_IMAGINE_MODEL}/quality/edit`]: [...GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS],
+        },
         resolutions: ["1K", "2K", "4K"],
+        resolutionsByModel: {
+          [FAL_KREA_2_MEDIUM_MODEL]: [],
+          [FAL_KREA_2_LARGE_MODEL]: [],
+          [FAL_NANO_BANANA_2_LITE_MODEL]: [],
+          [`${FAL_NANO_BANANA_2_LITE_MODEL}/edit`]: [],
+          [FAL_GROK_IMAGINE_MODEL]: [...GROK_IMAGINE_SUPPORTED_RESOLUTIONS],
+          [`${FAL_GROK_IMAGINE_MODEL}/edit`]: [...GROK_IMAGINE_SUPPORTED_RESOLUTIONS],
+          [`${FAL_GROK_IMAGINE_MODEL}/quality/edit`]: [...GROK_IMAGINE_SUPPORTED_RESOLUTIONS],
+        },
       },
       output: {
         formats: [...FAL_OUTPUT_FORMATS],

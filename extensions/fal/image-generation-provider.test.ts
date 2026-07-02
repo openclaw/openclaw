@@ -44,6 +44,23 @@ describe("fal image-generation provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("publishes model-specific Grok and Nano Banana 2 Lite geometry", () => {
+    const geometry = buildFalImageGenerationProvider().capabilities.geometry;
+    const grokRatios = geometry?.aspectRatiosByModel?.["xai/grok-imagine-image"];
+    const grokResolutions = geometry?.resolutionsByModel?.["xai/grok-imagine-image"];
+    const nanoResolutions = geometry?.resolutionsByModel?.["google/nano-banana-2-lite"];
+
+    expect(grokRatios).toContain("2:1");
+    expect(grokRatios).toContain("20:9");
+    expect(grokResolutions).toEqual(["1K", "2K"]);
+    expect(geometry?.aspectRatiosByModel?.["xai/grok-imagine-image/edit"]).toEqual(grokRatios);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality/edit"]).toEqual(
+      grokResolutions,
+    );
+    expect(nanoResolutions).toEqual([]);
+    expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
+  });
+
   it("generates image buffers from the fal sync API", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
