@@ -439,21 +439,6 @@ export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMess
   };
 }
 
-function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const message of messages) {
-    const stripped = stripThinkingBlocksFromMessage(message);
-    if (stripped === message) {
-      out.push(stripped);
-      continue;
-    }
-    touched = true;
-    out.push(stripped);
-  }
-  return touched ? out : messages;
-}
-
 export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
   let latestUserIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -732,7 +717,11 @@ export function wrapAnthropicStreamWithRecovery(
       ? (contextRecord.messages as AgentMessage[])
       : [];
     const retry = () => {
-      const cleanedMessages = stripAllThinkingBlocks(originalMessages);
+      // Preserve the latest assistant message's thinking verbatim; strip
+      // thinking only from prior turns. Anthropic/Bedrock reject requests
+      // whose latest thinking block was modified (including stripped), so the
+      // recovery retry must keep it intact and only drop prior-turn blocks.
+      const cleanedMessages = dropThinkingBlocks(originalMessages);
       const nextContext = {
         ...(context as unknown as Record<string, unknown>),
         messages: cleanedMessages,
@@ -742,7 +731,7 @@ export function wrapAnthropicStreamWithRecovery(
     const notify = () =>
       notifyRecoveredAnthropicThinking(requestMeta, {
         originalMessages,
-        cleanedMessages: stripAllThinkingBlocks(originalMessages),
+        cleanedMessages: dropThinkingBlocks(originalMessages),
       });
 
     const stream = innerStreamFn(model, context, options);

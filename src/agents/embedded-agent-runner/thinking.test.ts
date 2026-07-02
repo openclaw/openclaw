@@ -481,7 +481,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     });
   }
 
-  it("retries once with omitted-reasoning text when the request is rejected before streaming", async () => {
+  it("preserves the latest assistant thinking on retry when the request is rejected before streaming", async () => {
     let callCount = 0;
     const contexts: Array<{ messages?: AgentMessage[] }> = [];
     const wrapped = wrapAnthropicStreamWithRecovery(
@@ -512,12 +512,73 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     if (!retryMessage || retryMessage.role !== "assistant") {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
+    // The latest (here only) assistant message must be replayed verbatim;
+    // stripping its thinking would cause Anthropic to reject the retry with
+    // the same "cannot be modified" error. See issue #98760.
     expect(retryMessage.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+      { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
     ]);
   });
 
-  it("retries with visible assistant text when stripping thinking leaves content", async () => {
+  it("strips prior-turn thinking on retry while preserving the latest assistant message", async () => {
+    let callCount = 0;
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        callCount += 1;
+        contexts.push(context as { messages?: AgentMessage[] });
+        return Promise.reject(anthropicThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "user",
+              content: [{ type: "text", text: "first turn" }],
+            },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "prior-secret", thinkingSignature: "prior-sig" },
+                { type: "text", text: "prior answer" },
+              ],
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "second turn" }],
+            },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "latest-secret", thinkingSignature: "latest-sig" },
+                { type: "text", text: "latest answer" },
+              ],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(anthropicThinkingError);
+    expect(callCount).toBe(2);
+    const retryMessages = contexts[1]?.messages;
+    if (!retryMessages || retryMessages.length !== 4) {
+      throw new Error("Expected Anthropic recovery retry to keep all four messages");
+    }
+    expect(retryMessages[1]?.role).toBe("assistant");
+    expect(retryMessages[1]?.content).toEqual([{ type: "text", text: "prior answer" }]);
+    expect(retryMessages[3]?.role).toBe("assistant");
+    expect(retryMessages[3]?.content).toEqual([
+      { type: "thinking", thinking: "latest-secret", thinkingSignature: "latest-sig" },
+      { type: "text", text: "latest answer" },
+    ]);
+  });
+
+  it("preserves latest assistant thinking alongside visible text on retry", async () => {
     const contexts: Array<{ messages?: AgentMessage[] }> = [];
     const wrapped = wrapAnthropicStreamWithRecovery(
       ((_model, context) => {
@@ -549,7 +610,12 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     if (!retryMessage || retryMessage.role !== "assistant") {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
-    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+    // Latest assistant's thinking must be replayed verbatim alongside the
+    // visible text; providers reject modified latest thinking blocks.
+    expect(retryMessage.content).toEqual([
+      { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+      { type: "text", text: "visible answer" },
+    ]);
   });
 
   it("notifies recovery only after a rejected request retry succeeds", async () => {
@@ -601,12 +667,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(recovered).toHaveBeenCalledTimes(1);
     expect(recovered).toHaveBeenCalledWith({
       originalMessages,
-      cleanedMessages: [
-        {
-          ...originalMessages[0],
-          content: [{ type: "text", text: "visible answer" }],
-        },
-      ],
+      // Recovery keeps the latest assistant thinking verbatim; no stripping
+      // happens when the only assistant message is the latest one.
+      cleanedMessages: originalMessages,
     });
   });
 
@@ -778,7 +841,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     },
   );
 
-  it("retries pre-content terminal stream-error events with omitted-reasoning text", async () => {
+  it("retries pre-content terminal stream-error events preserving latest assistant thinking", async () => {
     let callCount = 0;
     const contexts: Array<{ messages?: AgentMessage[] }> = [];
     const finalMessage = createTestAssistantMessage({
@@ -833,7 +896,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
     expect(retryMessage.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+      { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
     ]);
   });
 
