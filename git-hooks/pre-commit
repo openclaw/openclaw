@@ -3,8 +3,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+GLOBAL_HOOKS_PATH="$(git config --global --get core.hooksPath 2>/dev/null || true)"
 RUN_NODE_TOOL="$ROOT_DIR/scripts/pre-commit/run-node-tool.sh"
 FILTER_FILES="$ROOT_DIR/scripts/pre-commit/filter-staged-files.mjs"
+
+if [[ -n "$GLOBAL_HOOKS_PATH" && -x "$GLOBAL_HOOKS_PATH/pre-commit" ]]; then
+  "$GLOBAL_HOOKS_PATH/pre-commit" "$@"
+fi
 
 if [[ ! -x "$RUN_NODE_TOOL" ]]; then
   echo "Missing helper: $RUN_NODE_TOOL" >&2
