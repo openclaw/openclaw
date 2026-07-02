@@ -144,23 +144,45 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function readToolDescriptorField<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
-}): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
+}): CachedPluginToolDescriptor | null {
+  const name = readToolDescriptorField(() => params.tool.name);
+  const description = readToolDescriptorField(() => params.tool.description);
+  const inputSchema = readToolDescriptorField(() => params.tool.parameters);
+  if (typeof name !== "string" || !name.trim() || typeof description !== "string") {
+    return null;
+  }
+  if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return null;
+  }
+  const label = readToolDescriptorField(() => (params.tool as { label?: unknown }).label);
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const displaySummaryRaw = readToolDescriptorField(() => params.tool.displaySummary);
+  const displaySummary =
+    typeof displaySummaryRaw === "string" && displaySummaryRaw.trim()
+      ? displaySummaryRaw
+      : undefined;
   return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(displaySummary ? { displaySummary } : {}),
     optional: params.optional,
     descriptor: {
-      name: params.tool.name,
+      name,
       ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
+      description,
+      inputSchema: asJsonObject(inputSchema),
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName: name },
     },
   };
 }
