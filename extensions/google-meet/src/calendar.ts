@@ -1,11 +1,20 @@
 // Google Meet plugin module implements calendar behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { googleApiError } from "./google-api-errors.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+
+type GoogleMeetCalendarFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+type GoogleMeetCalendarFetchDeps = {
+  /** Override `fetch` for tests that exercise the real SSRF guard. */
+  fetchImpl?: GoogleMeetCalendarFetch;
+  lookupFn?: LookupFn;
+};
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -162,7 +171,11 @@ async function fetchGoogleCalendarEvents(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
+} & GoogleMeetCalendarFetchDeps): Promise<{
+  calendarId: string;
+  events: GoogleMeetCalendarEvent[];
+  now: Date;
+}> {
   const calendarId = params.calendarId?.trim() || "primary";
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
@@ -188,6 +201,8 @@ async function fetchGoogleCalendarEvents(params: {
     },
     policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
     auditContext: "google-meet.calendar.events.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   try {
     if (!response.ok) {
@@ -197,7 +212,7 @@ async function fetchGoogleCalendarEvents(params: {
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       });
     }
-    const payload = (await response.json()) as { items?: unknown };
+    const payload = await readProviderJsonResponse<{ items?: unknown }>(response, "google-meet.calendar.events.list");
     if (payload.items !== undefined && !Array.isArray(payload.items)) {
       throw new Error("Google Calendar events.list response had non-array items");
     }
@@ -215,7 +230,7 @@ export async function listGoogleMeetCalendarEvents(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<GoogleMeetCalendarEventsResult> {
+} & GoogleMeetCalendarFetchDeps): Promise<GoogleMeetCalendarEventsResult> {
   const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
   const best = chooseBestMeetCalendarEvent(events, now);
   return {
@@ -237,7 +252,7 @@ export async function findGoogleMeetCalendarEvent(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<GoogleMeetCalendarLookupResult> {
+} & GoogleMeetCalendarFetchDeps): Promise<GoogleMeetCalendarLookupResult> {
   const result = await listGoogleMeetCalendarEvents(params);
   const selected = result.events.find((event) => event.selected) ?? result.events[0];
   if (!selected) {
