@@ -221,6 +221,51 @@ backend normally has `nativeToolMode: "always-on"` but its side-question argv
 reliably disables those tools, also set `sideQuestionToolMode: "disabled"`;
 otherwise OpenClaw fails closed when BTW requires a no-tools CLI run.
 
+### Auth profile forwarding
+
+CLI backends do not receive raw auth profile credential material by default. If a
+backend must stage a selected OpenClaw auth profile into a CLI-owned auth home,
+set `authProfileForwarding` with both the accepted provider ids and accepted
+credential kinds, then consume the typed value from `ctx.authCredential` inside
+`prepareExecution`.
+
+```typescript
+return {
+  id: "acme-cli",
+  defaultAuthProfileId: "acme-cli:default",
+  authProfileForwarding: {
+    supported: true,
+    providers: ["acme-cli"],
+    credentialKinds: ["oauth"],
+  },
+  prepareExecution(ctx) {
+    if (!ctx.authCredential) {
+      return undefined;
+    }
+
+    // Validate the credential shape before writing any CLI auth files.
+    return {
+      env: {
+        ACME_CLI_HOME: makeIsolatedCliHome(ctx),
+      },
+      clearEnv: ["ACME_API_KEY", "ACME_AUTH_TOKEN"],
+      cleanup: async () => removeIsolatedCliHome(ctx),
+    };
+  },
+  config: {
+    command: "acme",
+    args: ["chat", "--json"],
+    output: "json",
+  },
+};
+```
+
+Keep the allowlist narrow. Declare only provider ids and credential kinds the
+backend can validate and stage safely. Use `clearEnv` when the CLI would
+otherwise prefer inherited host credentials over the isolated auth material.
+Backends without `authProfileForwarding` do not receive `ctx.authCredential`,
+even when the user selected an auth profile.
+
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
 If your backend runs an agent that compacts its **own** transcript, set
