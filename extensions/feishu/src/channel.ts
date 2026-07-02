@@ -640,6 +640,15 @@ function resolveFeishuMessageReadChatTarget(ctx: {
       requestedTarget: resolveFeishuReadTarget(explicit),
     };
   }
+  const currentMessageId =
+    typeof ctx.toolContext?.currentMessageId === "number"
+      ? String(ctx.toolContext.currentMessageId)
+      : ctx.toolContext?.currentMessageId?.trim();
+  if (currentMessageId === ctx.messageId) {
+    return {
+      requestedTarget: resolveFeishuReadTarget(ctx.toolContext?.currentChannelId),
+    };
+  }
   return {};
 }
 
@@ -766,22 +775,18 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
   account: ResolvedFeishuAccount;
   requestedTarget?: FeishuReadTarget;
 }) {
-  const trustedDirectId =
-    params.requestedTarget?.kind === "direct" ? params.requestedTarget.id : undefined;
   if (!params.requestedTarget && shouldEnforceFeishuDirectReadTarget(params.account)) {
     throw new Error("Feishu read target chat is not allowed.");
   }
   if (params.requestedTarget?.kind === "direct") {
-    if (
-      shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account }) ||
-      shouldEnforceFeishuDirectReadTarget(params.account)
-    ) {
+    const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+    if ((dmPolicy as string) === "disabled") {
       throw new Error("Feishu read target chat is not allowed.");
     }
-    if (trustedDirectId) {
+    if (dmPolicy === "allowlist") {
       assertFeishuTrustedDirectReadTargetAllowed({
         account: params.account,
-        directId: trustedDirectId,
+        directId: params.requestedTarget.id,
       });
     }
     return;
@@ -810,13 +815,28 @@ function assertFeishuFetchedMessageReadTargetAllowed(params: {
     return;
   }
   const target = params.requestedTarget;
-  if (!target || target.kind !== "group") {
+  if (!target) {
     throw new Error("Feishu read target chat is not allowed.");
   }
   const messageRecord =
     params.message && typeof params.message === "object"
       ? (params.message as Record<string, unknown>)
       : {};
+  if (target.kind === "direct") {
+    const senderOpenId = readFirstString(messageRecord, ["senderOpenId", "sender_open_id"]);
+    const senderId = readFirstString(messageRecord, ["senderId", "sender_id"]);
+    const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
+    const targetId = normalizeFeishuAllowEntry(target.id);
+    if (
+      !targetId ||
+      ![senderOpenId, senderId, actualChatId].some(
+        (candidate) => candidate !== undefined && normalizeFeishuAllowEntry(candidate) === targetId,
+      )
+    ) {
+      throw new Error("Feishu read target chat is not allowed.");
+    }
+    return;
+  }
   const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
   if (
     !actualChatId ||
