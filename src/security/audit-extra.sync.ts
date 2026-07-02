@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -24,7 +25,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -76,6 +76,35 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
+}
+
+function looksLikePlaintextApiKey(value: string): boolean {
+  return /^(sk-|xoxb-|xapp-|ghp_|AKIA)/.test(value.trim());
+}
+
+function getConfigEnvVarEntries(cfg: OpenClawConfig): Array<{ key: string; value: string }> {
+  const envConfig = cfg.env;
+  if (!envConfig || typeof envConfig !== "object") {
+    return [];
+  }
+  const entries: Array<{ key: string; value: string }> = [];
+  const vars = (envConfig as Record<string, unknown>).vars;
+  if (vars && typeof vars === "object") {
+    for (const [key, value] of Object.entries(vars)) {
+      if (typeof value === "string") {
+        entries.push({ key, value });
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(envConfig)) {
+    if (key === "vars" || key === "shellEnv") {
+      continue;
+    }
+    if (typeof value === "string") {
+      entries.push({ key, value });
+    }
+  }
+  return entries;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -600,6 +629,18 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
       detail:
         "hooks.token is set in the config file; keep config perms tight and treat it like an API secret.",
     });
+  }
+
+  for (const { key, value } of getConfigEnvVarEntries(cfg)) {
+    if (!looksLikeEnvRef(value) && looksLikePlaintextApiKey(value)) {
+      findings.push({
+        checkId: "config.secrets.api_key_in_env_vars",
+        severity: "warn",
+        title: `API key stored in config env var "${key}"`,
+        detail: `env.vars.${key} looks like a plaintext API key; prefer storing secrets in ~/.openclaw/.env or using SecretRefs instead of openclaw.json.`,
+        remediation: `Move ${key} out of openclaw.json and load it from the process environment or a secrets manager.`,
+      });
+    }
   }
 
   return findings;

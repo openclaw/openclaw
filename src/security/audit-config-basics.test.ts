@@ -239,6 +239,53 @@ describe("security audit config basics", () => {
     );
   });
 
+  it("flags plaintext API keys stored in config.env.vars", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        env: {
+          vars: {
+            OPENAI_API_KEY: "sk-test-key-openai-fake",
+            SLACK_BOT_TOKEN: "xoxb-test-slack-bot-token",
+            SLACK_APP_TOKEN: "xapp-test-slack-app-token",
+            GITHUB_TOKEN: "ghp_TEST_FAKE_TOKEN",
+            AWS_ACCESS_KEY_ID: "AKIA_TEST_FAKE_KEY",
+          },
+        },
+      },
+      sourceConfig: {},
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    const hits = report.findings.filter((f) => f.checkId === "config.secrets.api_key_in_env_vars");
+    expect(hits).toHaveLength(5);
+    expect(hits.every((f) => f.severity === "warn")).toBe(true);
+  });
+
+  it("does not flag env references or benign values in config.env.vars", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        env: {
+          vars: {
+            OPENAI_API_KEY: "${OPENAI_API_KEY}",
+            GITHUB_TOKEN: "${GITHUB_TOKEN}",
+            SOME_OTHER_VAR: "not-a-secret-value",
+            EMPTY_VAR: "",
+          },
+        },
+      },
+      sourceConfig: {},
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(report.findings.some((f) => f.checkId === "config.secrets.api_key_in_env_vars")).toBe(
+      false,
+    );
+  });
+
   it("emits a redacted security audit summary event", async () => {
     resetDiagnosticEventsForTest();
     const captured = captureSecurityEvents();
