@@ -550,7 +550,7 @@ function stripExistingContext(text: string) {
   return text.slice(0, index).trim();
 }
 
-function assertNoCronCommandPayload(value: unknown): void {
+function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
     return;
   }
@@ -558,6 +558,12 @@ function assertNoCronCommandPayload(value: unknown): void {
   if (payload?.kind === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+  const schedule = isRecord(value.schedule) ? value.schedule : undefined;
+  if (schedule?.kind === "on-exit") {
+    throw new Error(
+      "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
   }
 }
@@ -1181,7 +1187,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
               throw new Error("job required");
             }
             const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
-            assertNoCronCommandPayload(canonicalJob);
+            assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             const job =
               normalizeCronJobCreate(canonicalJob, {
@@ -1305,7 +1311,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             const canonicalPatch = canonicalizeCronToolObject(
               params.patch as Record<string, unknown>,
             );
-            assertNoCronCommandPayload(canonicalPatch);
+            assertNoCronShellExecution(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {

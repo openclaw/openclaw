@@ -6,9 +6,12 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../../utils.js";
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
+// "on-exit" is recognized (not synthesized) so an explicit on-exit kind
+// survives canonicalization and reaches the assertNoCronShellExecution
+// rejection instead of being overwritten by another flat schedule field.
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
 // Intentionally excludes "command" (which persisted-shape.ts allows): the agent
-// cron tool blocks command payloads via assertNoCronCommandPayload, so they are
+// cron tool blocks command payloads via assertNoCronShellExecution, so they are
 // CLI/Gateway-only and never inferred from flat tool args.
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
@@ -57,7 +60,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
-  return value === "at" || value === "every" || value === "cron";
+  return typeof value === "string" && (CRON_SCHEDULE_KINDS as readonly string[]).includes(value);
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
