@@ -29,11 +29,11 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
-    var detail: String {
+    var systemImage: String {
         switch self {
-        case .system: "Matches the system appearance."
-        case .light: "Always uses light appearance."
-        case .dark: "Always uses dark appearance."
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max"
+        case .dark: "moon.stars"
         }
     }
 

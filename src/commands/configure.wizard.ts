@@ -18,6 +18,7 @@ import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -884,12 +885,14 @@ export async function runConfigureWizard(
     const gatewayStatusLine = gatewayProbe.ok
       ? "Gateway: reachable"
       : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+    const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({ bind });
 
     note(
       [
         `Web UI: ${displayLinks.httpUrl}`,
         `Gateway WS: ${displayLinks.wsUrl}`,
         gatewayStatusLine,
+        ...windowsFirewallLines,
         "Docs: https://docs.openclaw.ai/web/control-ui",
       ].join("\n"),
       "Control UI",

@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.0"
 
 settings:
   base:

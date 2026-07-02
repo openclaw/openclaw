@@ -1,0 +1,357 @@
+/**
+ * Resolves the conversation-scoped runtime facts that tool and harness policy
+ * hot paths share. Keep this internal: it prepares existing config/state, not a
+ * new public access-profile config surface.
+ */
+import type { ChatType } from "../channels/chat-type.js";
+import { normalizeChatType } from "../channels/chat-type.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillSnapshot } from "../skills/types.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
+  resolveSubagentToolPolicyForSession,
+  resolveTrustedGroupId,
+} from "./agent-tools.policy.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
+import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "./subagent-capabilities.js";
+import type { PromptMode } from "./system-prompt.types.js";
+import {
+  collectExplicitAllowlist,
+  collectExplicitDenylist,
+  resolveToolProfilePolicy,
+  type ToolPolicyLike,
+} from "./tool-policy.js";
+import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+export type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+
+export type ConversationCapabilityProfileParams = {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  /** Live conversation key when a sandbox/policy key is used for tool filtering. */
+  runSessionKey?: string;
+  /** Session key used for subagent capability inheritance when it differs from sessionKey. */
+  sandboxSessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  agentId?: string;
+  agentDir?: string;
+  agentAccountId?: string | null;
+  messageProvider?: string | null;
+  messageChannel?: string | null;
+  chatType?: string;
+  messageTo?: string | null;
+  messageThreadId?: string | number | null;
+  currentChannelId?: string | null;
+  currentMessagingTarget?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: readonly string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
+  modelProvider?: string;
+  modelId?: string;
+  modelApi?: string;
+  modelContextWindowTokens?: number;
+  modelHasVision?: boolean;
+  workspaceDir?: string;
+  cwd?: string;
+  spawnWorkspaceDir?: string;
+  isCanonicalWorkspace?: boolean;
+  promptMode?: PromptMode;
+  skillsSnapshot?: SkillSnapshot;
+  sandboxToolPolicy?: SandboxToolPolicy;
+  runtimeToolAllowlist?: string[];
+};
+
+export type ResolvedConversationCapabilityProfile = {
+  agentId?: string;
+  serviceIdentity: {
+    agentId?: string;
+    agentDir?: string;
+    accountId?: string | null;
+    runId?: string;
+    sessionId?: string;
+  };
+  model: {
+    provider?: string;
+    id?: string;
+    api?: string;
+    contextWindowTokens?: number;
+    hasVision?: boolean;
+  };
+  conversation: {
+    scope: ConversationCapabilityScope;
+    chatType?: ChatType;
+    sessionKey?: string;
+    policySessionKey?: string;
+    runSessionKey?: string;
+    sessionId?: string;
+    messageProvider?: string | null;
+    messageChannel?: string | null;
+    messageTo?: string | null;
+    messageThreadId?: string | number | null;
+    currentChannelId?: string | null;
+    currentMessagingTarget?: string | null;
+    currentThreadTs?: string | null;
+    currentMessageId?: string | number | null;
+    groupId?: string | null;
+    groupChannel?: string | null;
+    groupSpace?: string | null;
+    memberRoleIds?: readonly string[];
+    spawnedBy?: string | null;
+  };
+  sender: {
+    id?: string | null;
+    name?: string | null;
+    username?: string | null;
+    e164?: string | null;
+    isOwner?: boolean;
+  };
+  workspace: {
+    workspaceDir?: string;
+    cwd?: string;
+    spawnWorkspaceDir?: string;
+    workspaceRoot: string;
+    runtimeRoot: string;
+    spawnWorkspaceRoot?: string;
+    instructionRoot?: string;
+    isCanonicalWorkspace?: boolean;
+  };
+  instructions: {
+    agentDir?: string;
+    workspaceDir?: string;
+    promptMode?: PromptMode;
+    isCanonicalWorkspace?: boolean;
+  };
+  skills: {
+    snapshot?: SkillSnapshot;
+  };
+  policy: {
+    agentId?: string;
+    sessionKey?: string;
+    subagentSessionKey?: string;
+    trustedGroup: {
+      groupId: string | null | undefined;
+      dropped: boolean;
+    };
+    profile?: string;
+    providerProfile?: string;
+    profilePolicy?: ToolPolicyLike;
+    providerProfilePolicy?: ToolPolicyLike;
+    profileAlsoAllow?: string[];
+    providerProfileAlsoAllow?: string[];
+    globalPolicy?: SandboxToolPolicy;
+    globalProviderPolicy?: SandboxToolPolicy;
+    agentPolicy?: SandboxToolPolicy;
+    agentProviderPolicy?: SandboxToolPolicy;
+    groupPolicy?: SandboxToolPolicy;
+    senderPolicy?: SandboxToolPolicy;
+    sandboxPolicy?: SandboxToolPolicy;
+    subagentPolicy?: SandboxToolPolicy;
+    inheritedToolPolicy?: SandboxToolPolicy;
+    inheritancePolicies: Array<ToolPolicyLike | undefined>;
+    explicitToolAllowlist: string[];
+    explicitToolDenylist: string[];
+  };
+};
+
+export function resolveConversationCapabilityProfile(
+  params: ConversationCapabilityProfileParams,
+): ResolvedConversationCapabilityProfile {
+  const messageProvider = params.messageProvider;
+  const effective = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const trustedGroup = resolveTrustedGroupId({
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    groupId: params.groupId,
+  });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    messageProvider: messageProvider ?? undefined,
+    groupId: trustedGroup.groupId,
+    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+    accountId: params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.config,
+    agentId: effective.agentId,
+    messageProvider,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const profilePolicy = resolveToolProfilePolicy(effective.profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
+  const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
+    cfg: params.config,
+  });
+  const subagentPolicy =
+    subagentSessionKey &&
+    isSubagentEnvelopeSession(subagentSessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, subagentSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
+    params.config,
+    subagentSessionKey,
+    {
+      store: subagentStore,
+    },
+  );
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    effective.globalPolicy,
+    effective.globalProviderPolicy,
+    effective.agentPolicy,
+    effective.agentProviderPolicy,
+    groupPolicy,
+    senderPolicy,
+    params.sandboxToolPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
+  ];
+
+  return {
+    agentId: effective.agentId,
+    serviceIdentity: {
+      agentId: effective.agentId,
+      agentDir: params.agentDir,
+      accountId: params.agentAccountId,
+      runId: params.runId,
+      sessionId: params.sessionId,
+    },
+    model: {
+      provider: params.modelProvider,
+      id: params.modelId,
+      api: params.modelApi,
+      contextWindowTokens: params.modelContextWindowTokens,
+      hasVision: params.modelHasVision,
+    },
+    conversation: {
+      scope: resolveConversationScope(params),
+      chatType: normalizeChatType(params.chatType),
+      sessionKey: params.runSessionKey ?? params.sessionKey,
+      policySessionKey: params.sessionKey,
+      runSessionKey: params.runSessionKey,
+      sessionId: params.sessionId,
+      messageProvider,
+      messageChannel: params.messageChannel,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: trustedGroup.groupId,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+    },
+    sender: {
+      id: params.senderId,
+      name: params.senderName,
+      username: params.senderUsername,
+      e164: params.senderE164,
+      isOwner: params.senderIsOwner,
+    },
+    workspace: {
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      spawnWorkspaceDir: params.spawnWorkspaceDir,
+      workspaceRoot: resolveWorkspaceRoot(params.workspaceDir),
+      runtimeRoot: resolveWorkspaceRoot(params.cwd ?? params.workspaceDir),
+      spawnWorkspaceRoot: params.spawnWorkspaceDir
+        ? resolveWorkspaceRoot(params.spawnWorkspaceDir)
+        : undefined,
+      instructionRoot: params.agentDir ?? params.workspaceDir,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+    },
+    instructions: {
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      promptMode: params.promptMode,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+    },
+    skills: {
+      snapshot: params.skillsSnapshot,
+    },
+    policy: {
+      agentId: effective.agentId,
+      sessionKey: params.sessionKey,
+      subagentSessionKey,
+      trustedGroup,
+      profile: effective.profile,
+      providerProfile: effective.providerProfile,
+      profilePolicy,
+      providerProfilePolicy,
+      profileAlsoAllow: effective.profileAlsoAllow,
+      providerProfileAlsoAllow: effective.providerProfileAlsoAllow,
+      globalPolicy: effective.globalPolicy,
+      globalProviderPolicy: effective.globalProviderPolicy,
+      agentPolicy: effective.agentPolicy,
+      agentProviderPolicy: effective.agentProviderPolicy,
+      groupPolicy,
+      senderPolicy,
+      sandboxPolicy: params.sandboxToolPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+      inheritancePolicies,
+      explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+    },
+  };
+}
+
+function resolveConversationScope(
+  params: Pick<
+    ConversationCapabilityProfileParams,
+    "chatType" | "groupId" | "groupChannel" | "groupSpace"
+  >,
+): ConversationCapabilityScope {
+  const chatType = normalizeChatType(params.chatType);
+  if (chatType === "direct") {
+    return "direct";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return "shared";
+  }
+  return params.groupId?.trim() || params.groupChannel?.trim() || params.groupSpace?.trim()
+    ? "shared"
+    : "unknown";
+}

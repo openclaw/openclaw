@@ -9,15 +9,18 @@ struct IPadActivityScreen: View {
     @State private var isLoading = false
     @State private var loadErrorText: String?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void)
     {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
     }
@@ -27,6 +30,7 @@ struct IPadActivityScreen: View {
             title: "Activity",
             subtitle: "Live device and gateway activity.",
             headerLeadingAction: self.headerLeadingAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             ProMetricGrid(metrics: self.metrics)

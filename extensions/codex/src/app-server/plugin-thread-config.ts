@@ -255,7 +255,7 @@ export async function buildCodexPluginThreadConfig(
         continue;
       }
       if (
-        record.policy.destructiveApprovalMode === "always" &&
+        record.policy.destructiveApprovalMode === "ask" &&
         !(await clearPersistedAppToolApprovalOverrides({
           request: params.request,
           configCwd: params.configCwd,
@@ -272,7 +272,7 @@ export async function buildCodexPluginThreadConfig(
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
       };
-      if (record.policy.destructiveApprovalMode === "always") {
+      if (record.policy.destructiveApprovalMode === "ask") {
         appConfig.approvals_reviewer = "user";
       }
       apps[app.id] = appConfig;
@@ -394,7 +394,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
       destructive_enabled: policy.allowDestructiveActions,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
-      ...(policy.destructiveApprovalMode === "always" ? { approvals_reviewer: "user" } : {}),
+      ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
     };
   }
   return { apps };

@@ -16,22 +16,18 @@ extension AgentProTab {
                     OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
             } accessory: {
-                HStack(spacing: 10) {
-                    self.gatewayPillButton
-                    self.headerIconButton(
-                        systemName: "magnifyingglass",
-                        label: "Search agents",
-                        action: {
-                            withAnimation(.snappy(duration: 0.18)) {
-                                self.agentSearchPresented.toggle()
-                            }
-                        })
-                    self.headerIconButton(
-                        systemName: "arrow.clockwise",
-                        label: self.overviewLoading ? "Refreshing agents" : "Refresh agents",
-                        action: {
-                            self.overviewRefreshNonce += 1
-                        })
+                OpenClawGlassControlGroup {
+                    HStack(spacing: 10) {
+                        self.gatewayPillButton
+                        self.headerIconButton(
+                            systemName: "magnifyingglass",
+                            label: "Search agents",
+                            action: {
+                                withAnimation(.snappy(duration: 0.18)) {
+                                    self.agentSearchPresented.toggle()
+                                }
+                            })
+                    }
                 }
                 .padding(.top, 2)
             }
@@ -41,15 +37,8 @@ extension AgentProTab {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.subheadline)
-                    .padding(.horizontal, 12)
+                    .textFieldStyle(.roundedBorder)
                     .frame(height: 38)
-                    .background {
-                        Capsule()
-                            .fill(self.searchFieldFill)
-                            .overlay {
-                                Capsule().strokeBorder(self.searchFieldStroke, lineWidth: 1)
-                            }
-                    }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -63,7 +52,8 @@ extension AgentProTab {
             Button(action: openSettings) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()
@@ -71,45 +61,66 @@ extension AgentProTab {
     }
 
     var agentFilters: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            Picker("Agent status", selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
-                    Button {
-                        withAnimation(.snappy(duration: 0.18)) {
-                            self.agentRosterFilter = filter
-                        }
-                    } label: {
-                        Text(filter.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(self.agentRosterFilter == filter ? .primary : .secondary)
-                            .padding(.horizontal, 15)
-                            .frame(height: AgentLayout.filterHeight)
-                            .background {
-                                Capsule()
-                                    .fill(self.agentRosterFilter == filter
-                                        ? Color.primary.opacity(0.13)
-                                        : Color.primary.opacity(0.055))
-                            }
-                            .overlay {
-                                Capsule()
-                                    .strokeBorder(Color.primary.opacity(self.agentRosterFilter == filter ? 0.22 : 0.06))
-                            }
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if self.agentFiltersActive {
-                    self.headerIconButton(
-                        systemName: "xmark",
-                        label: "Clear filters",
-                        action: {
-                            self.agentRosterFilter = .all
-                            self.agentSearchText = ""
-                        })
-                        .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
+                    Text(filter.title).tag(filter)
                 }
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
+            .pickerStyle(.segmented)
+
+            if self.agentFiltersActive {
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        self.agentRosterFilter = .all
+                        self.agentSearchText = ""
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear filters")
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    var agentFilterMenu: some View {
+        Menu {
+            Picker("Agent status", selection: self.$agentRosterFilter) {
+                ForEach(AgentRosterFilter.allCases) { filter in
+                    Label(filter.title, systemImage: filter.systemImage)
+                        .tag(filter)
+                }
+            }
+            if self.agentFiltersActive {
+                Divider()
+                Button("Clear Filters", systemImage: "xmark.circle") {
+                    self.agentRosterFilter = .all
+                    self.agentSearchText = ""
+                }
+            }
+        } label: {
+            Label("Filter agents", systemImage: "line.3.horizontal.decrease")
+                .labelStyle(.iconOnly)
+        }
+        .accessibilityIdentifier("agent-status-filter-menu")
+        .accessibilityValue(self.agentRosterFilter.title)
+    }
+
+    @ViewBuilder
+    var gatewayToolbarButton: some View {
+        if let openSettings {
+            Button(action: openSettings) {
+                Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
+            }
+            .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+            .accessibilityLabel(self.gatewayConnected ? "Gateway online" : "Gateway offline")
+            .accessibilityHint("Opens Settings / Gateway")
         }
     }
 
@@ -246,68 +257,42 @@ extension AgentProTab {
     func agentRow(_ agent: AgentSummary) -> some View {
         let isActive = agent.id == self.activeAgentID
         let state = self.agentRosterState(for: agent)
-        return HStack(alignment: .top, spacing: 12) {
-            self.agentAvatar(agent, state: state)
+        return Button {
+            guard !isActive else { return }
+            self.appModel.setSelectedAgentId(agent.id)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                self.agentAvatar(agent, state: state)
 
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(self.agentName(for: agent))
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(state.color)
-                                .frame(width: 6, height: 6)
-                            Text(state.title)
-                                .font(.caption2.weight(.semibold))
-                        }
-                        .foregroundStyle(state.color)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(self.agentName(for: agent))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                    }
 
                     Text(self.agentDetail(for: agent))
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                .layoutPriority(1)
 
-                HStack(spacing: 0) {
-                    self.agentMetric(label: "Sessions", value: self.agentSessionSummary(agent))
-                    Divider()
-                        .frame(height: 24)
-                        .padding(.horizontal, 12)
-                    self.agentMetric(label: "Runtime", value: self.agentRuntimeSummary(agent))
+                Spacer(minLength: 8)
+
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .frame(width: 24, height: 44)
+                        .accessibilityHidden(true)
                 }
             }
-            .layoutPriority(1)
-
-            Button {
-                self.appModel.setSelectedAgentId(agent.id)
-            } label: {
-                Image(systemName: isActive ? "checkmark" : "arrow.right")
-                    .font(.caption.weight(.bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(isActive ? OpenClawBrand.accent : .primary)
-            .frame(width: AgentLayout.actionButtonSize, height: AgentLayout.actionButtonSize)
-            .background {
-                Circle()
-                    .fill(self.iconButtonFill)
-                    .overlay {
-                        Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
-                    }
-            }
-            .accessibilityLabel(isActive ? "Default agent" : "Set default agent")
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 13)
-        .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            self.appModel.setSelectedAgentId(agent.id)
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.agentAccessibilityLabel(agent, isActive: isActive, state: state))
+        .accessibilityHint(isActive ? "Selected agent" : "Selects this agent")
     }
 
     func headerIconButton(
@@ -319,15 +304,9 @@ extension AgentProTab {
             Image(systemName: systemName)
                 .font(.subheadline.weight(.semibold))
                 .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
-                .background {
-                    Circle()
-                        .fill(self.iconButtonFill)
-                        .overlay {
-                            Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
-                        }
-                }
         }
-        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .openClawGlassButton()
         .accessibilityLabel(label)
     }
 
@@ -338,38 +317,17 @@ extension AgentProTab {
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.62)
                 .lineLimit(1)
-                .frame(width: 48, height: 48)
+                .frame(width: 36, height: 36)
                 .background(
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    self.agentTint(for: agent, state: state),
-                                    Color.primary.opacity(0.38),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing)))
+                        .fill(self.agentTint(for: agent, state: state).gradient))
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
 
             Circle()
                 .fill(state.color)
-                .frame(width: 10, height: 10)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+                .frame(width: 8, height: 8)
+                .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 2))
         }
-    }
-
-    func agentMetric(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.74)
-        }
-        .frame(minWidth: 60, alignment: .leading)
     }
 
     func agentMenuRow(
@@ -562,22 +520,6 @@ extension AgentProTab {
             self.appModel.isOperatorGatewayConnected
     }
 
-    private var searchFieldFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.78)
-    }
-
-    private var searchFieldStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07)
-    }
-
-    private var iconButtonFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.065) : Color.white.opacity(0.78)
-    }
-
-    private var iconButtonStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.07)
-    }
-
     var emptyAgentsTitle: String {
         if !self.gatewayConnected { return "Agents unavailable" }
         if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }
@@ -600,7 +542,6 @@ extension AgentProTab {
             self.appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
             self.activeAgentID,
             self.scenePhase == .active ? "active" : "inactive",
-            "\(self.overviewRefreshNonce)",
         ].joined(separator: ":")
     }
 

@@ -100,6 +100,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
       .option(
+        "--on-exit <shell>",
+        "Fire once when this watched command exits (event trigger; survives turn teardown)",
+      )
+      .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
+      .option(
         "--tz <iana>",
         "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
         "",
@@ -152,12 +157,15 @@ export function registerCronAddCommand(cron: Command) {
             const hasScheduleFlag =
               typeof opts.at === "string" ||
               typeof opts.cron === "string" ||
-              typeof opts.every === "string";
+              typeof opts.every === "string" ||
+              typeof opts.onExit === "string";
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
             const schedule = resolveCronCreateScheduleFromArgs({
               at: opts.at,
               cron: opts.cron,
               every: opts.every,
+              onExit: opts.onExit,
+              onExitCwd: opts.onExitCwd,
               exact: opts.exact,
               positionalSchedule,
               stagger: opts.stagger,
