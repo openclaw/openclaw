@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,7 +24,9 @@ import {
   createOpenClawReadTool,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
+  wrapToolWriteWithAppend,
 } from "./agent-tools.read.js";
+import { createWriteTool } from "./sessions/tools/write.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("FS tools with workspaceOnly=false", () => {
@@ -235,6 +238,181 @@ describe("FS tools with workspaceOnly=false", () => {
         content: "test content",
       }),
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
+  });
+
+  it("should append to an existing file when append=true (workspaceOnly=false)", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-1", {
+      path: outsideFile,
+      content: "line two\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("should create a new file when append=true and file does not exist (workspaceOnly=false)", async () => {
+    const newFile = path.join(tmpDir, "append-new.txt");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-append-2", {
+      path: newFile,
+      content: "first line\n",
+      append: true,
+    });
+    const content = await fs.readFile(newFile, "utf-8");
+    expect(content).toBe("first line\n");
+  });
+
+  it("normalizes file URL paths before appending (workspaceOnly=false)", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-append-file-url", {
+      path: pathToFileURL(outsideFile).href,
+      content: "line two\n",
+      append: true,
+    });
+
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("strips malformed XML arg-value suffixes before appending", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-malformed-suffix", {
+      path: `${outsideFile}</arg_value>>`,
+      content: "line two\n",
+      append: true,
+    });
+
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Successfully appended"),
+    });
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("should overwrite (not append) when append=false", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-no-append", {
+      path: outsideFile,
+      content: "new content",
+      append: false,
+    });
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("new content");
+  });
+
+  it("rejects malformed append values before falling back to overwrite", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.execute("test-invalid-append", {
+        path: outsideFile,
+        content: "new content",
+        append: "true",
+      }),
+    ).rejects.toThrow(/append parameter.*boolean/);
+
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("old content");
+  });
+
+  it("should append within workspace boundary when append=true and workspaceOnly=true", async () => {
+    const insideFile = path.join(workspaceDir, "log.txt");
+    await fs.writeFile(insideFile, "entry 1\n");
+
+    const tools = toolsFor(true);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-workspace", {
+      path: insideFile,
+      content: "entry 2\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(insideFile, "utf-8");
+    expect(content).toBe("entry 1\nentry 2\n");
+  });
+
+  it("routes wrapper append calls through the shared write recovery path", async () => {
+    const filePath = path.join(tmpDir, "wrapped-append-recovery.txt");
+    await fs.writeFile(filePath, "before\n", "utf-8");
+    const appendFile = vi.fn(async (absolutePath: string, content: string) => {
+      await fs.appendFile(absolutePath, content, "utf-8");
+      throw new Error("node invoke timed out");
+    });
+    const baseTool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        appendFile,
+        readFile: (absolutePath) => fs.readFile(absolutePath),
+        statFile: async (absolutePath) => {
+          try {
+            const stat = await fs.stat(absolutePath);
+            return {
+              type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+            } as const;
+          } catch (error) {
+            if (
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              (error as { code?: unknown }).code === "ENOENT"
+            ) {
+              return null;
+            }
+            throw error;
+          }
+        },
+      },
+    }) as unknown as AnyAgentTool;
+    const writeTool = wrapToolWriteWithAppend(baseTool);
+
+    const result = await writeTool.execute("wrapped-append", {
+      path: filePath,
+      content: "after\n",
+      append: true,
+    });
+
+    expect(appendFile).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("before\nafter\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"after\n".length} bytes to ${filePath}`,
+    });
   });
 
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {

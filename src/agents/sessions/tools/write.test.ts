@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, createWriteToolDefinition, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -22,10 +22,15 @@ describe("write tool", () => {
     return path.join(tmpDir, name);
   }
 
-  function createRecoverableOperations(writeFile: WriteOperations["writeFile"]): WriteOperations {
+  function createRecoverableOperations(
+    writeFile: WriteOperations["writeFile"],
+    appendFile: WriteOperations["appendFile"] = (absolutePath, content) =>
+      fs.appendFile(absolutePath, content, "utf-8"),
+  ): WriteOperations {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
+      appendFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -108,6 +113,130 @@ describe("write tool", () => {
     );
 
     expect(result.content[0]?.type).toBe("text");
+  });
+
+  it("advertises append mode in shared write prompt metadata", () => {
+    const definition = createWriteToolDefinition(tmpDir);
+
+    expect(definition.description).toContain("appends when append is true");
+    expect(definition.promptSnippet).toContain("append");
+    expect((definition.promptGuidelines ?? []).join("\n")).toContain("append: true");
+  });
+
+  it("appends content when append mode is enabled", async () => {
+    const filePath = await createTempPath("append.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("appends content when it is identical to the existing file", async () => {
+    const filePath = await createTempPath("append-duplicate.txt");
+    await fs.writeFile(filePath, "duplicate\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "duplicate\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("duplicate\nduplicate\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"duplicate\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it.each(["false", 1])("rejects malformed append values before branching", async (append) => {
+    const filePath = await createTempPath(`append-invalid-${String(append)}.txt`);
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "beta\n", append } as never, undefined),
+    ).rejects.toThrow(/append parameter.*boolean/);
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\n");
+  });
+
+  it("recovers timeout-like post-append errors when readback preserves existing content", async () => {
+    const filePath = await createTempPath("append-timeout.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          throw new Error("node invoke timed out");
+        },
+      ),
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("reports success when append completes before an abort is observed", async () => {
+    const filePath = await createTempPath("append-abort.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        appendFile: async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          controller.abort();
+        },
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      controller.signal,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("rejects append mode when the backend does not support appending", async () => {
+    const filePath = await createTempPath("append-unsupported.txt");
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "beta\n", append: true }, undefined),
+    ).rejects.toThrow("Append mode is not supported by this write tool backend");
   });
 
   it("writes file URL paths through the shared session path resolver", async () => {

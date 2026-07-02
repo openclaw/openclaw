@@ -129,9 +129,9 @@ async function handleProxyRequest(
       return;
     }
     await finished(
-      Readable.fromWeb(
-        guarded.response.body as unknown as NodeReadableStream<Uint8Array>,
-      ).pipe(res),
+      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>).pipe(
+        res,
+      ),
     );
   } catch (error) {
     if (res.destroyed || res.writableEnded) {

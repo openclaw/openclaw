@@ -267,7 +267,9 @@ describe("scripts/restart-mac.sh", () => {
     const result = runRestartLockHarness(lockDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`Another restart is running (pid ${process.pid}); re-run with --wait.`);
+    expect(result.stdout).toContain(
+      `Another restart is running (pid ${process.pid}); re-run with --wait.`,
+    );
     expect(result.stderr).toBe("");
     expect(existsSync(lockDir)).toBe(true);
     expect(readFileSync(join(lockDir, "pid"), "utf8")).toBe(String(process.pid));

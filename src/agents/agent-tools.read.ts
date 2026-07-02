@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import { Type } from "typebox";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -847,10 +848,12 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
 export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const ops = createSandboxWriteOperations(params);
   const base = createWriteTool(params.root, {
-    operations: createSandboxWriteOperations(params),
+    operations: ops,
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -863,10 +866,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 
 /** Create a host workspace write tool using guarded filesystem operations. */
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createWriteTool(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const ops = createHostWriteOperations(root, options);
+  const base = createWriteTool(root, { operations: ops }) as unknown as AnyAgentTool;
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -946,6 +949,25 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     statFile: (absolutePath: string) =>
       params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+    appendFile: async (absolutePath: string, content: string) => {
+      let existing = "";
+      try {
+        const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+        existing = buf.toString("utf8");
+      } catch (err) {
+        // Only treat genuine missing-file errors as empty; re-throw safety and I/O failures.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
+      }
+      await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
+      await params.bridge.writeFile({
+        filePath: absolutePath,
+        cwd: params.root,
+        data: existing + content,
+      });
+    },
   } as const;
 }
 
@@ -1016,6 +1038,12 @@ async function writeWorkspaceFile(
   await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
+async function appendHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.appendFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -1031,6 +1059,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
       statFile: (absolutePath: string) =>
         statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      appendFile: appendHostFile,
     } as const;
   }
 
@@ -1057,7 +1086,45 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return statHostFile(path.resolve(root, relative));
     },
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await (await getRoot()).append(relative, content, { mkdir: true });
+    },
   } as const;
+}
+
+export function wrapToolWriteWithAppend(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+      content: Type.String({ description: "Content to write to the file" }),
+      append: Type.Optional(
+        Type.Boolean({
+          description:
+            "When true, append content to the existing file instead of overwriting it. If the file does not exist it is created.",
+        }),
+      ),
+    }),
+    description: `${tool.description} Pass \`append: true\` to append to an existing file instead of overwriting it.`,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      if (record && Object.hasOwn(record, "append") && typeof record.append !== "boolean") {
+        throw new Error(
+          "Invalid append parameter: expected boolean when provided. Supply correct parameters before retrying.",
+        );
+      }
+      let normalizedArgs = args;
+      if (record && record.append === true && typeof record.path === "string") {
+        const normalizedPath = normalizeFileToolPathParam(record.path);
+        if (!normalizedPath.trim()) {
+          throw malformedXmlArgValuePathError("path");
+        }
+        normalizedArgs = { ...record, path: normalizedPath };
+      }
+      return tool.execute(toolCallId, normalizedArgs, signal, onUpdate);
+    },
+  };
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {

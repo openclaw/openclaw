@@ -423,7 +423,7 @@ function computeSessionKey(
       ? p.model
       : p.runtimeModel && typeof p.runtimeModel === "object"
         ? p.runtimeModel
-      : { id: typeof p.model === "string" ? p.model : undefined };
+        : { id: typeof p.model === "string" ? p.model : undefined };
   const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
   const modelId =
     modelObj.id ??

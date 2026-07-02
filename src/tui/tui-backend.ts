@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines the TUI backend contract and backend event shapes.
 import type {
   CommandEntry,
@@ -6,7 +7,6 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 // Transport-agnostic backend contract consumed by the TUI runtime.
