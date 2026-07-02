@@ -124,18 +124,10 @@ export class OpenClawFilePreviewModal extends LitElement {
       background: var(--bg-elevated);
     }
 
-    .esc,
     .kbd {
       font-family: var(--mono);
       border: 1px solid var(--border);
       color: var(--muted);
-    }
-
-    .esc {
-      font-size: 10px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      background: var(--bg);
     }
 
     .body {
@@ -404,7 +396,7 @@ export class OpenClawFilePreviewModal extends LitElement {
             @input=${this.handleQueryInput}
             autofocus
           />
-          <span class="state">${fileCount} <span class="esc">esc</span></span>
+          <span class="state">${fileCount}</span>
         </header>
         <div class="body">
           <aside class="list">
