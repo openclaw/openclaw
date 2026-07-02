@@ -113,8 +113,10 @@ export function buildMemoryFlushPlan(
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
+  const compactionDefaults = cfg?.agents?.defaults?.compaction;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(compactionDefaults?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(compactionDefaults?.reserveTokens) ??
     DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
