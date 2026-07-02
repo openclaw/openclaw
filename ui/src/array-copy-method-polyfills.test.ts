@@ -72,7 +72,7 @@ describe("array-copy-method-polyfills", () => {
 
     installArrayCopyMethodPolyfills();
 
-    expect([1, 2].toSorted()).toEqual([99, 1, 2]);
+    expect([1, 2].toSorted((a, b) => a - b)).toEqual([99, 1, 2]);
   });
 
   it("installs the fallbacks before the app module evaluates", async () => {
