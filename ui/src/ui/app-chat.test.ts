@@ -1334,6 +1334,25 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("routes typed /new arguments through the existing fresh-session action", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const onSlashAction = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/new Research Plan",
+      sessionKey: "agent:main",
+      onSlashAction,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(onSlashAction).toHaveBeenCalledWith("new-session");
+    expect(host.chatMessage).toBe("");
+  });
+
   it("does not queue typed /new behind an active run", async () => {
     const onSlashAction = vi.fn();
     const host = makeHost({
@@ -2230,6 +2249,32 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+
+  it("sends /label as a normal chat message instead of patching the session locally", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/label Research Plan",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/label Research Plan",
+        sessionKey: "agent:main",
+      }),
+    );
+    expect(executeSlashCommandMock).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("");
   });
 
   it("shows local slash-command feedback when the gateway client is unavailable", async () => {

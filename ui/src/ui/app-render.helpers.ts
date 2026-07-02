@@ -34,10 +34,12 @@ import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  areUiSessionKeysEquivalent,
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
 } from "./session-key.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
@@ -775,6 +777,49 @@ export function dismissChatError(state: AppViewState) {
   state.chatError = null;
 }
 
+function isPersistedSessionRow(row: SessionsListResult["sessions"][number]): boolean {
+  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
+  return Boolean(sessionId);
+}
+
+function isFallbackMainSessionKey(state: AppViewState, sessionKey: string): boolean {
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const mainKey = resolveUiConfiguredMainKey(state);
+  if (normalizedSessionKey === mainKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return Boolean(parsed && normalizeLowercaseStringOrEmpty(parsed.rest) === mainKey);
+}
+
+function resolveNewChatParentSessionKey(
+  state: AppViewState,
+  previousSessionKey: string,
+): string | undefined {
+  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  if (!normalizedPreviousSessionKey) {
+    return undefined;
+  }
+  if (normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown") {
+    return undefined;
+  }
+  const sessions = state.sessionsResult?.sessions;
+  if (
+    sessions &&
+    sessions.length === 0 &&
+    isFallbackMainSessionKey(state, normalizedPreviousSessionKey)
+  ) {
+    return undefined;
+  }
+  const currentRow = sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, normalizedPreviousSessionKey),
+  );
+  if (currentRow && !isPersistedSessionRow(currentRow)) {
+    return undefined;
+  }
+  return normalizedPreviousSessionKey;
+}
+
 export type CreateChatSessionIntent = { source: "user" };
 
 export async function createChatSession(
@@ -801,11 +846,7 @@ export async function createChatSession(
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
-  const parentSessionKey =
-    normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
-      ? undefined
-      : normalizedPreviousSessionKey;
+  const parentSessionKey = resolveNewChatParentSessionKey(state, previousSessionKey);
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {
