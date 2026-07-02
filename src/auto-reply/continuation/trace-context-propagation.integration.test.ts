@@ -127,7 +127,10 @@ import {
   type StartSpanOptions,
   type Tracer,
 } from "../../infra/continuation-tracer.js";
-import { parseDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
+import {
+  parseDiagnosticTraceparent,
+  runWithDiagnosticTraceparent,
+} from "../../infra/diagnostic-trace-context.js";
 import {
   enqueueSessionDelivery,
   recoverPendingSessionDeliveries,
@@ -244,12 +247,13 @@ describe("continuation trace-context propagation integration", () => {
 
     for (let hop = 1; hop <= 3; hop += 1) {
       const tool = createContinueDelegateTool({ agentSessionKey: sessionKey });
-      await tool.execute(`tool-${hop}`, {
-        task: `hop ${hop}`,
-        mode: "silent-wake",
-        targetSessionKey: "agent:main:root",
-        traceparent: carriedTraceparent,
-      });
+      await runWithDiagnosticTraceparent(carriedTraceparent, () =>
+        tool.execute(`tool-${hop}`, {
+          task: `hop ${hop}`,
+          mode: "silent-wake",
+          targetSessionKey: "agent:main:root",
+        }),
+      );
       const [delegate] = consumePendingDelegates(sessionKey);
       expect(delegate?.traceparent).toBe(carriedTraceparent);
 
