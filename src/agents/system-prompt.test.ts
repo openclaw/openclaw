@@ -1104,7 +1104,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
       expect(prompt).toContain(
-        "Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output",
+        "Group/channel etiquette: message-tool-only delivery does not require visible output",
       );
       expect(prompt).toContain("The target defaults to the current source channel");
       expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -1130,6 +1130,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).toContain(
+      "Group/channel etiquette: message-tool-only delivery does not require visible output",
+    );
     expect(prompt).not.toContain("The target defaults to the current source channel");
   });
 
@@ -1150,7 +1153,7 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("keeps Discord group etiquette scoped to group message-tool-only delivery", () => {
+  it("keeps group/channel etiquette scoped to message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1160,10 +1163,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
-  it("omits Discord group etiquette for direct message-tool-only delivery", () => {
+  it("omits group/channel etiquette for direct message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1175,7 +1178,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {

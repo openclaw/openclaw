@@ -19,6 +19,20 @@ import type { PreparedCliRunContext } from "./types.js";
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function recordMcpLoopbackToolCallResult(params: {
   captureKey: string;
   toolName: string;
@@ -43,6 +57,8 @@ function recordMcpLoopbackToolCallResult(params: {
 function buildPreparedCliRunContext(params: {
   output: "jsonl" | "text";
   provider?: string;
+  runId?: string;
+  beforeExecution?: () => Promise<void>;
 }): PreparedCliRunContext {
   const provider = params.provider ?? "codex-cli";
   const backend = {
@@ -62,7 +78,7 @@ function buildPreparedCliRunContext(params: {
       provider,
       model: "model",
       timeoutMs: 1_000,
-      runId: `run-${params.output}`,
+      runId: params.runId ?? `run-${params.output}`,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -74,6 +90,7 @@ function buildPreparedCliRunContext(params: {
     preparedBackend: {
       backend,
       env: {},
+      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
     },
     reusableCliSession: {},
     hadSessionFile: false,
@@ -101,6 +118,65 @@ beforeEach(() => {
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("runs prepared backend staging inside the serialized execution queue", async () => {
+    const firstSpawnEntered = createDeferred();
+    const releaseFirstSpawn = createDeferred();
+    const events: string[] = [];
+    let spawnCount = 0;
+
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      spawnCount += 1;
+      const input = args[0] as SupervisorSpawnInput;
+      const label = spawnCount === 1 ? "first" : "second";
+      events.push(`spawn:${label}`);
+      input.onStdout?.(`answer ${label}`);
+      if (label === "first") {
+        firstSpawnEntered.resolve();
+        await releaseFirstSpawn.promise;
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const first = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        output: "text",
+        runId: "run-first",
+        beforeExecution: async () => {
+          events.push("stage:first");
+        },
+      }),
+    );
+    await firstSpawnEntered.promise;
+    const second = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        output: "text",
+        runId: "run-second",
+        beforeExecution: async () => {
+          events.push("stage:second");
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(events).toEqual(["stage:first", "spawn:first"]);
+
+    releaseFirstSpawn.resolve();
+    await Promise.all([first, second]);
+
+    expect(events).toEqual(["stage:first", "spawn:first", "stage:second", "spawn:second"]);
+  });
+
   it("disables supervisor capture without parsing from the diagnostic stdout tail", async () => {
     const fullText = `start-${"x".repeat(80 * 1024)}-end`;
 
@@ -277,6 +353,40 @@ describe("executePreparedCliRun supervisor output capture", () => {
       return;
     }
     throw new Error("Expected CLI run to reject with a rate limit error");
+  });
+
+  it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Credit balance is too low",
+      session_id: "session-jsonl-error",
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message: "Credit balance is too low",
+    });
   });
 
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {

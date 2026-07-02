@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
+import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -57,6 +58,62 @@ class OnboardingFlowLogicTest {
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+  }
+
+  @Test
+  fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
+    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+    val afterSendOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.SEND_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterSendOnly)
+
+    val afterReadOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
+      )
+    assertTrue(afterReadOnly)
+
+    val deniedRead =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to false),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertFalse(deniedRead)
+  }
+
+  @Test
+  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
+    val permissionGroups =
+      listOf(
+        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
+
+    for (requiredPermissions in permissionGroups) {
+      val readPermission = requiredPermissions.first()
+      val writePermission = requiredPermissions.last()
+      assertFalse(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(readPermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { false },
+        ),
+      )
+      assertTrue(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(writePermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { permission -> permission == readPermission },
+        ),
+      )
+    }
   }
 
   @Test

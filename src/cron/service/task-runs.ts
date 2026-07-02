@@ -43,6 +43,15 @@ function resolveCronTaskChildSessionKey(params: {
   if (params.job.sessionTarget === "main") {
     return resolveMainSessionCronRunSessionKey(params.job, params.startedAt);
   }
+  const explicitSessionKey = params.job.sessionKey?.trim();
+  if (explicitSessionKey) {
+    // Explicit session bindings must win over generated cron session keys so
+    // task drill-down opens the same transcript the cron run actually used.
+    return explicitSessionKey;
+  }
+  if (params.job.sessionTarget !== "isolated") {
+    return undefined;
+  }
   return resolveCronAgentSessionKey({
     sessionKey: `cron:${params.job.id}`,
     agentId: params.job.agentId ?? params.state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
