@@ -14,6 +14,7 @@ import type { CronServiceState } from "./state.js";
 
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
 export const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
+const CRON_AGENT_SETUP_WATCHDOG_MAX_MS = 10 * 60_000;
 const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
@@ -48,6 +49,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 export type CronAgentWatchdog = {
   start: () => void;
+  setupTimeoutMs: () => number;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
@@ -69,6 +71,7 @@ export function createCronAgentWatchdog(params: {
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
   let observedLaneWait = false;
+  const setupTimeoutMs = resolveCronAgentSetupWatchdogMs(params.jobTimeoutMs);
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -142,11 +145,12 @@ export function createCronAgentWatchdog(params: {
           if (state === "waiting_for_runner") {
             setTimedOut(setupTimeoutErrorMessage(activeExecution));
           }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        }, setupTimeoutMs);
         return;
       }
       startTimeout();
     },
+    setupTimeoutMs: () => setupTimeoutMs,
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = true;
@@ -221,5 +225,12 @@ function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
   return Math.max(
     CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS,
     Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+  );
+}
+
+export function resolveCronAgentSetupWatchdogMs(jobTimeoutMs: number): number {
+  return Math.max(
+    CRON_AGENT_SETUP_WATCHDOG_MS,
+    Math.min(CRON_AGENT_SETUP_WATCHDOG_MAX_MS, Math.floor(jobTimeoutMs / 2)),
   );
 }
