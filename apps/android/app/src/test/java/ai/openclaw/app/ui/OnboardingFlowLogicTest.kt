@@ -311,6 +311,56 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun gatewayPairingContinueOnlyRoutesToNodeApprovalWhenApprovalNeedsUserAction() {
+    assertEquals(
+      OnboardingStep.Permissions,
+      gatewayPairingContinueDestination(
+        ready = true,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+      ),
+    )
+    assertEquals(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+      ),
+    )
+    assertEquals(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval,
+      ),
+    )
+    assertEquals(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved,
+      ),
+    )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+      ),
+    )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+      ),
+    )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
+      ),
+    )
+  }
+
+  @Test
   fun recoveryNodeApprovalPollingWaitsForInFlightRefresh() {
     assertTrue(
       shouldRefreshNodeApprovalDuringRecovery(

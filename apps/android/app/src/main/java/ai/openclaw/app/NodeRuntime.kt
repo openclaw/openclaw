@@ -2418,6 +2418,8 @@ class NodeRuntime(
       nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
         _nodesDevicesRefreshing.value = true
         _nodesDevicesErrorText.value = null
+        _nodeCapabilityApprovalState.value = GatewayNodeApprovalState.Loading
+        _nodeCapabilityApprovalRequestId.value = null
       }
     if (!refreshStarted) return
     if (!operatorConnected) {
