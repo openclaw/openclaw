@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
@@ -30,6 +31,58 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
+  @Test
+  fun standaloneStatusPreservesLiveOperatorConnection() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    writeField(runtime, "operatorConnected", true)
+    val method = runtime.javaClass.getDeclaredMethod("setStandaloneGatewayStatus", String::class.java)
+    method.isAccessible = true
+
+    method.invoke(runtime, "Verify gateway TLS fingerprint…")
+
+    assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+    assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun unstructuredRetryClearsEarlierOperatorAuthProblem() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: unauthorized")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "UNAUTHORIZED",
+        message = "unauthorized",
+        details =
+          GatewayConnectErrorDetails(
+            code = "AUTH_TOKEN_MISSING",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "provide_token",
+          ),
+      ),
+      true,
+    )
+    val problemCode =
+      runtime.gatewayConnectionDisplay.value.problem
+        ?.code
+    assertEquals(
+      "AUTH_TOKEN_MISSING",
+      problemCode,
+    )
+
+    onDisconnected("Reconnecting…")
+    assertEquals("Reconnecting…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+
+    onDisconnected("Gateway error: timeout")
+    assertEquals("Gateway error: timeout", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
   @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(

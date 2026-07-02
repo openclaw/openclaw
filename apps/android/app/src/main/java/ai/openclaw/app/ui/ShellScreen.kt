@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.GatewayNodeApprovalState
@@ -334,11 +335,10 @@ private fun OverviewScreen(
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
   onOpenCommand: () -> Unit,
 ) {
-  val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val isConnected = gatewayConnectionDisplay.isConnected
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val execApprovals by viewModel.execApprovals.collectAsState()
@@ -411,8 +411,8 @@ private fun OverviewScreen(
           OverviewPrimaryPanel(
             agentName = activeAgentName,
             agentBadge = activeAgentBadge,
-            statusText = gatewaySummary(statusText, isConnected, gatewayConnectionProblem),
-            isConnected = isConnected,
+            statusText = gatewaySummary(gatewayConnectionDisplay),
+            isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
             sessionCount = sessions.size,
             cronJobCount = cronStatus.jobs,
@@ -1341,9 +1341,8 @@ private fun SettingsShellScreen(
   onOpenCommand: () -> Unit,
 ) {
   val displayName by viewModel.displayName.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val isConnected = gatewayConnectionDisplay.isConnected
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
@@ -1415,7 +1414,13 @@ private fun SettingsShellScreen(
 
       val settingsRows =
         listOf(
-          SettingsRow("Gateway", gatewaySummary(statusText, isConnected, gatewayConnectionProblem), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
+          SettingsRow(
+            "Gateway",
+            gatewaySummary(gatewayConnectionDisplay),
+            Icons.Default.Cloud,
+            status = gatewayConnectionDisplay.isConnected,
+            route = SettingsRoute.Gateway,
+          ),
           SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
           SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
           SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
@@ -1789,3 +1794,5 @@ internal fun gatewaySummary(
     else -> "Not connected"
   }
 }
+
+internal fun gatewaySummary(display: GatewayConnectionDisplay): String = gatewaySummary(display.statusText, display.isConnected, display.problem)

@@ -4,6 +4,7 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
@@ -519,6 +520,18 @@ class ShellScreenLogicTest {
     assertEquals("Connecting...", gatewaySummary("Reconnecting", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Waiting for pairing", gatewaySummary("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Certificate review needed", gatewaySummary("TLS handshake failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
+  @Test
+  fun gatewaySummaryUsesAtomicRetryDisplayAfterAuthFailure() {
+    val retrying =
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText = "Reconnecting…",
+        problem = null,
+      )
+
+    assertEquals("Connecting...", gatewaySummary(retrying))
   }
 
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())

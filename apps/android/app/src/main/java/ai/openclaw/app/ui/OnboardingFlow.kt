@@ -139,9 +139,10 @@ fun OnboardingFlow(
   val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   ClawDesignTheme(dark = onboardingDark) {
     val context = LocalContext.current
-    val statusText by viewModel.statusText.collectAsState()
-    val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
-    val isConnected by viewModel.isConnected.collectAsState()
+    val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+    val statusText = gatewayConnectionDisplay.statusText
+    val gatewayConnectionProblem = gatewayConnectionDisplay.problem
+    val isConnected = gatewayConnectionDisplay.isConnected
     val isNodeConnected by viewModel.isNodeConnected.collectAsState()
     val nodeCapabilityApprovalState by viewModel.nodeCapabilityApprovalState.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()

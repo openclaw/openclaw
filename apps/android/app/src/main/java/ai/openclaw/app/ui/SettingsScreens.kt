@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -886,10 +887,8 @@ private fun GatewaySettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val isConnected by viewModel.isConnected.collectAsState()
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -911,13 +910,13 @@ private fun GatewaySettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Connection", if (isConnected) "Connected" else "Offline"),
+          SettingsMetric("Connection", if (gatewayConnectionDisplay.isConnected) "Connected" else "Offline"),
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
           SettingsMetric(
             "Status",
-            gatewayStatusLabel(statusText = statusText, isConnected = isConnected, gatewayConnectionProblem = gatewayConnectionProblem),
+            gatewayStatusLabel(gatewayConnectionDisplay),
           ),
         ),
     )
@@ -1068,6 +1067,8 @@ internal fun gatewayStatusLabel(
     else -> "Not connected"
   }
 }
+
+internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
 
 @Composable
 private fun AboutSettingsScreen(
