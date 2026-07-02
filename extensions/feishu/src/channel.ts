@@ -656,10 +656,7 @@ function shouldEnforceFeishuReadTarget(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
 }): boolean {
-  const groupPolicy =
-    params.account.config.groupPolicy ??
-    resolveDefaultGroupPolicy(params.cfg) ??
-    (Object.keys(params.account.config.groups ?? {}).length > 0 ? "allowlist" : undefined);
+  const groupPolicy = params.account.config.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg);
   return groupPolicy === "allowlist" || groupPolicy === "disabled";
 }
 
@@ -680,10 +677,7 @@ function assertFeishuReadTargetAllowed(params: {
   chatId?: string | null;
 }) {
   const chatId = params.chatId?.trim();
-  const groupPolicy =
-    params.account.config.groupPolicy ??
-    resolveDefaultGroupPolicy(params.cfg) ??
-    (Object.keys(params.account.config.groups ?? {}).length > 0 ? "allowlist" : undefined);
+  const groupPolicy = params.account.config.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg);
   if (!groupPolicy || groupPolicy === "open") {
     if (
       chatId &&

@@ -1224,6 +1224,43 @@ describe("feishuPlugin actions", () => {
     expect(listPinsFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("does not treat Feishu groups config as read allowlist when group policy is unset", async () => {
+    listPinsFeishuMock.mockResolvedValueOnce({
+      chatId: "oc_group_2",
+      pins: [{ messageId: "om_pin" }],
+      hasMore: false,
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "list-pins",
+      params: { chatId: "oc_group_2" },
+      cfg: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_main",
+            appSecret: "secret_main",
+            groups: {
+              oc_group_1: { requireMention: true },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(listPinsFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      chatId: "oc_group_2",
+      startTime: undefined,
+      endTime: undefined,
+      pageSize: undefined,
+      pageToken: undefined,
+      accountId: undefined,
+    });
+  });
+
   it("removes pins", async () => {
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "unpin",
