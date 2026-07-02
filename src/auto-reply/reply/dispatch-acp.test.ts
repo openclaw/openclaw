@@ -1644,6 +1644,35 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
   });
 
+  it("does not unbind valid bindings when allowedAgents rejects a ready session with a missing persisted cwd", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    const missingCwd = path.join(os.tmpdir(), "openclaw-pr68843-policy-rejection-missing-cwd");
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({ runtimeOptions: { cwd: missingCwd } }),
+    });
+    // allowedAgents policy rejection throws ACP_SESSION_INIT_FAILED, but it is a
+    // pre-runtime policy error, not a runtime init failure. The cwd probe must not run,
+    // so a ready session with a missing cwd keeps its bindings on a policy rejection.
+    policyMocks.resolveAcpAgentPolicyError.mockReturnValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", `ACP agent "main" is not allowed by policy.`),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      `ACP agent "main" is not allowed by policy.`,
+    );
+  });
+
   it("uses canonical session keys for bound-session identity notices", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";

@@ -581,6 +581,12 @@ export async function tryDispatchAcpReply(params: {
       recordProcessed: params.recordProcessed,
       markIdle: params.markIdle,
     });
+  // The cwd-based stale probe is a runtime-failure signal only. Pre-runtime policy
+  // rejections (dispatch-disabled, toolsAllow, allowedAgents) throw the same
+  // ACP_SESSION_INIT_FAILED code but are not runtime init failures, so the cwd probe
+  // must not run for them — otherwise a ready session with a missing cwd loses all
+  // bindings from a policy rejection alone.
+  let runtimeInitStarted = false;
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -690,6 +696,7 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
+    runtimeInitStarted = true;
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -758,7 +765,9 @@ export async function tryDispatchAcpReply(params: {
       targetSessionKey: canonicalSessionKey,
       error: acpError,
       sessionCwd:
-        acpResolution.kind === "ready" ? resolveAcpSessionCwd(acpResolution.meta) : undefined,
+        runtimeInitStarted && acpResolution.kind === "ready"
+          ? resolveAcpSessionCwd(acpResolution.meta)
+          : undefined,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),
