@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionProblem
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -10,4 +11,52 @@ class SettingsScreensTest {
     assertEquals("Third-party", androidDistributionChannel("thirdParty"))
     assertEquals("Unknown", androidDistributionChannel(""))
   }
+
+  @Test
+  fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
+    assertEquals(
+      "Setup code expired",
+      gatewayStatusLabel(
+        "Gateway error: unauthorized: bootstrap token invalid or expired",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID"),
+      ),
+    )
+    assertEquals(
+      "Device identity required",
+      gatewayStatusLabel(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayStatusLabelFallsBackToGenericAuthLabelWithoutAKnownReason() {
+    assertEquals("Authentication needed", gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = null))
+    assertEquals(
+      "Authentication needed",
+      gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")),
+    )
+  }
+
+  @Test
+  fun gatewayStatusLabelLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
+    val problem = authProblem("AUTH_TOKEN_MISSING")
+    assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
+    assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
+  private fun authProblem(code: String): GatewayConnectionProblem =
+    GatewayConnectionProblem(
+      code = code,
+      message = "Authentication failed.",
+      reason = null,
+      requestId = null,
+      recommendedNextStep = null,
+      pauseReconnect = false,
+      retryable = false,
+    )
 }
