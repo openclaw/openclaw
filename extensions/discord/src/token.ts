@@ -79,7 +79,9 @@ export function resolveDiscordToken(
   if (accountToken.status === "configured_unavailable") {
     return { token: "", source: "config", tokenStatus: "configured_unavailable" };
   }
-  if (hasAccountToken) {
+  // Default account always falls through to top-level + DISCORD_BOT_TOKEN; only
+  // explicit non-default accounts treat a blank account-level token as opt-out.
+  if (hasAccountToken && accountId !== DEFAULT_ACCOUNT_ID) {
     return { token: "", source: "none", tokenStatus: "missing" };
   }
 
