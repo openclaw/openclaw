@@ -252,6 +252,10 @@ export function deriveSessionTitle(
     return normalizeOptionalString(entry.subject);
   }
 
+  if (normalizeOptionalString(entry.label)) {
+    return normalizeOptionalString(entry.label);
+  }
+
   if (firstUserMessage?.trim()) {
     const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
