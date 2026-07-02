@@ -8,9 +8,10 @@ import {
   resolveTeamGroupId,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
-import { fetchGraphJson } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
 
 vi.mock("./graph.js", () => ({
+  fetchAllGraphPages: vi.fn(),
   fetchGraphJson: vi.fn(),
 }));
 
@@ -18,6 +19,14 @@ const firstGraphPath = () => {
   const [call] = vi.mocked(fetchGraphJson).mock.calls;
   if (!call) {
     throw new Error("expected Graph fetch call");
+  }
+  return call[0].path;
+};
+
+const firstFetchAllGraphPagesPath = () => {
+  const [call] = vi.mocked(fetchAllGraphPages).mock.calls;
+  if (!call) {
+    throw new Error("expected paginated Graph fetch call");
   }
   return call[0].path;
 };
@@ -163,44 +172,86 @@ describe("fetchChannelMessage", () => {
 
 describe("fetchThreadReplies", () => {
   beforeEach(() => {
+    vi.mocked(fetchAllGraphPages).mockReset();
     vi.mocked(fetchGraphJson).mockReset();
   });
 
   it("fetches replies with correct path and default limit", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "reply-1" }, { id: "reply-2" }],
+      truncated: false,
     } as never);
 
     const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
 
     expect(result).toHaveLength(2);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
       token: "tok",
       path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
     });
   });
 
   it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: Array.from({ length: 52 }, (_, index) => ({ id: `reply-${index + 1}` })),
+      truncated: false,
+    } as never);
 
-    await fetchThreadReplies("tok", "g", "c", "m", 200);
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    expect(firstGraphPath()).toContain("$top=50");
+    expect(firstFetchAllGraphPagesPath()).toContain("$top=50");
+    expect(result).toHaveLength(50);
+    expect(result[0]?.id).toBe("reply-3");
+    expect(result.at(-1)?.id).toBe("reply-52");
   });
 
-  it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("clamps limit to 1 minimum and keeps the newest reply", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "oldest" }, { id: "newest" }],
+      truncated: false,
+    } as never);
 
-    await fetchThreadReplies("tok", "g", "c", "m", 0);
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    expect(firstGraphPath()).toContain("$top=1");
+    expect(firstFetchAllGraphPagesPath()).toContain("$top=50");
+    expect(result).toEqual([{ id: "newest" }]);
   });
 
   it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
+  });
+
+  it("returns newest limited replies from paginated results", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "reply-1" }, { id: "reply-2" }, { id: "reply-3" }, { id: "reply-4" }],
+      truncated: false,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 3);
+
+    expect(result).toEqual([{ id: "reply-2" }, { id: "reply-3" }, { id: "reply-4" }]);
+  });
+
+  it("sets a page cap to avoid unbounded pagination", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: Array.from({ length: 50 }, (_, index) => ({ id: `reply-${index + 1}` })),
+      truncated: true,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m");
+
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/teams/g/channels/c/messages/m/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
+    });
+    expect(result).toHaveLength(50);
+    expect(result[0]?.id).toBe("reply-1");
+    expect(result.at(-1)?.id).toBe("reply-50");
   });
 });
 

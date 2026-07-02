@@ -3,7 +3,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -18,6 +18,8 @@ export type GraphThreadMessage = {
 // TTL cache for team ID -> group GUID mapping.
 const teamGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const THREAD_REPLIES_PAGE_SIZE = 50;
+const THREAD_REPLIES_MAX_PAGES = 50;
 
 function resolveTeamGroupIdCacheExpiresAt(nowRaw = Date.now()): number | undefined {
   const now = asDateTimestampMs(nowRaw);
@@ -115,12 +117,8 @@ export async function fetchChannelMessage(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not
- * support `$orderby`, so results are always returned in ascending (oldest-first) order.
- * Combined with the `$top` cap of 50, this means only the **oldest 50 replies** are
- * returned for long threads — newer replies are silently omitted. There is currently no
- * Graph API workaround for this; pagination via `@odata.nextLink` can retrieve more
- * replies but still in ascending order only.
+ * The Graph replies endpoint does not support `$orderby`, so pages arrive
+ * oldest-first. Follow pagination and retain the newest replies for context.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -129,13 +127,17 @@ export async function fetchThreadReplies(
   messageId: string,
   limit = 50,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
+  const rawLimit = Number.isFinite(limit) ? Math.floor(limit) : THREAD_REPLIES_PAGE_SIZE;
+  const replyLimit = Math.min(Math.max(rawLimit, 1), THREAD_REPLIES_PAGE_SIZE);
   // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // For threads with >50 replies, only the oldest 50 are returned. The most recent
-  // replies (often the most relevant context) may be truncated.
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
-  return res.value ?? [];
+  // Keep the newest replies as pages arrive so long threads preserve recent context.
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${THREAD_REPLIES_PAGE_SIZE}&$select=id,from,body,createdDateTime`;
+  const { items } = await fetchAllGraphPages<GraphThreadMessage>({
+    token,
+    path,
+    maxPages: THREAD_REPLIES_MAX_PAGES,
+  });
+  return items.slice(-replyLimit);
 }
 
 /**
