@@ -1300,12 +1300,14 @@ export async function executePreparedCliRun(
             reason = reason ?? "unknown";
             const status = resolveFailoverStatus(reason);
             const retryCode =
-              reason === "unknown" &&
-              result.reason === "exit" &&
-              errorCandidates.length === 0 &&
-              !observedCliActivity
-                ? "cli_unknown_empty_failure"
-                : undefined;
+              reason === "context_overflow"
+                ? "cli_context_overflow"
+                : reason === "unknown" &&
+                    result.reason === "exit" &&
+                    errorCandidates.length === 0 &&
+                    !observedCliActivity
+                  ? "cli_unknown_empty_failure"
+                  : undefined;
             throw new FailoverError(err, {
               reason,
               provider: params.provider,

@@ -661,6 +661,67 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry context overflow after a confirmed message send", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before overflow",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before overflow",
+        },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "Prompt is too long",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:delivered-overflow",
+      runId: "run-delivered-overflow",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before overflow"]);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1390,6 +1451,48 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
+  it("does not fresh retry context overflow when the run timeout budget is exhausted", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "Prompt is too long",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:expired-overflow-budget",
+      runId: "run-expired-overflow-budget",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    const expiredBudgetContext = {
+      ...context,
+      started: Date.now() - context.params.timeoutMs - 1,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...expiredBudgetContext,
+        params: {
+          ...expiredBudgetContext.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("Prompt is too long");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
@@ -1468,7 +1571,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it.each(["timeout", "unknown"] as const)(
+  it.each(["timeout", "unknown", "context_overflow"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
       const hookRunner = {
@@ -1498,6 +1601,18 @@ describe("runCliAgent reliability", () => {
             stderr: "",
             timedOut: true,
             noOutputTimedOut: true,
+          });
+        }
+        if (spawnCount === 1 && reason === "context_overflow") {
+          return createManagedRun({
+            reason: "exit",
+            exitCode: 1,
+            exitSignal: null,
+            durationMs: 150,
+            stdout: "",
+            stderr: "Prompt is too long",
+            timedOut: false,
+            noOutputTimedOut: false,
           });
         }
         if (spawnCount === 1) {
@@ -1552,6 +1667,8 @@ describe("runCliAgent reliability", () => {
         });
 
         expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
+        expect(result.meta.finalPromptText).toContain("User: earlier context");
+        expect(result.meta.finalPromptText).toContain("<next_user_message>");
         expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
         expect(events).toEqual(["spawn-1", `clear-${reason}`, "spawn-2"]);
         if (reason === "timeout") {

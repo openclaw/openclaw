@@ -3003,6 +3003,64 @@ ${JSON.stringify({
     );
   });
 
+  it("marks Claude live stderr context overflows as retryable", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({ type: "system", subtype: "init", session_id: "live-overflow" }) + "\n",
+        );
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "Prompt is too long",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-overflow-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => exited),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-overflow",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+        status: 413,
+      },
+    );
+  });
+
   it("fails when Claude exits before a live turn starts", async () => {
     supervisorSpawnMock.mockImplementationOnce(async () => ({
       runId: "live-run",

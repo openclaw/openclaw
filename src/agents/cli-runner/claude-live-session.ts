@@ -833,11 +833,13 @@ function createResultError(
   const result = typeof parsed.result === "string" ? parsed.result.trim() : "";
   const message = extractCliErrorMessage(raw) ?? (result || "Claude CLI failed.");
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
+  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
   return new FailoverError(message, {
     reason,
     provider: session.providerId,
     model: session.modelId,
     status: resolveFailoverStatus(reason),
+    code,
   });
 }
 
@@ -1012,6 +1014,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
     return;
   }
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
+  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
   failTurn(
     session,
     new FailoverError(message, {
@@ -1019,6 +1022,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
       provider: session.providerId,
       model: session.modelId,
       status: resolveFailoverStatus(reason),
+      code,
     }),
   );
 }
