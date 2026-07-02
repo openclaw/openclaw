@@ -91,12 +91,52 @@ const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
+const DEFAULT_RECENT_ACTIVITY_MINUTES = 120;
+
+type SessionActivityLevel = "active" | "recent" | "normal";
 
 function getAgentIdentity(
   agentIdentityById: Record<string, AgentIdentityResult>,
   agentId: string,
 ): AgentIdentityResult | null {
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
+}
+
+function resolveRecentActivityWindowMs(activeMinutes: string): number | null {
+  const trimmed = activeMinutes.trim();
+  if (!trimmed) {
+    return DEFAULT_RECENT_ACTIVITY_MINUTES * 60_000;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed * 60_000;
+}
+
+function isSessionRecentlyActive(
+  row: GatewaySessionRow,
+  nowMs: number,
+  recentWindowMs: number | null,
+): boolean {
+  if (!recentWindowMs || typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) {
+    return false;
+  }
+  return nowMs - row.updatedAt <= recentWindowMs;
+}
+
+function resolveSessionActivityLevel(
+  row: GatewaySessionRow,
+  nowMs: number,
+  recentWindowMs: number | null,
+): SessionActivityLevel {
+  if (isSessionRunActive(row)) {
+    return "active";
+  }
+  if (isSessionRecentlyActive(row, nowMs, recentWindowMs)) {
+    return "recent";
+  }
+  return "normal";
 }
 
 function resolveThinkLevelOptions(
@@ -219,6 +259,16 @@ function renderSessionStatusBadge(row: GatewaySessionRow) {
     >
       <span class="session-status-badge__dot" aria-hidden="true"></span>
       <span class="session-status-badge__label">${badge.label}</span>
+    </span>
+  `;
+}
+
+function renderSessionRecentBadge(updated: string) {
+  const title = `${t("sessionsView.updated")}: ${updated}`;
+  return html`
+    <span class="session-status-recent" title=${title} aria-label=${title}>
+      <span class="session-status-recent__dot" aria-hidden="true"></span>
+      <span class="session-status-recent__label">${t("sessions.recentShort")}</span>
     </span>
   `;
 }
@@ -493,6 +543,8 @@ export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
+  const nowMs = Date.now();
+  const recentActivityWindowMs = resolveRecentActivityWindowMs(props.activeMinutes);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
@@ -748,8 +800,10 @@ export function renderSessions(props: SessionsProps) {
                           : t("sessionsView.noSessions")}
                       </td>
                     </tr>
-                  `
-                : paginated.flatMap((row) => renderRows(row, props))}
+                `
+                : paginated.flatMap((row) =>
+                    renderRows(row, props, nowMs, recentActivityWindowMs),
+                  )}
             </tbody>
           </table>
         </div>
@@ -788,7 +842,12 @@ export function renderSessions(props: SessionsProps) {
   `;
 }
 
-function renderRows(row: GatewaySessionRow, props: SessionsProps) {
+function renderRows(
+  row: GatewaySessionRow,
+  props: SessionsProps,
+  nowMs: number,
+  recentActivityWindowMs: number | null,
+) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
@@ -839,6 +898,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
+  const activityLevel = resolveSessionActivityLevel(
+    row,
+    nowMs,
+    recentActivityWindowMs,
+  );
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
@@ -859,6 +923,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     "session-data-row",
     hasCheckpoints ? "session-data-row--expandable" : "",
     isExpanded ? "session-data-row--expanded" : "",
+    activityLevel === "active" ? "session-data-row--active" : "",
+    activityLevel === "recent" ? "session-data-row--recent" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -948,7 +1014,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
-          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+          ${renderSessionStatusBadge(row)}
+          ${activityLevel === "recent" ? renderSessionRecentBadge(updated) : nothing}
+          ${renderSessionGoalChip(row.goal)}
         </div>
       </td>
       <td class="session-runtime-cell">

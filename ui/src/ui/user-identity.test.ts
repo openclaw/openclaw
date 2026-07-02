@@ -13,6 +13,10 @@ describe("local user identity helpers", () => {
     expect(resolveLocalUserName({ name: "   " })).toBe("You");
   });
 
+  it("truncates user names to the configured maximum length", () => {
+    expect(resolveLocalUserName({ name: "U".repeat(120) })).toBe("U".repeat(50));
+  });
+
   it("resolves renderable local avatar URLs through the shared chat path", () => {
     expect(resolveLocalUserAvatarUrl({ avatar: "/avatar/user" })).toBe("/avatar/user");
     expect(resolveLocalUserAvatarUrl({ avatar: "data:image/png;base64,AAA" })).toBe(

@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
+import { t } from "../../i18n/index.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
 function buildResult(
@@ -558,6 +559,61 @@ describe("sessions view", () => {
       "Status: Failed",
       "Status: Done",
     ]);
+  });
+
+  it("highlights active and recently updated session rows", async () => {
+    const now = Date.now();
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:active",
+              kind: "direct",
+              updatedAt: now - 90_000,
+              hasActiveRun: true,
+              status: "running",
+            },
+            {
+              key: "agent:main:recent",
+              kind: "direct",
+              updatedAt: now - 30_000,
+              status: "done",
+            },
+            {
+              key: "agent:main:old",
+              kind: "direct",
+              updatedAt: now - 10 * 60_000,
+              status: "done",
+            },
+          ]),
+        ),
+        activeMinutes: "2",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    const rowFor = (key: string) =>
+      Array.from(rows).find(
+        (row) => row.querySelector(".session-key-cell")?.textContent?.trim() === key,
+      );
+    const activeRow = rowFor("agent:main:active");
+    const recentRow = rowFor("agent:main:recent");
+    const oldRow = rowFor("agent:main:old");
+
+    expect(activeRow?.classList.contains("session-data-row--active")).toBe(true);
+    expect(recentRow?.classList.contains("session-data-row--recent")).toBe(true);
+    expect(oldRow?.classList.contains("session-data-row--active")).toBe(false);
+    expect(oldRow?.classList.contains("session-data-row--recent")).toBe(false);
+
+    const recentPill = recentRow?.querySelector(".session-status-recent");
+    expect(recentPill).not.toBeNull();
+    expect(recentPill?.textContent?.trim()).toBe(t("sessions.recentShort"));
+
+    expect(activeRow?.querySelector(".session-status-recent")).toBeNull();
   });
 
   it("renders session goals in the status cell and search index", async () => {

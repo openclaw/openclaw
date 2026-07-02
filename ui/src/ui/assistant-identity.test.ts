@@ -8,6 +8,11 @@ describe("normalizeAssistantIdentity", () => {
     expect(normalizeAssistantIdentity({ avatar: dataUrl }).avatar).toBe(dataUrl);
   });
 
+  it("truncates assistant names to the configured maximum length", () => {
+    const longName = "N".repeat(120);
+    expect(normalizeAssistantIdentity({ name: longName }).name).toBe("N".repeat(50));
+  });
+
   it("preserves same-origin Control UI avatar routes", () => {
     expect(normalizeAssistantIdentity({ avatar: "/avatar/main" }).avatar).toBe("/avatar/main");
   });
