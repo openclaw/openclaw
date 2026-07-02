@@ -413,6 +413,13 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun nodeApprovalCheckingOnlyTracksActiveRefresh() {
+    assertTrue(nodeApprovalCheckingInProgress(checkRequested = true, nodesDevicesRefreshing = true))
+    assertFalse(nodeApprovalCheckingInProgress(checkRequested = true, nodesDevicesRefreshing = false))
+    assertFalse(nodeApprovalCheckingInProgress(checkRequested = false, nodesDevicesRefreshing = true))
+  }
+
+  @Test
   fun showsPairingStateForPairingRequiredGatewayStatus() {
     assertEquals(
       GatewayRecoveryUiState.Pairing,
