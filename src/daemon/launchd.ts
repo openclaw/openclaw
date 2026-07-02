@@ -49,6 +49,7 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
+const LAUNCH_DAEMON_PLIST_DIR = "/Library/LaunchDaemons";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
@@ -130,6 +131,10 @@ function resolveLaunchAgentPlistPathForLabel(
 ): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
+  return path.posix.join(LAUNCH_DAEMON_PLIST_DIR, `${label}.plist`);
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
@@ -489,10 +494,15 @@ function writeLaunchAgentActionLine(
 
 async function bootstrapLaunchAgentOrThrow(params: {
   domain: string;
+  label: string;
   serviceTarget: string;
   plistPath: string;
   actionHint: string;
+  systemConflictAlreadyChecked?: boolean;
 }) {
+  if (!params.systemConflictAlreadyChecked) {
+    await assertNoSystemLaunchDaemonConflict(params.label);
+  }
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
   await execLaunchctl(["enable", params.serviceTarget]);
@@ -635,6 +645,7 @@ type LaunchAgentBootstrapRepairResult =
       status: "bootstrap-failed" | "kickstart-failed";
       detail?: string;
     }
+  | { ok: false; status: "system-launchdaemon-conflict"; detail: string }
   | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
@@ -650,6 +661,14 @@ export async function repairLaunchAgentBootstrap(args: {
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
+  const conflict = await findSystemLaunchDaemonConflict(label);
+  if (conflict) {
+    return {
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: formatSystemLaunchDaemonConflictError(conflict),
+    };
+  }
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   let repairStatus: "repaired" | "already-loaded" = "repaired";
@@ -1004,15 +1023,101 @@ async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: 
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
+    label,
     serviceTarget: `${domain}/${label}`,
     plistPath: params.plistPath,
     actionHint: "openclaw gateway install --force",
+    systemConflictAlreadyChecked: true,
   });
+}
+
+type SystemLaunchDaemonConflict =
+  | {
+      reason: "loaded";
+      label: string;
+      serviceTarget: string;
+      plistPath: string;
+    }
+  | {
+      reason: "plist";
+      label: string;
+      serviceTarget: string;
+      plistPath: string;
+    };
+
+async function findSystemLaunchDaemonConflict(
+  label: string,
+): Promise<SystemLaunchDaemonConflict | null> {
+  const serviceTarget = `system/${label}`;
+  const plistPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
+  const loaded = await execLaunchctl(["print", serviceTarget]);
+  if (loaded.code === 0) {
+    return { reason: "loaded", label, serviceTarget, plistPath };
+  }
+  try {
+    await fs.access(plistPath);
+    return { reason: "plist", label, serviceTarget, plistPath };
+  } catch {
+    // launchd uses the plist's Label key, not the plist filename, as the job
+    // identity. Operator-owned LaunchDaemons can be stored under arbitrary names.
+  }
+  const matchingPlistPath = await findSystemLaunchDaemonPlistPathByLabel(label);
+  if (matchingPlistPath) {
+    return { reason: "plist", label, serviceTarget, plistPath: matchingPlistPath };
+  }
+  return null;
+}
+
+function extractLaunchDaemonPlistLabel(contents: string): string | null {
+  return (
+    contents.match(/<key>\s*Label\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/i)?.[1]?.trim() ??
+    null
+  );
+}
+
+async function findSystemLaunchDaemonPlistPathByLabel(label: string): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(LAUNCH_DAEMON_PLIST_DIR);
+  } catch {
+    return null;
+  }
+  for (const entry of entries.toSorted()) {
+    if (!entry.endsWith(".plist")) {
+      continue;
+    }
+    const candidatePath = path.posix.join(LAUNCH_DAEMON_PLIST_DIR, entry);
+    const contents = await fs.readFile(candidatePath, "utf8").catch(() => null);
+    if (contents !== null && extractLaunchDaemonPlistLabel(contents) === label) {
+      return candidatePath;
+    }
+  }
+  return null;
+}
+
+function formatSystemLaunchDaemonConflictError(conflict: SystemLaunchDaemonConflict): string {
+  const detected =
+    conflict.reason === "loaded"
+      ? `launchd already has ${conflict.serviceTarget}`
+      : `a system-domain LaunchDaemon plist already exists at ${conflict.plistPath}`;
+  return [
+    `Refusing to install LaunchAgent ${conflict.label} because ${detected}.`,
+    "Installing a GUI LaunchAgent with the same label would create duplicate OpenClaw services in different launchd domains.",
+    `Remove or rename the system LaunchDaemon first, for example with \`sudo launchctl bootout ${conflict.serviceTarget}\` and by removing its plist such as \`${conflict.plistPath}\`, or choose a distinct launchd label for this user service when the calling command supports one.`,
+  ].join("\n");
+}
+
+async function assertNoSystemLaunchDaemonConflict(label: string): Promise<void> {
+  const conflict = await findSystemLaunchDaemonConflict(label);
+  if (conflict) {
+    throw new Error(formatSystemLaunchDaemonConflictError(conflict));
+  }
 }
 
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
+  await assertNoSystemLaunchDaemonConflict(resolveLaunchAgentLabel({ env: args.env }));
   const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
   await activateLaunchAgent({ env: args.env, plistPath });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
@@ -1085,6 +1190,7 @@ async function rewriteLaunchAgentPlistForRestart({
 
 async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
+  label: string;
   serviceTarget: string;
   plistPath: string;
 }): Promise<void> {
@@ -1095,6 +1201,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   try {
     await bootstrapLaunchAgentOrThrow({
       domain: params.domain,
+      label: params.label,
       serviceTarget: params.serviceTarget,
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
@@ -1119,6 +1226,7 @@ export async function restartLaunchAgent({
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (isCurrentProcessLaunchdServiceLabel(label)) {
+    await assertNoSystemLaunchDaemonConflict(label);
     const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
       env: serviceEnv,
       label,
@@ -1137,6 +1245,8 @@ export async function restartLaunchAgent({
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
+
+  await assertNoSystemLaunchDaemonConflict(label);
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
@@ -1170,9 +1280,11 @@ export async function restartLaunchAgent({
     }
     await bootstrapLaunchAgentOrThrow({
       domain,
+      label,
       serviceTarget,
       plistPath,
       actionHint: "openclaw gateway restart",
+      systemConflictAlreadyChecked: true,
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -1185,13 +1297,14 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
+    await ensureLaunchAgentLoadedAfterFailure({ domain, label, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
   // If the service was previously booted out, re-register the rewritten plist and retry.
   await bootstrapLaunchAgentOrThrow({
     domain,
+    label,
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
