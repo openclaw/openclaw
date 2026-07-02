@@ -2247,7 +2247,26 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    // Use navigator.clipboard when available (secure contexts), falling back
+    // to a temporary textarea + execCommand for non-secure HTTP deployments
+    // (e.g. http://openclaw.local). (#98759)
+    const clipboard = globalThis.navigator?.clipboard;
+    if (clipboard?.writeText) {
+      void clipboard.writeText(filePath);
+      return;
+    }
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = filePath;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    } catch {
+      // Clipboard is unavailable — silently ignore.
+    }
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
