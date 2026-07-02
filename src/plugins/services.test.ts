@@ -229,6 +229,109 @@ describe("startPluginServices", () => {
     expect(stopThrows).toHaveBeenCalledOnce();
   });
 
+  it("keeps healthy plugin services after unreadable service registration metadata", async () => {
+    const registry = createEmptyPluginRegistry();
+    const starts: string[] = [];
+    const stops: string[] = [];
+    const contexts: OpenClawPluginServiceContext[] = [];
+
+    const unreadableServiceRegistration = {
+      get pluginId() {
+        return "plugin:broken-service";
+      },
+      get service() {
+        throw new Error("plugin service getter exploded");
+      },
+      source: "test",
+      origin: "workspace",
+      rootDir: "/plugins/broken-service",
+    } as never;
+    const unreadableOwnerRegistration = {
+      get pluginId() {
+        throw new Error("plugin service plugin id getter exploded");
+      },
+      service: createTrackingService("service-broken-owner", { starts }),
+      source: "test",
+      origin: "workspace",
+      rootDir: "/plugins/broken-owner-service",
+    } as never;
+    const healthyService = createTrackingService("service-ok", {
+      starts,
+      stops,
+      contexts,
+    });
+    registry.services = [
+      unreadableServiceRegistration,
+      unreadableOwnerRegistration,
+      {
+        pluginId: "plugin:healthy",
+        service: healthyService,
+        source: "test",
+        origin: "workspace",
+        rootDir: "/plugins/healthy-service",
+      },
+    ] as typeof registry.services;
+
+    const config = createServiceConfig();
+    const handle = await startPluginServices({
+      registry,
+      config,
+      workspaceDir: "/tmp/workspace",
+    });
+    await handle.stop();
+
+    expect(starts).toEqual(["k"]);
+    expect(stops).toEqual(["k"]);
+    expectServiceContexts(contexts, config);
+    expect(requireLoggerErrorMessage()).toContain("plugin service registration unreadable");
+    expect(requireLoggerErrorMessage(1)).toContain("plugin service registration unreadable");
+  });
+
+  it("preserves the plugin service receiver while using snapshotted metadata", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    const service: OpenClawPluginService & { marker: string } = {
+      id: "receiver-service",
+      marker: "receiver-ok",
+      start() {
+        starts.push(this.marker);
+      },
+      stop() {
+        stops.push(this.marker);
+      },
+    };
+
+    const handle = await startPluginServices({
+      registry: createRegistry([service]),
+      config: createServiceConfig(),
+    });
+    await handle.stop();
+
+    expect(starts).toEqual(["receiver-ok"]);
+    expect(stops).toEqual(["receiver-ok"]);
+  });
+
+  it("uses stop handlers installed during service startup", async () => {
+    const stops: string[] = [];
+    const service: OpenClawPluginService & { marker: string } = {
+      id: "dynamic-stop-service",
+      marker: "dynamic-stop-ok",
+      start() {
+        this.stop = () => {
+          stops.push(this.marker);
+        };
+      },
+    };
+
+    const handle = await startPluginServices({
+      registry: createRegistry([service]),
+      config: createServiceConfig(),
+    });
+    await handle.stop();
+
+    expect(stops).toEqual(["dynamic-stop-ok"]);
+  });
+
   it("emits per-service startup trace spans and summary", async () => {
     const measured: string[] = [];
     const details: Array<{
