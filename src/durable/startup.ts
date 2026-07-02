@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 // Gateway startup integration for the durable runtime control plane.
-import { isDurableRuntimesEnabled } from "./config.js";
+import { isDurableRuntimesEnabled, isDurableWorkerEnabled } from "./config.js";
 import {
   reconcileDurableAgentTurnsOnGatewayStartup,
   reconcileDurableChatSendsOnGatewayStartup,
@@ -23,21 +23,28 @@ export async function maybeRecordDurableGatewayStartup(params: {
   let store: ReturnType<typeof openDurableRuntimeStore> | null = null;
   try {
     store = openDurableRuntimeStore({ env });
-    const recovery = reconcileDurableAgentTurnsOnGatewayStartup({
-      store,
-      processInstanceId: params.processInstanceId,
-      now: params.startupStartedAt,
-    });
-    const chatSendRecovery = reconcileDurableChatSendsOnGatewayStartup({
-      store,
-      processInstanceId: params.processInstanceId,
-      now: params.startupStartedAt,
-    });
-    const subagentRecovery = reconcileDurableSubagentRunsOnGatewayStartup({
-      store,
-      processInstanceId: params.processInstanceId,
-      now: params.startupStartedAt,
-    });
+    const recoveryEnabled = isDurableWorkerEnabled(env);
+    const recovery = recoveryEnabled
+      ? reconcileDurableAgentTurnsOnGatewayStartup({
+          store,
+          processInstanceId: params.processInstanceId,
+          now: params.startupStartedAt,
+        })
+      : { scanned: 0, markedLost: 0 };
+    const chatSendRecovery = recoveryEnabled
+      ? reconcileDurableChatSendsOnGatewayStartup({
+          store,
+          processInstanceId: params.processInstanceId,
+          now: params.startupStartedAt,
+        })
+      : { scanned: 0, markedLost: 0 };
+    const subagentRecovery = recoveryEnabled
+      ? reconcileDurableSubagentRunsOnGatewayStartup({
+          store,
+          processInstanceId: params.processInstanceId,
+          now: params.startupStartedAt,
+        })
+      : { scanned: 0, markedLost: 0 };
     const run = store.createRun({
       operationKind: "openclaw.gateway.startup",
       operationVersion: "1",

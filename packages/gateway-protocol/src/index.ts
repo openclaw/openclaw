@@ -194,6 +194,12 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type DurableCoordinationGetParams,
+  DurableCoordinationGetParamsSchema,
+  type DurableCoordinationGetResult,
+  DurableCoordinationGetResultSchema,
+  type DurableCoordinationProjection,
+  DurableCoordinationProjectionSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -705,6 +711,12 @@ export const validateSessionsUsageParams =
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateDurableCoordinationGetParams = lazyCompile<DurableCoordinationGetParams>(
+  DurableCoordinationGetParamsSchema,
+);
+export const validateDurableCoordinationGetResult = lazyCompile<DurableCoordinationGetResult>(
+  DurableCoordinationGetResultSchema,
+);
 export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -1075,6 +1087,9 @@ export {
   TasksGetResultSchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
+  DurableCoordinationGetParamsSchema,
+  DurableCoordinationProjectionSchema,
+  DurableCoordinationGetResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1392,6 +1407,9 @@ export type {
   TasksGetResult,
   TasksCancelParams,
   TasksCancelResult,
+  DurableCoordinationGetParams,
+  DurableCoordinationProjection,
+  DurableCoordinationGetResult,
   CronJob,
   CronListParams,
   CronStatusParams,

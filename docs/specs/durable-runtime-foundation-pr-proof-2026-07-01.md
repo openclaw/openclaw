@@ -31,6 +31,32 @@ is intentionally a local-first, opt-in runtime substrate:
 
 Focused validation observed on the PR2 branch:
 
+- Latest reviewer P1/P2 follow-up validation, rerun on 2026-07-02:
+  - Addressed reviewer P1: gateway startup still records the durable startup
+    marker when `OPENCLAW_DURABLE_RUNTIME=1`, but agent-turn/chat-send/subagent
+    mark-lost reconciliation now runs only when `OPENCLAW_DURABLE_WORKER=1`.
+  - Regression proof: `src/durable/startup.test.ts` seeds an open durable agent
+    turn, runs gateway startup with runtime enabled and no worker flag, and
+    verifies the run/step remain `running`; the paired worker-enabled case
+    verifies the same run/step are marked `lost`.
+  - Addressed reviewer P2: `durable.coordination.get` now has public
+    `packages/gateway-protocol` params/result/projection schemas, inferred
+    exported TypeScript types, lazy validators, and validator tests. The
+    Gateway handler now uses `validateDurableCoordinationGetParams` instead of
+    local ad hoc param parsing and rejects invalid params before opening durable
+    state.
+  - `node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts`
+    - 1 file, 47 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+    - 2 files, 6 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/startup.test.ts`
+    - 1 file, 2 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/recovery.test.ts src/durable/sqlite-store.test.ts src/durable/worker.test.ts src/durable/coordination-projection.test.ts`
+    - 4 files, 24 tests passed.
+  - `npm run tsgo:core`
+    - passed.
+  - `git diff --check`
+    - passed.
 - Reviewer follow-up validation, rerun on 2026-07-02 after rebasing onto
   upstream `origin/main` commit `133ce01e4a`:
   - Code fix commit: `c6cf9d12c0` (`fix(durable): gate recovery and schema

@@ -11,6 +11,8 @@ import {
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
+  validateDurableCoordinationGetParams,
+  validateDurableCoordinationGetResult,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -784,6 +786,92 @@ describe("validateTasksListParams", () => {
   it("rejects internal task statuses and unknown fields", () => {
     expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
     expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
+  });
+});
+
+describe("validateDurableCoordinationGet", () => {
+  it("accepts coordination inspection params and rejects unknown fields", () => {
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "rt_123" })).toBe(true);
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "" })).toBe(false);
+    expect(
+      validateDurableCoordinationGetParams({ runtimeRunId: "rt_123", includeSteps: true }),
+    ).toBe(false);
+  });
+
+  it("accepts the public durable coordination projection result shape", () => {
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          currentStepId: "subagents",
+          waitingReason: "child",
+          updatedAt: 200,
+          refs: {
+            outputRefs: [],
+            errorRefs: [],
+            artifactRefs: [],
+          },
+          external: {
+            sessionKey: "agent:main:main",
+            taskId: "task_123",
+          },
+          children: {
+            total: 1,
+            pending: 0,
+            running: 0,
+            succeeded: 1,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 1,
+            open: 0,
+          },
+          controls: {
+            canCancel: false,
+            canRetry: true,
+            canResume: false,
+            canSignal: false,
+            canOpenTimeline: true,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "paused",
+          recoveryState: "waiting_child",
+          updatedAt: 200,
+          refs: { outputRefs: [], errorRefs: [], artifactRefs: [] },
+          external: {},
+          children: {
+            total: 0,
+            pending: 0,
+            running: 0,
+            succeeded: 0,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 0,
+            open: 0,
+          },
+          controls: {
+            canCancel: false,
+            canRetry: false,
+            canResume: false,
+            canSignal: false,
+            canOpenTimeline: true,
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });
 
