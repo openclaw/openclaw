@@ -100,9 +100,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
         }
         if (!isRecord(existing) || !isRecord(incoming)) {
           if (existing !== incoming) {
-            logWarn(
-              `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
-            );
+            warnSchemaConflictOnce(key);
           }
           continue;
         }
@@ -122,9 +120,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
           mergedProps[key] = merged;
           continue;
         }
-        logWarn(
-          `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
-        );
+        warnSchemaConflictOnce(key);
       }
     }
     requiredSets.push(
@@ -143,6 +139,22 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
 
 function isPropertySchema(value: unknown): value is boolean | Record<string, unknown> {
   return typeof value === "boolean" || isRecord(value);
+}
+
+// Schema conflict warnings name field-level precedence, not request context.
+// Keep one warning per field so repeated loopback cache misses do not flood logs.
+const emittedConflictWarnings = new Set<string>();
+
+function warnSchemaConflictOnce(key: string) {
+  if (emittedConflictWarnings.has(key)) {
+    return;
+  }
+  emittedConflictWarnings.add(key);
+  logWarn(`mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`);
+}
+
+export function clearMcpToolSchemaWarningsForTest() {
+  emittedConflictWarnings.clear();
 }
 
 /** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
