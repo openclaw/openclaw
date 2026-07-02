@@ -9,6 +9,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeExecAllowlistPatternForAdd } from "../infra/exec-allowlist-pattern.js";
 import {
   collectExecPolicyScopeSnapshots,
   type ExecPolicyScopeSnapshot,
@@ -394,6 +395,14 @@ function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | n
   return pattern ? pattern : null;
 }
 
+function resolveAllowlistMutationPattern(params: { trimmedPattern: string; source: string }) {
+  // Gateway and node targets can live on another host; resolving the local
+  // realpath there would store a wrong-host path, so only local writes translate.
+  return normalizeExecAllowlistPatternForAdd(params.trimmedPattern, {
+    resolveLocalRealpath: params.source === "local",
+  });
+}
+
 function ensureAgent(file: ExecApprovalsFile, agentKey: string): ExecApprovalsAgent {
   const agents = file.agents ?? {};
   const entry = agents[agentKey] ?? {};
@@ -590,12 +599,23 @@ export function registerExecApprovalsCli(program: Command) {
     allowlist,
     name: "add",
     description: "Add a glob pattern to an allowlist",
-    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+    mutate: ({ trimmedPattern, source, file, agent, agentKey, allowlistEntries }) => {
+      const normalized = resolveAllowlistMutationPattern({ trimmedPattern, source });
+      const pattern = normalized.pattern;
+      if (normalized.kind === "resolved-symlink") {
+        defaultRuntime.log(
+          `Resolved ${trimmedPattern} to executable realpath ${pattern}; storing the realpath so the entry matches at exec time.`,
+        );
+      } else if (normalized.kind === "unverified-path") {
+        defaultRuntime.log(
+          `Note: path allowlist entries match the executable realpath. If ${pattern} is a symlink on the target host, add its realpath instead.`,
+        );
+      }
+      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === pattern)) {
         defaultRuntime.log("Already allowlisted.");
         return false;
       }
-      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      allowlistEntries.push({ pattern, lastUsedAt: Date.now() });
       agent.allowlist = allowlistEntries;
       file.agents = { ...file.agents, [agentKey]: agent };
       return true;
@@ -606,10 +626,19 @@ export function registerExecApprovalsCli(program: Command) {
     allowlist,
     name: "remove",
     description: "Remove a glob pattern from an allowlist",
-    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-      const nextEntries = allowlistEntries.filter(
+    mutate: ({ trimmedPattern, source, file, agent, agentKey, allowlistEntries }) => {
+      // Prefer the exact typed pattern; fall back to its current realpath so a
+      // symlink path still removes the stored realpath entry. Skips the
+      // filesystem call entirely when the typed pattern matches directly.
+      let nextEntries = allowlistEntries.filter(
         (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
       );
+      if (nextEntries.length === allowlistEntries.length) {
+        const normalized = resolveAllowlistMutationPattern({ trimmedPattern, source });
+        nextEntries = allowlistEntries.filter(
+          (entry) => normalizeAllowlistEntry(entry) !== normalized.pattern,
+        );
+      }
       if (nextEntries.length === allowlistEntries.length) {
         defaultRuntime.log("Pattern not found.");
         return false;

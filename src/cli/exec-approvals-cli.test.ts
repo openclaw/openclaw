@@ -1,4 +1,7 @@
 // Exec approvals CLI tests cover approval command registration and output handling.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -560,6 +563,81 @@ describe("exec approvals CLI", () => {
       agents: undefined,
     });
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "stores the executable realpath when allowlisting a symlink path",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approvals-cli-"));
+      try {
+        const realBinary = path.join(tempDir, "cellar-rg");
+        fs.writeFileSync(realBinary, "#!/bin/sh\n", { mode: 0o755 });
+        const symlinkPath = path.join(tempDir, "rg");
+        fs.symlinkSync(realBinary, symlinkPath);
+        const realPath = fs.realpathSync(realBinary);
+
+        const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+        saveExecApprovals.mockClear();
+
+        await runApprovalsCommand(["approvals", "allowlist", "add", symlinkPath]);
+
+        const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
+        const agent = requireRecord(requireRecord(saved.agents, "agents")["*"], "wildcard agent");
+        const allowlist = requireArray(agent.allowlist, "allowlist");
+        expectFields(allowlist[0], "allowlist entry", { pattern: realPath });
+        expect(
+          defaultRuntime.log.mock.calls.some((call) =>
+            String(call[0]).includes(`storing the realpath`),
+          ),
+        ).toBe(true);
+
+        // Removing by the symlink path the operator typed removes the realpath entry.
+        localSnapshot.file = {
+          version: 1,
+          agents: { "*": { allowlist: [{ pattern: realPath, lastUsedAt: Date.now() }] } },
+        };
+        saveExecApprovals.mockClear();
+        await runApprovalsCommand(["approvals", "allowlist", "remove", symlinkPath]);
+        const savedAfterRemove = requireRecord(
+          firstMockArg(saveExecApprovals),
+          "saved approvals after remove",
+        );
+        expectFields(savedAfterRemove, "saved approvals after remove", {
+          version: 1,
+          agents: undefined,
+        });
+        expect(runtimeErrors).toHaveLength(0);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps node-target allowlist patterns unresolved and prints a realpath hint", async () => {
+    await runApprovalsCommand([
+      "approvals",
+      "allowlist",
+      "add",
+      "--node",
+      "macbook",
+      "/opt/homebrew/bin/rg",
+    ]);
+
+    const setCall = callGatewayFromCli.mock.calls.find(
+      (call) => call[0] === "exec.approvals.node.set",
+    );
+    if (!setCall) {
+      throw new Error("Expected exec.approvals.node.set call");
+    }
+    const file = requireRecord(requireRecord(setCall[2], "set params").file, "approvals file");
+    const agent = requireRecord(requireRecord(file.agents, "agents")["*"], "wildcard agent");
+    const allowlist = requireArray(agent.allowlist, "allowlist");
+    expectFields(allowlist[0], "allowlist entry", { pattern: "/opt/homebrew/bin/rg" });
+    expect(
+      defaultRuntime.log.mock.calls.some((call) =>
+        String(call[0]).includes("match the executable realpath"),
+      ),
+    ).toBe(true);
   });
 
   it("bounds approvals JSON read from stdin", async () => {

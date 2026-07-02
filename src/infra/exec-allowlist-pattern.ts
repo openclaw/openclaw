@@ -89,6 +89,48 @@ function compileGlobRegex(pattern: string): RegExp {
   return compiled;
 }
 
+/** Add-time normalization outcome for an operator-supplied allowlist pattern. */
+export type ExecAllowlistAddPatternNormalization =
+  | { kind: "unchanged"; pattern: string }
+  | { kind: "resolved-symlink"; pattern: string }
+  | { kind: "unverified-path"; pattern: string };
+
+function isLiteralPathAllowlistPattern(pattern: string): boolean {
+  const isPathShaped = pattern.includes("/") || pattern.includes("\\") || pattern.startsWith("~");
+  // Globs are operator-authored match structure; only literal paths resolve.
+  return Boolean(pattern) && isPathShaped && !/[*?]/.test(pattern);
+}
+
+/**
+ * Normalizes a literal path pattern to the executable realpath before storing.
+ * Path-shaped entries match only the resolved realpath (symlink retargeting
+ * must not keep approvals), so storing a symlink path (e.g. /opt/homebrew/bin/rg)
+ * would create an entry that never matches. Pass `resolveLocalRealpath: false`
+ * when the entry targets another host's filesystem; literal paths then report
+ * "unverified-path" so callers hint instead of translating against the wrong disk.
+ */
+export function normalizeExecAllowlistPatternForAdd(
+  rawPattern: string,
+  opts?: { resolveLocalRealpath?: boolean },
+): ExecAllowlistAddPatternNormalization {
+  const trimmed = rawPattern.trim();
+  if (!isLiteralPathAllowlistPattern(trimmed)) {
+    return { kind: "unchanged", pattern: trimmed };
+  }
+  if (opts?.resolveLocalRealpath === false) {
+    return { kind: "unverified-path", pattern: trimmed };
+  }
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
+  const realPath = tryRealpath(expanded);
+  if (!realPath) {
+    return { kind: "unverified-path", pattern: trimmed };
+  }
+  if (normalizeMatchTarget(realPath) === normalizeMatchTarget(expanded)) {
+    return { kind: "unchanged", pattern: trimmed };
+  }
+  return { kind: "resolved-symlink", pattern: realPath };
+}
+
 export function matchesExecAllowlistPattern(pattern: string, target: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {
