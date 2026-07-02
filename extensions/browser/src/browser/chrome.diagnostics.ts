@@ -4,6 +4,7 @@
  * Probes /json/version and WebSocket health, redacts sensitive endpoint data,
  * and formats status output for browser doctor/status flows.
  */
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -110,7 +111,10 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      const data = await readProviderJsonResponse<ChromeVersion>(
+        response,
+        "chrome.diagnostics.version",
+      );
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }
