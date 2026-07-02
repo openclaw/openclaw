@@ -161,6 +161,21 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
       allowedOrigins: ["https://api.example.com"],
     });
   });
+
+  // #81963: plugin-provider baseUrl trust is origin-scoped, not path-scoped.
+  // URL.origin intentionally drops path/query, strips userinfo, and elides
+  // default ports so equivalent configured baseUrls trust the same request
+  // origin without promoting sibling origins.
+  it.each([
+    ["https://api.example.com/v1/", "https://api.example.com"],
+    ["https://api.example.com:443/v1", "https://api.example.com"],
+    ["http://api.example.com:80/v1", "http://api.example.com"],
+    ["https://token@example.com/v1", "https://example.com"],
+  ])("normalizes plugin provider baseUrl origin %s", (baseUrl, origin) => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)).toEqual({
+      allowedOrigins: [origin],
+    });
+  });
 });
 
 describe("resolveSsrFPolicyForUrl", () => {
@@ -243,6 +258,29 @@ describe("resolveSsrFPolicyForUrl", () => {
     ).toEqual({
       allowedOrigins: ["http://[fd00::1]:11434"],
     });
+  });
+
+  it("keeps concurrent private-origin trust isolated per configured baseUrl", async () => {
+    const agentA = { allowedOrigins: ["http://10.0.0.5:11434"] };
+    const agentB = { allowedOrigins: ["http://10.0.0.5:11435"] };
+
+    const [aPolicy, bPolicy, aAgainstBPort] = await Promise.all([
+      Promise.resolve(resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:11434/v1/chat"), agentA)),
+      Promise.resolve(resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:11435/v1/chat"), agentB)),
+      Promise.resolve(resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:11435/v1/chat"), agentA)),
+    ]);
+
+    expect(aPolicy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:11434"],
+      allowedHostnames: ["10.0.0.5"],
+    });
+    expect(bPolicy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:11435"],
+      allowedHostnames: ["10.0.0.5"],
+    });
+    expect(aAgainstBPort).toEqual({ allowedOrigins: ["http://10.0.0.5:11434"] });
+    expect(agentA).toEqual({ allowedOrigins: ["http://10.0.0.5:11434"] });
+    expect(agentB).toEqual({ allowedOrigins: ["http://10.0.0.5:11435"] });
   });
 });
 
