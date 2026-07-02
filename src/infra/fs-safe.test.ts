@@ -19,12 +19,34 @@ import {
 } from "./fs-safe.js";
 
 const tempDirs = createTrackedTempDirs();
+let hardlinkSupport: Promise<boolean> | undefined;
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
+
+async function canCreateHardlinks(): Promise<boolean> {
+  hardlinkSupport ??= (async () => {
+    let probeDir: string | undefined;
+    try {
+      probeDir = await tempDirs.make("openclaw-fs-hardlink-probe-");
+      const targetFile = path.join(probeDir, "target.txt");
+      const linkFile = path.join(probeDir, "link.txt");
+      await fs.writeFile(targetFile, "target", "utf8");
+      await fs.link(targetFile, linkFile);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (probeDir !== undefined) {
+        await fs.rm(probeDir, { recursive: true, force: true });
+      }
+    }
+  })();
+  return await hardlinkSupport;
+}
 
 async function expectRejectCode(promise: Promise<unknown>, expected: string | RegExp) {
   const err = await promise.catch((caught: unknown) => caught);
@@ -348,7 +370,10 @@ describe("fs-safe", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
+  it("blocks hardlink aliases under root", async () => {
+    if (!(await canCreateHardlinks())) {
+      return;
+    }
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const hardlinkPath = path.join(root, "link.txt");
     await withOutsideHardlinkAlias({
@@ -475,7 +500,10 @@ describe("fs-safe", () => {
     await expectRejectCode((await openRoot(root)).write("../escape.txt", "x"), "outside-workspace");
   });
 
-  it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
+  it("rejects writing through hardlink aliases", async () => {
+    if (!(await canCreateHardlinks())) {
+      return;
+    }
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const hardlinkPath = path.join(root, "alias.txt");
     await withOutsideHardlinkAlias({
@@ -487,7 +515,10 @@ describe("fs-safe", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("rejects appending through hardlink aliases", async () => {
+  it("rejects appending through hardlink aliases", async () => {
+    if (!(await canCreateHardlinks())) {
+      return;
+    }
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const hardlinkPath = path.join(root, "alias.txt");
     await withOutsideHardlinkAlias({
