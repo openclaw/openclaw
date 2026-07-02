@@ -41,6 +41,23 @@ describe("scripts/pr wrappers", () => {
     expect(script).not.toContain("Merged via rebase.");
   });
 
+  it("does not report failed PR worktree cleanup as removed", () => {
+    const common = readScript("scripts/pr-lib/common.sh");
+    const worktree = readScript("scripts/pr-lib/worktree.sh");
+    const merge = readScript("scripts/pr-lib/merge.sh");
+
+    expect(common).toContain("normalized_path=");
+    expect(common).toContain("git rev-parse --path-format=absolute --show-toplevel");
+    expect(common).toContain('normalized_path="$root/${path#./}"');
+    expect(common).toContain("$2 == target || $2 == normalized");
+    expect(common).toContain('if ! git worktree remove "$path" --force');
+    expect(common).toContain('echo "Warning: failed to remove registered worktree $path"');
+    expect(common).toContain("return 1");
+    expect(worktree).toContain('if remove_worktree_if_present "$dir"; then');
+    expect(worktree).toContain('echo "skipped $dir (PR #$pr state=$state; removal failed)"');
+    expect(merge).toContain('remove_worktree_if_present ".worktrees/pr-$pr" || true');
+  });
+
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
     const script = readScript("scripts/pr-prepare");
 

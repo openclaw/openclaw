@@ -198,9 +198,22 @@ worktree_path_for_branch() {
 
 worktree_is_registered() {
   local path="$1"
-  git worktree list --porcelain | awk -v target="$path" '
+  local normalized_path="$path"
+  case "$path" in
+    /*|[A-Za-z]:/*)
+      ;;
+    *)
+      local root
+      root=$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)
+      if [ -n "$root" ]; then
+        normalized_path="$root/${path#./}"
+      fi
+      ;;
+  esac
+
+  git worktree list --porcelain | awk -v target="$path" -v normalized="$normalized_path" '
     /^worktree / {
-      if ($2 == target) {
+      if ($2 == target || $2 == normalized) {
         found=1
       }
     }
@@ -255,7 +268,10 @@ remove_worktree_if_present() {
   fi
 
   if worktree_is_registered "$path"; then
-    git worktree remove "$path" --force >/dev/null 2>&1 || true
+    if ! git worktree remove "$path" --force >/dev/null 2>&1; then
+      echo "Warning: failed to remove registered worktree $path"
+      return 1
+    fi
   fi
 
   if [ ! -e "$path" ]; then
@@ -264,24 +280,24 @@ remove_worktree_if_present() {
 
   if worktree_is_registered "$path"; then
     echo "Warning: failed to remove registered worktree $path"
-    return 0
+    return 1
   fi
 
   if ! is_repo_pr_worktree_dir "$path"; then
     echo "Warning: refusing to trash non-PR-worktree path $path"
-    return 0
+    return 1
   fi
 
   if command -v trash >/dev/null 2>&1; then
     trash "$path" >/dev/null 2>&1 || {
       echo "Warning: failed to trash orphaned worktree dir $path"
-      return 0
+      return 1
     }
     return 0
   fi
 
   echo "Warning: orphaned worktree dir remains and trash is unavailable: $path"
-  return 0
+  return 1
 }
 
 delete_local_branch_if_safe() {

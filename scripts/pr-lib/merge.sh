@@ -313,7 +313,7 @@ merge_run() {
   root=$(repo_root)
   cd "$root"
   delete_remote_pr_head_branch_after_merge
-  remove_worktree_if_present ".worktrees/pr-$pr"
+  remove_worktree_if_present ".worktrees/pr-$pr" || true
   delete_local_branch_if_safe "temp/pr-$pr"
   delete_local_branch_if_safe "pr-$pr"
   delete_local_branch_if_safe "pr-$pr-prep"

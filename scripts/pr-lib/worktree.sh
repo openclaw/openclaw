@@ -145,11 +145,15 @@ gc_pr_worktrees() {
         if [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
         else
-          remove_worktree_if_present "$dir"
-          delete_local_branch_if_safe "temp/pr-$pr"
-          delete_local_branch_if_safe "pr-$pr"
-          delete_local_branch_if_safe "pr-$pr-prep"
-          echo "removed $dir (PR #$pr state=$state)"
+          if remove_worktree_if_present "$dir"; then
+            delete_local_branch_if_safe "temp/pr-$pr"
+            delete_local_branch_if_safe "pr-$pr"
+            delete_local_branch_if_safe "pr-$pr-prep"
+            echo "removed $dir (PR #$pr state=$state)"
+          else
+            echo "skipped $dir (PR #$pr state=$state; removal failed)"
+            continue
+          fi
         fi
         removed=$((removed + 1))
         ;;
