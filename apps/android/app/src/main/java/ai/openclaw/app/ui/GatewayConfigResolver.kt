@@ -162,12 +162,9 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   if (!tls && !isLocalCleartextGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
-  if (uri.port != -1 && uri.port !in 1..65535) {
-    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  }
   val defaultPort = if (tls) 443 else 18789
   val displayPort = if (tls) 443 else 80
-  val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
+  val port = gatewayPort(uri.port, defaultPort) ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
     if (port == displayPort && defaultPort == displayPort) {
@@ -245,6 +242,13 @@ internal fun gatewayEndpointValidationMessage(
         GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
         GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
       }
+  }
+
+private fun gatewayPort(port: Int, defaultPort: Int): Int? =
+  when {
+    port == -1 -> defaultPort
+    port in 1..65535 -> port
+    else -> null
   }
 
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
