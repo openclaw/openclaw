@@ -109,6 +109,7 @@ import {
   testing as runtimeRegistryLoaderTesting,
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
+import type { RuntimePluginLoadProgress } from "./runtime/load-diagnostics.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
@@ -1099,6 +1100,51 @@ describe("loadOpenClawPlugins", () => {
     expect(metrics.registerMs).toEqual(expect.any(Number));
     expect(metrics.registerFailedCount).toBe(0);
     expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
+  it("reports runtime plugin load progress with attempted, in-flight, and completed plugin ids", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "progress-a",
+      filename: "progress-a.cjs",
+      body: `module.exports = { id: "progress-a", register() {} };`,
+    });
+    const second = writePlugin({
+      id: "progress-b",
+      filename: "progress-b.cjs",
+      body: `module.exports = { id: "progress-b", register() {} };`,
+    });
+    const progress: RuntimePluginLoadProgress[] = [];
+
+    loadRegistryFromAllowedPlugins([first, second], {
+      runtimePluginLoadProgress: (event: RuntimePluginLoadProgress) => {
+        progress.push(event);
+      },
+    });
+
+    expect(progress[0]?.pluginIds).toEqual(["progress-a", "progress-b"]);
+    expect(progress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          inFlightPluginId: "progress-a",
+          inFlightPhase: "load",
+        }),
+        expect.objectContaining({
+          inFlightPluginId: "progress-a",
+          inFlightPhase: "register",
+        }),
+        expect.objectContaining({
+          completedPluginIds: ["progress-a"],
+          inFlightPluginId: "progress-b",
+          inFlightPhase: "load",
+        }),
+      ]),
+    );
+    expect(progress.at(-1)).toMatchObject({
+      pluginIds: ["progress-a", "progress-b"],
+      completedPluginIds: ["progress-a", "progress-b"],
+    });
+    expect(progress.at(-1)?.inFlightPluginId).toBeUndefined();
   });
 
   it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
