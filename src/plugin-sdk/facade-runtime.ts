@@ -264,7 +264,6 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 }
 
 /** Async variant of tryLoadActivatedBundledPluginPublicSurfaceModuleSync for async call sites. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
