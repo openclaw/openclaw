@@ -1106,6 +1106,30 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("accepts opt-in cron.billingGuard config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        billingGuard: {
+          enabled: true,
+          probeBackoffMs: [1800000, 3600000, 7200000],
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid cron.billingGuard probe backoff config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        billingGuard: {
+          enabled: true,
+          probeBackoffMs: [0],
+        },
+      },
+    });
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("broadcast", () => {
