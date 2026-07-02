@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 
@@ -201,8 +202,9 @@ describe("message action media helpers", () => {
   maybeIt(
     "normalizes OpenShell /sandbox media params using configured containerWorkdir",
     async () => {
-      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-openshell-"));
+      const tempDirs: string[] = [];
       try {
+        const sandboxRoot = makeTempDir(tempDirs, "msg-params-openshell-");
         const args: Record<string, unknown> = {
           mediaUrl: " file:///sandbox/output/photo.png ",
           fileUrl: "/sandbox/output/report.pdf",
@@ -220,7 +222,7 @@ describe("message action media helpers", () => {
         expect(args.mediaUrl).toBe(path.join(sandboxRoot, "output", "photo.png"));
         expect(args.fileUrl).toBe(path.join(sandboxRoot, "output", "report.pdf"));
       } finally {
-        await fs.rm(sandboxRoot, { recursive: true, force: true });
+        cleanupTempDirs(tempDirs);
       }
     },
   );
