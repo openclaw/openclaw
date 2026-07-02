@@ -293,7 +293,8 @@ public struct OpenClawChatView: View {
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars)
+                showsAssistantAvatar: self.showsAssistantAvatars,
+                isClean: self.composerChrome == .clean)
                 .frame(
                     maxWidth: .infinity,
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
@@ -305,12 +306,15 @@ public struct OpenClawChatView: View {
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars)
+                showsAssistantAvatar: self.showsAssistantAvatars,
+                isClean: self.composerChrome == .clean)
                 .equatable()
         }
 
         if !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
+            ChatPendingToolsBubble(
+                toolCalls: self.viewModel.pendingToolCalls,
+                isClean: self.composerChrome == .clean)
                 .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -325,7 +329,8 @@ public struct OpenClawChatView: View {
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars)
+                showsAssistantAvatar: self.showsAssistantAvatars,
+                isClean: self.composerChrome == .clean)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -446,7 +451,14 @@ public struct OpenClawChatView: View {
     }
 
     private var visibleEmptyAssistantIntro: String? {
-        guard self.composerChrome == .clean, self.showsEmptyState else { return nil }
+        guard self.composerChrome == .clean,
+              self.showsEmptyState,
+              !self.viewModel.isLoading,
+              self.activeErrorText == nil,
+              self.isComposerEnabled
+        else {
+            return nil
+        }
         guard let text = self.emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty
         else {
@@ -648,22 +660,21 @@ private struct ChatAssistantIntroCard: View {
     let text: String
 
     var body: some View {
-        Text(self.text)
-            .font(.body)
-            .lineSpacing(4)
-            .foregroundStyle(OpenClawChatTheme.assistantText)
-            .multilineTextAlignment(.leading)
-            .padding(.vertical, 12)
-            .padding(.horizontal, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(OpenClawChatTheme.assistantBubble)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
-            .frame(maxWidth: 280, alignment: .leading)
-            .padding(.top, 4)
-            .padding(.leading, 10)
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(OpenClawChatTheme.accent)
+                .accessibilityHidden(true)
+
+            Text(self.text)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .multilineTextAlignment(.leading)
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, 4)
+        .frame(maxWidth: 320, alignment: .leading)
+        .padding(.top, 8)
     }
 }
 
