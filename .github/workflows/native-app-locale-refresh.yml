@@ -71,25 +71,81 @@ jobs:
 
       - name: Ensure translation provider secrets exist
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+          if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
             exit 1
           fi
 
       - name: Refresh native locale artifact
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCLAW_CONTROL_UI_I18N_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || 'openai' }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-8' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.5' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
           LOCALE: ${{ matrix.locale }}
-        run: node --import tsx scripts/native-app-i18n.ts sync --write --locale "${LOCALE}"
+        run: |
+          set -euo pipefail
+
+          run_refresh() {
+            local provider="$1"
+            local model="$2"
+            local openai_api_key="${3-}"
+            if [ "$provider" = "openai" ]; then
+              OPENAI_API_KEY="$openai_api_key" \
+                OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+                OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+                node --import tsx scripts/native-app-i18n.ts sync --write --locale "${LOCALE}"
+              return
+            fi
+            OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+              OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+              node --import tsx scripts/native-app-i18n.ts sync --write --locale "${LOCALE}"
+          }
+
+          run_openai_refresh() {
+            local status=1
+            if [ -n "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ]; then
+              set +e
+              run_refresh openai "${OPENAI_MODEL}" "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}"
+              status="$?"
+              set -e
+              if [ "$status" -eq 0 ]; then
+                return 0
+              fi
+              if [ -z "${OPENAI_API_KEY:-}" ] || [ "${OPENAI_API_KEY}" = "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}" ]; then
+                return "$status"
+              fi
+              echo "::warning::Docs OpenAI native locale refresh key failed for ${LOCALE}; retrying with repository OpenAI key."
+            fi
+            if [ -z "${OPENAI_API_KEY:-}" ]; then
+              return "$status"
+            fi
+            run_refresh openai "${OPENAI_MODEL}" "${OPENAI_API_KEY}"
+          }
+
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            set +e
+            run_refresh anthropic "${ANTHROPIC_MODEL}"
+            status="$?"
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+              exit "$status"
+            fi
+            echo "::warning::Anthropic native locale refresh failed for ${LOCALE}; retrying with OpenAI."
+          fi
+
+          run_openai_refresh
 
       - name: Commit and push locale artifact
         env:

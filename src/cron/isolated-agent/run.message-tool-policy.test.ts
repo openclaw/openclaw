@@ -996,12 +996,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
-  it("releases preexisting run context after detached current-session completion", async () => {
+  it("keeps shared cron run context references active after completion", async () => {
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": { retained: true } },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    const { getAgentRunContext, registerAgentRunContext } =
+    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
       await import("../../infra/agent-events.js");
     registerAgentRunContext("test-session-id", {
       sessionKey: "agent:default:cron:message-tool-policy",
@@ -1015,8 +1015,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: currentSessionJob as never,
     });
 
-    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+    expect(getAgentRunContext("test-session-id")).toMatchObject({
+      sessionKey: "agent:default:cron:message-tool-policy",
+    });
     expect(cronSession.store).toBeUndefined();
+    clearAgentRunContext("test-session-id");
   });
 
   it("releases a shared cron run context created by this invocation", async () => {

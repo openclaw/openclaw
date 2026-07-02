@@ -868,6 +868,18 @@ function resolveAutoEnableChannelId(params: {
   if (params.entry.kind === "configured-plugin-repaired") {
     return null;
   }
+  const plugin = params.manifestRegistry.plugins.find(
+    (record) => record.id === params.entry.pluginId,
+  );
+  if (plugin && plugin.origin !== "bundled") {
+    if (params.entry.kind !== "channel-configured") {
+      return null;
+    }
+    const channelId = normalizeManifestChannelId(params.entry.channelId);
+    if ((plugin.channels ?? []).some((id) => normalizeManifestChannelId(id) === channelId)) {
+      return null;
+    }
+  }
   const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
   if (builtInChannelId) {
     return builtInChannelId;
@@ -875,9 +887,6 @@ function resolveAutoEnableChannelId(params: {
   if (params.entry.kind !== "channel-configured") {
     return null;
   }
-  const plugin = params.manifestRegistry.plugins.find(
-    (record) => record.id === params.entry.pluginId,
-  );
   if (plugin?.origin !== "bundled") {
     return null;
   }

@@ -123,7 +123,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(requests[0]?.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
   });
 
-  it("uses a run-scoped execution key for explicit session-bound cron", async () => {
+  it("keeps explicit session-bound cron execution on the requested session key", async () => {
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: {
@@ -144,14 +144,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     );
 
     expect(result.status).toBe("ok");
-    expect(result.sessionKey).toBe("agent:default:cron:test-job:run:bound-run-1");
-    const sessionRequest = requireFirstMockArg(
-      resolveCronSessionMock,
-      "resolveCronSessionMock",
-    ) as { forceNew?: boolean; sessionKey?: string; sourceSessionKey?: string };
-    expect(sessionRequest.forceNew).toBe(true);
-    expect(sessionRequest.sessionKey).toBe("agent:default:cron:test-job");
-    expect(sessionRequest.sourceSessionKey).toBe("agent:default:project-alpha-monitor");
+    expect(result.sessionKey).toBe("agent:default:project-alpha-monitor");
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     const runRequest = requireFirstMockArg(runEmbeddedAgentMock, "runEmbeddedAgentMock") as {
       sessionId?: string;
@@ -161,9 +154,8 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("bound-run-1");
-    expect(runRequest.sessionKey).toBe("agent:default:cron:test-job:run:bound-run-1");
-    expect(runRequest.sessionKey).not.toBe("agent:default:project-alpha-monitor");
-    expect(runRequest.promptCacheKey).toMatch(/^openclaw-cron-[a-f0-9]{32}$/u);
+    expect(runRequest.sessionKey).toBe("agent:default:project-alpha-monitor");
+    expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBeUndefined();
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });

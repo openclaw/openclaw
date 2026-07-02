@@ -177,13 +177,13 @@ struct CommandCenterTab: View {
                         icon: "server.rack",
                         title: "Address",
                         value: self.gatewayAddressText,
-                        color: OpenClawBrand.accent)
+                        color: OpenClawBrand.accentForeground)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "person.2.fill",
                         title: "Agents",
                         value: self.gatewayAgentCountText,
-                        color: OpenClawBrand.accentHot)
+                        color: OpenClawBrand.accentHotForeground)
                 }
                 .padding(.vertical, 7)
             }

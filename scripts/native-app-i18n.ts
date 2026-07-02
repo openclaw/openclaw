@@ -176,6 +176,9 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   BUILD_SETTING_RE.lastIndex = 0;
+  if (hasQuotedConditionalSwiftInterpolation(source)) {
+    return false;
+  }
   const isDirectUiText = kind.startsWith("ui-") || kind.startsWith("resource-");
   if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
     return false;
@@ -187,6 +190,18 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   return kind !== "plist-string" || /\s/u.test(source);
+}
+
+function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
+  return (
+    extractSwiftInterpolations(source)?.some(
+      (interpolation) =>
+        /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/u.test(interpolation) ||
+        /\bif\b[\s\S]*"((?:\\.|[^"\\])*)"[\s\S]*\belse\b[\s\S]*"((?:\\.|[^"\\])*)"/u.test(
+          interpolation,
+        ),
+    ) ?? false
+  );
 }
 
 function extractSwiftInterpolations(source: string): string[] | null {

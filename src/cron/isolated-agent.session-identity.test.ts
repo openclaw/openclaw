@@ -153,13 +153,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("persists rotated transcript identity for current-bound cron runs under the cron key", async () => {
+  it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const boundSessionKey = "agent:main:telegram:direct:42";
       const originalSessionFile = path.join(home, "bound-session.jsonl");
       const rotatedSessionFile = path.join(home, "bound-session-rotated.jsonl");
-      await fs.writeFile(rotatedSessionFile, "", "utf-8");
       const storePath = await writeSessionStoreEntries(home, {
         [boundSessionKey]: {
           sessionId: "bound-session",
@@ -197,7 +196,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
         { sessionContext: { sessionKey: boundSessionKey } },
       ) as CronJob;
-      const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
@@ -218,25 +216,19 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       expect(finalPersist?.[0]).toBe(storePath);
       const persistedStore: Record<string, { [key: string]: unknown }> = {};
       (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
-      expect(persistedStore[executionSessionKey]).toEqual(
+      expect(persistedStore[boundSessionKey]).toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
           sessionFile: rotatedSessionFile,
-          usageFamilyKey: executionSessionKey,
-          usageFamilySessionIds: expect.arrayContaining(["bound-session-rotated"]),
+          usageFamilyKey: boundSessionKey,
+          usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
         }),
       );
 
-      await expect(readSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
+      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
           sessionFile: rotatedSessionFile,
-        }),
-      );
-      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
-        expect.objectContaining({
-          sessionId: "bound-session",
-          sessionFile: originalSessionFile,
         }),
       );
     });

@@ -25,7 +25,7 @@ struct TalkRuntimeIssueBanner: View {
     }
 
     private var tint: Color {
-        .orange
+        OpenClawBrand.warn
     }
 }
 

@@ -55,12 +55,12 @@ struct IPadActivityScreen: View {
                 icon: "person.2.fill",
                 title: "Agents",
                 value: self.gatewayConnected ? "\(self.appModel.gatewayAgents.count)" : "offline",
-                color: OpenClawBrand.accent),
+                color: OpenClawBrand.accentForeground),
             ProMetric(
                 icon: "bubble.left.and.text.bubble.right",
                 title: "Sessions",
                 value: self.isLoading ? "..." : "\(self.sessionRows.count)",
-                color: OpenClawBrand.accentHot),
+                color: OpenClawBrand.accentHotForeground),
         ]
     }
 
@@ -103,7 +103,7 @@ struct IPadActivityScreen: View {
                     title: "Share intake",
                     detail: self.appModel.lastShareEventText,
                     value: "iPad",
-                    color: OpenClawBrand.accent,
+                    color: OpenClawBrand.accentForeground,
                     actionTitle: nil,
                     action: nil)
 
@@ -114,7 +114,7 @@ struct IPadActivityScreen: View {
                         title: "Loading sessions",
                         detail: "Fetching recent activity from the gateway.",
                         value: "loading",
-                        color: OpenClawBrand.accent,
+                        color: OpenClawBrand.accentForeground,
                         actionTitle: nil,
                         action: nil)
                 } else if let loadErrorText {

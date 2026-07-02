@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
+const { buildTelegramGroupHistorySelfSender } = await import("./group-history-window.js");
 
 describe("buildTelegramMessageContext requireMention precedence", () => {
   function buildForumMessage(threadId = 99) {
@@ -109,7 +110,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   it("keeps room events as context for the next direct group request", async () => {
     const groupHistories = new Map();
     const cfg = {
-      channels: { telegram: { includeGroupHistoryContext: "recent" } },
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
     };
     await buildTelegramMessageContextForTest({
@@ -152,7 +152,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     expect(ctx?.ctxPayload.Body).toContain("side chatter");
   });
 
-  it("omits pending group room events from default body context", async () => {
+  it("keeps room events as context with default group history mode", async () => {
     const groupHistories = new Map();
     const cfg = {
       messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
@@ -194,8 +194,161 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
-    expect(ctx?.ctxPayload.InboundHistory).toBeUndefined();
+    expect(ctx?.ctxPayload.Body).toContain("side chatter");
+    expect(ctx?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "side chatter" }),
+    ]);
+  });
+
+  it("passes prior silent room events to the next default ambient turn", async () => {
+    const groupHistories = new Map();
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+    };
+    await buildTelegramMessageContextForTest({
+      cfg,
+      message: { ...buildForumMessage(99), text: "Tell Sam deploy moved" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      message: { ...buildForumMessage(99), message_id: 2, text: "What changed?" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(ctx?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "Tell Sam deploy moved" }),
+    ]);
+  });
+
+  it("passes user requests to later default ambient turns", async () => {
+    const groupHistories = new Map();
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+    };
+    await buildTelegramMessageContextForTest({
+      cfg,
+      message: {
+        ...buildForumMessage(99),
+        text: "@bot note the deploy moved",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      message: { ...buildForumMessage(99), message_id: 2, text: "What now?" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(ctx?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "@bot note the deploy moved" }),
+    ]);
+  });
+
+  it("uses outbound self entries as the non-destructive user-request watermark", async () => {
+    const historyKey = "-1001234567890:topic:99";
+    const groupHistories = new Map([
+      [
+        historyKey,
+        [
+          { sender: "Alice", body: "before self marker", timestamp: 1, messageId: "1" },
+          {
+            sender: buildTelegramGroupHistorySelfSender("OpenClaw"),
+            body: "self marker body",
+            timestamp: 2,
+            messageId: "2",
+          },
+          { sender: "Riley", body: "after watermark", timestamp: 3, messageId: "3" },
+        ],
+      ],
+    ]);
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+    };
+
+    const userRequest = await buildTelegramMessageContextForTest({
+      cfg,
+      message: {
+        ...buildForumMessage(99),
+        message_id: 4,
+        text: "@bot answer after watermark",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(userRequest?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(userRequest?.ctxPayload.Body).toContain("after watermark");
+    expect(userRequest?.ctxPayload.Body).not.toContain("before self marker");
+    expect(userRequest?.ctxPayload.Body).not.toContain("self marker body");
+    expect(userRequest?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "after watermark" }),
+    ]);
+
+    const roomEvent = await buildTelegramMessageContextForTest({
+      cfg,
+      message: { ...buildForumMessage(99), message_id: 5, text: "ambient after watermark" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(roomEvent?.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(roomEvent?.ctxPayload.Body).toContain("before self marker");
+    expect(roomEvent?.ctxPayload.Body).toContain("self marker body");
+    expect(roomEvent?.ctxPayload.Body).toContain("after watermark");
+    expect(roomEvent?.ctxPayload.InboundHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ body: "before self marker" }),
+        expect.objectContaining({ body: "self marker body", sender: "OpenClaw (you)" }),
+        expect.objectContaining({ body: "after watermark" }),
+      ]),
+    );
   });
 
   it("lets explicit topic requireMention=false override mention activation", async () => {
