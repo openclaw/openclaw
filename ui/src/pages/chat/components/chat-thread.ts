@@ -145,6 +145,7 @@ function getPinnedMessageSummary(message: unknown): string {
 }
 
 export function resetChatThreadPresentationState() {
+  removeReplyContextMenu();
   if (threadState.historyRenderExpansionFrame != null) {
     cancelAnimationFrame(threadState.historyRenderExpansionFrame);
   }
