@@ -387,7 +387,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
           }
           stdout += "\n[output truncated]";
           outputTruncated = true;
-          onAbort();
           return;
         }
         totalStdoutBytes += chunkBytes;
@@ -412,7 +411,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
           }
           stderr += "\n[output truncated]";
           outputTruncated = true;
-          onAbort();
           return;
         }
         totalStderrBytes += chunkBytes;
