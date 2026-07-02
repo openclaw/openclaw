@@ -9,6 +9,8 @@ export {
 export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
+  filterMessagingToolMetaCommentary,
+  isPostToolSendMetaCommentary,
   resolveMessagingToolPayloadDedupe,
   shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads-dedupe.js";
