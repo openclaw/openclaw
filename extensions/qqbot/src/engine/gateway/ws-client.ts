@@ -7,6 +7,7 @@ import WebSocket from "ws";
 // precedent (Discord, Slack, Signal) so a half-open upgrade eventually closes,
 // releases GatewayConnection.isConnecting, and allows reconnects.
 const QQBOT_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
+const QQBOT_GATEWAY_PAYLOAD_LIMIT_BYTES = 1024 * 1024;
 
 interface QQWSClientOptions {
   gatewayUrl: string;
@@ -18,6 +19,7 @@ export async function createQQWSClient(options: QQWSClientOptions): Promise<WebS
   return new WebSocket(options.gatewayUrl, {
     headers: { "User-Agent": options.userAgent },
     handshakeTimeout: QQBOT_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
+    maxPayload: QQBOT_GATEWAY_PAYLOAD_LIMIT_BYTES,
     ...(wsAgent ? { agent: wsAgent } : {}),
   });
 }
