@@ -44,6 +44,26 @@ import kotlin.math.roundToInt
 /**
  * CameraX-backed capture service used by gateway camera commands.
  */
+internal fun cleanupCameraClipSession(
+  recordingStopNeeded: Boolean,
+  stopRecording: () -> Unit,
+  cameraBound: Boolean,
+  unbindCamera: () -> Unit,
+  temporaryFile: File?,
+  callerOwnsFile: Boolean,
+  deleteTemporaryFile: (File) -> Unit,
+) {
+  if (recordingStopNeeded) {
+    runCatching { stopRecording() }
+  }
+  if (cameraBound) {
+    runCatching { unbindCamera() }
+  }
+  if (!callerOwnsFile && temporaryFile != null) {
+    runCatching { deleteTemporaryFile(temporaryFile) }
+  }
+}
+
 class CameraCaptureManager(
   private val context: Context,
 ) {
@@ -247,75 +267,92 @@ class CameraCaptureManager(
       }
 
       provider.unbindAll()
-      android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
-      val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
-      android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
-
-      // Give camera pipeline time to initialize before recording
-      android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
-      kotlinx.coroutines.delay(1_500)
-
-      val file = File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir)
-      val outputOptions = FileOutputOptions.Builder(file).build()
-
-      val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
-      android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${file.absolutePath}")
-      val recording: Recording =
-        videoCapture.output
-          .prepareRecording(context, outputOptions)
-          .apply {
-            if (includeAudio) withAudioEnabled()
-          }.start(context.mainExecutor()) { event ->
-            android.util.Log.w("CameraCaptureManager", "clip: event ${event.javaClass.simpleName}")
-            if (event is VideoRecordEvent.Status) {
-              android.util.Log.w("CameraCaptureManager", "clip: recording status update")
-            }
-            if (event is VideoRecordEvent.Finalize) {
-              android.util.Log.w(
-                "CameraCaptureManager",
-                "clip: finalize hasError=${event.hasError()} error=${event.error} cause=${event.cause}",
-              )
-              finalized.complete(event)
-            }
-          }
-
-      android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
+      var cameraBound = false
+      var recording: Recording? = null
+      var recordingStopRequested = false
+      var file: File? = null
+      var callerOwnsFile = false
       try {
-        kotlinx.coroutines.delay(durationMs.toLong())
-      } finally {
-        android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
-        recording.stop()
-      }
+        android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
+        val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
+        cameraBound = true
+        android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
 
-      val finalizeEvent =
+        // Give camera pipeline time to initialize before recording
+        android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
+        kotlinx.coroutines.delay(1_500)
+
+        val clipFile = File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir)
+        file = clipFile
+        val outputOptions = FileOutputOptions.Builder(clipFile).build()
+
+        val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
+        android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${clipFile.absolutePath}")
+        recording =
+          videoCapture.output
+            .prepareRecording(context, outputOptions)
+            .apply {
+              if (includeAudio) withAudioEnabled()
+            }.start(context.mainExecutor()) { event ->
+              android.util.Log.w("CameraCaptureManager", "clip: event ${event.javaClass.simpleName}")
+              if (event is VideoRecordEvent.Status) {
+                android.util.Log.w("CameraCaptureManager", "clip: recording status update")
+              }
+              if (event is VideoRecordEvent.Finalize) {
+                android.util.Log.w(
+                  "CameraCaptureManager",
+                  "clip: finalize hasError=${event.hasError()} error=${event.error} cause=${event.cause}",
+                )
+                finalized.complete(event)
+              }
+            }
+
+        android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
         try {
-          withTimeout(15_000) { finalized.await() }
-        } catch (err: Throwable) {
-          android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
-          withContext(Dispatchers.IO) { file.delete() }
-          provider.unbindAll()
-          throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
+          kotlinx.coroutines.delay(durationMs.toLong())
+        } finally {
+          android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
+          recording.stop()
+          recordingStopRequested = true
         }
-      if (finalizeEvent.hasError()) {
-        android.util.Log.e(
-          "CameraCaptureManager",
-          "clip: FAILED error=${finalizeEvent.error}, cause=${finalizeEvent.cause}",
-          finalizeEvent.cause,
+
+        val finalizeEvent =
+          try {
+            withTimeout(15_000) { finalized.await() }
+          } catch (err: kotlinx.coroutines.TimeoutCancellationException) {
+            android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
+            withContext(Dispatchers.IO) { clipFile.delete() }
+            throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
+          }
+        if (finalizeEvent.hasError()) {
+          android.util.Log.e(
+            "CameraCaptureManager",
+            "clip: FAILED error=${finalizeEvent.error}, cause=${finalizeEvent.cause}",
+            finalizeEvent.cause,
+          )
+          // Check file size for debugging
+          val fileSize = withContext(Dispatchers.IO) { if (clipFile.exists()) clipFile.length() else -1 }
+          android.util.Log.e("CameraCaptureManager", "clip: file exists=${clipFile.exists()} size=$fileSize")
+          withContext(Dispatchers.IO) { clipFile.delete() }
+          throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
+        }
+
+        val fileSize = withContext(Dispatchers.IO) { clipFile.length() }
+        android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
+
+        callerOwnsFile = true
+        FilePayload(file = clipFile, durationMs = durationMs.toLong(), hasAudio = includeAudio)
+      } finally {
+        cleanupCameraClipSession(
+          recordingStopNeeded = recording != null && !recordingStopRequested,
+          stopRecording = { recording?.stop() },
+          cameraBound = cameraBound,
+          unbindCamera = { provider.unbindAll() },
+          temporaryFile = file,
+          callerOwnsFile = callerOwnsFile,
+          deleteTemporaryFile = { it.delete() },
         )
-        // Check file size for debugging
-        val fileSize = withContext(Dispatchers.IO) { if (file.exists()) file.length() else -1 }
-        android.util.Log.e("CameraCaptureManager", "clip: file exists=${file.exists()} size=$fileSize")
-        withContext(Dispatchers.IO) { file.delete() }
-        provider.unbindAll()
-        throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
       }
-
-      val fileSize = withContext(Dispatchers.IO) { file.length() }
-      android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
-
-      provider.unbindAll()
-
-      FilePayload(file = file, durationMs = durationMs.toLong(), hasAudio = includeAudio)
     }
 
   private fun rotateBitmapByExif(
