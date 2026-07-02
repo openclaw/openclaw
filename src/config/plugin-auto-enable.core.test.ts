@@ -1332,31 +1332,33 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.apn).toBeUndefined();
   });
 
-  it("skips when plugins are globally disabled", () => {
-    expect(
-      detectPluginAutoEnableCandidates({
-        config: {
-          channels: { slack: { botToken: "x" } },
-          plugins: {
-            enabled: false,
-            allow: ["slack"],
-            entries: { slack: { config: { botToken: "x" } } },
-          },
-        },
-        env,
-        manifestRegistry: makeRegistry([{ id: "slack", channels: ["slack"] }]),
-      }),
-    ).toStrictEqual([]);
-
-    const result = applyPluginAutoEnable({
+  it("materializes configured-plugin-repaired as plugins.entries, not channels", () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/98564:
+    // Repaired external plugins whose id matches a built-in channel id (e.g.
+    // "mattermost") must be enabled via plugins.entries.<id>.enabled so that
+    // gateway startup can load the non-bundled plugin.
+    const result = materializePluginAutoEnableCandidates({
       config: {
-        channels: { slack: { botToken: "x" } },
-        plugins: { enabled: false },
+        channels: {
+          mattermost: { baseUrl: "http://mattermost:8065" },
+        },
       },
       env,
+      candidates: [
+        {
+          pluginId: "mattermost",
+          kind: "configured-plugin-repaired",
+        },
+      ],
+      manifestRegistry: makeRegistry([
+        { id: "mattermost", origin: "npm", channels: ["mattermost"] },
+      ]),
     });
 
-    expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
+    expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
+    expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
+    expect(result.changes.join("\n")).toContain(
+      "mattermost installed for existing configuration, enabled automatically.",
+    );
   });
 });

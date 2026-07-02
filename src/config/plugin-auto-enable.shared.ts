@@ -861,6 +861,13 @@ function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
 }): string | null {
+  // Repaired configured plugins are explicit plugin entries, not built-in
+  // channel activations. Their id may coincidentally match a built-in channel
+  // id (e.g. "mattermost"), so we must avoid writing to channels.<id>.enabled
+  // and instead write to plugins.entries.<id>.enabled.
+  if (params.entry.kind === "configured-plugin-repaired") {
+    return null;
+  }
   const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
   if (builtInChannelId) {
     return builtInChannelId;
