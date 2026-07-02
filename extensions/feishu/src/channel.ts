@@ -671,6 +671,21 @@ function shouldVerifyFeishuMessageReadTarget(params: {
   return shouldEnforceFeishuReadTarget(params) || hasDisabledFeishuGroupConfig(params.account);
 }
 
+function shouldVerifyFeishuFetchedReadTarget(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  requestedTarget?: FeishuReadTarget;
+}): boolean {
+  if (shouldVerifyFeishuMessageReadTarget(params)) {
+    return true;
+  }
+  if (params.requestedTarget?.kind !== "direct") {
+    return false;
+  }
+  const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+  return dmPolicy !== "open";
+}
+
 function assertFeishuReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -811,7 +826,13 @@ function assertFeishuFetchedMessageReadTargetAllowed(params: {
   requestedTarget?: FeishuReadTarget;
   message: unknown;
 }) {
-  if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
+  if (
+    !shouldVerifyFeishuFetchedReadTarget({
+      cfg: params.cfg,
+      account: params.account,
+      requestedTarget: params.requestedTarget,
+    })
+  ) {
     return;
   }
   const target = params.requestedTarget;
@@ -863,7 +884,13 @@ async function assertFeishuReactionReadTargetAllowed(params: {
     account: params.account,
     requestedTarget: params.requestedTarget,
   });
-  if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
+  if (
+    !shouldVerifyFeishuFetchedReadTarget({
+      cfg: params.cfg,
+      account: params.account,
+      requestedTarget: params.requestedTarget,
+    })
+  ) {
     return;
   }
   const message = await params.getMessageFeishu({
