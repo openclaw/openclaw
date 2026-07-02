@@ -8,7 +8,6 @@ import {
   normalizeGatewayVersionToPinnedIosVersion,
   normalizePinnedIosVersion,
   renderIosReleaseNotes,
-  renderIosVersionXcconfig,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
 } from "../../scripts/lib/ios-version.ts";
@@ -99,6 +98,35 @@ describe("resolveIosVersion", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("prints derived release notes from the CLI", () => {
+    const rootDir = writeIosFixture({
+      packageVersion: "2026.4.6",
+      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.7\n\nGenerated notes.\n",
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/ios-version.ts",
+        "--root",
+        rootDir,
+        "--version",
+        "2026.4.7",
+        "--field",
+        "releaseNotes",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Generated notes.\n");
+    expect(result.stderr).toBe("");
+  });
+
   it("rejects missing iOS sync CLI root values before reading version files", () => {
     const result = spawnSync(
       process.execPath,
@@ -136,10 +164,8 @@ describe("resolveIosVersion", () => {
       canonicalVersion: "2026.4.6",
       changelogPath: path.join(rootDir, "apps/ios/CHANGELOG.md"),
       marketingVersion: "2026.4.6",
-      releaseNotesPath: path.join(rootDir, "apps/ios/fastlane/metadata/en-US/release_notes.txt"),
       versionSource: "package",
       versionSourcePath: path.join(rootDir, "package.json"),
-      versionXcconfigPath: path.join(rootDir, "apps/ios/Config/Version.xcconfig"),
     });
   });
 
@@ -209,20 +235,6 @@ describe("gateway version normalization", () => {
       packageVersion: "2026.4.7-beta.5",
       pinnedIosVersion: "2026.4.7",
     });
-  });
-});
-
-describe("renderIosVersionXcconfig", () => {
-  it("renders checked-in defaults from the package-derived iOS version", () => {
-    const rootDir = writeIosFixture({
-      packageVersion: "2026.4.8",
-      changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.8\n\nNotes.\n",
-    });
-    const version = resolveIosVersion(rootDir);
-
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_IOS_VERSION = 2026.4.8");
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_MARKETING_VERSION = 2026.4.8");
-    expect(renderIosVersionXcconfig(version)).toContain("OPENCLAW_BUILD_VERSION = 1");
   });
 });
 
