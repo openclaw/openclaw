@@ -201,46 +201,72 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
-  it("maps container paths using custom containerWorkdir into sandbox root", async () => {
+  it.each([
+    {
+      name: "/sandbox absolute path",
+      media: "/sandbox/output/image.png",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "/sandbox/ absolute path with trailing slash",
+      media: "/sandbox/output/image.png",
+      containerWorkdir: "/sandbox/",
+    },
+    {
+      name: "file:///sandbox URL",
+      media: "file:///sandbox/output/image.png",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "file:///sandbox/ URL with trailing slash",
+      media: "file:///sandbox/output/image.png",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("maps $name into sandbox root", async ({ media, containerWorkdir }) => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({
-        media: "/sandbox/output/image.png",
+        media,
         sandboxRoot: sandboxDir,
-        containerWorkdir: "/sandbox",
+        containerWorkdir,
       });
       expect(result).toBe(path.join(sandboxDir, "output", "image.png"));
     });
   });
 
-  it("maps file:// URLs under custom containerWorkdir into sandbox root", async () => {
+  it.each([
+    { name: "/sandbox root", media: "/sandbox", containerWorkdir: "/sandbox" },
+    {
+      name: "/sandbox/ root with trailing slash",
+      media: "/sandbox",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("maps $name to sandbox root", async ({ media, containerWorkdir }) => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({
-        media: "file:///sandbox/output/image.png",
+        media,
         sandboxRoot: sandboxDir,
-        containerWorkdir: "/sandbox",
-      });
-      expect(result).toBe(path.join(sandboxDir, "output", "image.png"));
-    });
-  });
-
-  it("maps container root path with custom containerWorkdir", async () => {
-    await withSandboxRoot(async (sandboxDir) => {
-      const result = await resolveSandboxedMediaSource({
-        media: "/sandbox",
-        sandboxRoot: sandboxDir,
-        containerWorkdir: "/sandbox",
+        containerWorkdir,
       });
       expect(result).toBe(sandboxDir);
     });
   });
 
-  it("does not map paths under similarly named custom containerWorkdir roots", async () => {
+  it.each([
+    {
+      name: "/sandboxer prefix",
+      containerWorkdir: "/sandbox",
+    },
+    {
+      name: "/sandboxer prefix with trailing-slash workdir",
+      containerWorkdir: "/sandbox/",
+    },
+  ])("rejects $name as outside sandbox", async ({ containerWorkdir }) => {
     await withSandboxRoot(async (sandboxDir) => {
       await expect(
         resolveSandboxedMediaSource({
           media: "/sandboxer/secret",
           sandboxRoot: sandboxDir,
-          containerWorkdir: "/sandbox",
+          containerWorkdir,
         }),
       ).rejects.toThrow(/sandbox/i);
     });

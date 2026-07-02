@@ -162,11 +162,13 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   let candidate = raw;
+  const containerWorkdir =
+    (params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\/+$/, "") || "/";
   if (/^file:\/\//i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
-      containerWorkdir: params.containerWorkdir,
+      containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -183,7 +185,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
-    containerWorkdir: params.containerWorkdir,
+    containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -220,14 +222,14 @@ async function assertNoManagedMediaAliasEscape(params: {
 }
 
 function isContainerWorkspacePath(normalizedPath: string, containerWorkdir?: string): boolean {
-  const workdir = containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR;
+  const workdir = (containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\/+$/, "") || "/";
   return normalizedPath === workdir || normalizedPath.startsWith(`${workdir}/`);
 }
 
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
-  containerWorkdir?: string;
+  containerWorkdir: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -266,10 +268,10 @@ function mapContainerWorkspaceFileUrl(params: {
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
-  containerWorkdir?: string;
+  containerWorkdir: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
-  const workdir = params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR;
+  const workdir = params.containerWorkdir;
   if (normalized === workdir) {
     return path.resolve(params.sandboxRoot);
   }
