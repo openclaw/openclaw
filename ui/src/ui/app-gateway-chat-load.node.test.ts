@@ -171,7 +171,8 @@ vi.mock("./controllers/health.ts", () => ({
   loadHealthState: loadHealthStateMock,
 }));
 
-vi.mock("./controllers/model-auth-status.ts", () => ({
+vi.mock("../lib/model-auth.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/model-auth.ts")>()),
   loadModelAuthStatusState: loadModelAuthStatusStateMock,
 }));
 
@@ -191,7 +192,7 @@ afterAll(() => {
   vi.doUnmock("../pages/nodes/devices.ts");
   vi.doUnmock("../app/exec-approval.ts");
   vi.doUnmock("./controllers/health.ts");
-  vi.doUnmock("./controllers/model-auth-status.ts");
+  vi.doUnmock("../lib/model-auth.ts");
   vi.doUnmock("../pages/nodes/data.ts");
   vi.resetModules();
 });

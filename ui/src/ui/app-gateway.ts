@@ -25,6 +25,7 @@ import {
 } from "../app/exec-approval.ts";
 import { setLastActiveSessionKey, type UiSettings } from "../app/settings.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { loadModelAuthStatusState, type ModelAuthStatusState } from "../lib/model-auth.ts";
 import { scopedAgentParamsForSession } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -76,10 +77,6 @@ import {
 } from "./controllers/assistant-identity.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import {
-  loadModelAuthStatusState,
-  type ModelAuthStatusState,
-} from "./controllers/model-auth-status.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,

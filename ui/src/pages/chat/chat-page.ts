@@ -47,6 +47,7 @@ import {
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
+  refreshChatModelAuthStatus,
   refreshPageChat,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
@@ -480,6 +481,7 @@ export class ChatPage extends LitElement {
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true }).finally(() => state.requestUpdate?.());
+      void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
     }
     state.requestUpdate?.();
@@ -557,7 +559,6 @@ export class ChatPage extends LitElement {
         quota: {
           basePath: state.basePath,
           modelAuthStatusResult: state.modelAuthStatusResult,
-          onNavigate: (target) => this.context.navigate(target),
         },
         runId: state.chatRunId,
         sending: state.chatSending,

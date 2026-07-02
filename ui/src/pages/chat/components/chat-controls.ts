@@ -5,7 +5,7 @@ import type {
   ModelAuthStatusResult,
   SessionsListResult,
 } from "../../../api/types.ts";
-import { pathForRoute, type RouteId } from "../../../app-routes.ts";
+import { normalizeBasePath } from "../../../app-routes.ts";
 import {
   normalizeChatAutoScrollMode,
   type ChatAutoScrollMode,
@@ -14,7 +14,7 @@ import {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isMonitoredAuthProvider } from "../../../lib/model-auth-helpers.ts";
+import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
   collectQuotaWindowsFromAuthStatus,
   formatQuotaReset,
@@ -30,7 +30,6 @@ import { renderChatModelControls, type ChatModelControlsProps } from "./chat-mod
 type ChatQuotaPillProps = {
   basePath?: string;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
-  onNavigate?: (routeId: RouteId) => void;
 };
 
 export type ChatControlsProps = {
@@ -352,28 +351,16 @@ export function renderChatQuotaPill(props: ChatQuotaPillProps) {
     : null;
   const title = [detail, secondaryDetail].filter(Boolean).join(" · ");
   const severity = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "ok";
+  const basePath = normalizeBasePath(props.basePath ?? "");
+  const href = `${basePath}/usage`;
 
   return html`
     <a
       class="chat-controls__quota chat-controls__quota--${severity}"
-      href=${pathForRoute("usage", props.basePath ?? "")}
+      href=${href}
       title=${title}
       aria-label=${`Provider usage: ${title}`}
       data-chat-provider-usage="true"
-      @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        event.preventDefault();
-        props.onNavigate?.("usage");
-      }}
     >
       <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>

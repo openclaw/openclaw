@@ -1,6 +1,11 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import type { AgentsListResult, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type {
+  AgentsListResult,
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../api/types.ts";
 import {
   fetchAssistantIdentity,
   loadLocalAssistantIdentity,
@@ -17,6 +22,7 @@ import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
@@ -129,6 +135,8 @@ export type ChatPageHost = ChatHost &
     chatSideResultTerminalRuns: Set<string>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
+    modelAuthStatusResult: ModelAuthStatusResult | null;
+    modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
@@ -224,7 +232,10 @@ export async function handleChatManualRefresh(state: ChatPageHost): Promise<void
   await state.updateComplete;
   state.resetToolStream();
   try {
-    await refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
+    await Promise.allSettled([
+      refreshPageChat(state, { awaitHistory: true, scheduleScroll: false }),
+      refreshChatModelAuthStatus(state, { refresh: true }),
+    ]);
     state.scrollToBottom({ smooth: true });
   } finally {
     requestAnimationFrame(() => {
@@ -491,6 +502,27 @@ async function refreshChatMetadata(host: ChatPageHost) {
     if (host.client === client) {
       host.chatModelsLoading = false;
     }
+  }
+}
+
+export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { refresh?: boolean }) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const client = host.client;
+  try {
+    const result = await loadModelAuthStatus(client, opts);
+    if (host.client !== client || !host.connected) {
+      return;
+    }
+    host.modelAuthStatusResult = result;
+    host.modelAuthStatusError = null;
+  } catch (err) {
+    if (host.client !== client || !host.connected) {
+      return;
+    }
+    host.modelAuthStatusResult = { ts: 0, providers: [] };
+    host.modelAuthStatusError = err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -857,6 +889,8 @@ export function createPageState(
     chatModelSwitchPromises: {} as Record<string, Promise<boolean>>,
     chatModelsLoading: false,
     chatModelCatalog: [] as ModelCatalogEntry[],
+    modelAuthStatusResult: null,
+    modelAuthStatusError: null,
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsLoading: false,

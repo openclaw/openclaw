@@ -2720,7 +2720,6 @@ describe("chat model controls", () => {
       renderChatQuotaPill({
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
-        onNavigate: (route) => state.setRoute(route),
       }),
       container,
     );
@@ -2729,10 +2728,6 @@ describe("chat model controls", () => {
     expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
     expect(quota?.getAttribute("href")).toBe("/usage");
     expect(quota?.getAttribute("title")).toContain("Codex · Week");
-
-    quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
-
-    expect(state.setRoute).toHaveBeenCalledWith("usage");
   });
 
   it("disables the chat header model picker while a run is active", () => {

@@ -14,7 +14,7 @@ import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../../lib/format.ts";
-import { isMonitoredAuthProvider } from "../../lib/model-auth-helpers.ts";
+import { isMonitoredAuthProvider } from "../../lib/model-auth.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import {
   collectQuotaWindows,
