@@ -69,7 +69,7 @@ export class SessionPicker extends LitElement {
   }
 
   override willUpdate(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("sessionsResult") && !this.result && !this.appliedQuery) {
+    if (changed.has("sessionsResult") && !this.appliedQuery) {
       this.result = this.sessionsResult;
     }
   }
