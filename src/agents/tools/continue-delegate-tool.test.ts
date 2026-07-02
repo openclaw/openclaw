@@ -4,6 +4,7 @@ import {
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
 } from "../../auto-reply/continuation-delegate-store.js";
+import { resetContinueDelegateTurnAdmissionForTests } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
@@ -28,11 +29,13 @@ describe("continue_delegate tool", () => {
     cancelPendingDelegates("test-session");
     consumePendingDelegates("test-session");
     consumeStagedPostCompactionDelegates("test-session");
+    resetContinueDelegateTurnAdmissionForTests();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     cancelPendingDelegates("test-session");
+    resetContinueDelegateTurnAdmissionForTests();
     clearRuntimeConfigSnapshot();
     resetDiagnosticTraceContextForTest();
     vi.useRealTimers();

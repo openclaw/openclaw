@@ -28,9 +28,11 @@ export {
   cancelPendingDelegates,
   consumePendingDelegates,
   enqueuePendingDelegate,
+  finalizeStagedPostCompactionDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
+  recoverStagedPostCompactionDelegates,
   resetDelegateStoreForTests,
   stagedPostCompactionDelegateCount,
 } from "./continuation/delegate-store.js";

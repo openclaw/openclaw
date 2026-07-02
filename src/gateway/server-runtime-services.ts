@@ -180,9 +180,10 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
   // queued in the same turn.
   const timer = setTimeout(() => {
     void (async () => {
-      const [delegateModule, workModule] = await Promise.all([
+      const [delegateModule, workModule, delegateStoreModule] = await Promise.all([
         import("../auto-reply/continuation/delegate-dispatch.js"),
         import("../auto-reply/continuation/work-dispatch.js"),
+        import("../auto-reply/continuation/delegate-store.js"),
       ]);
       const delegateLog = params.log.child("continuation-delegate-recovery");
       const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
@@ -193,6 +194,15 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
       ) {
         delegateLog.info(
           `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
+        );
+      }
+      // #1144: reset post-compaction delegates left `running` by a crash between
+      // release-claim and durable handoff back to `queued` so the next
+      // compaction seam re-consumes them instead of losing the staged work.
+      const postCompactionReset = delegateStoreModule.recoverStagedPostCompactionDelegates();
+      if (postCompactionReset > 0) {
+        delegateLog.info(
+          `recovered post-compaction delegates reset-to-queued=${postCompactionReset}`,
         );
       }
 

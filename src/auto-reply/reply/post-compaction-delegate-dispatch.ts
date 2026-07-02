@@ -23,7 +23,10 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { consumeStagedPostCompactionDelegates } from "../continuation-delegate-store.js";
+import {
+  consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates,
+} from "../continuation-delegate-store.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
@@ -58,6 +61,7 @@ export type PostCompactionDelegateDeliveryDeps = {
 
 export type PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates(sessionKey: string): SessionPostCompactionDelegate[];
+  finalizeStagedPostCompactionDelegates(sessionKey: string, claimedAtOrBefore?: number): number;
   drainPostCompactionDelegateDeliveries(params: {
     entryIds?: readonly string[];
     log: SessionDeliveryRecoveryLogger;
@@ -123,6 +127,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
 
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates,
   drainPostCompactionDelegateDeliveries,
   enqueuePostCompactionDelegateDelivery,
   enqueueSystemEvent,
@@ -639,6 +644,11 @@ export async function dispatchPostCompactionDelegates(
   deps: PostCompactionDelegateDispatchDeps = defaultPostCompactionDelegateDispatchDeps,
 ): Promise<DispatchPostCompactionDelegatesResult> {
   const stagedCompactionDelegates = deps.consumeStagedPostCompactionDelegates(params.sessionKey);
+  // Capture the claim horizon immediately: consumeStagedPostCompactionDelegates
+  // now claims TaskFlow rows to `running` (not `finished`), so we finalize them
+  // only AFTER the durable handoff below. Bounding finalize to rows claimed at
+  // or before this instant keeps a concurrent later consume's rows untouched.
+  const stagedClaimHorizon = deps.now();
   let persistedCompactionDelegates: SessionPostCompactionDelegate[] = [];
   try {
     persistedCompactionDelegates = await takePendingPostCompactionDelegates({
@@ -777,6 +787,13 @@ export async function dispatchPostCompactionDelegates(
       );
     }
   }
+
+  // Durable handoff is complete: every consumed delegate is now either queued
+  // for delivery, re-staged to the session store, or intentionally dropped
+  // (stale/over-budget). Finalize the claimed TaskFlow rows so they are not
+  // re-consumed. Crash before this leaves them `running` for restart recovery
+  // (#1144) rather than lost behind a premature `finished`.
+  deps.finalizeStagedPostCompactionDelegates(params.sessionKey, stagedClaimHorizon);
 
   const lifecycleEvent = buildPostCompactionLifecycleEvent({
     compactionCount: params.compactionCount,

@@ -212,6 +212,12 @@ function listQueuedPostCompactionFlows(sessionKey: string): TaskFlowRecord[] {
     .toSorted((a, b) => a.createdAt - b.createdAt);
 }
 
+function listRunningPostCompactionFlows(sessionKey: string): TaskFlowRecord[] {
+  return listTaskFlowsForOwnerKey(sessionKey)
+    .filter((flow) => isPostCompactionDelegateFlow(flow) && flow.status === "running")
+    .toSorted((a, b) => a.createdAt - b.createdAt);
+}
+
 function decodeDelegateState(flow: TaskFlowRecord): PendingDelegateState | undefined {
   const parsed = PendingDelegateStateSchema.safeParse(flow.stateJson);
   return parsed.success ? parsed.data : undefined;
@@ -677,7 +683,17 @@ export function stagePostCompactionDelegate(
 }
 
 /**
- * Consume staged post-compaction delegates. Same lifecycle as consumePendingDelegates.
+ * Consume staged post-compaction delegates by CLAIMING them to `running`
+ * (non-terminal), mirroring {@link consumePendingDelegates}. The row is NOT
+ * finished here: terminalization waits for {@link finalizeStagedPostCompactionDelegates}
+ * after the caller has durably handed the delegate off (session-delivery row
+ * enqueued or re-staged). A crash between claim and handoff therefore leaves a
+ * recoverable `running` row — {@link recoverStagedPostCompactionDelegates}
+ * resets it to `queued` on restart — instead of silently losing the staged work
+ * behind a premature `finished` (#1144).
+ *
+ * At-least-once on the crash-recovery seam is intentional: a duplicate
+ * post-compaction shard is far cheaper than a dropped one.
  */
 export function consumeStagedPostCompactionDelegates(
   sessionKey: string,
@@ -702,20 +718,97 @@ export function consumeStagedPostCompactionDelegates(
       continue;
     }
 
-    const finished = finishFlow({
+    const releasedAt = Date.now();
+    const claimed = updateFlowRecordByIdExpectedRevision({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
-      currentStep: "Released after compaction",
-      stateJson: { ...state, releasedAt: Date.now() },
+      patch: {
+        status: "running",
+        currentStep: "Released after compaction — awaiting durable handoff",
+        stateJson: { ...state, releasedAt },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+        endedAt: null,
+        updatedAt: releasedAt,
+      },
     });
-    if (!finished.applied) {
+    if (!claimed.applied || !claimed.flow) {
       continue;
     }
 
-    delegates.push(flowToDelegate(flow, state));
+    delegates.push(flowToDelegate(claimed.flow, { ...state, releasedAt }));
   }
 
   return delegates;
+}
+
+/**
+ * Finalize (finish) staged post-compaction rows a caller claimed via
+ * {@link consumeStagedPostCompactionDelegates} once the durable handoff
+ * succeeded. Finishes only `running` post-compaction rows updated at or before
+ * `claimedAtOrBefore` (the caller's post-consume timestamp) so a concurrent
+ * later consume's freshly-claimed rows are never finished out from under it.
+ * Returns the number of rows finalized.
+ */
+export function finalizeStagedPostCompactionDelegates(
+  sessionKey: string,
+  claimedAtOrBefore?: number,
+): number {
+  let finalized = 0;
+  for (const flow of listRunningPostCompactionFlows(sessionKey)) {
+    if (claimedAtOrBefore !== undefined && flow.updatedAt > claimedAtOrBefore) {
+      continue;
+    }
+    const state = decodeDelegateState(flow);
+    const now = Date.now();
+    const finished = finishFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep: "Durably handed off after compaction",
+      stateJson: { ...(state ?? { kind: "continuation_delegate", task: "" }), releasedAt: now },
+      updatedAt: now,
+      endedAt: now,
+    });
+    if (finished.applied) {
+      finalized += 1;
+    }
+  }
+  return finalized;
+}
+
+/**
+ * Recover post-compaction rows left `running` by a crash between claim and
+ * durable handoff (#1144). Resets them to `queued` so the next compaction seam
+ * re-consumes them; called once at startup. Returns the number of rows reset.
+ */
+export function recoverStagedPostCompactionDelegates(): number {
+  let recovered = 0;
+  for (const flow of listTaskFlowRecords()) {
+    if (!isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+      continue;
+    }
+    const state = decodeDelegateState(flow);
+    if (!state) {
+      continue;
+    }
+    const now = Date.now();
+    const reset = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "queued",
+        currentStep: "Recovered running post-compaction delegate to queued after restart",
+        stateJson: state,
+        endedAt: null,
+        updatedAt: now,
+      },
+    });
+    if (reset.applied) {
+      recovered += 1;
+    }
+  }
+  return recovered;
 }
 
 export function stagedPostCompactionDelegateCount(sessionKey: string): number {

@@ -5,6 +5,7 @@ import {
   emitContinuationWorkFireSpan,
   emitContinuationWorkSpan,
 } from "../../infra/continuation-tracer.js";
+import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -29,6 +30,7 @@ import {
   peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   queuedPendingWorkCount,
+  reconcileUndeliverableGrantedWork,
   requeuePendingWork,
   supersedeQueuedTurnEndParkedWork,
   type ContinuationWorkReasonCategory,
@@ -510,6 +512,10 @@ function buildFoldedProvenanceNote(works: readonly PendingContinuationWork[], no
 
 type ContinuationTurnGrantResult =
   | { status: "ran" }
+  // Turn ran, but the durable delivered-mark lost the revision race and the row
+  // was reconciled here (guard written or parked non-retryable). The caller must
+  // NOT run markPendingWorkTurnGranted with the stale revision.
+  | { status: "ran-finalized" }
   | { status: "skipped"; reason: string; retryTrigger?: ContinuationIdleRetryTrigger };
 
 async function driveContinuationTurn(
@@ -593,27 +599,29 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON };
   }
 
-  const reply = await getReplyFromConfig(
-    {
-      Body: wakeText,
-      BodyForCommands: wakeText,
-      CommandBody: wakeText,
-      Provider: "system",
-      Surface: "system",
-      From: "system",
-      To: "agent",
-      SessionKey: work.sessionKey,
-      RuntimePolicySessionKey: work.sessionKey,
-      ...(agentId ? { AgentId: agentId } : {}),
-    },
-    {
-      continuationTrigger: "work-wake",
-      parentRunId: work.parentRunId,
-      lane: continuationLane,
-      typingPolicy: "system_event",
-      suppressTyping: true,
-    },
-    cfg,
+  const reply = await runWithDiagnosticTraceparent(work.traceparent, () =>
+    getReplyFromConfig(
+      {
+        Body: wakeText,
+        BodyForCommands: wakeText,
+        CommandBody: wakeText,
+        Provider: "system",
+        Surface: "system",
+        From: "system",
+        To: "agent",
+        SessionKey: work.sessionKey,
+        RuntimePolicySessionKey: work.sessionKey,
+        ...(agentId ? { AgentId: agentId } : {}),
+      },
+      {
+        continuationTrigger: "work-wake",
+        parentRunId: work.parentRunId,
+        lane: continuationLane,
+        typingPolicy: "system_event",
+        suppressTyping: true,
+      },
+      cfg,
+    ),
   );
   if (!hasNonDrainReplyPayload(reply) && isGatewayDraining()) {
     return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
@@ -623,7 +631,17 @@ async function driveContinuationTurn(
   // dispatch loop's finishFlow — so a crash in that window leaves a row the
   // consume read-guard skips (no restart-gap re-delivery). The mark bumps the
   // revision on `work` so the follow-on markPendingWorkTurnGranted still applies.
-  markPendingWorkDelivered(work);
+  if (!markPendingWorkDelivered(work)) {
+    // #1144: the provider turn already ran, but the durable delivered-mark lost
+    // the expected-revision race (a revision/cancel landed between claim and
+    // here). Returning a plain "ran" would let the caller run
+    // markPendingWorkTurnGranted with the stale revision — that finish also
+    // fails, leaving the row `running` WITHOUT the succeeded read-guard, so
+    // recovery would re-drive this already-executed turn. Reconcile the row so
+    // it can never be replayed and tell the caller not to finalize again.
+    reconcileUndeliverableGrantedWork(work);
+    return { status: "ran-finalized" };
+  }
   return { status: "ran" };
 }
 
@@ -812,6 +830,21 @@ export async function dispatchPendingContinuationWork(params: {
   includeRunningIdleRetry?: boolean;
 }): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const recoverRunning = params.recoverRunning === true;
+  // #1144: honor a hot-disabled continuation feature on the LIVE callback path.
+  // Startup recovery (recoverPendingContinuationWork) already skips disabled
+  // continuation, but an armed work/idle-retry timer that fired before the
+  // operator set agents.defaults.continuation.enabled=false would otherwise
+  // still consume and drive queued work here — buying provider turns after the
+  // feature was disabled. Re-check the live config and bail before consuming or
+  // mutating any queued rows (they stay durable/recoverable if re-enabled);
+  // clear the in-process timers so the self-rearm loop stops instead of
+  // re-arming a disabled feature.
+  const runtimeConfig = resolveContinuationRuntimeConfig();
+  if (!runtimeConfig.enabled) {
+    clearWorkTimer(params.sessionKey);
+    clearIdleRetryFailureTimer(params.sessionKey);
+    return { dispatched: 0, failed: 0, reaped: 0 };
+  }
   const { replyRunRegistry } = await importReplyRunRegistry();
   const sessionActive = replyRunRegistry.isActive(params.sessionKey);
   const activeSessionId = sessionActive
@@ -835,7 +868,6 @@ export async function dispatchPendingContinuationWork(params: {
   // #986 Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);
   // on-time staggered elections drain one-per-poll and never co-arrive.
-  const runtimeConfig = resolveContinuationRuntimeConfig();
   const supersededGraceMs = runtimeConfig.maxDelayMs * SUPERSEDED_GRACE_MULTIPLIER;
   const { drive: worksToDrive, superseded } = partitionSupersededWork(
     works,
@@ -908,6 +940,13 @@ export async function dispatchPendingContinuationWork(params: {
       const result = await driveContinuationTurn(work, wakeText);
       if (result.status === "ran") {
         markPendingWorkTurnGranted(work);
+        dispatched++;
+        continue;
+      }
+      if (result.status === "ran-finalized") {
+        // The turn ran; driveContinuationTurn already reconciled the flow after
+        // a delivered-mark revision race (#1144). Do NOT finalize again with a
+        // stale revision — count it as dispatched and move on.
         dispatched++;
         continue;
       }

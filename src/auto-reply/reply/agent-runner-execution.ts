@@ -104,6 +104,7 @@ import {
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stagePostCompactionDelegate } from "../continuation-delegate-store.js";
+import { resetContinueDelegateTurnBudget } from "../continuation/delegate-turn-admission.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -2931,6 +2932,13 @@ export async function runAgentTurnWithFallback(params: {
                       });
                     },
                     onAssistantMessageStart: async () => {
+                      // New assistant turn: reset the per-turn continue_delegate
+                      // admission budget so this turn can schedule up to
+                      // maxDelegatesPerTurn regardless of earlier turns in the
+                      // same run (the tool list is built once per run).
+                      if (params.sessionKey) {
+                        resetContinueDelegateTurnBudget(params.sessionKey);
+                      }
                       await params.typingSignals.signalMessageStart();
                       await params.opts?.onAssistantMessageStart?.();
                     },

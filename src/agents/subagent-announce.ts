@@ -7,6 +7,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   consumePendingDelegates,
+  enqueuePendingDelegate,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   stagePostCompactionDelegate,
@@ -89,9 +90,6 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
-let continuationStateRuntimePromise: Promise<
-  typeof import("../auto-reply/continuation/state.js")
-> | null = null;
 let subagentSpawnRuntimePromise: Promise<
   Pick<typeof import("./subagent-spawn.js"), "spawnSubagentDirect">
 > | null = null;
@@ -126,11 +124,6 @@ const subagentRegistryRuntimeLoader = createLazyImportLoader(
 
 function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimeLoader.load();
-}
-
-function loadContinuationStateRuntime() {
-  continuationStateRuntimePromise ??= import("../auto-reply/continuation/state.js");
-  return continuationStateRuntimePromise;
 }
 
 function loadSubagentSpawnRuntime() {
@@ -330,6 +323,12 @@ async function rejectCrossSessionTargetingForSubagentDispatch(params: {
 async function drainChildContinuationQueue(params: {
   childSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  /**
+   * Child-run token cost accumulated into the parent chain THIS turn. Folded
+   * into the dispatcher's chain state so the cost cap is enforced against the
+   * post-run total, not the stale pre-accumulation total (#1144).
+   */
+  additionalChainTokens?: number;
 }): Promise<void> {
   let cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
   try {
@@ -378,9 +377,18 @@ async function drainChildContinuationQueue(params: {
       | ContinuationChainSource
       | undefined;
     const dispatchConfig = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
+    const baseChainState = loadContinuationChainState(childEntry);
+    const chainState =
+      params.additionalChainTokens && params.additionalChainTokens > 0
+        ? {
+            ...baseChainState,
+            accumulatedChainTokens:
+              baseChainState.accumulatedChainTokens + params.additionalChainTokens,
+          }
+        : baseChainState;
     const dispatchResult = await dispatchToolDelegates({
       sessionKey: params.childSessionKey,
-      chainState: loadContinuationChainState(childEntry),
+      chainState,
       ctx: {
         sessionKey: params.childSessionKey,
         agentChannel: params.requesterOrigin?.channel,
@@ -784,18 +792,6 @@ export async function runSubagentAnnounceFlow(params: {
       reply = undefined;
     }
 
-    // F7: drain the child session's continue_delegate queue now that the
-    // subagent has settled. Delegates enqueued by the subagent during its
-    // turn would otherwise stay orphaned in TaskFlow until the next inbound
-    // message on the parent triggers agent-runner dispatch — stalling the
-    // two-hop chain. Chain state is inherited from the child session entry
-    // so hop labels and cost caps remain accurate across hops.
-    // RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4.
-    await drainChildContinuationQueue({
-      childSessionKey: params.childSessionKey,
-      requesterOrigin: targetRequesterOrigin,
-    });
-
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
@@ -1073,6 +1069,21 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    // F7: drain the child session's continue_delegate queue now that the
+    // subagent has settled. Delegates enqueued by the subagent during its turn
+    // would otherwise stay orphaned in TaskFlow until the next inbound message
+    // on the parent triggers agent-runner dispatch — stalling the two-hop chain.
+    // Runs AFTER the child-token accumulation above (moved from the pre-refresh
+    // site) and folds accumulatedChildTokens into the dispatcher's cost basis so
+    // a child run that pushed the chain over costCapTokens cannot launch another
+    // delegate on stale cost (#1144).
+    // RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4.
+    await drainChildContinuationQueue({
+      childSessionKey: params.childSessionKey,
+      requesterOrigin: targetRequesterOrigin,
+      additionalChainTokens: accumulatedChildTokens,
+    });
+
     // --- Consume tool-dispatched delegates from the completing subagent ---
     const toolDelegates =
       continuationEnabled && isContinuationChainDelegate
@@ -1204,9 +1215,7 @@ export async function runSubagentAnnounceFlow(params: {
               );
             }
           } else {
-            const continuationStateRuntime = await loadContinuationStateRuntime();
-
-            const doChainSpawn = async (timerTriggered = false) => {
+            const doChainSpawn = async () => {
               try {
                 const rejectedByTargetingPolicy =
                   await rejectCrossSessionTargetingForSubagentDispatch({
@@ -1257,9 +1266,7 @@ export async function runSubagentAnnounceFlow(params: {
                 );
                 if (spawnResult.status === "accepted") {
                   defaultRuntime.log(
-                    timerTriggered
-                      ? `[subagent-chain-hop] Timer fired and spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`
-                      : `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
+                    `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
                   );
                 } else {
                   const reasonText = spawnResult.error ?? "no reason given";
@@ -1276,26 +1283,35 @@ export async function runSubagentAnnounceFlow(params: {
 
             if (chainDelayMs && chainDelayMs > 0) {
               const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
-              continuationStateRuntime.retainContinuationTimerRef(targetRequesterSessionKey);
-              const timerHandle = setTimeout(() => {
-                try {
-                  doChainSpawn(true).catch((err: unknown) => {
-                    defaultRuntime.log(
-                      `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
-                    );
-                  });
-                } finally {
-                  continuationStateRuntime.unregisterContinuationTimerHandle(
-                    targetRequesterSessionKey,
-                    timerHandle,
-                  );
-                }
-              }, clampedDelay);
-              continuationStateRuntime.registerContinuationTimerHandle(
-                targetRequesterSessionKey,
-                timerHandle,
-              );
-              timerHandle.unref();
+              // #1144: route the delayed bracket delegate through the durable
+              // pending-delegate store — same durability class as the
+              // tool-dispatched delayed path — instead of a volatile setTimeout
+              // that a gateway restart before `clampedDelay` elapses would drop.
+              // Enqueue under the requester session (bracket delegates spawn with
+              // agentSessionKey=requester), then drain that session so the shared
+              // hedge timer is armed for the unmatured entry; restart recovery
+              // re-drives it if the process dies first.
+              enqueuePendingDelegate(targetRequesterSessionKey, {
+                task: chainTask,
+                delayMs: clampedDelay,
+                ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
+                ...(chainSignal.targetSessionKey
+                  ? { targetSessionKey: chainSignal.targetSessionKey }
+                  : {}),
+                ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
+                  ? { targetSessionKeys: chainSignal.targetSessionKeys }
+                  : {}),
+                ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
+                ...(chainSignal.model ? { model: chainSignal.model } : {}),
+              });
+              void drainChildContinuationQueue({
+                childSessionKey: targetRequesterSessionKey,
+                requesterOrigin: targetRequesterOrigin,
+              }).catch((err: unknown) => {
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${targetRequesterSessionKey}: ${String(err)}`,
+                );
+              });
             } else {
               // Fire-and-forget — don't block the announce flow
               doChainSpawn().catch((err: unknown) => {

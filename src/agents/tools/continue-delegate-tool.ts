@@ -9,6 +9,10 @@ import {
   stagePostCompactionDelegate,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
+  peekContinueDelegatesScheduledThisTurn,
+  recordContinueDelegateScheduledThisTurn,
+} from "../../auto-reply/continuation/delegate-turn-admission.js";
+import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
@@ -130,8 +134,6 @@ function readStrictStringArrayParam(
  * unrelated inbound traffic does not cancel scheduled work.
  */
 export function createContinueDelegateTool(opts: { agentSessionKey?: string }): AnyAgentTool {
-  let delegatesThisTurn = 0;
-
   return {
     label: "Continuation",
     name: "continue_delegate",
@@ -218,9 +220,13 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         );
       }
 
-      // Check per-turn delegate limit. Durable queued depth is reported for
-      // visibility but does not consume this turn's admission budget.
+      // Check per-turn delegate limit. The budget is keyed by session and reset
+      // at each assistant-turn boundary (delegate-turn-admission), so a later
+      // turn in the same run gets a fresh cap instead of inheriting this turn's
+      // count. Durable queued depth is reported for visibility but does not
+      // consume this turn's admission budget.
       const maxPerTurn = continuationConfig.maxDelegatesPerTurn;
+      const delegatesThisTurn = peekContinueDelegatesScheduledThisTurn(sessionKey);
       if (delegatesThisTurn >= maxPerTurn) {
         const queueDepths = getContinuationDelegateQueueDepths(sessionKey);
         return jsonResult({
@@ -245,13 +251,13 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
           ...traceContextFields,
           ...modelField,
         });
-        delegatesThisTurn += 1;
+        const scheduledThisTurn = recordContinueDelegateScheduledThisTurn(sessionKey);
 
         return jsonResult({
           status: "queued-for-compaction",
           mode: "post-compaction",
-          delegateIndex: delegatesThisTurn,
-          delegatesThisTurn,
+          delegateIndex: scheduledThisTurn,
+          delegatesThisTurn: scheduledThisTurn,
           ...targetingFields,
           ...modelField,
           note:
@@ -273,8 +279,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...modelField,
       });
 
-      delegatesThisTurn += 1;
-      const dispatchIndex = delegatesThisTurn;
+      const dispatchIndex = recordContinueDelegateScheduledThisTurn(sessionKey);
 
       return jsonResult({
         status: "scheduled",

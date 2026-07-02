@@ -599,6 +599,62 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
   return true;
 }
 
+/**
+ * Reconcile a continuation work row whose durable delivered-mark lost the
+ * expected-revision race AFTER the provider turn already executed (#1144:
+ * revision/cancel race). The turn is spent, so restart-gap replay must be
+ * prevented. If the row is still `running` under a bumped revision, write the
+ * `succeeded` read-guard against the CURRENT revision so `consumePendingWork`
+ * recognizes it as delivered and finalizes it instead of re-driving. When even
+ * that races, fail the row non-retryably — dropping a stale row is strictly
+ * safer than replaying an already-executed turn.
+ *
+ * No-ops when the row is gone, already terminal, cancel-owned, or re-queued by
+ * another actor: none of those replay THIS turn (a fresh election is a new flow
+ * / a deliberate requeue, not a restart-gap redelivery).
+ */
+export function reconcileUndeliverableGrantedWork(work: PendingContinuationWork): void {
+  if (!work.flowId) {
+    return;
+  }
+  const current = getTaskFlowById(work.flowId);
+  if (!current || current.status !== "running" || current.cancelRequestedAt != null) {
+    return;
+  }
+  const state = decodeWorkState(current) ?? buildFallbackWorkState(work);
+  const now = Date.now();
+  const succeeded = { point: "optimal", durability: "durable" } as const;
+  const marked = updateFlowRecordByIdExpectedRevision({
+    flowId: current.flowId,
+    expectedRevision: current.revision,
+    patch: {
+      currentStep: "Continuation wake delivered (post-race reconcile)",
+      stateJson: {
+        ...state,
+        deliveredAt: state.deliveredAt ?? now,
+        disposition: "granted",
+        succeeded,
+      },
+      updatedAt: now,
+    },
+  });
+  if (marked.applied) {
+    return;
+  }
+  const latest = getTaskFlowById(work.flowId);
+  if (!latest || latest.status !== "running" || latest.cancelRequestedAt != null) {
+    return;
+  }
+  failFlow({
+    flowId: latest.flowId,
+    expectedRevision: latest.revision,
+    currentStep: "Continuation turn executed; delivered-mark lost revision race",
+    blockedSummary:
+      "Provider turn already ran; parking non-retryable to prevent restart-gap replay.",
+    updatedAt: Date.now(),
+  });
+}
+
 export function requeuePendingWork(
   work: PendingContinuationWork,
   params: {
