@@ -792,6 +792,60 @@ describe("runDoctorSessionSqlite", () => {
     ]);
   });
 
+  it("moves corrupt SQLite database files aside during recovery", async () => {
+    const store = createLegacyStore();
+    const sqlitePath = path.join(
+      store.stateDir,
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+    fs.writeFileSync(`${sqlitePath}-wal`, "wal", { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(0);
+    expect(report.targets[0]?.corruptRecovery?.movedFiles.length).toBeGreaterThanOrEqual(2);
+    expect(fs.existsSync(sqlitePath)).toBe(false);
+    expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
+    expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(false);
+    expect(
+      report.targets[0]?.corruptRecovery?.movedFiles.every((filePath) =>
+        filePath.includes(".corrupt-"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not move SQLite paths aside for non-corruption recovery inspection failures", async () => {
+    const store = createLegacyStore();
+    const sqlitePath = path.join(
+      store.stateDir,
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(sqlitePath, { recursive: true });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "recover",
+      store: store.storePath,
+    });
+
+    expect(report.totals.issues).toBe(1);
+    expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
+    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+    expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
+  });
+
   it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
     const store = createLegacyStore({
       transcriptLines: [
@@ -891,10 +945,10 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
   });
 
-  it("reports malformed transcripts without importing partial rows", async () => {
+  it("reports malformed transcripts while importing the session entry", async () => {
     const store = createLegacyStore({
       agentDirName: "token=supersecret",
-      transcriptLines: ['{"type":"session"}', "{bad"],
+      transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
     });
 
     const report = await runDoctorSessionSqlite({
@@ -909,14 +963,33 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(report.totals.issues).toBe(1);
-    expect(report.totals.archivedUnreferencedJsonlFiles).toBe(0);
-    expect(report.totals.unreferencedJsonlFiles).toBe(2);
+    expect(report.totals).toMatchObject({
+      archivedTranscriptFiles: 2,
+      archivedUnreferencedJsonlFiles: 1,
+      importedEntries: 1,
+      importedTranscriptEvents: 1,
+      sqliteEntries: 1,
+      unreferencedJsonlFiles: 0,
+    });
     expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
-    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(true);
-    expect(inspect.totals.sqliteEntries).toBe(0);
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
+    expect(inspect.totals.sqliteEntries).toBe(1);
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "token-supersecret",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toHaveLength(1);
     const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-    expect(manifest.targets[0]?.plannedMoves).toEqual([]);
-    expect(manifest.targets[0]?.completedMoves).toEqual([]);
+    expect(manifest.targets[0]?.completedMoves.some((move) => move.kind === "transcript")).toBe(
+      true,
+    );
+    expect(
+      manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
+    ).toBe(true);
     expect(report.migrationRun?.failureReportMarkdownPath).toBeTruthy();
     const failureReport = fs.readFileSync(
       report.migrationRun?.failureReportMarkdownPath ?? "",

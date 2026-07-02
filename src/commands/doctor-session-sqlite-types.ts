@@ -34,6 +34,11 @@ export type DoctorSessionSqliteDbStats = {
   walSizeBytes: number;
 };
 
+export type DoctorSessionSqliteCorruptRecovery = {
+  movedFiles: string[];
+  skippedFiles: string[];
+};
+
 export type SessionSqliteMigrationFailureIssue = {
   body: string;
   bodyPath?: string;
@@ -81,6 +86,7 @@ export type DoctorSessionSqliteTargetReport = {
   unreferencedJsonlFiles: string[];
   validatedEntries: number;
   validatedTranscriptEvents: number;
+  corruptRecovery?: DoctorSessionSqliteCorruptRecovery;
   restore?: DoctorSessionSqliteRestoreReport;
 };
 

@@ -34,6 +34,7 @@ import {
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
+  createTranscriptEventPrefixReader,
   readOnlySqliteDbStats,
   readOnlySqliteExactSessionEntry,
   readOnlySqliteSessionEntries,
@@ -73,6 +74,7 @@ type LegacySessionRecord = {
 const WARNING_ISSUE_CODES = new Set([
   "transcript_missing",
   "transcript_archive_failed",
+  "transcript_malformed",
   "unreferenced_jsonl_archive_failed",
 ]);
 
@@ -412,6 +414,17 @@ async function importLegacySessionRecord(
     });
     return;
   } else if (result.status === "malformed") {
+    const imported = await importSqliteSessionRows({
+      agentId: target.agentId,
+      entry: record.entry,
+      sessionKey: record.sessionKey,
+      storePath: target.storePath,
+      ...(record.transcriptPath
+        ? { readTranscriptEvents: createTranscriptEventPrefixReader(record.transcriptPath) }
+        : {}),
+    });
+    report.importedEntries += 1;
+    report.importedTranscriptEvents += imported.transcriptEvents;
     report.issues.push({
       code: "transcript_malformed",
       message: result.message,
@@ -490,11 +503,13 @@ function validateImportedRecordBeforeArchive(
     return;
   }
   if (result.status !== "ok") {
-    report.issues.push({
-      code: "transcript_malformed",
-      message: result.message,
-      sessionKey: record.sessionKey,
-    });
+    if (!hasSessionIssue(report, "transcript_malformed", record.sessionKey)) {
+      report.issues.push({
+        code: "transcript_malformed",
+        message: result.message,
+        sessionKey: record.sessionKey,
+      });
+    }
     return;
   }
   const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
@@ -711,11 +726,13 @@ function validateTranscriptEventCount(
     return;
   }
   if (result.status !== "ok") {
-    report.issues.push({
-      code: "transcript_malformed",
-      message: result.message,
-      sessionKey: record.sessionKey,
-    });
+    if (!hasSessionIssue(report, "transcript_malformed", record.sessionKey)) {
+      report.issues.push({
+        code: "transcript_malformed",
+        message: result.message,
+        sessionKey: record.sessionKey,
+      });
+    }
     return;
   }
   const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
@@ -736,6 +753,14 @@ function validateTranscriptEventCount(
     return;
   }
   report.validatedTranscriptEvents += sqliteEvents.events;
+}
+
+function hasSessionIssue(
+  report: DoctorSessionSqliteTargetReport,
+  code: string,
+  sessionKey: string,
+): boolean {
+  return report.issues.some((issue) => issue.code === code && issue.sessionKey === sessionKey);
 }
 
 function countAlreadyMigratedTranscriptEventsForImport(

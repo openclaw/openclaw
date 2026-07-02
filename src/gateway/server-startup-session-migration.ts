@@ -32,7 +32,9 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
 };
 
 const STARTUP_WARNING_ISSUE_CODES = new Set([
+  "entry_invalid",
   "transcript_archive_failed",
+  "transcript_malformed",
   "transcript_missing",
   "unreferenced_jsonl_archive_failed",
 ]);
@@ -63,12 +65,26 @@ async function runStartupSessionSqliteImport(params: {
   const runDoctorSessionSqlite =
     params.deps?.runDoctorSessionSqlite ??
     (await import("../commands/doctor-session-sqlite.js")).runDoctorSessionSqlite;
-  const report = await runDoctorSessionSqlite({
-    allAgents: true,
-    cfg: params.cfg,
-    env,
-    mode: "import",
-  });
+  let report: DoctorSessionSqliteReport;
+  try {
+    report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: params.cfg,
+      env,
+      mode: "import",
+    });
+  } catch (error) {
+    if (isSqliteCorruptionError(error)) {
+      throw new Error(
+        [
+          `session SQLite migration failed during startup because an agent SQLite database could not be opened: ${String(error)}`,
+          'Run "openclaw doctor --session-sqlite recover --session-sqlite-all-agents" to move the corrupt database aside and preserve it for support.',
+        ].join("\n"),
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   const warningIssues = collectStartupWarningIssues(report);
   const blockingIssues = collectStartupBlockingIssues(report);
   if (blockingIssues.length > 0) {
@@ -177,4 +193,13 @@ function formatSessionSqliteStartupImportSummary(report: DoctorSessionSqliteRepo
     `- importedEntries=${report.totals.importedEntries} importedTranscriptEvents=${report.totals.importedTranscriptEvents}`,
     `- archivedTranscriptArtifacts=${report.totals.archivedTranscriptFiles} archivedUnreferencedJsonl=${report.totals.archivedUnreferencedJsonlFiles}`,
   ].join("\n");
+}
+
+function isSqliteCorruptionError(error: unknown): boolean {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") {
+    return true;
+  }
+  const message = String(error).toLowerCase();
+  return message.includes("database disk image is malformed") || message.includes("not a database");
 }

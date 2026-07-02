@@ -83,6 +83,23 @@ export function createTranscriptEventReader(
   };
 }
 
+export function createTranscriptEventPrefixReader(
+  transcriptPath: string,
+): (append: (event: TranscriptEvent) => void) => void {
+  return (append) => {
+    try {
+      for (const line of iterateJsonlLinesSync(transcriptPath)) {
+        const parsed = parseJsonlLine(line);
+        if (parsed) {
+          append(parsed as TranscriptEvent);
+        }
+      }
+    } catch {
+      // The caller records the malformed transcript issue; keep the readable prefix.
+    }
+  };
+}
+
 export function readSqliteEntryCount(target: SessionStoreTarget): number {
   const result = readOnlySqliteSessionEntries(target);
   return result.ok ? result.summaries.length : 0;

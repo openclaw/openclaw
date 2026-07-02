@@ -286,9 +286,12 @@ Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, refreshes the
 sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
 body that avoids transcript contents, raw environment, secrets, and unbounded
-config. With `--github-issue --yes`, doctor uses the GitHub CLI to create the
-issue in `openclaw/openclaw`; without confirmation it writes the local support
-report and prints a prefilled issue URL.
+config. When no failed migration manifest exists but a selected agent SQLite
+database is corrupt or not a database, recovery preserves the DB, WAL, and SHM
+files by renaming them with a `.corrupt-<timestamp>` suffix so the next startup
+can create a fresh database. With `--github-issue --yes`, doctor uses the GitHub
+CLI to create the issue in `openclaw/openclaw`; without confirmation it writes
+the local support report and prints a prefilled issue URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the

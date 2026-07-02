@@ -1186,7 +1186,6 @@ export async function resetSessionEntryLifecycle(params: {
     if (previousSessionId) {
       mutation.previousSessionId = previousSessionId;
     }
-    await params.afterEntryMutation?.(mutation);
     const archivedTranscripts = await archiveLifecycleSessionTranscripts({
       sessionId: previousSessionId,
       storePath: params.storePath,
@@ -1194,6 +1193,7 @@ export async function resetSessionEntryLifecycle(params: {
       agentId: params.agentId,
       reason: "reset",
     });
+    await params.afterEntryMutation?.(mutation);
     ensureLifecycleTranscriptHeader({
       sessionFile: nextSessionFile,
       sessionId: nextEntry.sessionId,

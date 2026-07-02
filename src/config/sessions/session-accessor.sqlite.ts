@@ -690,9 +690,6 @@ export async function resetSqliteSessionEntryLifecycle(
     runOpenClawAgentWriteTransaction((transactionDb) => {
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
       writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry);
-    }, toDatabaseOptions(resolved));
-    await params.afterEntryMutation?.(mutation);
-    runOpenClawAgentWriteTransaction((transactionDb) => {
       archivedTranscripts = current?.entry.sessionId
         ? archiveSqliteSessionStateAfterEntryRemoval({
             archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
@@ -702,6 +699,7 @@ export async function resetSqliteSessionEntryLifecycle(
           })
         : [];
     }, toDatabaseOptions(resolved));
+    await params.afterEntryMutation?.(mutation);
     emitArchivedSqliteTranscriptUpdates(archivedTranscripts);
     return {
       ...mutation,

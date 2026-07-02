@@ -1,4 +1,5 @@
 /** Builds doctor reports for session SQLite migration recovery mode. */
+import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import {
   createSessionSqliteMigrationFailureIssue,
@@ -8,6 +9,7 @@ import {
   sessionSqliteMigrationTargetKey,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-migration-run.js";
+import { readOnlySqliteDbStats, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type {
   DoctorSessionSqliteOptions,
   DoctorSessionSqliteReport,
@@ -28,6 +30,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const selectedTargetKeys = resolveRecoverTargetKeys(params.options, params.targets);
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, selectedTargetKeys);
   if (!failedRun) {
+    const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets);
+    if (recoveredCorruptTargets.length > 0) {
+      return summarizeRecoverReport(recoveredCorruptTargets);
+    }
     return summarizeRecoverReport([
       createSyntheticRecoverTargetReport(
         params.env,
@@ -78,6 +84,102 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   return report;
 }
 
+function recoverCorruptSqliteTargets(
+  targets: readonly SessionStoreTarget[],
+): DoctorSessionSqliteTargetReport[] {
+  return targets.flatMap((target) => {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (!fs.existsSync(sqlitePath)) {
+      return [];
+    }
+    const stats = readOnlySqliteDbStats(target);
+    if (stats.ok) {
+      if (stats.stats.integrityCheck && stats.stats.integrityCheck !== "ok") {
+        return [
+          recoverCorruptSqliteTarget(
+            target,
+            sqlitePath,
+            new Error(`SQLite quick_check reported: ${stats.stats.integrityCheck}`),
+          ),
+        ];
+      }
+      return [];
+    }
+    if (!isSqliteCorruptionError(stats.error)) {
+      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, stats.error)];
+    }
+    return [recoverCorruptSqliteTarget(target, sqlitePath, stats.error)];
+  });
+}
+
+function recoverCorruptSqliteTarget(
+  target: SessionStoreTarget,
+  sqlitePath: string,
+  error: unknown,
+): DoctorSessionSqliteTargetReport {
+  const report = createEmptyRecoverTargetReport(target, sqlitePath);
+  try {
+    report.corruptRecovery = moveCorruptSqliteFilesAside(sqlitePath);
+  } catch (moveError) {
+    report.issues.push({
+      code: "sqlite_corrupt_recovery_failed",
+      message: `${sqlitePath}: ${String(moveError)}; original error: ${String(error)}`,
+    });
+  }
+  return report;
+}
+
+function createRecoverInspectionFailureTargetReport(
+  target: SessionStoreTarget,
+  sqlitePath: string,
+  error: unknown,
+): DoctorSessionSqliteTargetReport {
+  const report = createEmptyRecoverTargetReport(target, sqlitePath);
+  report.issues.push({
+    code: "sqlite_recovery_inspect_failed",
+    message: `${sqlitePath}: ${String(error)}`,
+  });
+  return report;
+}
+
+function moveCorruptSqliteFilesAside(sqlitePath: string): {
+  movedFiles: string[];
+  skippedFiles: string[];
+} {
+  const movedFiles: string[] = [];
+  const skippedFiles: string[] = [];
+  const suffix = `.corrupt-${Date.now()}`;
+  for (const candidate of [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`]) {
+    if (!fs.existsSync(candidate)) {
+      skippedFiles.push(candidate);
+      continue;
+    }
+    const destination = uniqueRecoveryPath(`${candidate}${suffix}`);
+    fs.renameSync(candidate, destination);
+    movedFiles.push(destination);
+  }
+  return { movedFiles, skippedFiles };
+}
+
+function uniqueRecoveryPath(basePath: string): string {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = attempt === 0 ? basePath : `${basePath}.${attempt}`;
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(`Could not choose recovery path for ${basePath}`);
+}
+
+function isSqliteCorruptionError(error: unknown): boolean {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") {
+    return true;
+  }
+  const message = String(error).toLowerCase();
+  return message.includes("database disk image is malformed") || message.includes("not a database");
+}
+
 function resolveRecoverTargetKeys(
   options: DoctorSessionSqliteOptions,
   targets: readonly SessionStoreTarget[],
@@ -116,6 +218,28 @@ function createSyntheticRecoverTargetReport(
     sqliteEntries: 0,
     sqlitePath: "",
     storePath: resolveSessionSqliteMigrationRunsDir(env),
+    unreferencedJsonlFiles: [],
+    validatedEntries: 0,
+    validatedTranscriptEvents: 0,
+  };
+}
+
+function createEmptyRecoverTargetReport(
+  target: SessionStoreTarget,
+  sqlitePath: string,
+): DoctorSessionSqliteTargetReport {
+  return {
+    agentId: target.agentId,
+    archivedTranscriptFiles: [],
+    archivedUnreferencedJsonlFiles: [],
+    importedEntries: 0,
+    importedTranscriptEvents: 0,
+    issues: [],
+    legacyEntries: 0,
+    referencedTranscriptFiles: 0,
+    sqliteEntries: 0,
+    sqlitePath,
+    storePath: target.storePath,
     unreferencedJsonlFiles: [],
     validatedEntries: 0,
     validatedTranscriptEvents: 0,

@@ -738,6 +738,7 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
+  messages?: unknown[];
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
@@ -753,28 +754,15 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  let messages: unknown[] = [];
-  try {
-    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId,
-          sessionEntry: params.entry,
-          sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        },
-        {
-          mode: "full",
-          reason: "before_reset hook payload",
-        },
-      );
-    }
-  } catch (err) {
-    logVerbose(
-      `before_reset: failed to read session messages for ${sessionId ?? "(none)"}; firing hook with empty messages (${String(err)})`,
-    );
-  }
+  const messages =
+    params.messages ??
+    (await readGatewayBeforeResetPluginHookMessages({
+      agentId,
+      entry: params.entry,
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }));
 
   void hookRunner
     .runBeforeReset(
@@ -793,6 +781,38 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     .catch((err: unknown) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
+}
+
+async function readGatewayBeforeResetPluginHookMessages(params: {
+  agentId: string;
+  entry?: SessionEntry;
+  sessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  if (typeof params.sessionId !== "string" || params.sessionId.trim().length === 0) {
+    return [];
+  }
+  try {
+    return await readSessionMessagesAsync(
+      {
+        agentId: params.agentId,
+        sessionEntry: params.entry,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      {
+        mode: "full",
+        reason: "before_reset hook payload",
+      },
+    );
+  } catch (err) {
+    logVerbose(
+      `before_reset: failed to read session messages for ${params.sessionId}; firing hook with empty messages (${String(err)})`,
+    );
+    return [];
+  }
 }
 
 export async function performGatewaySessionReset(params: {
@@ -919,6 +939,15 @@ export async function performGatewaySessionReset(params: {
     parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
     reason: "session-reset",
   });
+  const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
+    ? await readGatewayBeforeResetPluginHookMessages({
+        agentId: normalizeAgentId(target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg)),
+        entry,
+        sessionId: entry?.sessionId,
+        sessionKey: target.canonicalKey ?? params.key,
+        storePath,
+      })
+    : undefined;
 
   const lifecycle = await resetSessionEntryLifecycle({
     agentId: target.agentId,
@@ -1075,6 +1104,7 @@ export async function performGatewaySessionReset(params: {
       await emitGatewayBeforeResetPluginHook({
         cfg,
         key: params.key,
+        messages: beforeResetMessages,
         target,
         storePath,
         entry: mutation.previousEntry,

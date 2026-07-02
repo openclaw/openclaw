@@ -102,9 +102,7 @@ describe("session store lifecycle mutations", () => {
       ]),
     );
     expect(transcriptUpdates.files).toContain(result.archivedTranscripts[0]?.archivedPath);
-    expect(callbackTranscriptEvents).toEqual([
-      createTranscriptEvent("old-session", "before reset old-session"),
-    ]);
+    expect(callbackTranscriptEvents).toEqual([]);
     expect(readArchiveLinesForSession(result, "old-session")).toEqual([
       createTranscriptEventLine("old-session", "before reset old-session"),
     ]);
@@ -137,6 +135,55 @@ describe("session store lifecycle mutations", () => {
         storePath,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("archives old SQLite transcript rows before reset callbacks can fail", async () => {
+    const now = Date.now();
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:callback-failure", storePath },
+      {
+        sessionId: "callback-old-session",
+        updatedAt: now,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      {
+        sessionKey: "agent:main:callback-failure",
+        sessionId: "callback-old-session",
+        storePath,
+      },
+      [createTranscriptEvent("callback-old-session", "before callback failure")],
+    );
+
+    await expect(
+      resetSessionEntryLifecycle({
+        storePath,
+        target: {
+          canonicalKey: "agent:main:callback-failure",
+          storeKeys: ["agent:main:callback-failure"],
+        },
+        buildNextEntry: (): SessionEntry => ({
+          sessionId: "callback-next-session",
+          updatedAt: now + 1,
+        }),
+        afterEntryMutation: () => {
+          throw new Error("callback failed");
+        },
+      }),
+    ).rejects.toThrow("callback failed");
+
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:callback-failure",
+        sessionId: "callback-old-session",
+        storePath,
+      }),
+    ).resolves.toEqual([]);
+    expect(
+      fs
+        .readdirSync(path.dirname(storePath))
+        .filter((file) => file.startsWith("callback-old-session.jsonl.reset.")),
+    ).toHaveLength(1);
   });
 
   it("deletes an entry from SQLite while archiving unreferenced transcript rows", async () => {

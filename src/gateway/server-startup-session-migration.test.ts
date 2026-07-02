@@ -162,7 +162,7 @@ describe("runStartupSessionMigration", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("blocks startup when hot legacy session SQLite import reports blocking issues", async () => {
+  it("warns without blocking when hot legacy session SQLite import reports legacy file issues", async () => {
     const log = makeLog();
     const runDoctorSessionSqlite = makeSessionSqliteImport({
       targets: [
@@ -204,6 +204,24 @@ describe("runStartupSessionMigration", () => {
       },
     });
 
+    await runStartupSessionMigration({
+      cfg: makeCfg(),
+      log,
+      deps: {
+        migrateOrphanedSessionKeys: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+        runDoctorSessionSqlite,
+      },
+    });
+
+    expect(firstLogMessage(log.warn, "malformed transcript warning")).toContain(
+      "session SQLite migration warnings",
+    );
+  });
+
+  it("classifies corrupt SQLite startup failures with recovery guidance", async () => {
+    const log = makeLog();
+    const runDoctorSessionSqlite = vi.fn().mockRejectedValue(new Error("file is not a database"));
+
     await expect(
       runStartupSessionMigration({
         cfg: makeCfg(),
@@ -213,7 +231,7 @@ describe("runStartupSessionMigration", () => {
           runDoctorSessionSqlite,
         },
       }),
-    ).rejects.toThrow("session SQLite migration failed during startup");
+    ).rejects.toThrow("openclaw doctor --session-sqlite recover --session-sqlite-all-agents");
   });
 
   it("auto-restores the current failed session SQLite migration run after files moved", async () => {
