@@ -1211,16 +1211,17 @@ describe("resolveApiKeyForProvider", () => {
     expect(resolved.source).toContain("OLLAMA_API_KEY");
   });
 
-  it("falls through to auth.order when inherited token profile is incompatible with model API", async () => {
+  it("falls through to auth.order when compaction opts into incompatible-profile fallback", async () => {
     // Simulates compaction inheriting a token-profile (mode "token", not "api-key")
     // that is incompatible with openai-responses (which requires api-key).
-    // The inherited profile is NOT locked, so the resolver should skip it and
-    // continue to auth.order.
+    // Compaction passes fallbackOnIncompatibleProfile: true, so the resolver
+    // should skip the incompatible profile and continue through auth.order.
     const resolved = await withoutEnv("OPENAI_API_KEY", () =>
       resolveApiKeyForProvider({
         provider: "openai",
         profileId: "openai:token-main",
         modelApi: "openai-responses",
+        fallbackOnIncompatibleProfile: true,
         cfg: {
           auth: {
             order: { openai: ["openai:token-main", "openai:api-key-backup"] },
@@ -1262,6 +1263,45 @@ describe("resolveApiKeyForProvider", () => {
           provider: "openai",
           profileId: "openai:token-main",
           lockedProfile: true,
+          modelApi: "openai-responses",
+          cfg: {
+            auth: {
+              order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+            },
+          },
+          store: {
+            version: 1,
+            order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+            profiles: {
+              "openai:token-main": {
+                type: "token",
+                provider: "openai",
+                token: "incompatible-token", // pragma: allowlist secret
+                expires: Date.now() + 86_400_000,
+              },
+              "openai:api-key-backup": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-backup-key", // pragma: allowlist secret
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Auth profile "openai:token-main" uses token auth, but openai/openai-responses requires an OpenAI API key profile.',
+    );
+  });
+
+  it("throws when explicit profileId without fallback opt-in is incompatible (fail-fast)", async () => {
+    // Callers like /btw pass a user-sourced profileId without lockedProfile
+    // or fallbackOnIncompatibleProfile. They must still fail fast to avoid
+    // silently switching to a different profile from auth.order.
+    await expect(
+      withoutEnv("OPENAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:token-main",
           modelApi: "openai-responses",
           cfg: {
             auth: {

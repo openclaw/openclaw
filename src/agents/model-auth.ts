@@ -1017,6 +1017,11 @@ export async function resolveApiKeyForProvider(params: {
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
+  /** When true and the resolved profile's auth mode is incompatible with the
+   *  model API, fall through to auth.order / env / config resolution instead
+   *  of throwing immediately. Only pass this from callers that inherit a
+   *  profile (compaction, subagent) — never from user-selected profile paths. */
+  fallbackOnIncompatibleProfile?: boolean;
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   modelApi?: string;
@@ -1062,13 +1067,11 @@ export async function resolveApiKeyForProvider(params: {
       modelApi: params.modelApi,
       mode: result.mode,
     });
-    // When the resolved auth profile is incompatible with the model API and
-    // the caller did not explicitly lock this profile, fall through to the
-    // remaining resolution path (auth.order, env, config) instead of failing
-    // immediately. This lets compaction and other inherited-profile callers
-    // skip incompatible profiles and continue through the configured auth
-    // order. User-locked profiles still fail fast.
-    if (!params.lockedProfile && !profileAuthAllowed) {
+    // When the caller explicitly opts into fallback (compaction, subagent)
+    // and the resolved profile's auth mode is incompatible with the model API,
+    // fall through to auth.order / env / config resolution instead of throwing.
+    // User-locked and ordinary explicit-profile calls still fail fast.
+    if (params.fallbackOnIncompatibleProfile && !profileAuthAllowed) {
       // fall through — skip this inherited profile and continue to
       // auth.order iteration / env / config resolution below.
     } else {
@@ -1543,6 +1546,7 @@ export async function getApiKeyForModel(params: {
   agentDir?: string;
   workspaceDir?: string;
   lockedProfile?: boolean;
+  fallbackOnIncompatibleProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
@@ -1554,6 +1558,7 @@ export async function getApiKeyForModel(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
+    fallbackOnIncompatibleProfile: params.fallbackOnIncompatibleProfile,
     credentialPrecedence: params.credentialPrecedence,
     modelApi: params.model.api,
   });
