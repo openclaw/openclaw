@@ -168,10 +168,13 @@ export function isAssistantCompletionReleaseNotification(
   notification: CodexServerNotification,
   turnCrossedToolHandoff: boolean,
 ): boolean {
-  if (isCompletedAssistantNotification(notification)) {
-    return true;
+  if (turnCrossedToolHandoff) {
+    return false;
   }
-  return !turnCrossedToolHandoff && isRawAssistantCompletionNotification(notification);
+  return (
+    isCompletedAssistantNotification(notification) ||
+    isRawAssistantCompletionNotification(notification)
+  );
 }
 
 /** Returns true when a notification proves assistant output is still active. */
