@@ -213,7 +213,11 @@ async function hasProviderCatalogForFilter(
     manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
-  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
+  // When discovering for a specific provider filter, include installed external
+  // plugin owners; bundled-only scoping applies only to broad unfiltered discovery.
+  const scopedPluginIds = options.discoveryEntriesOnly
+    ? pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+    : pluginIds;
   if (scopedPluginIds.length === 0) {
     return false;
   }
@@ -343,9 +347,15 @@ export async function loadProviderCatalogModelsForList(params: {
     manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
+  // When a provider filter is active, include installed external plugin owners
+  // so `models list --provider <external>` can run catalog.run for that provider.
+  // Bundled-only scoping applies to broad unfiltered or static-only discovery.
   const scopedPluginIds = onlyPluginIds
-    ? onlyPluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+    ? params.staticOnly === true
+      ? onlyPluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
+      : onlyPluginIds
     : bundledPluginIds;
+  const scopedPluginIdSet = new Set(scopedPluginIds);
   if (scopedPluginIds.length === 0) {
     return [];
   }
@@ -389,8 +399,7 @@ export async function loadProviderCatalogModelsForList(params: {
       pluginMetadataSnapshot: params.metadataSnapshot,
     })
   ).filter(
-    (provider) =>
-      typeof provider.pluginId === "string" && bundledPluginIdSet.has(provider.pluginId),
+    (provider) => typeof provider.pluginId === "string" && scopedPluginIdSet.has(provider.pluginId),
   );
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const rows: Model[] = [];

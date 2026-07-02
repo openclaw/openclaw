@@ -252,6 +252,10 @@ export async function buildModelsListResult(params: {
   const catalog = await loadModelCatalogForBrowse({
     cfg,
     view,
+    // The gateway catalog is served from a process-level cache warmed at startup.
+    // Use a longer timeout than the CLI default (750ms) so an in-flight cold-start
+    // warm does not race with the UI /model picker on first open after restart.
+    timeoutMs: 30_000,
     loadCatalog: async (loadParams) => {
       const readOnlyLoad = loadParams.readOnly ?? true;
       if (params.preloadedCatalog && readOnlyLoad) {

@@ -263,6 +263,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm; ClawHub: `clawhub:@openclaw/parallel-plugin`. Adds web search provider support.
 
+- **[pioneer](/plugins/reference/pioneer)** (`@openclaw/pioneer-provider`) - npm; ClawHub: `clawhub:@openclaw/pioneer-provider`. Adds Pioneer model provider support to OpenClaw.
+
 - **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm; ClawHub: `clawhub:@openclaw/perplexity-plugin`. Adds web search provider support.
 
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm; ClawHub: `clawhub:@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
