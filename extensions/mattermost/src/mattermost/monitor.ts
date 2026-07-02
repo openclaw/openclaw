@@ -167,6 +167,11 @@ type MattermostReaction = {
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 
+type MattermostDebouncedPost = {
+  post: MattermostPost;
+  payload: MattermostEventPayload;
+};
+
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return normalizeTrimmedStringList(values);
 }
@@ -199,6 +204,75 @@ function buildMattermostInboundReplayKeys(params: {
 }): string[] {
   return uniqueStrings(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`)).filter(
     (key) => !key.endsWith(":"),
+  );
+}
+
+function readMattermostNumberField(post: MattermostPost, field: string): number | undefined {
+  const value = (post as Record<string, unknown>)[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function resolveMattermostPostEditReplayMarker(post: MattermostPost): string {
+  const editedAt =
+    readMattermostNumberField(post, "edit_at") ?? readMattermostNumberField(post, "update_at");
+  return editedAt !== undefined ? String(editedAt) : "unknown";
+}
+
+export function resolveMattermostPostReplayMessageIds(params: {
+  post: MattermostPost;
+  payload: MattermostEventPayload;
+  messageIds?: string[];
+}): string[] {
+  const explicitIds = params.messageIds?.map((id) => id.trim()).filter(Boolean);
+  if (explicitIds?.length) {
+    return explicitIds;
+  }
+
+  const postId = params.post.id.trim();
+  if (!postId) {
+    return [];
+  }
+  if (params.payload.event !== "post_edited") {
+    return [postId];
+  }
+
+  // Mattermost edits reuse the original post id; include the edit marker so a
+  // non-mentioned original post cannot block a later mention added by editing.
+  return [`${postId}:edit:${resolveMattermostPostEditReplayMarker(params.post)}`];
+}
+
+function collapseMattermostDebouncedPosts(
+  entries: readonly MattermostDebouncedPost[],
+): MattermostDebouncedPost[] {
+  const collapsed: MattermostDebouncedPost[] = [];
+  const indexByPostId = new Map<string, number>();
+  for (const entry of entries) {
+    const postId = entry.post.id.trim();
+    if (!postId) {
+      collapsed.push(entry);
+      continue;
+    }
+    const existingIndex = indexByPostId.get(postId);
+    if (existingIndex === undefined) {
+      indexByPostId.set(postId, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
+    // Mattermost edits update an existing post, so keep the original position
+    // while replacing stale debounce snapshots with the latest event body.
+    collapsed[existingIndex] = entry;
+  }
+  return collapsed;
+}
+
+function resolveMattermostDebouncedReplayMessageIds(
+  entries: readonly MattermostDebouncedPost[],
+): string[] {
+  return entries.flatMap((entry) =>
+    resolveMattermostPostReplayMessageIds({
+      post: entry.post,
+      payload: entry.payload,
+    }),
   );
 }
 
@@ -1291,7 +1365,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
 
-    const allMessageIds = messageIds?.length ? messageIds : post.id ? [post.id] : [];
+    const allMessageIds = resolveMattermostPostReplayMessageIds({ post, payload, messageIds });
     if (allMessageIds.length === 0) {
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
@@ -1601,6 +1675,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
         const mediaPayload = buildAgentMediaPayload(mediaList);
         const commandBody = rawText.trim();
+        const primaryMessageSid = allMessageIds.at(-1) ?? post.id ?? undefined;
         const inboundHistory =
           historyKey && historyLimit > 0
             ? createChannelHistoryWindow({ historyMap: channelHistories }).buildInboundHistory({
@@ -1634,7 +1709,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           SenderId: senderId,
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
-          MessageSid: post.id ?? undefined,
+          MessageSid: primaryMessageSid,
           MessageSids: allMessageIds.length > 1 ? allMessageIds : undefined,
           MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
           MessageSidLast:
@@ -2179,10 +2254,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg,
     channel: "mattermost",
   });
-  const debouncer = core.channel.debounce.createInboundDebouncer<{
-    post: MattermostPost;
-    payload: MattermostEventPayload;
-  }>({
+  const debouncer = core.channel.debounce.createInboundDebouncer<MattermostDebouncedPost>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
       const channelId =
@@ -2207,15 +2279,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return !core.channel.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
+      const collapsedEntries = collapseMattermostDebouncedPosts(entries);
+      const last = collapsedEntries.at(-1);
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
-        await handlePost(last.post, last.payload);
+      const replayMessageIds = resolveMattermostDebouncedReplayMessageIds(entries);
+      if (collapsedEntries.length === 1) {
+        await handlePost(
+          last.post,
+          last.payload,
+          replayMessageIds.length > 0 ? replayMessageIds : undefined,
+        );
         return;
       }
-      const combinedText = entries
+      const combinedText = collapsedEntries
         .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
         .filter(Boolean)
         .join("\n");
@@ -2224,8 +2302,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         message: combinedText,
         file_ids: [],
       };
-      const ids = entries.map((entry) => entry.post.id).filter(Boolean);
-      await handlePost(mergedPost, last.payload, ids.length > 0 ? ids : undefined);
+      await handlePost(
+        mergedPost,
+        last.payload,
+        replayMessageIds.length > 0 ? replayMessageIds : undefined,
+      );
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
@@ -2247,6 +2328,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return me.update_at ?? 0;
     },
     onPosted: async (post, payload) => {
+      const senderId = post.user_id ?? payload.broadcast?.user_id;
+      if (senderId === botUserId) {
+        logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
+        return;
+      }
+      if (isSystemPost(post)) {
+        logVerboseMessage(`mattermost: drop post (system post type=${post.type ?? "unknown"})`);
+        return;
+      }
       await debouncer.enqueue({ post, payload });
     },
     onReaction: async (payload) => {
