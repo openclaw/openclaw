@@ -160,7 +160,9 @@ describe("RealtimeTalkSession", () => {
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
     const request = vi
       .fn()
-      .mockRejectedValueOnce(new Error("talk.client.create is client-owned; use talk.session.create"))
+      .mockRejectedValueOnce(
+        new Error("talk.client.create is client-owned; use talk.session.create"),
+      )
       .mockResolvedValueOnce({
         provider: "example",
         transport: "gateway-relay",
