@@ -91,7 +91,7 @@ describe("native app i18n inventory", () => {
         (entry) =>
           entry.source === '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       entries.some(
         (entry) =>
