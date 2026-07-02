@@ -5,12 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
-import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -20,6 +14,12 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -1783,41 +1783,49 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
-  it("recovers terminal failed agent API sessions without rotating the session id", async () => {
-    const sessionId = "failed-agent-session";
-    await withTempDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(`${sessionsDir}/${sessionId}.jsonl`, "", "utf8");
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: `${sessionsDir}/sessions.json`,
-        entry: {
-          sessionId,
-          status: "failed",
-          startedAt: 100,
-          endedAt: 200,
-          runtimeMs: 100,
-          abortedLastRun: true,
-          updatedAt: Date.now(),
+  it.each(["failed", "timeout", "killed"] as const)(
+    "recovers terminal %s agent API sessions without rotating the session id",
+    async (status) => {
+      const sessionId = `${status}-agent-session`;
+      await withTempDir(
+        { prefix: `openclaw-gateway-terminal-${status}-recovery-` },
+        async (root) => {
+          const sessionsDir = `${root}/sessions`;
+          await fs.mkdir(sessionsDir, { recursive: true });
+          await fs.writeFile(`${sessionsDir}/${sessionId}.jsonl`, "", "utf8");
+          mocks.loadSessionEntry.mockReturnValue({
+            cfg: {},
+            storePath: `${sessionsDir}/sessions.json`,
+            entry: {
+              sessionId,
+              status,
+              startedAt: 100,
+              endedAt: 200,
+              runtimeMs: 100,
+              abortedLastRun: true,
+              updatedAt: Date.now(),
+            },
+            canonicalKey: "agent:main:main",
+          });
+
+          const capturedEntry = await runMainAgentAndCaptureEntry(
+            `recover-terminal-${status}-agent-session`,
+          );
+          const call = await waitForAgentCommandCall();
+
+          expect(call.sessionId).toBe(sessionId);
+          expectRecordFields(capturedEntry, {
+            sessionId,
+            status: undefined,
+            startedAt: undefined,
+            endedAt: undefined,
+            runtimeMs: undefined,
+            abortedLastRun: undefined,
+          });
         },
-        canonicalKey: "agent:main:main",
-      });
-
-      const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
-      const call = await waitForAgentCommandCall();
-
-      expect(call.sessionId).toBe(sessionId);
-      expectRecordFields(capturedEntry, {
-        sessionId,
-        status: undefined,
-        startedAt: undefined,
-        endedAt: undefined,
-        runtimeMs: undefined,
-        abortedLastRun: undefined,
-      });
-    });
-  });
+      );
+    },
+  );
 
   it("does not restore a stale session id over a fresh store rotation (#5369)", async () => {
     mocks.resolveSessionLifecycleTimestamps.mockImplementation(

@@ -63,6 +63,28 @@ Observed results:
 Review follow-up validation after restoring the pairing QR sensitive-display
 path:
 
+- Reviewer follow-up validation after restoring current-main ACP task ownership
+  and terminal session cleanup invariants, rerun on 2026-07-02:
+  - Addressed reviewer P1: confirmed backend ACP manual-spawn child turns no
+    longer create duplicate Gateway CLI task rows when ACP metadata proves the
+    spawn control plane already owns the requester-visible task.
+  - Addressed reviewer P2: visible requests that reuse recoverable terminal
+    `failed`, `timeout`, or `killed` sessions now clear stale status, timing,
+    runtime, and abort fields without rotating the valid session id.
+  - Regression proof: `src/gateway/server-methods/agent.test.ts` covers
+    confirmed ACP suppression, fallback tracking for unsafe ACP-shaped cases,
+    plugin-subagent precedence, and terminal reuse cleanup for all three
+    recoverable terminal statuses.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/agent.test.ts`
+    - 2 files, 350 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-chat.agent-events.test.ts`
+    - 1 file, 99 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts src/gateway/server-methods/chat-history-omission-logging.test.ts src/gateway/session-utils.fs.test.ts`
+    - 7 files, 293 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/system-prompt.test.ts`
+    - 1 file, 92 tests passed.
+  - `git diff --check`
+    - passed.
 - Reviewer follow-up validation after gating durable orchestration prompt
   guidance, rerun on 2026-07-02 after rebasing onto PR2 foundation commit
   `cb0a5b5a9b`:

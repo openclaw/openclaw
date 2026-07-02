@@ -640,14 +640,34 @@ type GatewayAgentTaskTrackingMode = "cli" | "plugin_subagent" | "none";
 function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
   sessionKey?: string;
+  acpTurnSource?: "manual_spawn";
   inputProvenance?: InputProvenance;
+  log: GatewayRequestContext["logGateway"];
 }): GatewayAgentTaskTrackingMode {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
-  return params.client?.internal?.agentRunTracking === "plugin_subagent"
-    ? "plugin_subagent"
-    : "cli";
+  if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
+    return "plugin_subagent";
+  }
+  if (
+    params.acpTurnSource === "manual_spawn" &&
+    resolveCanUseInternalRuntimeHandoff(params.client) &&
+    isAcpSessionKey(params.sessionKey)
+  ) {
+    try {
+      if (readAcpSessionMeta({ sessionKey: params.sessionKey }) != null) {
+        return "none";
+      }
+    } catch (err) {
+      params.log.warn(
+        `failed to read ACP session metadata for ${params.sessionKey}; falling back to cli task tracking: ${formatForLog(
+          err,
+        )}`,
+      );
+    }
+  }
+  return "cli";
 }
 
 async function registerPluginSubagentRunFromGateway(params: {
@@ -2166,6 +2186,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             ? freshEntry?.sessionId
             : freshSessionId;
           const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
+          const shouldClearReusedTerminalState =
+            !freshRotatedSessionId &&
+            freshCanReuseSession &&
+            (freshEntry?.status === "failed" ||
+              freshEntry?.status === "timeout" ||
+              freshEntry?.status === "killed");
+          const shouldClearTerminalState =
+            shouldClearRotatedState || shouldClearReusedTerminalState;
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
@@ -2194,18 +2222,18 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             space: nextGroup.groupSpace,
             ...(pluginOwnerId ? { pluginOwnerId } : {}),
-            ...(shouldClearRotatedState
+            ...(shouldClearTerminalState
               ? {
                   status: undefined,
                   startedAt: undefined,
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
-                  sessionFile: undefined,
                 }
               : {}),
+            ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
           };
-          if (shouldClearRotatedState) {
+          if (shouldClearTerminalState) {
             clearAllCliSessions(patch);
           }
           return {
@@ -2681,7 +2709,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
         client,
         sessionKey: resolvedSessionKey,
+        acpTurnSource: request.acpTurnSource,
         inputProvenance,
+        log: context.logGateway,
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";
