@@ -406,6 +406,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
   "agents.defaults.compaction.provider",
+  "agents.defaults.compaction.thinkingLevel",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
@@ -473,6 +474,16 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.thinkingLevel": [
+    '"off"',
+    '"minimal"',
+    '"low"',
+    '"medium"',
+    '"high"',
+    '"xhigh"',
+    '"adaptive"',
+    '"max"',
+  ],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
