@@ -14,6 +14,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -371,6 +372,29 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("targets only changed non-default channel accounts", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.telegram.accounts.alpha.enabled",
+      "channels.telegram.accounts.beta.commands",
+    ]);
+
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.restartChannelAccounts).toEqual(
+      new Map([["telegram", new Set(["alpha", "beta"])]]),
+    );
+  });
+
+  it("keeps default account and channel-wide changes on the wholesale path", () => {
+    const plan = buildGatewayReloadPlan([
+      "channels.telegram.accounts.alpha.enabled",
+      "channels.telegram.accounts.default.commands",
+      "channels.telegram.botToken",
+    ]);
+
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+    expect(plan.restartChannelAccounts).toEqual(new Map());
   });
 
   it("restarts every channel whose config prefix matches", () => {
@@ -1659,6 +1683,53 @@ describe("startGatewayConfigReloader", () => {
       harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     await harness.reloader.stop();
+  });
+
+  it("runs account-scoped channel changes through hot reload", async () => {
+    const channelRegistry = createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "test",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: { listAccountIds: () => ["default", "alpha"], resolveAccount: () => ({}) },
+          reload: { configPrefixes: ["channels.telegram"] },
+        } satisfies ChannelPlugin,
+        source: "test",
+      },
+    ]);
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { telegram: { accounts: { alpha: { enabled: false } } } },
+    } as OpenClawConfig;
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { telegram: { accounts: { alpha: { enabled: true } } } },
+    } as OpenClawConfig;
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "account-reload" })),
+      { initialConfig },
+    );
+
+    pinActivePluginChannelRegistry(channelRegistry);
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      const [plan] = getOnlyHotReloadCall(harness);
+      expect(plan.restartChannelAccounts).toEqual(new Map([["telegram", new Set(["alpha"])]]));
+      expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
+    } finally {
+      releasePinnedPluginChannelRegistry(channelRegistry);
+      await harness.reloader.stop();
+    }
   });
 
   it("plans one immutable runtime override snapshot per candidate", async () => {

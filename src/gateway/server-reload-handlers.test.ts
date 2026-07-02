@@ -332,12 +332,15 @@ function createDeferredVoid() {
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
-    start: (channel: ChannelKind) => Promise<void>;
-    stop: (channel: ChannelKind) => Promise<void>;
+    start: ReloadHandlerParams["startChannel"];
+    stop: ReloadHandlerParams["stopChannel"];
   },
   reloadPlugins?: Parameters<typeof createGatewayReloadHandlers>[0]["reloadPlugins"],
   stopPostReadySidecars = vi.fn(),
   recovery: boolean | NonNullable<ReloadHandlerParams["requestRecoveryRestart"]> = true,
+  options?: {
+    getChannelAutostartSuppression?: ReloadHandlerParams["getChannelAutostartSuppression"];
+  },
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const stopExitWatchers = vi.fn();
@@ -369,6 +372,7 @@ function createReloadHandlersForTest(
     setState,
     startChannel: channels?.start ?? vi.fn(async () => {}),
     stopChannel: channels?.stop ?? vi.fn(async () => {}),
+    getChannelAutostartSuppression: options?.getChannelAutostartSuppression,
     stopPostReadySidecars,
     reloadPlugins:
       reloadPlugins ??
@@ -3113,6 +3117,206 @@ describe("gateway channel hot reload handlers", () => {
       }
     }
   }
+
+  function createAccountReloadPlan(
+    accountIds: string[],
+    overrides: Partial<GatewayReloadPlan> = {},
+  ): GatewayReloadPlan {
+    return {
+      ...createChannelReloadPlan([]),
+      changedPaths: accountIds.map((accountId) => `channels.discord.accounts.${accountId}`),
+      restartChannelAccounts: new Map([["discord", new Set(accountIds)]]),
+      ...overrides,
+    };
+  }
+
+  async function withDiscordAccounts(accountIds: string[], run: () => Promise<void>) {
+    const registry = createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "discord",
+            config: { listAccountIds: () => accountIds },
+          }),
+        },
+        source: "test",
+      },
+    ]);
+    pinActivePluginChannelRegistry(registry);
+    try {
+      await run();
+    } finally {
+      releasePinnedPluginChannelRegistry(registry);
+    }
+  }
+
+  it("restarts only the changed account", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha", "beta"], async () => {
+        await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
+  });
+
+  it("continues targeted restarts after an account failure", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+        if (accountId === "alpha") {
+          throw new Error("stop failed");
+        }
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const { applyHotReload } = createReloadHandlersForTest(
+      undefined,
+      channels,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha", "beta"], async () => {
+        await applyHotReload(createAccountReloadPlan(["alpha", "beta"]), {});
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:alpha", "stop:discord:beta", "start:discord:beta"]);
+    expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+  });
+
+  it("promotes unlisted accounts to a wholesale restart", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha"], async () => {
+        await applyHotReload(createAccountReloadPlan(["removed-account"]), {});
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+  });
+
+  it("stops account targets without restarting them while autostart is suppressed", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const { applyHotReload } = createReloadHandlersForTest(
+      undefined,
+      channels,
+      undefined,
+      undefined,
+      true,
+      {
+        getChannelAutostartSuppression: () => ({
+          reason: "crash-loop-breaker",
+          message: "safe mode",
+        }),
+      },
+    );
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccounts(["default", "alpha"], async () => {
+        await applyHotReload(createAccountReloadPlan(["alpha"]), {});
+      });
+    });
+
+    expect(events).toEqual(["stop:discord:alpha"]);
+  });
+
+  it("defers account restarts when a plugin reload did not stop a channel", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const reloadPlugins = vi.fn(
+      async (): Promise<GatewayPluginReloadResult> => ({
+        restartChannels: new Set(),
+        activeChannels: new Set(["discord"]),
+      }),
+    );
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload, channels, reloadPlugins);
+    hoisted.activeEmbeddedRunCount.value = 1;
+    vi.useFakeTimers();
+    let reload: Promise<void> | undefined;
+
+    try {
+      await withChannelReloadsEnabled(async () => {
+        await withDiscordAccounts(["default", "alpha"], async () => {
+          reload = applyHotReload(createAccountReloadPlan(["alpha"], { reloadPlugins: true }), {});
+          await vi.advanceTimersByTimeAsync(0);
+          expect(events).toEqual([]);
+          expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("(discord)"));
+
+          hoisted.activeEmbeddedRunCount.value = 0;
+          await vi.advanceTimersByTimeAsync(500);
+          await reload;
+        });
+      });
+    } finally {
+      hoisted.activeEmbeddedRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(500).catch(() => {});
+      vi.useRealTimers();
+      await reload?.catch(() => {});
+    }
+
+    expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
+    expect(reloadPlugins).toHaveBeenCalledOnce();
+  });
+
+  it("requires a recovery owner for targeted account reloads", async () => {
+    const { applyHotReload } = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    await expect(applyHotReload(createAccountReloadPlan(["alpha"]), {})).rejects.toThrow(
+      "config reload requires a managed gateway restart owner for irreversible hot reload",
+    );
+  });
 
   it("refuses channel restarts while crash-loop safe mode suppresses autostart", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
