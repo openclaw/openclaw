@@ -4,7 +4,11 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { getBashShellConfig } from "../shell-utils.js";
+
+const execAsync = promisify(exec);
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -124,6 +128,94 @@ export function resolveHeadersOrThrow(
   const resolved: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     resolved[key] = resolveConfigValueOrThrow(value, `${description} header "${key}"`);
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
+async function executeWithDefaultShellAsync(command: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execAsync(command, {
+      timeout: 10000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function executeCommandUncachedAsync(commandConfig: string): Promise<string | undefined> {
+  const command = commandConfig.slice(1);
+  return process.platform === "win32"
+    ? (async () => {
+        const configuredResult = executeWithConfiguredShell(command);
+        return configuredResult.executed
+          ? configuredResult.value
+          : await executeWithDefaultShellAsync(command);
+      })()
+    : executeWithDefaultShellAsync(command);
+}
+
+async function executeCommandAsync(commandConfig: string): Promise<string | undefined> {
+  if (commandResultCache.has(commandConfig)) {
+    return commandResultCache.get(commandConfig);
+  }
+
+  const result = await executeCommandUncachedAsync(commandConfig);
+  commandResultCache.set(commandConfig, result);
+  return result;
+}
+
+/**
+ * Resolve a config value (API key, header value, etc.) to an actual value (async).
+ * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
+ * - Otherwise checks environment variable first, then treats as literal (not cached)
+ */
+export async function resolveConfigValueAsync(config: string): Promise<string | undefined> {
+  if (config.startsWith("!")) {
+    return executeCommandAsync(config);
+  }
+  const envValue = process.env[config];
+  return envValue || config;
+}
+
+/**
+ * Resolve all header values using the same resolution logic as API keys (async).
+ */
+export async function resolveConfigValueUncachedAsync(config: string): Promise<string | undefined> {
+  if (config.startsWith("!")) {
+    return executeCommandUncachedAsync(config);
+  }
+  const envValue = process.env[config];
+  return envValue || config;
+}
+
+export async function resolveConfigValueOrThrowAsync(
+  config: string,
+  description: string,
+): Promise<string> {
+  const resolvedValue = await resolveConfigValueUncachedAsync(config);
+  if (resolvedValue !== undefined) {
+    return resolvedValue;
+  }
+
+  if (config.startsWith("!")) {
+    throw new Error(`Failed to resolve ${description} from shell command: ${config.slice(1)}`);
+  }
+
+  throw new Error(`Failed to resolve ${description}`);
+}
+
+export async function resolveHeadersOrThrowAsync(
+  headers: Record<string, string> | undefined,
+  description: string,
+): Promise<Record<string, string> | undefined> {
+  if (!headers) {
+    return undefined;
+  }
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    resolved[key] = await resolveConfigValueOrThrowAsync(value, `${description} header "${key}"`);
   }
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }

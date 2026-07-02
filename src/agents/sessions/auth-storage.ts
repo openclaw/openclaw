@@ -7,6 +7,7 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { replaceFileAtomicSync } from "../../infra/replace-file.js";
@@ -22,7 +23,7 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
-import { resolveConfigValue } from "./resolve-config-value.js";
+import { resolveConfigValue, resolveConfigValueAsync } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -170,7 +171,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       });
 
       throwIfCompromised();
-      const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
+      const current = existsSync(this.authPath) ? await fs.readFile(this.authPath, "utf-8") : undefined;
       const { result, next } = await fn(current);
       throwIfCompromised();
       if (next !== undefined) {
@@ -502,7 +503,7 @@ export class AuthStorage {
     const cred = this.data[providerId];
 
     if (cred?.type === "api_key") {
-      return resolveConfigValue(cred.key);
+      return resolveConfigValueAsync(cred.key);
     }
 
     if (cred?.type === "oauth") {
