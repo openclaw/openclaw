@@ -67,6 +67,12 @@ spec:
               value: /home/node/.openclaw
             - name: NODE_ENV
               value: production
+            # V8 sizes its heap from host RAM and ignores the cgroup memory
+            # limit, so under resources.limits.memory it can be OOM-killed
+            # (exit 137) when memory use spikes. Pin the heap to ~75% of the
+            # limit below.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536"
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:
