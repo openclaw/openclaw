@@ -5,6 +5,7 @@ import {
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 
@@ -52,6 +53,17 @@ export function resolveDiscordFormattingOptions(ctx: {
   };
 }
 
+export function shouldReplyToFirstDiscordChunkOnly(params: {
+  replyToIdSource?: ReplyToResolution["source"];
+  replyToMode?: ReplyToMode;
+}): boolean {
+  return (
+    params.replyToIdSource === "implicit" &&
+    params.replyToMode !== undefined &&
+    isSingleUseReplyToMode(params.replyToMode)
+  );
+}
+
 export async function createDiscordPayloadSendContext(ctx: {
   cfg: OpenClawConfig;
   to: string;
@@ -65,6 +77,7 @@ export async function createDiscordPayloadSendContext(ctx: {
 }): Promise<{
   target: string;
   formatting: DiscordFormattingOptions;
+  replyToFirstChunkOnly: boolean;
   resolveReplyTo: () => string | undefined;
   send: DiscordSendFn;
   sendVoice: DiscordVoiceSendFn;
@@ -74,6 +87,10 @@ export async function createDiscordPayloadSendContext(ctx: {
   return {
     target: resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId }),
     formatting: resolveDiscordFormattingOptions(ctx),
+    replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
+      replyToIdSource: ctx.replyToIdSource,
+      replyToMode: ctx.replyToMode,
+    }),
     resolveReplyTo: createReplyToFanout({
       replyToId: ctx.replyToId,
       replyToIdSource: ctx.replyToIdSource,

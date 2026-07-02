@@ -6,7 +6,6 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -24,6 +23,7 @@ import {
   loadDiscordSendRuntime,
   resolveDiscordFormattingOptions,
   resolveDiscordOutboundTarget,
+  shouldReplyToFirstDiscordChunkOnly,
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
@@ -103,17 +103,6 @@ async function maybeSendDiscordWebhookText(params: {
     avatarUrl: persona.avatarUrl,
   });
   return result;
-}
-
-function shouldReplyToFirstDiscordChunkOnly(params: {
-  replyToIdSource?: "explicit" | "implicit";
-  replyToMode?: "off" | "first" | "all" | "batched";
-}): boolean {
-  return (
-    params.replyToIdSource === "implicit" &&
-    params.replyToMode !== undefined &&
-    isSingleUseReplyToMode(params.replyToMode)
-  );
 }
 
 export const discordOutbound: ChannelOutboundAdapter = {
