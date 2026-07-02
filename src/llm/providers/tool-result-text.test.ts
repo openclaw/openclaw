@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 describe("extractToolResultText", () => {
+  it("replays plain string content without dropping it character-by-character", () => {
+    expect(extractToolResultText("plain status output" as never)).toBe("plain status output");
+  });
+
+  it("replays a single structured object as readable fallback text", () => {
+    const textFromOutputField = extractToolResultText({ output: "status card text" } as never);
+    const textFromPayloadObject = extractToolResultText({
+      type: "json",
+      payload: { ok: true },
+    } as never);
+
+    expect(textFromOutputField).toContain("status card text");
+    expect(textFromPayloadObject).toContain('"ok":true');
+  });
+
   it("redacts structured secret fields with the shared tool-payload contract", () => {
     const text = extractToolResultText([
       {

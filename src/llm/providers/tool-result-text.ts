@@ -123,11 +123,23 @@ function truncateProviderToolText(text: string): string {
   return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
-export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
+function normalizeToolResultBlocks(blocks: unknown): readonly unknown[] {
+  if (Array.isArray(blocks)) {
+    return blocks;
+  }
+  if (blocks === null || blocks === undefined) {
+    return [];
+  }
+  return [blocks];
+}
+
+export function describeToolResultMediaPlaceholder(
+  blocks: readonly unknown[] | unknown,
+): string | undefined {
   let hasImage = false;
   let hasAudio = false;
 
-  for (const block of blocks) {
+  for (const block of normalizeToolResultBlocks(blocks)) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -177,10 +189,14 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
   return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;
 }
 
-export function extractToolResultText(blocks: readonly unknown[]): string {
+export function extractToolResultText(blocks: readonly unknown[] | unknown): string {
+  if (typeof blocks === "string") {
+    return sanitizeSurrogates(blocks);
+  }
+
   const explicitTexts: string[] = [];
   const structuredTexts: string[] = [];
-  for (const block of blocks) {
+  for (const block of normalizeToolResultBlocks(blocks)) {
     const text = extractToolResultBlockText(block);
     if (!text) {
       continue;
