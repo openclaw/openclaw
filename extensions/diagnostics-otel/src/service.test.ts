@@ -2460,6 +2460,10 @@ describe("diagnostics-otel service", () => {
     expect(harnessDuration?.[1]?.["openclaw.outcome"]).toBe("completed");
     expect(Object.hasOwn(harnessDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(harnessDuration?.[1] ?? {}, "openclaw.sessionKey")).toBe(false);
+    const harnessDurationBoundaries = histogramCreateOptions("openclaw.harness.duration_ms")?.advice
+      ?.explicitBucketBoundaries;
+    expect(harnessDurationBoundaries).toContain(30_000);
+    expect(harnessDurationBoundaries?.at(-1)).toBe(600_000);
     const toolDuration = lastHistogramRecord("openclaw.tool.execution.duration_ms");
     expect(toolDuration?.[0]).toBe(20);
     expect(toolDuration?.[1]?.["openclaw.tool.source"]).toBe("core");
