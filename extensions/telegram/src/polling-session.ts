@@ -3,11 +3,7 @@ import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import {
-  collectErrorGraphCandidates,
-  formatErrorMessage,
-  readErrorName,
-} from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
@@ -26,13 +22,20 @@ import {
 } from "./bot-processing-outcome.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
-import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import {
+  resolveNonRetryableSpooledUpdateFailure,
+  resolveSpooledUpdateAttemptNumber,
+  resolveSpooledUpdateRetryDelayMs,
+  shouldDeadLetterRetryableSpooledUpdate,
+  TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
+} from "./spooled-update-retry-policy.js";
 import {
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdate,
@@ -135,74 +138,12 @@ const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 const TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS = 2 * TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS;
-const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
-const TELEGRAM_SPOOLED_RETRY_BASE_MS = 1_000;
-const TELEGRAM_SPOOLED_RETRY_MAX_MS = 3 * 60_000;
-const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
-const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
-const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
-}
-
-type NonRetryableSpooledUpdateFailure = {
-  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
-  message: string;
-};
-
-function resolveNonRetryableSpooledUpdateFailure(
-  err: unknown,
-): NonRetryableSpooledUpdateFailure | null {
-  for (const candidate of collectErrorGraphCandidates(err, (current) => [
-    current.cause,
-    current.error,
-  ])) {
-    const message = formatErrorMessage(candidate);
-    if (isTelegramMessageDispatchReplayForgetError(candidate)) {
-      // A committed dispatch key that cannot be rolled back makes retry unsafe:
-      // the next replay can be duplicate-suppressed and then deleted.
-      return { reason: "dispatch-dedupe-rollback-failed", message };
-    }
-    if (
-      readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
-      MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)
-    ) {
-      return { reason: "missing-agent-harness", message };
-    }
-  }
-  return null;
-}
-
-function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = Date.now()): number {
-  const attempts = update.attempts ?? 0;
-  if (!update.lastError || update.lastAttemptAt === undefined || attempts <= 0) {
-    return 0;
-  }
-  const exponent = Math.min(attempts - 1, 8);
-  const delayMs = Math.min(
-    TELEGRAM_SPOOLED_RETRY_MAX_MS,
-    TELEGRAM_SPOOLED_RETRY_BASE_MS * 2 ** exponent,
-  );
-  return Math.max(0, update.lastAttemptAt + delayMs - now);
-}
-
-function resolveSpooledUpdateAttemptNumber(update: TelegramSpooledUpdate): number {
-  return (update.attempts ?? 0) + 1;
-}
-
-function shouldDeadLetterRetryableSpooledUpdate(
-  update: TelegramSpooledUpdate,
-  attempt: number,
-  now = Date.now(),
-): boolean {
-  return (
-    attempt >= TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS &&
-    now - update.receivedAt >= TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS
-  );
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
