@@ -787,6 +787,11 @@ export async function buildSessionEntry(
       false;
     let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
+    // Text-based [cron: prefix detection for no-metadata archives.  Set
+    // separately from generatedByCronRun so the content wipe + message
+    // skip only fire on record-level trusted provenance, not on user-
+    // typed text that happens to match the cron prefix pattern.  (#98241)
+    let archiveOpaqueByCronPromptText = false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
@@ -840,15 +845,22 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
+      if (allowArchiveContentCronClassification) {
+        // Detect no-metadata cron archives through the [cron: text
+        // prefix for opacity (so internal cron output stays excluded
+        // from memory_search).  Do NOT wipe collected content or skip
+        // subsequent messages — only record-level cron provenance
+        // (isCronRunGeneratedRecord) triggers the cross-message wipe.
+        // User-typed text like "[cron:daily-digest] why did it fail?"
+        // is indistinguishable from a genuine cron prompt by string
+        // matching alone, so the per-message sanitizer handles
+        // individual messages while the archive opacity flag keeps
+        // genuine no-metadata cron archives opaque.  (#98241)
+        if (
+          isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
+        ) {
+          archiveOpaqueByCronPromptText = true;
+        }
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
@@ -886,7 +898,7 @@ export async function buildSessionEntry(
       lineMap,
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
-      ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
+      ...(generatedByCronRun || archiveOpaqueByCronPromptText ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);
