@@ -100,8 +100,23 @@ async function archiveLegacyImportRunRecords(params: {
     if (!entry.isFile() || !entry.name.endsWith(".json")) {
       continue;
     }
+    const filePath = path.join(importRunsDir, entry.name);
+    // Only archive files that were successfully read and migrated. If the file
+    // is malformed (partial write, truncation, syntax error) it was skipped by
+    // readLegacyMemoryWikiImportRunRecords; leave it in place so the user can
+    // inspect and repair it instead of silently renaming it away.
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      JSON.parse(raw);
+    } catch {
+      params.warnings.push(
+        `Skipped malformed legacy import-run file ${filePath} — not archived. ` +
+          `Inspect or delete the file, then re-run \`openclaw doctor --fix\`.`,
+      );
+      continue;
+    }
     await archiveLegacySource({
-      filePath: path.join(importRunsDir, entry.name),
+      filePath,
       label: "Memory Wiki import-run legacy record",
       changes: params.changes,
       warnings: params.warnings,

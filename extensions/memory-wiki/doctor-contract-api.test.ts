@@ -192,6 +192,53 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
   });
 
+  it("skips malformed legacy import-run files, leaving them in place with a warning", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const validPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-valid");
+    const malformedPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-broken");
+    await fs.mkdir(path.dirname(validPath), { recursive: true });
+    await fs.writeFile(
+      validPath,
+      `${JSON.stringify({
+        version: 1,
+        runId: "chatgpt-valid",
+        importType: "chatgpt",
+        exportPath: "/tmp/a",
+        sourcePath: "/tmp/a/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/a.md"],
+        updatedPaths: [],
+      })}\n`,
+    );
+    // Partial write / editor save with a syntax error -> not valid JSON.
+    await fs.writeFile(malformedPath, "{ broken json , ");
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) throw new Error("Expected import-run migration");
+
+    // Detection still reports the valid record; malformed ones do not block detection.
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("Memory Wiki import runs:")],
+    });
+    // Migration succeeds; the malformed file is left in place with a warning.
+    const result = await migration.migrateLegacyState(params);
+    expect(result.warnings).toEqual([expect.stringContaining("malformed legacy import-run file")]);
+    // Valid file -> archived (renamed).
+    await expect(fs.stat(validPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${validPath}.migrated`)).resolves.toBeDefined();
+    // Malformed file -> left in place (not archived, not renamed).
+    await expect(fs.stat(malformedPath)).resolves.toBeDefined();
+    await expect(fs.stat(`${malformedPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("merges legacy entries with existing plugin state before archiving", async () => {
     const stateDir = await makeTempDir();
     const vaultRoot = path.join(stateDir, "vault");
