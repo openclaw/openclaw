@@ -486,8 +486,6 @@ extension SettingsProTab {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Divider()
-
                     Text(self.notificationRelayDetail)
                         .font(.caption)
                         .foregroundStyle(.secondary)

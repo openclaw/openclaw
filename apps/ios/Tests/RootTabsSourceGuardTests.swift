@@ -326,6 +326,7 @@ struct RootTabsSourceGuardTests {
         #expect(notificationsSection.contains("detail: \"\""))
         #expect(notificationsSection.contains("self.handleNotificationAction()"))
         #expect(notificationsSection.contains("self.notificationRelayDetail"))
+        #expect(!notificationsSection.contains("Divider()"))
         #expect(!notificationsSection.contains("systemName: \"network\""))
         #expect(actionsSource.contains("if !detail.isEmpty"))
     }
