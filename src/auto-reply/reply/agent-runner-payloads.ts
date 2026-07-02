@@ -15,6 +15,7 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -37,6 +38,43 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 
 function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
+}
+
+function hasNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function shouldMarkHeartbeatMessageToolDelivered(payload: ReplyPayload): boolean {
+  if (payload.isError || payload.isFallbackNotice || payload.isReasoning) {
+    return false;
+  }
+  if (payload.interactive || payload.presentation || payload.channelData) {
+    return false;
+  }
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  return sendable.hasText && !sendable.hasMedia;
+}
+
+function markHeartbeatMessageToolDeliveredPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  const markable = payloads.filter(shouldMarkHeartbeatMessageToolDelivered);
+  if (markable.length !== 1) {
+    return payloads;
+  }
+  let nextPayloads: ReplyPayload[] | undefined;
+  for (let index = 0; index < payloads.length; index++) {
+    const payload = payloads[index];
+    if (payload !== markable[0]) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
+    if (!nextPayloads) {
+      nextPayloads = payloads.slice(0, index);
+    }
+    nextPayloads.push(markReplyPayloadForMessageToolDeliveryForReplyRoute(payload));
+  }
+  return nextPayloads ?? payloads;
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -296,6 +334,7 @@ export async function buildReplyPayloads(params: {
     messagingToolSentTargets.length > 0;
   const sentMediaUrlFallback = params.messagingToolSentMediaUrls ?? [];
   let dedupedPayloads = silentFilteredPayloads;
+  let hasHeartbeatRouteTextDeliveryEvidence = false;
   if (shouldCheckMessagingToolDedupe) {
     const dedupeRuntime = await loadReplyPayloadsDedupeRuntime();
     const originatingTo = resolveOriginMessageTo({
@@ -343,6 +382,11 @@ export async function buildReplyPayloads(params: {
         payloads: [payload],
         sentMediaUrls: normalizedSentMediaUrls,
       });
+      if (params.isHeartbeat && decision.matchingRoute && hasNonEmptyStringArray(sentTexts)) {
+        hasHeartbeatRouteTextDeliveryEvidence = true;
+        dedupedPayloads.push(...mediaFiltered);
+        continue;
+      }
       const textFiltered = dedupeRuntime.filterMessagingToolDuplicates({
         payloads: mediaFiltered,
         sentTexts,
@@ -495,9 +539,12 @@ export async function buildReplyPayloads(params: {
       replyPayloads.push(payload);
     }
   }
+  const finalReplyPayloads = hasHeartbeatRouteTextDeliveryEvidence
+    ? markHeartbeatMessageToolDeliveredPayloads(replyPayloads)
+    : replyPayloads;
 
   return {
-    replyPayloads,
+    replyPayloads: finalReplyPayloads,
     didLogHeartbeatStrip,
   };
 }
