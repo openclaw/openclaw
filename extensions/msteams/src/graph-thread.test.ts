@@ -15,14 +15,6 @@ vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
 }));
 
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
-
 const firstFetchAllGraphPagesPath = () => {
   const [call] = vi.mocked(fetchAllGraphPages).mock.calls;
   if (!call) {
