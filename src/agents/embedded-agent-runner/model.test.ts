@@ -2687,6 +2687,83 @@ describe("resolveModel", () => {
     });
   });
 
+  it("keeps transport-overriding manifest aliases on the requested provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "azure-openai-responses",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
+  it("keeps provider-level Azure transport aliases on the requested provider", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "azure-openai-responses": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel: vi.fn(({ provider, context }) =>
+        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
+          ? {
+              provider: "openai",
+              id: "gpt-5.5",
+              name: "gpt-5.5",
+              api: "openai-responses" as const,
+              baseUrl: "https://api.openai.com/v1",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+              contextWindow: 1_000_000,
+              maxTokens: 128_000,
+            }
+          : undefined,
+      ),
+    };
+
+    const result = await resolveModelAsync("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks,
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "azure-openai-responses",
+      id: "gpt-5.5",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    });
+  });
+
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
       models: {
