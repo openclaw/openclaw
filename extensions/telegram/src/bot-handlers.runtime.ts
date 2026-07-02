@@ -3361,6 +3361,7 @@ export const registerTelegramHandlers = ({
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
     let dispatchDedupeKeys: string[] = [];
     let admittedBotToBotSender = false;
+    let botToBotRuntimeCfg = cfg;
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
@@ -3368,11 +3369,13 @@ export const registerTelegramHandlers = ({
       if (event.applyBotToBotPolicy !== false) {
         let effectiveBotToBotConfig = telegramCfg.botToBot;
         try {
+          const runtimeCfg = telegramDeps.getRuntimeConfig();
           const runtimeBotToBotConfig = resolveTelegramAccount({
-            cfg: telegramDeps.getRuntimeConfig(),
+            cfg: runtimeCfg,
             accountId,
           }).config.botToBot;
           effectiveBotToBotConfig = runtimeBotToBotConfig ?? effectiveBotToBotConfig;
+          botToBotRuntimeCfg = runtimeCfg;
         } catch {
           // Keep the startup snapshot when live config is temporarily unavailable.
         }
@@ -3434,7 +3437,7 @@ export const registerTelegramHandlers = ({
           dmThreadId,
           senderId: event.senderId,
           receiverId: event.ctx.me?.id,
-          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultsConfig: botToBotRuntimeCfg.channels?.defaults?.botLoopProtection,
           nowMs: messageDateMs,
         });
         if (botLoopProtection) {
