@@ -160,7 +160,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           ...(accountId ? { accountId } : {}),
         },
         cfg as CoreConfig,
-        { mediaLocalRoots },
+        { mediaLocalRoots, toolContext: ctx.toolContext },
       );
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
