@@ -2187,6 +2187,140 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives stale exact legacy npm install record when SQLite has newer authoritative metadata", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.6.8",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.6.8",
+        resolvedSpec: "@openclaw/discord@2026.6.8",
+        integrity: "sha512-current",
+        installedAt: "2026-06-17T12:00:00.000Z",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.6.8-beta.1",
+        version: "2026.6.8-beta.1",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.6.8-beta.1",
+        resolvedSpec: "@openclaw/discord@2026.6.8-beta.1",
+        installedAt: "2026-06-16T12:00:00.000Z",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@2026.6.8",
+          resolvedName: "@openclaw/discord",
+          resolvedVersion: "2026.6.8",
+          integrity: "sha512-current",
+        },
+      },
+    });
+  });
+
+  for (const fixture of [
+    {
+      label: "current spec names a different package",
+      currentPatch: { spec: "@vendor/discord@2026.6.8" },
+      legacyPatch: {},
+    },
+    {
+      label: "current version disagrees with its resolved version",
+      currentPatch: { version: "2026.6.7" },
+      legacyPatch: {},
+    },
+    {
+      label: "legacy resolved spec names a different package",
+      currentPatch: {},
+      legacyPatch: { resolvedSpec: "@vendor/discord@2026.6.8-beta.1" },
+    },
+    {
+      label: "legacy resolved version disagrees with its exact spec",
+      currentPatch: {},
+      legacyPatch: {
+        version: "2026.6.7-beta.1",
+        resolvedVersion: "2026.6.7-beta.1",
+      },
+    },
+  ] satisfies Array<{
+    label: string;
+    currentPatch: Partial<InstalledPluginInstallRecordInfo>;
+    legacyPatch: Partial<InstalledPluginInstallRecordInfo>;
+  }>) {
+    it(`keeps stale legacy npm install record when ${fixture.label}`, async () => {
+      const root = await makeTempRoot();
+      await writeExistingPluginInstallIndex(root, {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@2026.6.8",
+          resolvedName: "@openclaw/discord",
+          resolvedVersion: "2026.6.8",
+          resolvedSpec: "@openclaw/discord@2026.6.8",
+          ...fixture.currentPatch,
+        },
+      });
+      const sourcePath = writeLegacyPluginInstallIndex(root, {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@2026.6.8-beta.1",
+          version: "2026.6.8-beta.1",
+          resolvedName: "@openclaw/discord",
+          resolvedVersion: "2026.6.8-beta.1",
+          resolvedSpec: "@openclaw/discord@2026.6.8-beta.1",
+          ...fixture.legacyPatch,
+        },
+      });
+
+      const result = await runLegacyStateMigrationsForRoot(root);
+
+      expect(result.warnings).toStrictEqual([
+        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: discord",
+      ]);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    });
+  }
+
+  it("keeps exact legacy npm install record when SQLite authoritative metadata is older", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.6.8-beta.1",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.6.8-beta.1",
+        resolvedSpec: "@openclaw/discord@2026.6.8-beta.1",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.6.8",
+        version: "2026.6.8",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([
+      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: discord",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
   it("keeps exact legacy npm install record when SQLite lacks authoritative package identity", async () => {
     const root = await makeTempRoot();
     await writeExistingPluginInstallIndex(root, {
