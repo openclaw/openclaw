@@ -11,7 +11,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 99,
+      "line": 104,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Searching…",
       "surface": "android",
@@ -19,7 +19,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 184,
+      "line": 189,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Mic off",
       "surface": "android",
@@ -27,7 +27,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 194,
+      "line": 199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Off",
       "surface": "android",
@@ -251,7 +251,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 76,
+      "line": 96,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayDiscovery.kt",
       "source": "Searching…",
       "surface": "android",
