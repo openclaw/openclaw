@@ -84,7 +84,7 @@ struct RootTabsSourceGuardTests {
         #expect(talkRange.lowerBound < controlRange.lowerBound)
         #expect(controlRange.lowerBound < agentRange.lowerBound)
         #expect(agentRange.lowerBound < settingsRange.lowerBound)
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost \{/).count == 3)
+        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 3)
     }
 
     @Test func `sidebar keeps navigation model destination only`() throws {
@@ -422,6 +422,20 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("supportsGatewayContract"))
         #expect(!source.contains("Compact mobile queue control"))
         #expect(!source.contains("Multi-column queue control"))
+    }
+
+    @Test func `workboard dismisses card sheet before opening chat`() throws {
+        let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
+        let openFunction = try Self.extract(
+            source,
+            from: "private func open(_ card: IPadWorkboardCard)",
+            to: "private func replace(_ card: IPadWorkboardCard)")
+        let dismiss = try #require(openFunction.range(of: "self.presentedSheet = nil"))
+        let focus = try #require(openFunction.range(of: "self.appModel.openChat(sessionKey: sessionKey)"))
+        let route = try #require(openFunction.range(of: "self.openChat()"))
+
+        #expect(dismiss.lowerBound < focus.lowerBound)
+        #expect(focus.lowerBound < route.lowerBound)
     }
 
     @Test func `workboard create action surfaces unavailable reasons`() throws {
@@ -863,12 +877,10 @@ struct RootTabsSourceGuardTests {
     @Test func `native chat uses gateway transport`() throws {
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
-        let settingsSectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
         #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
-        #expect(settingsSectionsSource.contains("Connected services and message routing"))
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))

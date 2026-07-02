@@ -28,6 +28,7 @@ struct RootTabs: View {
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var phoneControlNavigationRequest: PhoneControlNavigationRequest?
     @State private var phoneChatReturn: PhoneChatReturn?
+    @State private var phoneChatSettingsResetRequestID: Int = 0
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -161,7 +162,7 @@ struct RootTabs: View {
 
     private var phoneTabContent: some View {
         TabView(selection: self.phoneTabSelection) {
-            PhoneTabSettingsHost { openSettingsRoute in
+            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
                 ChatProTab(
                     headerLeadingAction: self.phoneChatReturnAction,
                     ownsNavigationStack: false,
@@ -1075,6 +1076,9 @@ extension RootTabs {
         self.phoneChatReturn = PhoneChatReturn(
             destination: returnDestination,
             openChatRequestID: self.appModel.openChatRequestID)
+        // Chat owns an embedded Settings stack. Pop it before routing so the requested
+        // session and contextual return action cannot remain hidden behind Settings.
+        self.phoneChatSettingsResetRequestID &+= 1
         self.selectSidebarDestination(.chat, preservingChatReturn: true)
     }
 
@@ -1339,9 +1343,14 @@ extension RootTabs {
 /// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
 private struct PhoneTabSettingsHost<Content: View>: View {
     @State private var settingsPath: [SettingsRoute] = []
+    private let resetRequestID: Int
     private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
 
-    init(@ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content) {
+    init(
+        resetRequestID: Int = 0,
+        @ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content)
+    {
+        self.resetRequestID = resetRequestID
         self.content = content
     }
 
@@ -1353,6 +1362,9 @@ private struct PhoneTabSettingsHost<Content: View>: View {
             .navigationDestination(for: SettingsRoute.self) { route in
                 SettingsProTab(directRoute: route)
             }
+        }
+        .onChange(of: self.resetRequestID) { _, _ in
+            self.settingsPath.removeAll()
         }
     }
 }

@@ -289,6 +289,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let chatTab = try XCTUnwrap(self.app?.tabBars.buttons["Chat"])
         let controlTab = try XCTUnwrap(self.app?.tabBars.buttons["Control"])
+
+        // Retain an embedded Chat Settings route, then prove contextual routing pops it.
+        chatTab.tap()
+        let gatewaySettings = try XCTUnwrap(self.app?.buttons["chat-gateway-status"])
+        XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 5))
+        gatewaySettings.tap()
+        XCTAssertTrue(self.app?.navigationBars["Gateway"].waitForExistence(timeout: 5) == true)
+
+        controlTab.tap()
+        XCTAssertTrue(self.app?.navigationBars["Control"].waitForExistence(timeout: 8) == true)
+        let activity = try XCTUnwrap(self.app?.buttons["Activity"])
+        XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        activity.tap()
+
         let recentActivity = try XCTUnwrap(self.app?.staticTexts["Recent activity"])
         XCTAssertTrue(recentActivity.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "control-activity-before-chat")
