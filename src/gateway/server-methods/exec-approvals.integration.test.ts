@@ -64,8 +64,9 @@ describe("exec-approvals node preflight (real gateway)", () => {
     // Pre-pair the capable node so its approved command surface includes
     // exec-approvals commands.  This simulates a previously paired desktop
     // node that already had exec-approvals in its pairing allowlist.
-    // The pre-pairing uses operator.admin scope, matching the updated
-    // resolveNodePairApprovalScopes (verified in node-pairing-authz.test.ts).
+    // operator.admin is used here as a superset of the required write scope
+    // to ensure the pre-pairing succeeds regardless of the current pairing
+    // authz defaults.
     const prePairRequest = await requestNodePairing({
       nodeId: capableIdent.deviceId,
       displayName: "capable-node",
