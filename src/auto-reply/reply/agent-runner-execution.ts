@@ -23,6 +23,7 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
+  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
@@ -962,14 +963,40 @@ function supportsChannelCodexLogin(provider: string | null | undefined): boolean
 
 function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
-  options?: { includeDetails?: boolean; isHeartbeat?: boolean },
+  options?: {
+    includeAuthProfileId?: boolean;
+    includeDetails?: boolean;
+    isHeartbeat?: boolean;
+  },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
-  if (authProfileFailoverFailure) {
-    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  if (oauthRefreshFailure) {
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
+      profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
+    });
+    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
+    const channelLoginHint = supportsCodexLogin
+      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "Re-auth";
+    const retryLoginHint = supportsCodexLogin
+      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "re-auth";
+    if (oauthRefreshFailure.reason) {
+      return {
+        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with ${loginCommandMarkdown} in a terminal, then try again.`,
+        isGenericRunnerFailure: false,
+      };
+    }
+    return {
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
+      isGenericRunnerFailure: false,
+    };
   }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
@@ -985,30 +1012,9 @@ function buildExternalRunFailureReply(
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
-  if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
-      profileId: oauthRefreshFailure.profileId,
-    });
-    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
-    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
-    const channelLoginHint = supportsCodexLogin
-      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "Re-auth";
-    const retryLoginHint = supportsCodexLogin
-      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "re-auth";
-    if (oauthRefreshFailure.reason) {
-      return {
-        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with \`${loginCommand}\` in a terminal, then try again.`,
-        isGenericRunnerFailure: false,
-      };
-    }
-    return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with \`${loginCommand}\` in a terminal.`,
-      isGenericRunnerFailure: false,
-    };
+  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
+  if (authProfileFailoverFailure) {
+    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -1110,6 +1116,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const externalRunFailureReply = buildExternalRunFailureReply(
     { message, error: params.err },
     {
+      includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
       includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
     },
   );
@@ -3206,8 +3213,12 @@ export async function runAgentTurnWithFallback(params: {
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      const oauthRefreshFailure =
+        classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const providerRequestError =
-        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
+        !isBilling && !oauthRefreshFailure && !shouldSurfaceToControlUi
+          ? classifyProviderRequestError(err)
+          : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
@@ -3345,6 +3356,7 @@ export async function runAgentTurnWithFallback(params: {
           ? buildExternalRunFailureReply(
               { message, error: err },
               {
+                includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
                 includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
                 isHeartbeat: params.isHeartbeat,
               },

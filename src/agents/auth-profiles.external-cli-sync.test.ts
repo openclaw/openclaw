@@ -333,7 +333,7 @@ describe("external cli oauth resolution", () => {
     );
   });
 
-  it("does not synthesize default Codex CLI auth beside a named local OpenAI OAuth profile", () => {
+  it("does not add Codex CLI as a sibling to a named managed OpenAI profile", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
         provider: "openai",
@@ -349,15 +349,54 @@ describe("external cli oauth resolution", () => {
         "openai:user@example.com",
         makeOAuthCredential({
           provider: "openai",
-          access: "local-managed-access",
-          refresh: "local-managed-refresh",
+          access: "managed-access",
+          refresh: "managed-refresh",
           expires: Date.now() - 5_000,
           accountId: "acct-codex",
-          email: "user@example.com",
         }),
       ),
       {
         providerIds: ["openai"],
+      },
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("does not fill an empty default slot beside a named managed OpenAI profile", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+            type: "oauth",
+            provider: "openai",
+            access: "",
+            refresh: "",
+            expires: 0,
+          },
+          "openai:user@example.com": makeOAuthCredential({
+            provider: "openai",
+            access: "managed-access",
+            refresh: "managed-refresh",
+            expires: Date.now() - 5_000,
+            accountId: "acct-codex",
+          }),
+        },
+      },
+      {
+        providerIds: ["openai"],
+        profileIds: [OPENAI_CODEX_DEFAULT_PROFILE_ID],
       },
     );
 

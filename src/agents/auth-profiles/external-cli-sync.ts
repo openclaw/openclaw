@@ -258,6 +258,18 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, providerConfig, store } = params;
+  const hasManagedProviderOAuth = Object.values(store.profiles).some(
+    (credential) =>
+      credential?.type === "oauth" &&
+      listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
+      hasInlineOAuthTokenMaterial(credential),
+  );
+  // Bootstrap-only CLI state must not enter any sibling slot once OpenClaw
+  // owns OAuth for the provider, regardless of how discovery was scoped.
+  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth) {
+    return [];
+  }
+
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
@@ -276,36 +288,7 @@ function listScopedExternalCliProfileIds(params: {
     return existingProfileIds;
   }
 
-  if (
-    providerConfig.bootstrapOnly &&
-    options?.providerIds &&
-    hasCanonicalLocalOAuthProfileForProvider({ providerConfig, store })
-  ) {
-    return [];
-  }
-
   return options?.providerIds ? [providerConfig.profileId] : [];
-}
-
-function hasCanonicalLocalOAuthProfileForProvider(params: {
-  providerConfig: ExternalCliSyncProvider;
-  store: AuthProfileStore;
-}): boolean {
-  const providerIds = normalizeProviderScope(listExternalCliProviderIds(params.providerConfig));
-  return Object.entries(params.store.profiles).some(([profileId, credential]) => {
-    if (externalCliProfileIdMatches(params.providerConfig, profileId)) {
-      return false;
-    }
-    if (credential?.type !== "oauth") {
-      return false;
-    }
-    const provider = credential.provider.trim().toLowerCase();
-    const normalizedProvider = normalizeProviderId(provider);
-    return (
-      providerIds?.has(provider) === true ||
-      (normalizedProvider ? providerIds?.has(normalizedProvider) === true : false)
-    );
-  });
 }
 
 /** Resolve scoped external CLI auth profiles available to overlay or persist. */

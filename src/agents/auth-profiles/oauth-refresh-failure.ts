@@ -17,28 +17,27 @@ export type OAuthRefreshFailureReason =
 
 type OAuthRefreshFailure = {
   provider: string | null;
+  profileId?: string;
   reason: OAuthRefreshFailureReason | null;
-  profileId?: string | null;
 };
 
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
-  readonly reason: OAuthRefreshFailureReason | null;
   readonly profileId?: string;
+  readonly reason: OAuthRefreshFailureReason | null;
 
-  constructor(params: { provider: string; message: string; cause?: unknown; profileId?: string }) {
+  constructor(params: { provider: string; profileId?: string; message: string; cause?: unknown }) {
     super(params.message, { cause: params.cause });
     this.name = "OAuthRefreshFailureError";
     this.provider = params.provider;
-    this.reason = classifyOAuthRefreshFailureReason(params.message);
     this.profileId = params.profileId;
+    this.reason = classifyOAuthRefreshFailureReason(params.message);
   }
 }
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const SAFE_PROFILE_ID_RE = /^[a-z0-9][a-z0-9._:@+-]*$/;
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -61,14 +60,25 @@ function sanitizeOAuthRefreshFailureProvider(provider: string | null | undefined
   return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : null;
 }
 
-function sanitizeOAuthRefreshFailureProfileId(
-  profileId: string | null | undefined,
-  provider: string,
-): string | null {
-  const sanitized = profileId ? sanitizeForLog(profileId).replaceAll("`", "").trim() : "";
-  return sanitized && SAFE_PROFILE_ID_RE.test(sanitized) && sanitized.startsWith(`${provider}:`)
-    ? sanitized
-    : null;
+function sanitizeOAuthRefreshFailureProfileId(profileId: string | null | undefined): string | null {
+  const sanitized = profileId ? sanitizeForLog(profileId).trim() : "";
+  return sanitized || null;
+}
+
+function quoteShellArg(value: string): string {
+  const escaped =
+    process.platform === "win32" ? value.replaceAll("'", "''") : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
+}
+
+/** Wrap a rendered login command in a Markdown code span that survives embedded backticks. */
+export function formatOAuthRefreshFailureLoginCommandMarkdown(command: string): string {
+  let fence = "`";
+  while (command.includes(fence)) {
+    fence += "`";
+  }
+  const padding = command.startsWith("`") || command.endsWith("`") ? " " : "";
+  return `${fence}${padding}${command}${padding}${fence}`;
 }
 
 /** Classify a raw OAuth refresh failure message into a stable reason code. */
@@ -110,16 +120,24 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
 
 /** Classify provider/reason from the structured OAuth refresh failure error. */
 export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
-  if (!(err instanceof OAuthRefreshFailureError)) {
-    return null;
+  const seen = new Set<object>();
+  let candidate = err;
+  while (candidate && typeof candidate === "object") {
+    if (candidate instanceof OAuthRefreshFailureError) {
+      const profileId = sanitizeOAuthRefreshFailureProfileId(candidate.profileId);
+      return {
+        provider: sanitizeOAuthRefreshFailureProvider(candidate.provider),
+        ...(profileId ? { profileId } : {}),
+        reason: candidate.reason,
+      };
+    }
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
   }
-  const provider = sanitizeOAuthRefreshFailureProvider(err.provider);
-  const profileId = provider ? sanitizeOAuthRefreshFailureProfileId(err.profileId, provider) : null;
-  return {
-    provider,
-    reason: err.reason,
-    ...(profileId ? { profileId } : {}),
-  };
+  return null;
 }
 
 /** Build the login command operators should run after OAuth refresh failure. */
@@ -128,13 +146,11 @@ export function buildOAuthRefreshFailureLoginCommand(
   options?: { profileId?: string | null },
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
-  const sanitizedProfileId = sanitizedProvider
-    ? sanitizeOAuthRefreshFailureProfileId(options?.profileId, sanitizedProvider)
-    : null;
+  const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   return sanitizedProvider
     ? formatCliCommand(
         sanitizedProfileId
-          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${sanitizedProfileId}`
+          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}`
           : `openclaw models auth login --provider ${sanitizedProvider}`,
       )
     : formatCliCommand("openclaw models auth login");
