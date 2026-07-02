@@ -237,6 +237,42 @@ describe("applyPluginAutoEnable channels", () => {
       );
     });
 
+    it("allowlists repaired external channel plugins under restrictive plugin policy", () => {
+      const result = materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            mattermost: {
+              baseUrl: "http://mattermost:8065",
+            },
+          },
+          plugins: {
+            allow: ["telegram"],
+          },
+        },
+        candidates: [
+          {
+            pluginId: "mattermost",
+            kind: "configured-plugin-repaired",
+          },
+        ],
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "mattermost",
+            channels: ["mattermost"],
+            origin: "global",
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.mattermost?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "mattermost"]);
+      expect(result.config.channels?.mattermost?.enabled).toBeUndefined();
+      expect(result.changes).toContain(
+        "mattermost installed for existing configuration, enabled automatically.",
+      );
+    });
+
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
       const result = applyWithApnChannelConfig();
 
