@@ -1053,7 +1053,6 @@ function buildParams(
   toolProjection?: AnthropicToolProjection;
 } {
   const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
   const compat = context.tools ? getAnthropicCompat(model) : undefined;
@@ -1082,7 +1081,6 @@ function buildParams(
       isOAuthTokenResult,
       cacheControl,
       messageCacheControlLimit,
-      replayThinkingEnabled,
     ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
@@ -1174,15 +1172,13 @@ function convertMessages(
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
   messageCacheControlLimit = 4,
-  replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1240,7 +1236,13 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+          // Strip thinking blocks from completed prior assistant turns:
+          // only the active tool-use cycle needs preserved signatures for
+          // tool-result continuity. Completed turns without pending tool
+          // calls do not need signatures, and re-emitting stale signatures
+          // can cause 400 "Invalid signature in thinking block" on long
+          // multi-turn sessions (#94228).
+          if (i !== activeToolTurnAssistantIndex) {
             omittedThinking = true;
             continue;
           }
