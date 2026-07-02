@@ -1,6 +1,6 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
 
@@ -60,7 +60,7 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
     cursor = next;
   }
   const leafKey = path[path.length - 1];
-  if (!(leafKey in cursor)) {
+  if (!Object.hasOwn(cursor, leafKey)) {
     return false;
   }
   delete cursor[leafKey];
