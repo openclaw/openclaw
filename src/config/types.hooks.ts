@@ -38,8 +38,11 @@ export type HookMappingConfig = {
    * runs default to the shared `cron` lane (which resolves to `cron-nested`),
    * so unrelated hook/cron work serializes behind a single global slot. Set a
    * dedicated lane (e.g. `jira-pickup`) to isolate a class of hooks — such as
-   * Jira work-pickup wakes — from that shared traffic without widening global
-   * concurrency. Omitted/blank preserves the `cron` default. (FAD-1526)
+   * Jira work-pickup wakes — from that shared traffic. Each distinct configured
+   * lane is created with its own `maxConcurrent: 1` slot, so lanes add
+   * independent per-lane capacity alongside the `cron` lane rather than
+   * partitioning the existing limit. Omitted/blank preserves the `cron`
+   * default. (FAD-1526)
    */
   lane?: string;
   transform?: HookMappingTransform;

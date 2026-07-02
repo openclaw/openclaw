@@ -935,7 +935,7 @@ Validation and safety notes:
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
-- `lane`: optional dedicated command-queue lane for this mapping's isolated agent runs. By default all hook agent runs share the `cron` lane, so a latency-sensitive hook can queue behind unrelated hook/cron traffic; setting a lane (e.g. `lane: "gmail-hooks"`) isolates that mapping without widening global concurrency. Omitted or blank keeps the shared `cron` default. The lane is trusted config only — external `/hooks/agent` request payloads cannot set or override it.
+- `lane`: optional dedicated command-queue lane for this mapping's isolated agent runs. By default all hook agent runs share the `cron` lane, so a latency-sensitive hook can queue behind unrelated hook/cron traffic; setting a lane (e.g. `lane: "gmail-hooks"`) gives that mapping its own queue. Capacity semantics: each distinct configured lane is created with its own `maxConcurrent: 1` slot, so every additional lane adds one more agent run that can execute concurrently alongside the shared `cron` lane — lanes add independent per-lane capacity rather than partitioning the existing limit. If you need a hard cap on simultaneous gateway agent runs, budget one slot per configured lane. Omitted or blank keeps the shared `cron` default. The lane is trusted config only — external `/hooks/agent` request payloads cannot set or override it.
 
 </Accordion>
 
