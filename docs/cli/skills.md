@@ -98,7 +98,10 @@ Notes:
   installs.
 - `install --version <version>` applies only to ClawHub skill refs.
 - `install --force` overwrites an existing workspace skill folder for the same
-  slug.
+  slug. An owner-qualified ref (`@owner/<slug>`) still refuses to replace a skill
+  already tracked under a different owner, even with `--force`; install, update,
+  and verify share one owner-match check. A skill tracked without an owner stays
+  overwriteable by an owner-qualified forced install.
 - Community ClawHub skill installs and updates check trust before downloading.
   Versioned community archive releases use exact-release trust metadata.
   Resolver-backed GitHub skills rely on ClawHub's install resolver to enforce

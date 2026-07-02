@@ -1757,6 +1757,143 @@ describe("skills-clawhub", () => {
     expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
   });
 
+  it("rejects owner-qualified ClawHub updates when the tracked skill has no owner", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-update-ownerless-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+    });
+
+    await expect(
+      updateSkillsFromClawHub({
+        workspaceDir,
+        slug: "@demo-owner/weather",
+      }),
+    ).rejects.toThrow('Skill "weather" is tracked as weather, not @demo-owner/weather.');
+    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses owner-qualified force installs over a skill tracked under a different owner", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-install-clobber-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      ownerHandle: "alice",
+      installedVersion: "1.0.0",
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir,
+      slug: "@bob/weather",
+      force: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected owner-mismatch install failure");
+    }
+    expect(result.error).toContain(
+      'Skill "weather" is tracked as @alice/weather, not @bob/weather.',
+    );
+    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+
+    const lock = JSON.parse(
+      await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+    ) as { skills: Record<string, Record<string, unknown>> };
+    expect(lock.skills.weather?.ownerHandle).toBe("alice");
+    expect(lock.skills.weather?.version).toBe("1.0.0");
+  });
+
+  it("allows owner-qualified force installs over a skill tracked under the same owner", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-install-same-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      ownerHandle: "alice",
+      installedVersion: "0.9.0",
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir,
+      slug: "@alice/weather",
+      force: true,
+    });
+
+    expectInstalledSkill(result, { slug: "weather", version: "1.0.0" });
+    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "alice",
+      baseUrl: undefined,
+    });
+    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows owner-qualified force installs over an owner-less tracked skill", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-install-ownerless-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+    });
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# Weather\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir,
+      slug: "@bob/weather",
+      force: true,
+    });
+
+    expectInstalledSkill(result, { slug: "weather", version: "1.0.0" });
+    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "bob",
+      baseUrl: undefined,
+    });
+    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still enforces the ClawHub release block for an owner-less tracked skill", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-owner-install-ownerless-blocked-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "weather",
+      installedVersion: "0.9.0",
+    });
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: false,
+      slug: "weather",
+      reason: "release_blocked",
+      message: "Release weather@1.0.0 is blocked by ClawHub security review.",
+      status: 451,
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir,
+      slug: "@bob/weather",
+      force: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected blocked-release install failure");
+    }
+    expect(result.error).toContain("blocked by ClawHub security review");
+    expect(result.error).not.toContain("is tracked as");
+    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledTimes(1);
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+  });
+
   describe("legacy tracked slugs remain updatable", () => {
     async function createLegacyTrackedSkillFixture(slug: string) {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
@@ -2161,6 +2298,25 @@ describe("skills-clawhub", () => {
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
+    });
+
+    it("rejects owner-qualified installed verification when the tracked skill has no owner", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-verify-ownerless-");
+      await writeClawHubOriginFixture({
+        workspaceDir,
+        slug: "weather",
+      });
+
+      const result = await resolveClawHubSkillVerificationTarget({
+        workspaceDir,
+        slug: "@other-owner/weather",
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected owner mismatch failure");
+      }
+      expect(result.error).toContain("is tracked as weather, not @other-owner/weather");
     });
 
     it("keeps the installed registry when an explicit version overrides the installed version", async () => {
