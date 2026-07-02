@@ -509,21 +509,12 @@ extension SettingsProTab {
 
     var aboutDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.detailStatusCard(
-                icon: "info.circle",
-                title: "OpenClaw",
-                detail: "iOS companion app",
-                value: DeviceInfoHelper.openClawVersionString(),
-                color: OpenClawBrand.accent)
-
             self.detailListCard {
-                self.detailRow("Version", value: DeviceInfoHelper.openClawVersionString())
+                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 Divider()
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                self.detailRow("Device", value: DeviceInfoHelper.deviceDisplayName())
                 Divider()
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                Divider()
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
         }
     }
