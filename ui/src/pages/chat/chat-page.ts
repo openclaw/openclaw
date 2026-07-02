@@ -25,7 +25,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, syncSelectedSessionMessageSubscription } from "./chat-gateway.ts";
+import { loadChatHistory, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   hasAbortableSessionRun,

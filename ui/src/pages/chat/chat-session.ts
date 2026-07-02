@@ -12,7 +12,7 @@ import {
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { loadChatHistory, type ChatState } from "./chat-gateway.ts";
+import { loadChatHistory, type ChatState } from "./chat-history.ts";
 import type { ChatHost } from "./chat-send.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";

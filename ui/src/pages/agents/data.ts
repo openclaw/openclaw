@@ -13,11 +13,11 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
 } from "../../lib/agents/tools-effective.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "../../ui/controllers/scope-errors.ts";
+} from "../../lib/gateway-errors.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import { loadChannels } from "../channels/data.ts";
 import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../config/data.ts";
@@ -76,7 +76,6 @@ export async function loadAgentsPage(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void host.loadCron?.();
-      return;
     case "overview":
     case "tools":
     case undefined:

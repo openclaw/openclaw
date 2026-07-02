@@ -1,10 +1,10 @@
 // Control UI controller manages logs gateway state.
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "../../ui/controllers/scope-errors.ts";
+} from "../../lib/gateway-errors.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";

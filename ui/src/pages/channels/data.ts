@@ -4,7 +4,7 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "../../ui/controllers/scope-errors.ts";
+} from "../../lib/gateway-errors.ts";
 import { loadConfig, loadConfigSchema } from "../config/data.ts";
 import type { ChannelsState } from "./data.types.ts";
 

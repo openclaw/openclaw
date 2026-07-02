@@ -1,6 +1,5 @@
 // Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../ui/gateway.ts";
 import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
@@ -9,10 +8,9 @@ import {
   handleChatEvent,
   handleChatGatewayEvent,
   handleChatSideResultGatewayEvent,
-  loadChatHistory,
   type ChatEventPayload,
-  type ChatState,
 } from "./chat-gateway.ts";
+import { GatewayRequestError, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
   abortChatRun,
   requestChatSend,

@@ -54,7 +54,7 @@ import {
   type ChatHistoryResult,
   type ChatMetadataResult,
   type ChatState,
-} from "./chat-gateway.ts";
+} from "./chat-history.ts";
 import { clearChatHistory, refreshChatSessionListForTarget } from "./chat-session.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,

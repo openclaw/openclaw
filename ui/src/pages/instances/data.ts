@@ -2,7 +2,7 @@ import type { PresenceEntry } from "../../api/types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "../../ui/controllers/scope-errors.ts";
+} from "../../lib/gateway-errors.ts";
 // Instances page owns presence gateway state.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 

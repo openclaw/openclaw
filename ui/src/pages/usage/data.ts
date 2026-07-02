@@ -4,16 +4,16 @@ import type {
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
 import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../lib/gateway-errors.ts";
+import {
   buildSessionUsageDateParams,
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../ui/controllers/scope-errors.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type { SessionLogEntry } from "./view.ts";
 

@@ -38,9 +38,8 @@ import {
   handleChatGatewayEvent,
   handleChatSideResultGatewayEvent,
   type ChatEventPayload,
-  type ChatMetadataResult,
-  type ChatState,
 } from "./chat-gateway.ts";
+import type { ChatMetadataResult, ChatState } from "./chat-history.ts";
 import {
   handleAbortChat,
   handleSendChat,
