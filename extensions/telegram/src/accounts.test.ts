@@ -422,6 +422,74 @@ describe("mergeTelegramAccountConfig", () => {
     expect(bot2.groupPolicy).toBe("allowlist");
   });
 
+  it("inherits top-level bot-to-bot config for accounts without bot-to-bot overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToBot: { enabled: true, allowBotIds: [101, "202"] },
+          accounts: {
+            work: { botToken: "bot-token" },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "work");
+    expect(merged.botToBot).toEqual({ enabled: true, allowBotIds: [101, "202"] });
+  });
+
+  it("inherits top-level bot-to-bot kill switch for accounts without bot-to-bot overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToBot: { enabled: true, killSwitch: true, allowBotIds: [101] },
+          accounts: {
+            work: { botToken: "bot-token" },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "work");
+    expect(merged.botToBot).toEqual({ enabled: true, killSwitch: true, allowBotIds: [101] });
+  });
+
+  it("merges partial account bot-to-bot overrides with inherited fields", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToBot: { enabled: true, killSwitch: true, allowBotIds: [101] },
+          accounts: {
+            work: {
+              botToken: "bot-token",
+              botToBot: { enabled: false },
+            },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "work");
+    expect(merged.botToBot).toEqual({ enabled: false, killSwitch: true, allowBotIds: [101] });
+  });
+  it("lets account bot-to-bot config explicitly override inherited fields", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToBot: { enabled: true, killSwitch: true, allowBotIds: [101] },
+          accounts: {
+            work: {
+              botToken: "bot-token",
+              botToBot: { enabled: false, killSwitch: false, allowBotIds: [303] },
+            },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "work");
+    expect(merged.botToBot).toEqual({ enabled: false, killSwitch: false, allowBotIds: [303] });
+  });
   it("keeps top-level policy fallback when auth lives in accounts.default", () => {
     const cfg: OpenClawConfig = {
       channels: {

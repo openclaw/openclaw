@@ -38,7 +38,108 @@ describe("telegram custom commands schema", () => {
     if (res.success) {
       expect(res.data.dmPolicy).toBe("pairing");
       expect(res.data.groupPolicy).toBe("allowlist");
+      expect(res.data.botToBot).toEqual({
+        enabled: false,
+        killSwitch: false,
+        allowBotIds: [],
+      });
     }
+  });
+
+  it("accepts and normalizes Telegram bot-to-bot numeric allow bot IDs", () => {
+    const res = TelegramConfigSchema.safeParse({
+      botToBot: {
+        enabled: true,
+        allowBotIds: [" 001234 ", 5678],
+      },
+      accounts: {
+        ops: {
+          botToBot: {
+            allowBotIds: ["42"],
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
+
+    expect(res.data.botToBot?.allowBotIds).toEqual(["1234", "5678"]);
+    expect(res.data.accounts?.ops?.botToBot).toEqual({
+      enabled: false,
+      killSwitch: false,
+      allowBotIds: ["42"],
+    });
+  });
+
+  it("does not inject account-level bot-to-bot defaults when omitted", () => {
+    const res = TelegramConfigSchema.safeParse({
+      botToBot: { enabled: true, killSwitch: true, allowBotIds: [42] },
+      accounts: { ops: { historyLimit: 3 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
+
+    expect(res.data.botToBot).toEqual({ enabled: true, killSwitch: true, allowBotIds: ["42"] });
+    expect(res.data.accounts?.ops?.botToBot).toBeUndefined();
+  });
+  it("rejects malformed Telegram bot-to-bot config", () => {
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          allowBotIds: ["bad-name"],
+        },
+      },
+      "botToBot.allowBotIds.0",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          allowBotIds: [0],
+        },
+      },
+      "botToBot.allowBotIds.0",
+    );
+  });
+
+  it("rejects removed Telegram bot-to-bot config fields", () => {
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          allowUsernames: ["helperbot"],
+        },
+      },
+      "botToBot",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          maxDepth: 1,
+        },
+      },
+      "botToBot",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          maxHops: 1,
+        },
+      },
+      "botToBot",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          rateLimit: { windowMs: 1000, maxMessages: 1 },
+        },
+      },
+      "botToBot",
+    );
   });
 
   it("accepts historyLimit overrides per account", () => {

@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
+type TelegramBotToBotConfig = NonNullable<TelegramAccountConfig["botToBot"]>;
+
 function normalizeAllowFromEntry(value: string | number): string {
   return String(value).trim();
 }
@@ -43,6 +45,20 @@ function resolveMergedAllowFrom(params: {
     return accountRestrictiveEntries.length > 0 ? accountRestrictiveEntries : baseAllowFrom;
   }
   return accountAllowFrom ?? baseAllowFrom;
+}
+
+function resolveMergedBotToBotConfig(params: {
+  baseBotToBot?: TelegramBotToBotConfig;
+  accountBotToBot?: TelegramBotToBotConfig;
+}): TelegramBotToBotConfig | undefined {
+  const { baseBotToBot, accountBotToBot } = params;
+  if (accountBotToBot === undefined) {
+    return baseBotToBot;
+  }
+  if (baseBotToBot === undefined) {
+    return accountBotToBot;
+  }
+  return { ...baseBotToBot, ...accountBotToBot };
 }
 
 export function resolveTelegramAccountConfig(
@@ -94,6 +110,10 @@ export function mergeTelegramAccountConfig(
     Array.isArray(account.capabilities) && account.capabilities.length === 0
       ? base.capabilities
       : (account.capabilities ?? base.capabilities);
+  const botToBot = resolveMergedBotToBotConfig({
+    baseBotToBot: base.botToBot,
+    accountBotToBot: account.botToBot,
+  });
 
-  return { ...base, ...account, allowFrom, capabilities, groups };
+  return { ...base, ...account, allowFrom, capabilities, groups, botToBot };
 }

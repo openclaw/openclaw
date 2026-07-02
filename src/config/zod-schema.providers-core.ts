@@ -157,6 +157,25 @@ const TelegramCustomCommandConfig = {
   pattern: TelegramCommandNamePattern,
   patternDescription: "use a-z, 0-9, underscore; max 32 chars",
 } as const;
+const normalizeTelegramBotToBotId = (value: string | number): string =>
+  String(value).trim().replace(/^0+/u, "") || "0";
+const TelegramBotToBotIdSchema = z
+  .union([z.number().int().positive(), z.string().trim().regex(/^\d+$/u)])
+  .overwrite(normalizeTelegramBotToBotId)
+  .pipe(z.string().regex(/^[1-9]\d*$/u));
+const TelegramBotToBotSchemaBase = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    killSwitch: z.boolean().optional().default(false),
+    allowBotIds: z.array(TelegramBotToBotIdSchema).optional().default([]),
+  })
+  .strict();
+const TelegramBotToBotSchema = TelegramBotToBotSchemaBase.optional().default({
+  enabled: false,
+  killSwitch: false,
+  allowBotIds: [],
+});
+const TelegramAccountBotToBotSchema = TelegramBotToBotSchemaBase.optional();
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -267,6 +286,7 @@ export const TelegramAccountSchemaBase = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
+    botToBot: TelegramAccountBotToBotSchema,
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: SecretInputSchema.optional().register(sensitive),
@@ -406,6 +426,7 @@ export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((valu
 });
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
+  botToBot: TelegramBotToBotSchema,
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

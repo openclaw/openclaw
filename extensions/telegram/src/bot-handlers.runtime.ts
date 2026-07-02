@@ -7,8 +7,10 @@ import {
   buildMentionRegexes,
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   shouldDebounceTextInbound,
+  type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
@@ -85,8 +87,10 @@ import {
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramBotToBotPolicy } from "./bot-to-bot-policy.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
+  resolveTelegramUpdateId,
   type MediaGroupEntry,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
@@ -186,6 +190,37 @@ function resolvePromptContextTextDedupeKey(
     return undefined;
   }
   return `${message.timestamp_ms}:${message.body.trim()}`;
+}
+
+export function resolveTelegramBotLoopProtectionFacts(params: {
+  accountId: string;
+  chatId: number;
+  messageThreadId?: number;
+  resolvedThreadId?: number;
+  dmThreadId?: number;
+  senderId: string;
+  receiverId?: string | number;
+  defaultsConfig?: ChannelBotLoopProtectionFacts["defaultsConfig"];
+  nowMs?: number;
+}): ChannelBotLoopProtectionFacts | undefined {
+  const senderId = params.senderId.trim();
+  const receiverId = params.receiverId == null ? "" : String(params.receiverId).trim();
+  if (!senderId || !receiverId || senderId === receiverId) {
+    return undefined;
+  }
+  const threadId = params.resolvedThreadId ?? params.dmThreadId ?? params.messageThreadId;
+  return {
+    scopeId: params.accountId,
+    conversationId: buildTelegramInboundDebounceConversationKey({
+      chatId: params.chatId,
+      threadId,
+    }),
+    senderId,
+    receiverId,
+    defaultsConfig: params.defaultsConfig,
+    defaultEnabled: true,
+    nowMs: params.nowMs,
+  };
 }
 
 export const registerTelegramHandlers = ({
@@ -3154,6 +3189,7 @@ export const registerTelegramHandlers = ({
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    applyBotToBotPolicy?: boolean;
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
@@ -3332,9 +3368,41 @@ export const registerTelegramHandlers = ({
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
     let dispatchDedupeKeys: string[] = [];
+    let admittedBotToBotSender = false;
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
+      }
+      if (event.applyBotToBotPolicy !== false) {
+        let effectiveBotToBotConfig = telegramCfg.botToBot;
+        try {
+          const runtimeBotToBotConfig = resolveTelegramAccount({
+            cfg: telegramDeps.getRuntimeConfig(),
+            accountId,
+          }).config.botToBot;
+          effectiveBotToBotConfig = runtimeBotToBotConfig ?? effectiveBotToBotConfig;
+        } catch {
+          // Keep the startup snapshot when live config is temporarily unavailable.
+        }
+        const botToBotDecision = resolveTelegramBotToBotPolicy({
+          message: event.msg,
+          from: event.msg.from,
+          me: event.ctx.me,
+          config: effectiveBotToBotConfig,
+          metadata: {
+            accountId,
+            updateId: resolveTelegramUpdateId(event.ctxForDedupe),
+          },
+        });
+        if (botToBotDecision.decision !== "allow" || !botToBotDecision.allow) {
+          logVerbose(
+            `Blocked telegram bot-to-bot sender ${event.senderId || "unknown"} (${botToBotDecision.reason}${
+              botToBotDecision.dedupeKey ? `, dedupe=${botToBotDecision.dedupeKey}` : ""
+            })`,
+          );
+          return;
+        }
+        admittedBotToBotSender = botToBotDecision.reason === "allowlisted_bot_sender";
       }
       const gate = await authorizeInboundMessage({
         msg: event.msg,
@@ -3360,6 +3428,36 @@ export const registerTelegramHandlers = ({
         topicConfig,
         effectiveGroupAllow,
       } = gate.context;
+
+      if (admittedBotToBotSender) {
+        const messageDateMs =
+          typeof event.msg.date === "number" && Number.isFinite(event.msg.date)
+            ? event.msg.date * 1000
+            : Date.now();
+        const botLoopProtection = resolveTelegramBotLoopProtectionFacts({
+          accountId,
+          chatId: event.chatId,
+          messageThreadId: event.messageThreadId,
+          resolvedThreadId,
+          dmThreadId,
+          senderId: event.senderId,
+          receiverId: event.ctx.me?.id,
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          nowMs: messageDateMs,
+        });
+        if (botLoopProtection) {
+          const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+          if (botLoopResult.suppressed) {
+            logVerbose(
+              `telegram: bot-to-bot loop detected before dispatch setup, suppressing for ${Math.max(
+                0,
+                Math.ceil((botLoopResult.cooldownUntilMs - messageDateMs) / 1000),
+              )}s`,
+            );
+            return;
+          }
+        }
+      }
 
       const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
         resolveTelegramSessionState({
@@ -3508,6 +3606,7 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
+      applyBotToBotPolicy: false,
     });
   });
 

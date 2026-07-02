@@ -100,6 +100,18 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+type TelegramBotToBotConfig = {
+  /** Opt-in gate for bot-originated Telegram messages. Default: false. */
+  enabled?: boolean;
+  /** Emergency switch that drops all bot-originated messages before allowlist checks. */
+  killSwitch?: boolean;
+  /**
+   * Numeric Telegram bot/user IDs allowed when bot-to-bot admission is enabled.
+   * Usernames are diagnostics/display only and are not used for admission.
+   */
+  allowBotIds?: Array<string | number>;
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -113,6 +125,8 @@ export type TelegramAccountConfig = {
   commands?: ProviderCommandsConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */
   customCommands?: TelegramCustomCommand[];
+  /** Telegram bot-to-bot inbound admission policy. Disabled by default. */
+  botToBot?: TelegramBotToBotConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /**

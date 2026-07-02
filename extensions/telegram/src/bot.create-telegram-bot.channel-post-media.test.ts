@@ -99,12 +99,16 @@ function setOpenChannelPostConfig() {
 }
 
 function getChannelPostHandler() {
-  createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+  createTelegramBot({
+    token: "tok",
+    proxyFetch: globalThis.fetch,
+    testTimings: TELEGRAM_TEST_TIMINGS,
+  });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
 function getChannelPostHandlerWithRuntimeTimings() {
-  createTelegramBot({ token: "tok" });
+  createTelegramBot({ token: "tok", proxyFetch: globalThis.fetch });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
@@ -164,7 +168,12 @@ function createChannelPostContext(params: {
   const photoFileId = params.photoFileId;
   return {
     channelPost: {
-      chat: { id: -100777111222, type: "channel", title: params.title ?? "Wake Channel" },
+      chat: {
+        id: -100777111222,
+        type: "channel",
+        title: params.title ?? "Wake Channel",
+        username: "wake_channel",
+      },
       message_id: params.messageId,
       date: params.date,
       ...(params.caption ? { caption: params.caption } : {}),
@@ -349,7 +358,12 @@ describe("createTelegramBot channel_post media", () => {
 
       await handler({
         channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          chat: {
+            id: -100777111222,
+            type: "channel",
+            title: "Wake Channel",
+            username: "wake_channel",
+          },
           message_id: 301,
           date: 1736380800,
           text: part1,
@@ -360,7 +374,12 @@ describe("createTelegramBot channel_post media", () => {
 
       await handler({
         channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          chat: {
+            id: -100777111222,
+            type: "channel",
+            title: "Wake Channel",
+            username: "wake_channel",
+          },
           message_id: 302,
           date: 1736380801,
           text: part2,
@@ -797,10 +816,12 @@ describe("createTelegramBot channel_post media", () => {
     setOpenChannelPostConfig();
 
     const runtimeError = vi.fn();
+    const fetchSpy = createImageFetchSpy();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       createTelegramBot({
         token: "tok",
+        proxyFetch: globalThis.fetch,
         testTimings: TELEGRAM_TEST_TIMINGS,
         runtime: { error: runtimeError } as unknown as RuntimeEnv,
       });
@@ -825,6 +846,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
     }
   });
 });

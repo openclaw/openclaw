@@ -2189,6 +2189,70 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("suppresses admitted peer bot loops before dispatch while leaving human messages unaffected", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        defaults: {
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+          },
+        },
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          botToBot: { enabled: true, allowBotIds: [88001] },
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const chat = { id: 99887766, type: "private" };
+    const me = { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" };
+
+    await handler({
+      message: {
+        chat,
+        message_id: 501,
+        date: 1736380800,
+        text: "bot peer first turn",
+        from: { id: 88001, is_bot: true, first_name: "PeerBot", username: "peer_bot" },
+      },
+      me,
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    await handler({
+      message: {
+        chat,
+        message_id: 502,
+        date: 1736380801,
+        text: "bot peer loop turn",
+        from: { id: 88001, is_bot: true, first_name: "PeerBot", username: "peer_bot" },
+      },
+      me,
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    await handler({
+      message: {
+        chat,
+        message_id: 503,
+        date: 1736380802,
+        text: "human follow-up",
+        from: { id: 99002, is_bot: false, first_name: "Ada", username: "ada" },
+      },
+      me,
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(2);
+  });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },

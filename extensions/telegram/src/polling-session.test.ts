@@ -720,6 +720,11 @@ describe("TelegramPollingSession", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   it("uses backoff helpers for recoverable polling retries", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
@@ -4162,7 +4167,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
-          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerTimeoutMs: 5_000,
           spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
@@ -4176,8 +4181,7 @@ describe("TelegramPollingSession", () => {
         finishedAt: Date.now(),
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_200);
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(

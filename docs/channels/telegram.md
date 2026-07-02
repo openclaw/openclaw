@@ -307,6 +307,33 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Tab>
 </Tabs>
 
+### Bot-to-bot admission
+
+Telegram bot-to-bot admission is default-off. Human senders keep the normal `dmPolicy`, `allowFrom`, `groupPolicy`, and group/topic routing behavior.
+
+Use `channels.telegram.botToBot` only when this bot should accept ordinary Telegram messages authored by another bot:
+
+```json5
+{
+  channels: {
+    telegram: {
+      botToBot: {
+        enabled: true,
+        killSwitch: false,
+        allowBotIds: ["123456789"],
+      },
+    },
+  },
+}
+```
+
+- `enabled: true` turns on admission for bot-originated ordinary messages.
+- `killSwitch: true` drops bot-originated ordinary messages before allowlist checks.
+- `allowBotIds` must contain numeric Telegram bot/user IDs. Usernames are display/diagnostic data only and are not used for admission.
+- Telegram must actually deliver those messages: configure BotFather privacy/group visibility as needed, and remember that Telegram group privacy can prevent bots from seeing normal group traffic.
+- Admitted peer bots still pass through OpenClaw's shared bot-loop protection before dispatch.
+- `channel_post` keeps the existing channel-post authorization and delivery path; the bot-to-bot admission gate is not applied there.
+
 ## Runtime behavior
 
 - Telegram is owned by the gateway process.
