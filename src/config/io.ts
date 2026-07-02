@@ -127,6 +127,7 @@ import {
 } from "./runtime-snapshot.js";
 export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
+import { applySpawnAllowlistEnvOverlay } from "./spawn-allowlist-env.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -1431,6 +1432,7 @@ export function createConfigIO(
     }
 
     applyConfigEnvVars(cfg, deps.env);
+    applySpawnAllowlistEnvOverlay(cfg, deps.env);
 
     const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
     if (
