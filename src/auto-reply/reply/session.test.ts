@@ -4313,7 +4313,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("accounts exhausted-run usage without committing its model", async () => {
+  it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -4357,12 +4357,12 @@ describe("persistSessionUsageUpdate", () => {
       totalTokens: 100,
       totalTokensFresh: true,
       cliSessionBindings: {
-        "claude-cli": { sessionId: "existing-cli-session" },
+        "claude-cli": { sessionId: "exhausted-cli-session" },
       },
       cliSessionIds: {
-        "claude-cli": "existing-cli-session",
+        "claude-cli": "exhausted-cli-session",
       },
-      claudeCliSessionId: "existing-cli-session",
+      claudeCliSessionId: "exhausted-cli-session",
     });
   });
 
@@ -4972,6 +4972,100 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
       sessionId: "codex-session",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
+  });
+
+  it("persists heartbeat CLI binding while preserving displayed session model", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-binding-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      cliSessionBinding: {
+        sessionId: "new-heartbeat-cli-session",
+        authProfileId: "anthropic:heartbeat",
+      },
+      contextTokensUsed: 128_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("new-heartbeat-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "new-heartbeat-cli-session",
+      authProfileId: "anthropic:heartbeat",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBe("new-heartbeat-cli-session");
+  });
+
+  it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+          "codex-cli": "codex-cli-session",
+        },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+          "codex-cli": { sessionId: "codex-cli-session" },
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      clearCliSessionBinding: true,
+      contextTokensUsed: 128_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-cli-session",
     });
     expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
   });

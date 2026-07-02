@@ -731,7 +731,10 @@ function toReasonClassification(reason: FailoverReason): FailoverClassification 
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 export function isTransientHttpError(raw: string): boolean {

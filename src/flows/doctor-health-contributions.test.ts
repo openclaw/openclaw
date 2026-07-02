@@ -61,11 +61,18 @@ const mocks = vi.hoisted(() => ({
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
+  resolveAgentContextLimits: vi.fn(
+    (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+      cfg.agents?.defaults?.contextLimits ?? {},
+  ),
   note: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
+  findModelCatalogEntry: vi.fn(() => ({ contextTokens: 200_000 })),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
   resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   resolveHooksGmailModel: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  modelKey: vi.fn((provider: string, model: string) => `${provider}/${model}`),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
     exists: true,
@@ -243,6 +250,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -251,12 +259,15 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
+  findModelCatalogEntry: mocks.findModelCatalogEntry,
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: mocks.getModelRefStatus,
   resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
+  resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
+  modelKey: mocks.modelKey,
 }));
 
 vi.mock("../version.js", async () => ({
@@ -441,9 +452,16 @@ describe("doctor health contributions", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentContextLimits.mockReset();
+    mocks.resolveAgentContextLimits.mockImplementation(
+      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+        cfg.agents?.defaults?.contextLimits ?? {},
+    );
     mocks.note.mockReset();
     mocks.loadModelCatalog.mockReset();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.findModelCatalogEntry.mockReset();
+    mocks.findModelCatalogEntry.mockReturnValue({ contextTokens: 200_000 });
     mocks.getModelRefStatus.mockReset();
     mocks.getModelRefStatus.mockReturnValue({
       allowed: true,
@@ -452,8 +470,12 @@ describe("doctor health contributions", () => {
     });
     mocks.resolveConfiguredModelRef.mockReset();
     mocks.resolveConfiguredModelRef.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.resolveDefaultModelForAgent.mockReset();
+    mocks.resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     mocks.resolveHooksGmailModel.mockReset();
     mocks.resolveHooksGmailModel.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.modelKey.mockReset();
+    mocks.modelKey.mockImplementation((provider: string, model: string) => `${provider}/${model}`);
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -1191,7 +1213,101 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps tool result cap opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toMatchObject({ defaultEnabled: false });
+    expect(toolResultCapCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
+        },
+      },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [toolResultCapCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.contextLimits.toolResultMaxChars",
+        }),
+      ],
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/tool-result-cap"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+  });
+
+  it("reports agent findings for inherited default tool result caps", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toBeDefined();
+
+    mocks.resolveAgentContextLimits.mockImplementation(
+      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+        cfg.agents?.defaults?.contextLimits ?? {},
+    );
+    mocks.resolveDefaultModelForAgent.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { agentId?: string };
+      return params.agentId === "writer"
+        ? { provider: "openai", model: "gpt-5.5" }
+        : { provider: "local", model: "tiny" };
+    });
+    mocks.findModelCatalogEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[1] as { modelId?: string };
+      return params.modelId === "gpt-5.5" ? { contextTokens: 200_000 } : { contextTokens: 8_000 };
+    });
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
+          list: [{ id: "writer" }],
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [toolResultCapCheck!],
+        onlyIds: ["core/doctor/tool-result-cap"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      findings: expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.contextLimits.toolResultMaxChars",
+          target: "agents.list.writer",
+        }),
+      ]),
+    });
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {

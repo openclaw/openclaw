@@ -125,6 +125,8 @@ type TelegramSendOpts = {
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
+  /** Override the prompt-context cache timestamp for transcript-aligned sends. */
+  promptContextTimestampMs?: number;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Whether replyToMessageId came from ambient context or explicit payload/action input. */
@@ -957,6 +959,7 @@ export async function sendMessageTelegram(
         message: res,
         messageId,
         text: chunk.plainText,
+        promptContextTimestampMs: opts.promptContextTimestampMs,
         ...(acceptedParams?.message_thread_id !== undefined
           ? { messageThreadId: acceptedParams.message_thread_id }
           : {}),
@@ -1133,6 +1136,7 @@ export async function sendMessageTelegram(
             message: plainResult.result,
             messageId: fallbackMessageId,
             text: fallbackText,
+            promptContextTimestampMs: opts.promptContextTimestampMs,
             ...(plainResult.acceptedParams?.message_thread_id !== undefined
               ? { messageThreadId: plainResult.acceptedParams.message_thread_id }
               : {}),
@@ -1155,6 +1159,7 @@ export async function sendMessageTelegram(
         message: result,
         messageId,
         text: chunk.plainText,
+        promptContextTimestampMs: opts.promptContextTimestampMs,
         ...(recordedParams?.message_thread_id !== undefined
           ? { messageThreadId: recordedParams.message_thread_id }
           : {}),
@@ -1409,6 +1414,7 @@ export async function sendMessageTelegram(
       message: result,
       messageId: mediaMessageId,
       ...(caption ? { text: caption } : {}),
+      promptContextTimestampMs: opts.promptContextTimestampMs,
       ...(mediaParams.message_thread_id !== undefined
         ? { messageThreadId: mediaParams.message_thread_id }
         : {}),
