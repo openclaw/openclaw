@@ -64,6 +64,15 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
+async function isParentAccessible(configuredPath: string): Promise<boolean> {
+  try {
+    await fs.access(path.dirname(path.resolve(configuredPath)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function collectUnsafeLocalArtifacts(
   configuredPaths: string[],
 ): Promise<UnsafeLocalArtifact[]> {
@@ -236,12 +245,25 @@ export async function syncMemoryWikiUnsafeLocalSources(
     }),
   );
 
-  const removedCount = await pruneImportedSourceEntries({
-    vaultRoot: config.vault.path,
-    group: "unsafe-local",
-    activeKeys,
-    state,
-  });
+  // Skip pruning when zero artifacts were collected AND at least one configured
+  // path has an inaccessible parent directory (transiently unavailable —
+  // undocked drive, NAS rebooting, cloud folder not mounted yet). In that
+  // state, zero artifacts is indistinguishable from "all sources deleted."
+  // Pruning would irreversibly delete imported pages and user-authored
+  // human-notes blocks. When the parent IS accessible but yields no artifacts,
+  // the user intentionally removed the source files, so pruning proceeds
+  // normally. See #97523.
+  const hasInaccessiblePath =
+    artifacts.length === 0 &&
+    !(await Promise.all(config.unsafeLocal.paths.map(isParentAccessible))).every(Boolean);
+  const removedCount = hasInaccessiblePath
+    ? 0
+    : await pruneImportedSourceEntries({
+        vaultRoot: config.vault.path,
+        group: "unsafe-local",
+        activeKeys,
+        state,
+      });
   await writeMemoryWikiSourceSyncState(config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;
   const updatedCount = results.filter((result) => result.changed && !result.created).length;
