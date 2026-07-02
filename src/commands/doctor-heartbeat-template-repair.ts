@@ -6,9 +6,17 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  HealthFinding,
+  HealthRepairDiff,
+  HealthRepairEffect,
+  HealthRepairResult,
+} from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { shortenHomePath } from "../utils.js";
+
+const HEARTBEAT_TEMPLATE_CHECK_ID = "core/doctor/heartbeat-template";
 
 const LEGACY_HEARTBEAT_PROSE_TEMPLATE = [
   "# HEARTBEAT.md",
@@ -124,6 +132,176 @@ async function readCleanHeartbeatTemplate(): Promise<string> {
   const templateDir = await resolveWorkspaceTemplateDir();
   const templatePath = path.join(templateDir, DEFAULT_HEARTBEAT_FILENAME);
   return await fs.readFile(templatePath, "utf-8");
+}
+
+function heartbeatTemplateAnalysisToHealthFinding(
+  heartbeatPath: string,
+  analysis: Exclude<HeartbeatTemplateRepairAnalysis, { status: "clean" }>,
+): HealthFinding {
+  if (analysis.status === "dirty-template-with-custom-content") {
+    return {
+      checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+      severity: "warning",
+      message:
+        "HEARTBEAT.md contains an older heartbeat template wrapper plus custom or unrecognized content.",
+      path: heartbeatPath,
+      requirement: "legacy-template-with-custom-content",
+      fixHint: "Remove the fenced template and Related lines manually if they are not intentional.",
+    };
+  }
+  return {
+    checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+    severity: "warning",
+    message: "HEARTBEAT.md contains an older heartbeat documentation template.",
+    path: heartbeatPath,
+    requirement: "legacy-template",
+    fixHint: 'Run "openclaw doctor --fix" to replace it with the clean heartbeat template.',
+  };
+}
+
+/** Collects read-only structured findings for legacy HEARTBEAT.md template wrappers. */
+export async function collectHeartbeatTemplateHealthFindings(
+  cfg: OpenClawConfig,
+  deps?: {
+    readFile?: (filePath: string) => Promise<string>;
+  },
+): Promise<readonly HealthFinding[]> {
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const readFile = deps?.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf-8"));
+  let content: string;
+  try {
+    content = await readFile(heartbeatPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return [];
+    }
+    return [
+      {
+        checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+        severity: "warning",
+        message: `Could not inspect HEARTBEAT.md: ${formatErrorMessage(error)}`,
+        path: heartbeatPath,
+        requirement: "inspect-failed",
+        fixHint: "Check file permissions, then rerun doctor.",
+      },
+    ];
+  }
+
+  const analysis = analyzeHeartbeatTemplateForRepair(content);
+  if (analysis.status === "clean") {
+    return [];
+  }
+  return [heartbeatTemplateAnalysisToHealthFinding(heartbeatPath, analysis)];
+}
+
+function heartbeatTemplateReplacementEffect(
+  heartbeatPath: string,
+  dryRun: boolean,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: dryRun ? "would-replace-heartbeat-template" : "replace-heartbeat-template",
+    target: heartbeatPath,
+    dryRunSafe: false,
+  };
+}
+
+function heartbeatTemplateReplacementDiff(
+  heartbeatPath: string,
+  before: string,
+  after: string,
+): HealthRepairDiff {
+  return {
+    kind: "file",
+    path: heartbeatPath,
+    before,
+    after,
+  };
+}
+
+/** Repairs or previews known legacy HEARTBEAT.md template rewrites for structured Doctor repair. */
+export async function repairHeartbeatTemplateHealthFindings(params: {
+  cfg: OpenClawConfig;
+  findings: readonly HealthFinding[];
+  dryRun?: boolean;
+  diff?: boolean;
+  deps?: {
+    readFile?: (filePath: string) => Promise<string>;
+    writeTextAtomic?: typeof writeTextAtomic;
+    readCleanHeartbeatTemplate?: () => Promise<string>;
+  };
+}): Promise<HealthRepairResult> {
+  const repairableFinding = params.findings.find(
+    (finding) =>
+      finding.checkId === HEARTBEAT_TEMPLATE_CHECK_ID &&
+      finding.requirement === "legacy-template" &&
+      typeof finding.path === "string",
+  );
+  if (repairableFinding === undefined) {
+    return {
+      status: "skipped",
+      reason: "only manual heartbeat template findings were present",
+      changes: [],
+    };
+  }
+
+  const heartbeatPath = repairableFinding.path;
+  if (typeof heartbeatPath !== "string") {
+    return {
+      status: "skipped",
+      reason: "heartbeat template finding did not include a file path",
+      changes: [],
+    };
+  }
+  const readFile = params.deps?.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf-8"));
+  const writeFile = params.deps?.writeTextAtomic ?? writeTextAtomic;
+  const readTemplate = params.deps?.readCleanHeartbeatTemplate ?? readCleanHeartbeatTemplate;
+  let content: string;
+  let cleanTemplate: string;
+  try {
+    [content, cleanTemplate] = await Promise.all([readFile(heartbeatPath), readTemplate()]);
+  } catch (error) {
+    return {
+      status: "failed",
+      reason: `could not prepare heartbeat template repair: ${formatErrorMessage(error)}`,
+      changes: [],
+    };
+  }
+
+  if (analyzeHeartbeatTemplateForRepair(content).status !== "dirty-template") {
+    return {
+      status: "skipped",
+      reason: "heartbeat file is not a pure legacy template",
+      changes: [],
+    };
+  }
+
+  if (params.dryRun !== true) {
+    try {
+      await writeFile(heartbeatPath, cleanTemplate, { mode: 0o600 });
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: `could not repair heartbeat template: ${formatErrorMessage(error)}`,
+        changes: [],
+      };
+    }
+  }
+
+  const shortPath = shortenHomePath(heartbeatPath);
+  return {
+    changes: [
+      params.dryRun === true
+        ? `Would replace ${shortPath} with the clean heartbeat template.`
+        : `Replaced ${shortPath} with the clean heartbeat template.`,
+    ],
+    diffs:
+      params.diff === true
+        ? [heartbeatTemplateReplacementDiff(heartbeatPath, content, cleanTemplate)]
+        : [],
+    effects: [heartbeatTemplateReplacementEffect(heartbeatPath, params.dryRun === true)],
+  };
 }
 
 /** Replaces known dirty heartbeat templates with the clean runtime template when repair is enabled. */

@@ -1735,6 +1735,26 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:heartbeat-template-repair",
       label: "Heartbeat template repair",
+      healthChecks: {
+        id: "core/doctor/heartbeat-template",
+        description: "Legacy HEARTBEAT.md documentation templates are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHeartbeatTemplateHealthFindings } =
+            await import("../commands/doctor-heartbeat-template-repair.js");
+          return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
+        },
+        async repair(ctx, findings) {
+          const { repairHeartbeatTemplateHealthFindings } =
+            await import("../commands/doctor-heartbeat-template-repair.js");
+          return await repairHeartbeatTemplateHealthFindings({
+            cfg: ctx.cfg,
+            findings,
+            dryRun: ctx.dryRun,
+            diff: ctx.diff,
+          });
+        },
+      },
       run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
