@@ -430,6 +430,67 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
+const PRIVATE_NETWORK_EXEC_DIAGNOSTIC = [
+  "OpenClaw exec private-network diagnostic: this command targets a private/internal address and failed with a network-looking error.",
+  "If the same macOS/Linux user can reach the target from an ordinary terminal, browser, or launchd/systemd user service, this may be an exec runtime, sandbox, or process-scoped network policy mismatch rather than a LAN outage.",
+  "Compare the same command from the user shell and check tools.exec.host/sandbox settings, elevated/runtime policy, and local VPN/Network Extension filters.",
+].join(" ");
+
+const NETWORK_FAILURE_PATTERNS = [
+  /\bno route to host\b/i,
+  /\bnetwork is unreachable\b/i,
+  /\bhost is down\b/i,
+  /\bfailed to connect\b/i,
+  /\bcould(?:n'?t| not) connect to server\b/i,
+  /\bconnection refused\b/i,
+  /\bconnection timed out\b/i,
+  /\boperation timed out\b/i,
+  /\bconnect\(\) failed\b/i,
+];
+
+const PRIVATE_HOST_PATTERNS = [
+  /\blocalhost\b/i,
+  /\b127(?:\.\d{1,3}){3}\b/,
+  /\b10(?:\.\d{1,3}){3}\b/,
+  /\b192\.168(?:\.\d{1,3}){2}\b/,
+  /\b172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}\b/,
+  /\b169\.254(?:\.\d{1,3}){2}\b/,
+  /\b::1\b/i,
+  /\bfc[0-9a-f]{2}:/i,
+  /\bfd[0-9a-f]{2}:/i,
+  /\bfe80:/i,
+];
+
+function textTargetsPrivateNetwork(text: string | undefined): boolean {
+  if (!text?.trim()) {
+    return false;
+  }
+  return PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function outputLooksLikeNetworkFailure(output: string): boolean {
+  return NETWORK_FAILURE_PATTERNS.some((pattern) => pattern.test(output));
+}
+
+function appendPrivateNetworkExecDiagnostic(params: {
+  command?: string;
+  output: string;
+  exitCode: number | null;
+}): string {
+  if (!textTargetsPrivateNetwork(params.command) && !textTargetsPrivateNetwork(params.output)) {
+    return params.output;
+  }
+  if (!outputLooksLikeNetworkFailure(params.output)) {
+    return params.output;
+  }
+  if (params.output.includes("OpenClaw exec private-network diagnostic:")) {
+    return params.output;
+  }
+  const codeText = typeof params.exitCode === "number" ? ` (exit code ${params.exitCode})` : "";
+  const diagnostic = `${PRIVATE_NETWORK_EXEC_DIAGNOSTIC}${codeText}`;
+  return params.output ? `${params.output}\n\n${diagnostic}` : diagnostic;
+}
+
 function classifyExecFailureKind(params: {
   exitReason: TerminationReason;
   exitCode: number;
@@ -482,6 +543,7 @@ export function buildExecExitOutcome(params: {
   aggregated: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
+  command?: string;
 }): ExecProcessOutcome {
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
@@ -490,13 +552,22 @@ export function buildExecExitOutcome(params: {
     isNormalExit && !isShellFailure ? "completed" : "failed";
   if (status === "completed") {
     const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+    const output = params.aggregated + exitMsg;
+    const aggregated =
+      exitCode !== 0
+        ? appendPrivateNetworkExecDiagnostic({
+            command: params.command,
+            output,
+            exitCode,
+          })
+        : output;
     return {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
@@ -512,6 +583,11 @@ export function buildExecExitOutcome(params: {
     exitSignal: params.exit.exitSignal,
     timeoutSec: params.timeoutSec,
   });
+  const failureReason = appendPrivateNetworkExecDiagnostic({
+    command: params.command,
+    output: joinExecFailureOutput(params.aggregated, reason),
+    exitCode: params.exit.exitCode ?? null,
+  });
   return {
     status: "failed",
     exitCode: params.exit.exitCode,
@@ -522,7 +598,7 @@ export function buildExecExitOutcome(params: {
     timedOut: params.exit.timedOut,
     noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
-    reason: joinExecFailureOutput(params.aggregated, reason),
+    reason: failureReason,
   };
 }
 
@@ -945,6 +1021,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
+        command: opts.command,
       });
 
       markExited(

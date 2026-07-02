@@ -529,6 +529,87 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.aggregated).toBe("done\n\n(Command exited with code 1)");
   });
 
+  it("annotates private-network connection failures on non-zero normal exits", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 7,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated:
+        "curl: (7) Failed to connect to 192.168.147.163 port 8686 after 3000 ms: Couldn't connect to server",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "curl -I http://192.168.147.163:8686/",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.aggregated).toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.aggregated).toContain("same macOS/Linux user");
+    expect(outcome.aggregated).toContain("exec runtime, sandbox, or process-scoped network policy");
+    expect(outcome.aggregated).toContain("exit code 7");
+  });
+
+  it("does not annotate private-network-looking output on zero-exit normal exits", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "saved log line: ssh: connect to host 192.168.147.163 port 22: No route to host",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "printf '%s\n' 'ssh: connect to host 192.168.147.163 port 22: No route to host'",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.aggregated).not.toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.aggregated).not.toContain("(Command exited with code");
+  });
+
+  it("does not annotate public-network connection failures", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 7,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "curl: (7) Failed to connect to 203.0.113.10 port 8686",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "curl -I http://203.0.113.10:8686/",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.aggregated).not.toContain("OpenClaw exec private-network diagnostic");
+  });
+
   it("classifies timed out exits as failures with a reason", () => {
     const outcome = buildExecExitOutcome({
       exit: {
@@ -578,6 +659,60 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+  });
+
+  it("annotates private-network route failures on failed exits", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "ssh: connect to host 192.168.147.163 port 22: No route to host",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "ssh -o ConnectTimeout=5 192.168.147.163 hostname",
+    });
+
+    expect(outcome.status).toBe("failed");
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected failed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.reason).toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.reason).toContain("same macOS/Linux user");
+    expect(outcome.reason).toContain("VPN/Network Extension filters");
+  });
+
+  it("annotates hostname commands when stderr reports a private-network route failure", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 255,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "ssh: connect to host 192.168.147.163 port 22: No route to host",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "ssh -o ConnectTimeout=5 docker-arr hostname",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.aggregated).toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.aggregated).toContain("same macOS/Linux user");
+    expect(outcome.aggregated).toContain("exit code 255");
   });
 });
 
