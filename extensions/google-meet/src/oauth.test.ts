@@ -227,4 +227,46 @@ describe("Google Meet OAuth", () => {
     ).rejects.toThrow(/timeout/i);
     expect(promptInput).not.toHaveBeenCalled();
   });
+
+  it("fails closed when the OAuth token response exceeds the size cap", async () => {
+    // 300 KiB body — well above the 256 KiB cap for OAuth token responses.
+    const largeBody = '{"a":"' + "x".repeat(300 * 1024) + '"}';
+    const fetchMock = vi.fn(async () => {
+      return new Response(largeBody, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      refreshGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow(/exceeds/);
+  });
+
+  it("still parses a normal token response under the cap", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          access_token: "new-access-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tokens = await refreshGoogleMeetAccessToken({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      refreshToken: "refresh-token",
+    });
+    expect(tokens.accessToken).toBe("new-access-token");
+    expect(tokens.tokenType).toBe("Bearer");
+    expect(Number.isFinite(tokens.expiresAt)).toBe(true);
+  });
 });
