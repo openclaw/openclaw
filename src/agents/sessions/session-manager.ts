@@ -960,15 +960,15 @@ function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
   // Persisted JSONL is untrusted: shapes may predate the current Message type,
   // so normalize through a record view instead of the declared union.
   const message: Record<string, unknown> = entry.message;
-  if (message.role !== "toolResult") {
-    return entry;
-  }
-  // Replayed JSONL can carry string or single-record tool results while
-  // downstream providers require block arrays. Without this, strings replay as
-  // empty output and records hit non-array replay assumptions.
-  if (typeof message.content === "string") {
+  // Replayed JSONL can carry legacy string assistant/toolResult content while
+  // downstream providers require block arrays. Single-record tool results need
+  // the same ingress repair before replay reaches provider conversion.
+  if (
+    (message.role === "assistant" || message.role === "toolResult") &&
+    typeof message.content === "string"
+  ) {
     message.content = [{ type: "text", text: message.content }];
-  } else if (isJsonRecord(message.content)) {
+  } else if (message.role === "toolResult" && isJsonRecord(message.content)) {
     message.content = [message.content];
   }
   return entry;
