@@ -521,6 +521,82 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps long workspace file sections scrollable inside the rail", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const browserEntries = Array.from({ length: 60 }, (_, index) => ({
+      kind: "file" as const,
+      name: `file-${String(index + 1).padStart(2, "0")}.ts`,
+      path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
+      size: 2048 + index,
+    }));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.files.list": {
+          browser: {
+            entries: browserEntries,
+            path: "",
+          },
+          files: [],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+
+      const browserSection = page.locator(".chat-workspace-rail__section", {
+        hasText: "Project files",
+      });
+      await expect
+        .poll(
+          () =>
+            browserSection.evaluate((section) => {
+              const element = section as HTMLElement;
+              const scroll = element.closest(".chat-workspace-rail__scroll") as HTMLElement | null;
+              if (!scroll) {
+                throw new Error("Expected workspace rail scroll container");
+              }
+              const sectionRect = element.getBoundingClientRect();
+              const scrollRect = scroll.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return {
+                bottomWithinRail: Math.ceil(sectionRect.bottom) <= Math.ceil(scrollRect.bottom),
+                clientHeight: element.clientHeight,
+                overflowY: style.overflowY,
+                scrollHeight: element.scrollHeight,
+              };
+            }),
+          { timeout: 10_000 },
+        )
+        .toMatchObject({
+          bottomWithinRail: true,
+          overflowY: "auto",
+        });
+      const sectionMetrics = await browserSection.evaluate((section) => {
+        const element = section as HTMLElement;
+        return {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      expect(sectionMetrics.scrollHeight).toBeGreaterThan(sectionMetrics.clientHeight);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

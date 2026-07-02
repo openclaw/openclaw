@@ -7,10 +7,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessagePlaceholder,
-} from "./bot/body-helpers.js";
+import { resolveTelegramPrimaryMedia, resolveTelegramRichMessageBody } from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -69,6 +66,9 @@ export type TelegramMessageCache = {
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
+type MessageWithPromptContextTimestamp = Message & {
+  openclaw_prompt_context_timestamp_ms?: unknown;
+};
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
@@ -155,13 +155,20 @@ function resolveMessageBody(msg: Message): string | undefined {
   if (location) {
     return formatLocationText(location);
   }
-  return (
-    resolveTelegramRichMessagePlaceholder(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder
-  );
+  return resolveTelegramRichMessageBody(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 function resolveMediaType(placeholder?: string): string | undefined {
   return placeholder?.match(/^<media:([^>]+)>$/)?.[1];
+}
+
+function resolveMessageTimestamp(msg: Message): number | undefined {
+  const promptContextTimestamp = (msg as MessageWithPromptContextTimestamp)
+    .openclaw_prompt_context_timestamp_ms;
+  if (typeof promptContextTimestamp === "number" && Number.isFinite(promptContextTimestamp)) {
+    return promptContextTimestamp;
+  }
+  return msg.date ? msg.date * 1000 : undefined;
 }
 
 function normalizeMessageNode(
@@ -177,13 +184,14 @@ function normalizeMessageNode(
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
   const threadId = normalizeTelegramCacheThreadId(params.threadId);
+  const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
     sender: buildSenderName(msg) ?? "unknown sender",
     ...(msg.from?.id != null ? { senderId: String(msg.from.id) } : {}),
     ...(msg.from?.username ? { senderUsername: msg.from.username } : {}),
-    ...(msg.date ? { timestamp: msg.date * 1000 } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     ...(body ? { body } : {}),
     ...(media ? { mediaType: resolveMediaType(media.placeholder) ?? media.placeholder } : {}),
     ...(fileId ? { mediaRef: `telegram:file/${fileId}` } : {}),

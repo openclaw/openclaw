@@ -384,6 +384,10 @@ const formatSchedule = (schedule: CronSchedule | undefined) => {
   if (schedule?.kind === "every") {
     return `every ${formatDurationHuman(schedule.everyMs)}`;
   }
+  if (schedule?.kind === "on-exit") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `on-exit ${schedule.command}${cwd}`;
+  }
   if (schedule?.kind !== "cron") {
     return "-";
   }

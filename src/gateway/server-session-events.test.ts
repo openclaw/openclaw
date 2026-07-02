@@ -4,9 +4,11 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
   kind: "direct",
+  sessionId: "sess-main",
   status: "done",
   updatedAt: 1,
 }));
+const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("./chat-display-projection.js", () => ({
@@ -18,6 +20,15 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
   readSessionMessageCountAsync: vi.fn(),
 }));
+vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
+    "../agents/embedded-agent-runner/runs.js",
+  );
+  return {
+    ...actual,
+    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+  };
+});
 
 const { createTranscriptUpdateBroadcastHandler } = await import("./server-session-events.js");
 
@@ -62,6 +73,7 @@ async function emitAssistantTranscriptUpdate(
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
   });
 
   it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
@@ -81,6 +93,17 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       hasActiveRun: false,
       session: { hasActiveRun: false },
     });
+  });
+
+  it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
+    isEmbeddedAgentRunActiveMock.mockImplementation((sessionId) => sessionId === "sess-main");
+
+    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      hasActiveRun: true,
+      session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
+    });
+    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-main");
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {

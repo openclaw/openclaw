@@ -25,6 +25,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
@@ -81,6 +82,7 @@ import {
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -946,6 +948,18 @@ function formatForwardedExternalRunFailureText(message: string): string {
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
 }
 
+function supportsChannelCodexLogin(provider: string | null | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  const normalizedProvider = provider.trim().toLowerCase().replace(/_/gu, "-");
+  return (
+    normalizedProvider === "openai" ||
+    normalizedProvider === "codex" ||
+    normalizedProvider === "openai-codex"
+  );
+}
+
 function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
@@ -975,14 +989,22 @@ function buildExternalRunFailureReply(
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
+    const channelLoginHint = supportsCodexLogin
+      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "Re-auth";
+    const retryLoginHint = supportsCodexLogin
+      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "re-auth";
     if (oauthRefreshFailure.reason) {
       return {
-        text: `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`,
+        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with \`${loginCommand}\` in a terminal, then try again.`,
         isGenericRunnerFailure: false,
       };
     }
     return {
-      text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with \`${loginCommand}\` in a terminal.`,
       isGenericRunnerFailure: false,
     };
   }
@@ -2120,6 +2142,12 @@ export async function runAgentTurnWithFallback(params: {
         offAnnounced: false,
         resetAnnounced: false,
       };
+      const bootstrapContextRunKind: BootstrapContextRunKind =
+        resolveHeartbeatRunScope(params.opts) === "commitment-only"
+          ? "commitment-only"
+          : params.opts?.isHeartbeat
+            ? "heartbeat"
+            : "default";
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2421,6 +2449,8 @@ export async function runAgentTurnWithFallback(params: {
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
                     authProfileId: authProfile.authProfileId,
+                    bootstrapContextMode: params.opts?.bootstrapContextMode,
+                    bootstrapContextRunKind,
                     bootstrapPromptWarningSignaturesSeen,
                     bootstrapPromptWarningSignature:
                       bootstrapPromptWarningSignaturesSeen[
@@ -2585,7 +2615,7 @@ export async function runAgentTurnWithFallback(params: {
                     enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                     forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                     bootstrapContextMode: params.opts?.bootstrapContextMode,
-                    bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                    bootstrapContextRunKind,
                     images: currentTurnImages.images,
                     imageOrder: currentTurnImages.imageOrder,
                     abortSignal: runAbortSignal,

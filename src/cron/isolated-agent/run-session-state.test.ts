@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   adoptCronRunSessionMetadata,
@@ -143,26 +144,32 @@ describe("createPersistCronSessionEntry", () => {
     });
   });
 
-  it("persists explicit session-bound cron state under the requested session key", async () => {
+  it("persists non-resumable cron state under the supplied execution session key", async () => {
     const cronSession = makeCronSession();
     const updateSessionStore = vi.fn(
       async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
         const store: Record<string, SessionEntry> = {};
         update(store);
-        expect(store["agent:main:session"]).toBe(cronSession.sessionEntry);
+        expect(store["agent:main:cron:job"]).toEqual({
+          updatedAt: 1000,
+          systemSent: true,
+        });
       },
     );
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
-      agentSessionKey: "agent:main:session",
+      agentSessionKey: "agent:main:cron:job",
       updateSessionStore,
     });
 
     await persist();
 
-    expect(cronSession.store["agent:main:session"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]).toEqual({
+      updatedAt: 1000,
+      systemSent: true,
+    });
   });
 
   it("adopts rotated run transcript metadata before persisting session-bound cron state", async () => {
@@ -216,9 +223,15 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
+const cronSessionTempDirs: string[] = [];
+
 async function createTranscriptFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-session-"));
+  const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
   const file = path.join(dir, "session.jsonl");
   await fs.writeFile(file, `${JSON.stringify({ type: "session", sessionId: "run-session-id" })}\n`);
   return file;
 }
+
+afterAll(() => {
+  cleanupTempDirs(cronSessionTempDirs);
+});

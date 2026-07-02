@@ -19,6 +19,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isStopped?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -233,6 +234,14 @@ const afterClearCallbacksByOperation = new WeakMap<
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
+  try {
+    return backend.isStopped === undefined ? backend.isStreaming() : !backend.isStopped();
+  } catch {
+    return false;
+  }
 }
 
 /** Run work after an operation no longer owns its session lane. */
@@ -726,7 +735,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  if (!backend.isStreaming()) {
+  if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
   void backend.queueMessage(text);

@@ -9,6 +9,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -133,6 +134,7 @@ let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let applySessionHints: typeof import("./body.js").applySessionHints;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
@@ -279,6 +281,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ applySessionHints } = await import("./body.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
@@ -2821,6 +2824,21 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call.commandBody).toContain("System: [t] Model switched.");
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
+  });
+
+  it("does not drain queued system events for commitment-only heartbeat runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        abortedLastRun: true,
+        opts: {
+          isHeartbeat: true,
+          [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+        },
+      }),
+    );
+
+    expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
+    expect(applySessionHints).not.toHaveBeenCalled();
   });
 
   it("keeps sender ownership when queued system events are prepended", async () => {

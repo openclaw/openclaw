@@ -1387,6 +1387,11 @@ export const de: TranslationMap = {
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
     },
+    pairingQrExpired: {
+      title: "Kopplungs-QR-Code abgelaufen",
+      reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",
+      badge: "Abgelaufen",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

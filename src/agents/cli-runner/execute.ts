@@ -1026,14 +1026,7 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const liveSessionOwnsRunArtifacts = context.mcpDeliveryCapture !== true;
-          fallbackClaudeSkillsPluginCleanupOwned = liveSessionOwnsRunArtifacts;
-          const ownedPreparedBackendCleanup = liveSessionOwnsRunArtifacts
-            ? context.preparedBackend.cleanup
-            : undefined;
-          if (liveSessionOwnsRunArtifacts) {
-            context.preparedBackend.cleanup = undefined;
-          }
+          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -1050,15 +1043,9 @@ export async function executePreparedCliRun(
                 ? emitCliCommentaryText
                 : undefined,
             onMcpCaptureReady: beginGatewayCapture,
-            cleanup: liveSessionOwnsRunArtifacts
-              ? async () => {
-                  try {
-                    await fallbackClaudeSkillsPlugin?.cleanup();
-                  } finally {
-                    await ownedPreparedBackendCleanup?.();
-                  }
-                }
-              : async () => {},
+            cleanup: async () => {
+              await fallbackClaudeSkillsPlugin?.cleanup();
+            },
           });
           const rawText = liveResult.output.text;
           runOutput = {
@@ -1300,12 +1287,14 @@ export async function executePreparedCliRun(
             reason = reason ?? "unknown";
             const status = resolveFailoverStatus(reason);
             const retryCode =
-              reason === "unknown" &&
-              result.reason === "exit" &&
-              errorCandidates.length === 0 &&
-              !observedCliActivity
-                ? "cli_unknown_empty_failure"
-                : undefined;
+              reason === "context_overflow"
+                ? "cli_context_overflow"
+                : reason === "unknown" &&
+                    result.reason === "exit" &&
+                    errorCandidates.length === 0 &&
+                    !observedCliActivity
+                  ? "cli_unknown_empty_failure"
+                  : undefined;
             throw new FailoverError(err, {
               reason,
               provider: params.provider,

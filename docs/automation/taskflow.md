@@ -25,7 +25,7 @@ Use Task Flow when work spans multiple sequential or branching steps and you nee
 For recurring workflows such as market intelligence briefings, treat the schedule, orchestration, and reliability checks as separate layers:
 
 1. Use [Scheduled Tasks](/automation/cron-jobs) for timing.
-2. Use a persistent cron session when the workflow should build on prior context.
+2. Store prior context in the workflow's own files, database, or tool state.
 3. Use [Lobster](/tools/lobster) for deterministic steps, approval gates, and resume tokens.
 4. Use Task Flow to track the multi-step run across child tasks, waits, retries, and gateway restarts.
 
@@ -43,7 +43,7 @@ openclaw cron add \
   --to "channel:C1234567890"
 ```
 
-Use `session:<id>` instead of `isolated` when the recurring workflow needs deliberate history, previous run summaries, or standing context. Use `isolated` when each run should start fresh and all required state is explicit in the workflow.
+Use `session:<id>` when the job should target a known chat/session for delivery context or safe preference seeding. Cron still executes each run in a detached session, so put previous run summaries and standing workflow state in explicit storage the job can read.
 
 Inside the workflow, put reliability checks before the LLM summary step:
 
