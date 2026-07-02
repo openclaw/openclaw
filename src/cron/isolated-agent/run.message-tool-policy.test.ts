@@ -1502,6 +1502,59 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
+  it("preserves delivered=false when unresolved implicit fallback returns silent ok", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "last",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required when delivery.channel=last has no previous channel."),
+    });
+    dispatchCronDeliveryMock.mockImplementationOnce(({ withRunSession, summary, outputText }) => ({
+      result: withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted: false,
+      }),
+      delivered: false,
+      deliveryAttempted: false,
+      cronRunSessionCleanupAttempted: false,
+      summary,
+      outputText,
+      synthesizedText: outputText,
+      deliveryPayloads: outputText ? [{ text: outputText }] : [],
+    }));
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(false);
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "last", to: null, source: "last" },
+      fallbackUsed: false,
+      delivered: false,
+    });
+    expectRecordFields(
+      result.delivery?.resolved,
+      {
+        ok: false,
+        source: "last",
+        error: "Channel is required when delivery.channel=last has no previous channel.",
+      },
+      "cron delivery resolved target",
+    );
+  });
+
   it("does not mark bare no-deliver runs delivered when the current target is unresolved", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({

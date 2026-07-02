@@ -1420,6 +1420,7 @@ async function finalizeCronRun(params: {
   if (deliveryResult.result) {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
+      delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
@@ -1438,7 +1439,7 @@ async function finalizeCronRun(params: {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({
-      delivered: deliveryResult.result.delivered,
+      delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
       deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
       delivery: deliveryTrace,
     });
