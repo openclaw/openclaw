@@ -668,6 +668,39 @@ describe("msteams attachments", () => {
         expect(tokenProvider.getAccessToken).toHaveBeenCalled();
       });
 
+      it("routes file.download.info SharePoint downloadUrl through Graph shares endpoint", async () => {
+        const downloadUrl = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
+        const tokenProvider = createTokenProvider();
+        const fetchMock = createGraphSharesFetchMock();
+        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
+        saveMediaBufferMock.mockResolvedValueOnce({
+          id: "saved.pdf",
+          path: SAVED_PDF_PATH,
+          size: Buffer.byteLength(PDF_PAYLOAD),
+          contentType: CONTENT_TYPE_APPLICATION_PDF,
+        });
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createTeamsFileDownloadInfoAttachments(downloadUrl, "pdf"), {
+            tokenProvider,
+            allowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+            authAllowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+            fetchFn: asFetchFn(fetchMock),
+          }),
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(media[0]?.path).toBe(SAVED_PDF_PATH);
+        const calledUrls = (fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).map(
+          ([input]) => resolveRequestUrl(input),
+        );
+        expect(calledUrls.length).toBeGreaterThan(0);
+        for (const url of calledUrls) {
+          expect(url.startsWith(GRAPH_SHARES_URL_PREFIX)).toBe(true);
+        }
+        expect(tokenProvider.getAccessToken).toHaveBeenCalled();
+      });
+
       it("falls through to direct fetch for non-shared-link URLs", async () => {
         const directUrl = createTestUrl("direct.pdf");
         const fetchMock = createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf");
