@@ -153,6 +153,7 @@ vi.mock("../infra/is-main.js", () => ({
 }));
 
 vi.mock("../logging/console.js", () => ({
+  getConsoleSettings: () => ({ level: "silent", style: "compact" }),
   routeLogsToStderr: () => mockState.routeLogsToStderr(),
 }));
 

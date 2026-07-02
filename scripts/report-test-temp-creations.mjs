@@ -7,6 +7,8 @@ import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const DEFAULT_BASE_REF = "origin/main";
 const DEFAULT_HEAD_REF = "HEAD";
+const DEFAULT_DIFF_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+const DIFF_MAX_BUFFER_ENV = "OPENCLAW_TEST_TEMP_REPORT_DIFF_MAX_BUFFER_BYTES";
 const TEMP_DIR_HELPER_PATH = "test/helpers/temp-dir.ts";
 const FINDING_PATTERNS = [
   {
@@ -120,7 +122,7 @@ function parseArgs(argv) {
   ]);
 }
 
-function readDiff(args, cwd = process.cwd()) {
+function readDiff(args, cwd = process.cwd(), env = process.env) {
   const range = args.noMergeBase ? `${args.base}..${args.head}` : `${args.base}...${args.head}`;
   const diffArgs = args.staged
     ? ["diff", "--cached", "--unified=0", "--diff-filter=ACMR", "--"]
@@ -128,9 +130,31 @@ function readDiff(args, cwd = process.cwd()) {
   return execFileSync("git", diffArgs, {
     cwd,
     encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: readDiffMaxBufferBytes(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function readDiffMaxBufferBytes(env = process.env) {
+  const raw = env[DIFF_MAX_BUFFER_ENV];
+  if (raw === undefined || raw === "") {
+    return DEFAULT_DIFF_MAX_BUFFER_BYTES;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${DIFF_MAX_BUFFER_ENV}: ${raw}`);
+  }
+  return value;
+}
+
+function isDiffBufferOverflow(error) {
+  return error?.code === "ENOBUFS" || error?.errno === -105;
+}
+
+function formatDiffBufferOverflowWarning(error, env = process.env) {
+  const maxBuffer = readDiffMaxBufferBytes(env);
+  const detail = error?.message ? ` ${error.message}` : "";
+  return `[test-temp-report] git diff exceeded ${maxBuffer} bytes; skipping warning-only temp creation report.${detail}\n`;
 }
 
 export function collectTempCreationFindingsFromDiff(diffText) {
@@ -205,7 +229,19 @@ export async function main(argv, io) {
     return 0;
   }
 
-  const findings = collectTempCreationFindingsFromDiff(readDiff(args));
+  let findings;
+  try {
+    findings = collectTempCreationFindingsFromDiff(readDiff(args, process.cwd(), env));
+  } catch (error) {
+    if (!isDiffBufferOverflow(error)) {
+      throw error;
+    }
+    if (args.json) {
+      stdout.write("[]\n");
+    }
+    stderr.write(formatDiffBufferOverflowWarning(error, env));
+    return args.failOnFindings ? 1 : 0;
+  }
   if (args.json) {
     stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
   } else if (findings.length === 0) {
