@@ -27,6 +27,7 @@ const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailur
   "auth_html",
   "auth_refresh",
   "auth_scope",
+  "upstream_html",
 ]);
 
 function resolveConfiguredRedactPatterns(): string[] {

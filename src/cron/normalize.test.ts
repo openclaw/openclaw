@@ -1039,3 +1039,37 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });
+
+describe("on-exit schedule normalization", () => {
+  it("keeps command/cwd and strips time fields for on-exit jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "watch build",
+      schedule: {
+        kind: "on-exit",
+        command: "make build",
+        cwd: "/repo",
+        // stale fields from a prior kind that must be dropped
+        everyMs: 1000,
+        expr: "* * * * *",
+        at: "2026-01-01T00:00:00Z",
+      },
+      payload: { kind: "systemEvent", text: "build done" },
+      sessionTarget: "main",
+    });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).toEqual({ kind: "on-exit", command: "make build", cwd: "/repo" });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("drops command/cwd when normalizing a non-on-exit schedule", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "interval",
+      schedule: { kind: "every", everyMs: 5000, command: "leftover", cwd: "/x" },
+      payload: { kind: "systemEvent", text: "tick" },
+      sessionTarget: "main",
+    });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).not.toHaveProperty("command");
+    expect(normalized?.schedule).not.toHaveProperty("cwd");
+  });
+});

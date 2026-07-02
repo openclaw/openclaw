@@ -13,6 +13,11 @@ import {
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../llm/providers/anthropic-thinking-replay.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -296,16 +301,17 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(
-  content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  >,
-) {
-  const hasImages = content.some((item) => item.type === "image");
-  if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      content.map((item) => ("text" in item ? item.text : "")).join("\n"),
+function convertContentBlocks(content: readonly unknown[]) {
+  const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
+  const hasImages =
+    Array.isArray(content) &&
+    content.some(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
+  if (!hasImages) {
+    return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
   const blocks: Array<
     | { type: "text"; text: string }
@@ -315,26 +321,30 @@ function convertContentBlocks(
       }
   > = [];
   let hasTextBlock = false;
-  for (const block of content) {
-    if (block.type === "text") {
-      const text = sanitizeTransportPayloadText(block.text);
-      if (text.trim().length > 0) {
-        blocks.push({ type: "text", text });
-        hasTextBlock = true;
-      }
-    } else {
-      blocks.push({
-        type: "image" as const,
-        source: {
-          type: "base64",
-          media_type: block.mimeType,
-          data: block.data,
-        },
-      });
+  for (const block of Array.isArray(content) ? content : []) {
+    if (!block || typeof block !== "object") {
+      continue;
     }
+    const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
+      hasTextBlock = true;
+    }
+    if (record.type !== "image") {
+      continue;
+    }
+    blocks.push({
+      type: "image" as const,
+      source: {
+        type: "base64",
+        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        data: typeof record.data === "string" ? record.data : "",
+      },
+    });
   }
   if (!hasTextBlock) {
-    return [{ type: "text", text: "(see attached image)" }, ...blocks];
+    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
 }

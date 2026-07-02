@@ -243,7 +243,13 @@ class TalkModeManager internal constructor(
   }
 
   /** Starts a push-to-talk capture session for gateway node.invoke callers. */
-  suspend fun beginPushToTalk(): TalkPttStartPayload {
+  suspend fun beginPushToTalk(allowNewCapture: Boolean): TalkPttStartPayload {
+    if (!allowNewCapture) {
+      // A background retry may reconcile an existing capture, but must never create one.
+      return activePttCaptureId
+        ?.let(::TalkPttStartPayload)
+        ?: throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
       throw IllegalStateException("UNAVAILABLE: Gateway not connected")
@@ -353,7 +359,7 @@ class TalkModeManager internal constructor(
       )
     }
 
-    beginPushToTalk()
+    beginPushToTalk(allowNewCapture = true)
     val completion = CompletableDeferred<TalkPttStopPayload>()
     pttCompletion = completion
     pttAutoStopEnabled = true

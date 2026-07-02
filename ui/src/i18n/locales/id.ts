@@ -1376,6 +1376,11 @@ export const id: TranslationMap = {
       retrySend: "Coba kirim lagi",
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
+    pairingQrExpired: {
+      title: "QR pemasangan kedaluwarsa",
+      reason: "Jalankan /pair qr lagi untuk membuat kode pengaturan baru.",
+      badge: "Kedaluwarsa",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

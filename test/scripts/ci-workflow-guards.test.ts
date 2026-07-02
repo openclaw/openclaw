@@ -9,6 +9,8 @@ const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
+const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
+const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -116,6 +118,53 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("keeps locale refresh bots from cancelling active refresh matrices", () => {
+    const controlUiWorkflow = parse(readFileSync(CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "utf8"));
+    const source = readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8");
+    const workflow = parse(source);
+    const refresh = workflow.jobs.refresh;
+    const commitStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Commit and push locale artifact",
+    );
+    const refreshStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Refresh native locale artifact",
+    );
+    const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
+      (step: { name?: string }) => step.name === "Refresh control UI locale files",
+    );
+
+    expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
+    expect(refresh.strategy.matrix.locale).toContain("sv");
+    expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(refreshStep.run).toContain("run_refresh anthropic");
+    expect(refreshStep.run).toContain("retrying with OpenAI");
+    expect(refreshStep.run).toContain("run_openai_refresh");
+    expect(refreshStep.run).toContain("repository OpenAI key");
+    expect(refreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
+    expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
+    expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
+    expect(controlUiRefreshStep.run).toContain("repository OpenAI key");
+    expect(controlUiRefreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    );
+    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
+    expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
+    expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
   });
 
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
@@ -427,6 +476,20 @@ describe("ci workflow guards", () => {
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("resets SwiftPM state between macOS release build retries", () => {
+    const workflow = readCiWorkflow();
+    const buildStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Swift build (release)",
+    );
+
+    expect(buildStep.run).toContain("for attempt in 1 2 3");
+    expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
+    expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
+    expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
+      buildStep.run.indexOf("swift build failed"),
+    );
   });
 
   it("bounds the Windows Crabbox hydrate main fetch", () => {

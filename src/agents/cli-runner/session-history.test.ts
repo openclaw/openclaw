@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -75,11 +76,11 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function expectMessageFields(value: unknown, expected: { role: string; content?: string }) {
+function expectMessageFields(value: unknown, expected: { role: string; content?: unknown }) {
   const message = requireRecord(value, "message");
   expect(message.role).toBe(expected.role);
   if ("content" in expected) {
-    expect(message.content).toBe(expected.content);
+    expect(message.content).toEqual(expected.content);
   }
 }
 
@@ -256,7 +257,10 @@ describe("loadCliSessionHistoryMessages", () => {
         });
         expect(history).toHaveLength(2);
         expectMessageFields(history[0], { role: "user", content: "active root" });
-        expectMessageFields(history[1], { role: "assistant", content: "active tail" });
+        expectMessageFields(history[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "active tail" }],
+        });
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -369,7 +373,10 @@ describe("loadCliSessionHistoryMessages", () => {
           content: "tail custom context",
         });
         expectBranchSummary(history[2], "tail branch context");
-        expectMessageFields(history[3], { role: "assistant", content: "tail answer" });
+        expectMessageFields(history[3], {
+          role: "assistant",
+          content: [{ type: "text", text: "tail answer" }],
+        });
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -414,7 +421,7 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("drops oversized transcript files instead of loading them into hook payloads", async () => {
+  it("loads a bounded tail from oversized transcript files", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const sessionFile = path.join(
       stateDir,
@@ -423,21 +430,173 @@ describe("loadCliSessionHistoryMessages", () => {
       "sessions",
       "session-oversized.jsonl",
     );
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
     fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(sessionFile, "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES + 1), "utf-8");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: "session-oversized",
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "old",
+          parentId: null,
+          timestamp: new Date(1).toISOString(),
+          message: {
+            role: "user",
+            content: "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES),
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "tail",
+          parentId: "old",
+          timestamp: new Date(2).toISOString(),
+          message: { role: "user", content: "tail history", timestamp: 2 },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
 
     try {
       await withCliSessionState(stateDir, async () => {
-        expect(
-          await loadCliSessionHistoryMessages({
-            sessionId: "session-oversized",
+        const history = await loadCliSessionHistoryMessages({
+          sessionId: "session-oversized",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        });
+        expect(history).toHaveLength(1);
+        expectMessageFields(history[0], { role: "user", content: "tail history" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("cli session history truncated to last"),
+        );
+      });
+    } finally {
+      warnSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips oversized transcript tails when branch controls were dropped", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const sessionFile = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-oversized-branch.jsonl",
+    );
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: "session-oversized-branch",
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "root",
+          parentId: null,
+          timestamp: new Date(1).toISOString(),
+          message: { role: "user", content: "root", timestamp: 1 },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-entry",
+          timestamp: new Date(2).toISOString(),
+          targetId: "root",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "filler",
+          parentId: "root",
+          timestamp: new Date(3).toISOString(),
+          message: {
+            role: "assistant",
+            content: "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES),
+            timestamp: 3,
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "side-entry",
+          parentId: "root",
+          timestamp: new Date(4).toISOString(),
+          message: { role: "assistant", content: "side history", timestamp: 4 },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "active-tail",
+          parentId: "root",
+          timestamp: new Date(5).toISOString(),
+          message: { role: "assistant", content: "active history", timestamp: 5 },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        await expect(
+          loadCliSessionHistoryMessages({
+            sessionId: "session-oversized-branch",
             sessionFile,
             sessionKey: "agent:main:main",
             agentId: "main",
           }),
-        ).toStrictEqual([]);
+        ).resolves.toStrictEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("cli session history truncated tail skipped"),
+        );
       });
     } finally {
+      warnSpy.mockRestore();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when transcript parsing fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const sessionFile = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-invalid-jsonl.jsonl",
+    );
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, "{not-json}\n", "utf-8");
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        await expect(
+          loadCliSessionHistoryMessages({
+            sessionId: "session-invalid-jsonl",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          }),
+        ).resolves.toStrictEqual([]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("cli session history parse failed:"),
+        );
+      });
+    } finally {
+      warnSpy.mockRestore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });

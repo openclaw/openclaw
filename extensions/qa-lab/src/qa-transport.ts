@@ -8,8 +8,8 @@ import type {
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusOutboundMessageInput,
-  QaBusSearchMessagesInput,
   QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
 } from "./runtime-api.js";
@@ -54,6 +54,20 @@ type QaTransportFailureCursorSpace = "all" | "outbound";
 type QaTransportFailureAssertionOptions = {
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
+};
+
+export type QaTransportOutboundMatch = {
+  conversation?: QaBusInboundMessageInput["conversation"];
+  senderId?: string;
+  sinceIndex?: number;
+  textIncludes?: string;
+  threadId?: string;
+  timeoutMs?: number;
+};
+
+export type QaTransportWaitForNoOutboundInput = {
+  quietMs?: number;
+  sinceIndex?: number;
 };
 
 export type QaTransportCapabilities = {
@@ -165,6 +179,10 @@ export type QaTransportAdapter = {
   supportedActions: readonly QaTransportActionName[];
   state: QaTransportState;
   capabilities: QaTransportCapabilities;
+  reset: () => Promise<void>;
+  sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
+  waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
+  waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
   waitReady: (params: {
     gateway: QaTransportGatewayClient;
@@ -248,4 +266,57 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     accountId?: string | null;
   }) => Promise<unknown>;
   abstract createReportNotes: (params: QaTransportReportParams) => string[];
+
+  async reset() {
+    await this.state.reset();
+  }
+
+  async sendInbound(input: QaBusInboundMessageInput) {
+    return await this.state.addInboundMessage(input);
+  }
+
+  async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
+    const quietMs = resolveTimerTimeoutMs(input.quietMs, 1_200, 0);
+    await sleep(quietMs);
+    assertNoFailureReplies(this.state, {
+      sinceIndex: input.sinceIndex,
+      cursorSpace: "outbound",
+    });
+    const observed = this.outboundSince(input.sinceIndex);
+    if (observed.length > 0) {
+      const summary = observed.map((message) => `${message.id}:${message.text}`).join("\n");
+      throw new Error(`expected no outbound messages for ${quietMs}ms, saw:\n${summary}`);
+    }
+  }
+
+  async waitForOutbound(input: QaTransportOutboundMatch) {
+    return await waitForQaTransportCondition(() => {
+      assertNoFailureReplies(this.state, {
+        sinceIndex: input.sinceIndex,
+        cursorSpace: "outbound",
+      });
+      return this.outboundSince(input.sinceIndex).find((message) => {
+        if (input.conversation && message.conversation.id !== input.conversation.id) {
+          return false;
+        }
+        if (input.conversation && message.conversation.kind !== input.conversation.kind) {
+          return false;
+        }
+        if (input.senderId && message.senderId !== input.senderId) {
+          return false;
+        }
+        if (input.threadId && message.threadId !== input.threadId) {
+          return false;
+        }
+        return !input.textIncludes || message.text.includes(input.textIncludes);
+      });
+    }, input.timeoutMs);
+  }
+
+  private outboundSince(sinceIndex = 0) {
+    return this.state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(sinceIndex);
+  }
 }
