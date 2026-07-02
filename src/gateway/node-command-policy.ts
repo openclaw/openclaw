@@ -5,6 +5,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -61,6 +62,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   ...SCREEN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,
@@ -115,14 +117,16 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    ...NODE_EXEC_APPROVALS_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS],
+  linux: [...SYSTEM_COMMANDS, ...NODE_EXEC_APPROVALS_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    ...NODE_EXEC_APPROVALS_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],

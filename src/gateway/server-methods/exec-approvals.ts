@@ -17,6 +17,7 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
@@ -111,6 +112,72 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   if (!nodeId) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
+  }
+  const nodeSession = params.context.nodeRegistry.get(nodeId);
+  if (nodeSession) {
+    const cfg = params.context.getRuntimeConfig();
+    const allowlist = resolveNodeCommandAllowlist(cfg, {
+      ...nodeSession,
+      approvedCommands: nodeSession.commands,
+    });
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: nodeSession.commands,
+      allowlist,
+    });
+    if (!allowed.ok) {
+      // isNodeCommandAllowed checks allowlist before declaredCommands, so
+      // "command not allowlisted" can mean either the node genuinely lacks the
+      // command in its effective surface, or the operator explicitly blocked it
+      // via gateway.nodes.denyCommands.  Check the node's original declared
+      // commands to decide which remediation to show — declaredCommands holds
+      // what the node actually supports, while commands is the resolved set
+      // after allowlist/denyCommands filtering.
+      const isPolicyDenial =
+        allowed.reason === "command not allowlisted" &&
+        Array.isArray(nodeSession.declaredCommands) &&
+        nodeSession.declaredCommands.includes(params.command);
+      const errorDetails = {
+        supportedCommands: nodeSession.commands,
+        requestedCommand: params.command,
+        reason: allowed.reason,
+      };
+      if (isPolicyDenial) {
+        // Admin-scoped exec-approvals node RPCs: allow based on raw declared
+        // capability when the effective command surface omits the command due
+        // to pairing allowlist or runtime command policy filtering.  Only
+        // explicit denyCommands can block this admin RPC.
+        const isDenied = (cfg.gateway?.nodes?.denyCommands ?? []).some(
+          (cmd: string) => cmd.trim() === params.command,
+        );
+        if (isDenied) {
+          params.respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`,
+              { details: errorDetails },
+            ),
+          );
+          return;
+        }
+        // Falls through to nodeRegistry.invoke — the node declared the
+        // capability and the operator did not explicitly deny it.
+      } else {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Node ${nodeId} does not support ${params.command}. ` +
+              `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`,
+            { details: errorDetails },
+          ),
+        );
+        return;
+      }
+    }
   }
   await respondUnavailableOnThrow(params.respond, async () => {
     const res = await params.context.nodeRegistry.invoke({
