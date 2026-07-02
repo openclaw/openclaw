@@ -39,7 +39,7 @@ type PackedPackage = {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs?: number } & Pick<
+  options: { cwd: NonNullable<SpawnOptionsWithoutStdio["cwd"]>; timeoutMs?: number } & Pick<
     SpawnOptionsWithoutStdio,
     "env" | "shell" | "windowsVerbatimArguments"
   >,
