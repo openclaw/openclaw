@@ -50,10 +50,18 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
   }
 }
 
-function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    // Malformed legacy store (partial write, editor save with a syntax error,
+    // or truncation). Skip this plan instead of killing `openclaw doctor --fix`
+    // with a raw SyntaxError; matches the sibling readLegacyStore guard above.
+    return null;
+  }
   if (!parsed || typeof parsed !== "object") {
-    throw new Error("legacy Discord thread bindings store must be an object");
+    return null;
   }
   return parsed as LegacyThreadBindingsStore;
 }
@@ -186,7 +194,11 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
       cleanupWhenEmpty: true,
       readEntries: () => {
         const store = readLegacyThreadBindingsStore(threadBindingsSourcePath);
-        if (store?.version !== 1 || !store.bindings || typeof store.bindings !== "object") {
+        if (!store) {
+          // Malformed or shape-incompatible legacy store; skip rather than block doctor.
+          return [];
+        }
+        if (store.version !== 1 || !store.bindings || typeof store.bindings !== "object") {
           throw new Error("legacy Discord thread bindings store must have version 1 bindings");
         }
         const out: Array<{ key: string; value: unknown }> = [];
