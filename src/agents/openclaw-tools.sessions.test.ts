@@ -1110,7 +1110,7 @@ describe("sessions tools", () => {
     const fireDetails = sessionsSendDetails(fire.details);
     expect(fireDetails.status).toBe("accepted");
     expect(fireDetails.runId).toBe("run-1");
-    expect(fireDetails.delivery?.status).toBe("pending");
+    expect(fireDetails.delivery?.status).toBe("sent");
     expect(fireDetails.delivery?.mode).toBe("announce");
     await waitForCalls(() => agentCallCount, 3);
     await waitForCalls(() => waitCallCount, 3);
@@ -1125,7 +1125,7 @@ describe("sessions tools", () => {
     const waitedDetails = sessionsSendDetails(waited.details);
     expect(waitedDetails.status).toBe("ok");
     expect(waitedDetails.reply).toBe("done");
-    expect(waitedDetails.delivery?.status).toBe("pending");
+    expect(waitedDetails.delivery?.status).toBe("delivered");
     expect(waitedDetails.delivery?.mode).toBe("announce");
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await waitForCalls(() => agentCallCount, 6);
@@ -1477,7 +1477,7 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(targetKey);
-    expect(details.delivery?.status).toBe("pending");
+    expect(details.delivery?.status).toBe("accepted");
     expect(details.delivery?.mode).toBe("announce");
 
     await vi.waitFor(
