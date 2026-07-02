@@ -70,6 +70,21 @@ describe("resolveOpenClawMetadata install validation", () => {
     expect(install).toBeUndefined();
   });
 
+  it("parses permission manifests for skill audit and install policy", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata:
+        '{"openclaw":{"permissions":{"exec":false,"tools":["web_fetch"],"read":["MEMORY.md","SOUL.md"],"write":["memory/skills/weather/*"],"network":["api.weather.gov"]}}}',
+    });
+
+    expect(metadata?.permissions).toEqual({
+      exec: false,
+      tools: ["web_fetch"],
+      read: ["MEMORY.md", "SOUL.md"],
+      write: ["memory/skills/weather/*"],
+      network: ["api.weather.gov"],
+    });
+  });
+
   it("parses Link-style YAML metadata with node install hints", () => {
     const frontmatter = parseFrontmatter(`---
 name: create-payment-credential

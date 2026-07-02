@@ -217,10 +217,18 @@ publish and sync.
   </Accordion>
   <Accordion title="Operator install policy">
     Configure `security.installPolicy` to run a trusted local policy command
-    before skill installs continue. The policy receives metadata and the staged
-    source path, applies to ClawHub, uploaded, Git, local, update, and
-    dependency-installer paths, and fails closed when the command cannot return
-    a valid decision.
+    before skill installs continue. The policy receives source provenance,
+    origin metadata, declared skill permissions, and the staged source path;
+    it applies to ClawHub, uploaded, Git, local, update, and dependency-installer
+    paths, and fails closed when the command cannot return a valid decision.
+  </Accordion>
+  <Accordion title="Permission manifests">
+    Skills may declare audit-only permission needs under
+    `metadata.openclaw.permissions`: `exec`, `tools`, `read`, `write`, and
+    `network`. These declarations are visible in status and install policy
+    payloads, but they do not grant access by themselves. Use them to make a
+    skill asking to write memory, config, or broad network destinations visible
+    before enabling or updating the skill.
   </Accordion>
   <Accordion title="Secret injection scope">
     `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the

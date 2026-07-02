@@ -5,6 +5,7 @@ import type {
   InstallPolicyRequestKind,
   InstallPolicySource,
 } from "../security/install-policy.js";
+import type { OpenClawManifestPermissions } from "../shared/frontmatter.js";
 export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
@@ -164,6 +165,7 @@ export async function evaluateSkillInstallPolicy(params: {
   config?: OpenClawConfig;
   installId: string;
   installSpec?: SkillInstallSpecMetadata;
+  permissions?: OpenClawManifestPermissions;
   logger: InstallScanLogger;
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;

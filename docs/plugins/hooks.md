@@ -524,6 +524,12 @@ runs built-in install-time dangerous-code blocking, so it is an empty `ok`
 result. Return additional findings or `{ block: true, blockReason }` to stop the
 install in that process.
 
+For skill installs, `event.skill.permissions` contains the optional audit-only
+`metadata.openclaw.permissions` manifest from the staged `SKILL.md`. Use it to
+compare declared command, tool, filesystem, and network needs with the source
+being installed; the field does not grant permissions or change sandboxing by
+itself.
+
 `block: true` is terminal. `block: false` is treated as no decision.
 Handler failures block the install fail-closed.
 

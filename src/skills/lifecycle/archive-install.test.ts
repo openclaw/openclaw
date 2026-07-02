@@ -67,8 +67,17 @@ async function expectFlatRootMarkerRejected(params: {
   });
 }
 
-function skillFileContent(name: string): string {
-  return ["---", `name: ${name}`, "description: Test skill", "---", "", "# Test", ""].join("\n");
+function skillFileContent(name: string, metadata?: string[]): string {
+  return [
+    "---",
+    `name: ${name}`,
+    "description: Test skill",
+    ...(metadata ?? []),
+    "---",
+    "",
+    "# Test",
+    "",
+  ].join("\n");
 }
 
 afterEach(async () => {
@@ -135,7 +144,19 @@ describe("skill archive install", () => {
     const workspaceDir = path.join(root, "workspace");
     const extractedRoot = path.join(root, "extracted");
     await fs.mkdir(extractedRoot, { recursive: true });
-    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("ClawHub Policy"));
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      skillFileContent("ClawHub Policy", [
+        "metadata:",
+        "  openclaw:",
+        "    permissions:",
+        "      exec: false",
+        "      tools: [web_fetch]",
+        "      read: [MEMORY.md]",
+        "      write: [memory/skills/weather/*]",
+        "      network: [api.weather.gov]",
+      ]),
+    );
     await fs.writeFile(path.join(extractedRoot, "payload.js"), "eval('danger');\n");
     const handler = vi.fn().mockReturnValue({});
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
@@ -158,8 +179,18 @@ describe("skill archive install", () => {
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0]?.[0] as
-      | { builtinScan?: { status?: string; scannedFiles?: number; findings?: unknown[] } }
+      | {
+          builtinScan?: { status?: string; scannedFiles?: number; findings?: unknown[] };
+          skill?: { permissions?: unknown };
+        }
       | undefined;
+    expect(payload?.skill?.permissions).toEqual({
+      exec: false,
+      tools: ["web_fetch"],
+      read: ["MEMORY.md"],
+      write: ["memory/skills/weather/*"],
+      network: ["api.weather.gov"],
+    });
     expect(payload?.builtinScan).toMatchObject({
       status: "ok",
       scannedFiles: 0,

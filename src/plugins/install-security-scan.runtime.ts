@@ -14,6 +14,7 @@ import {
   type InstallPolicySource,
 } from "../security/install-policy.js";
 import { isPathInside } from "../security/scan-paths.js";
+import type { OpenClawManifestPermissions } from "../shared/frontmatter.js";
 import {
   findBlockedManifestDependencies,
   findBlockedNodeModulesDirectory,
@@ -713,6 +714,7 @@ async function runBeforeInstallHook(params: {
   skill?: {
     installId: string;
     installSpec?: SkillInstallSpec;
+    permissions?: OpenClawManifestPermissions;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -863,6 +865,7 @@ async function runOperatorInstallPolicy(params: {
   skill?: {
     installId: string;
     installSpec?: SkillInstallSpec;
+    permissions?: OpenClawManifestPermissions;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file" | "dependency-tree";
@@ -1250,6 +1253,7 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
   installSpec?: SkillInstallSpec;
+  permissions?: OpenClawManifestPermissions;
   logger: InstallScanLogger;
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
@@ -1276,6 +1280,7 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
       skill: {
         installId: params.installId,
         ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+        ...(params.permissions ? { permissions: params.permissions } : {}),
       },
     });
   if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
@@ -1300,6 +1305,7 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
     skill: {
       installId: params.installId,
       ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+      ...(params.permissions ? { permissions: params.permissions } : {}),
     },
   });
   return hookResult;

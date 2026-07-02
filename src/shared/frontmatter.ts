@@ -68,6 +68,19 @@ export type OpenClawManifestRequires = {
   config: string[];
 };
 
+export type OpenClawManifestPermissions = {
+  /** Whether the skill declares a need to execute local commands. */
+  exec?: boolean;
+  /** Tool names or groups the skill expects to use. */
+  tools: string[];
+  /** Filesystem read scopes requested by the skill. */
+  read: string[];
+  /** Filesystem write scopes requested by the skill. */
+  write: string[];
+  /** Network domains or hosts the skill expects to contact. */
+  network: string[];
+};
+
 /** Extracts normalized runtime requirement lists from an OpenClaw manifest block. */
 export function resolveOpenClawManifestRequires(
   metadataObj: Record<string, unknown>,
@@ -85,6 +98,40 @@ export function resolveOpenClawManifestRequires(
     env: normalizeStringList(requiresRaw.env),
     config: normalizeStringList(requiresRaw.config),
   };
+}
+
+/** Extracts self-declared skill permission needs from an OpenClaw manifest block. */
+export function resolveOpenClawManifestPermissions(
+  metadataObj: Record<string, unknown>,
+): OpenClawManifestPermissions | undefined {
+  const permissionsRaw =
+    typeof metadataObj.permissions === "object" && metadataObj.permissions !== null
+      ? (metadataObj.permissions as Record<string, unknown>)
+      : undefined;
+  if (!permissionsRaw) {
+    return undefined;
+  }
+
+  const permissions: OpenClawManifestPermissions = {
+    tools: normalizeStringList(permissionsRaw.tools),
+    read: normalizeStringList(permissionsRaw.read),
+    write: normalizeStringList(permissionsRaw.write),
+    network: normalizeStringList(permissionsRaw.network),
+  };
+  if (typeof permissionsRaw.exec === "boolean") {
+    permissions.exec = permissionsRaw.exec;
+  }
+
+  if (
+    permissions.exec === undefined &&
+    permissions.tools.length === 0 &&
+    permissions.read.length === 0 &&
+    permissions.write.length === 0 &&
+    permissions.network.length === 0
+  ) {
+    return undefined;
+  }
+  return permissions;
 }
 
 /** Parses manifest install entries with a caller-owned parser and drops unsupported specs. */
