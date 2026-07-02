@@ -17,7 +17,7 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
-import type { OutboundMediaAccessContext } from "./outbound-types.js";
+import { DEFAULT_MEDIA_SEND_ERROR, type OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -136,6 +136,24 @@ function resolveMediaTargetContext(
   };
 }
 
+function isHttpUrl(value: string): boolean {
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
+function isImageDataUrl(value: string): boolean {
+  return value.startsWith("data:image/");
+}
+
+function isBareRelativeMediaPath(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    Boolean(trimmed) &&
+    !trimmed.startsWith("#") &&
+    !trimmed.startsWith("//") &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+  );
+}
+
 async function autoMediaBatch(params: {
   qualifiedTarget: string;
   account: GatewayAccount;
@@ -149,7 +167,8 @@ async function autoMediaBatch(params: {
   onResultError: (mediaUrl: string, error: string) => string;
   onThrownError: (mediaUrl: string, error: string) => string;
   onSuccess?: (mediaUrl: string) => string | undefined;
-}): Promise<void> {
+}): Promise<number> {
+  let sentCount = 0;
   for (const mediaUrl of params.mediaUrls) {
     try {
       const result = await params.mediaSender.sendMedia({
@@ -159,14 +178,15 @@ async function autoMediaBatch(params: {
         accountId: params.account.accountId,
         replyToId: params.replyToId,
         account: params.account,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
+        ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+        ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+        ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
       });
       if (result.error) {
         params.log?.error(params.onResultError(mediaUrl, result.error));
         continue;
       }
+      sentCount++;
       const successMessage = params.onSuccess?.(mediaUrl);
       if (successMessage) {
         params.log?.info(successMessage);
@@ -175,6 +195,7 @@ async function autoMediaBatch(params: {
       params.log?.error(params.onThrownError(mediaUrl, formatErrorMessage(err)));
     }
   }
+  return sentCount;
 }
 
 // ---- Text chunk sending ----
@@ -296,19 +317,21 @@ async function sendWithResultLogging(params: {
   log?: DeliverAccountContext["log"];
   onSuccess?: () => string | undefined;
   onError: (error: string) => string;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     const result = await params.run();
     if (result.error) {
       params.log?.error(params.onError(result.error));
-      return;
+      return false;
     }
     const successMessage = params.onSuccess?.();
     if (successMessage) {
       params.log?.info(successMessage);
     }
+    return true;
   } catch (err) {
     params.log?.error(params.onError(formatErrorMessage(err)));
+    return false;
   }
 }
 
@@ -319,8 +342,8 @@ async function sendPhotoWithLogging(params: {
   log?: DeliverAccountContext["log"];
   onSuccess?: (imageUrl: string) => string | undefined;
   onError: (error: string) => string;
-}): Promise<void> {
-  await sendWithResultLogging({
+}): Promise<boolean> {
+  return await sendWithResultLogging({
     run: async () => await params.mediaSender.sendPhoto(params.target, params.imageUrl),
     log: params.log,
     onSuccess: params.onSuccess ? () => params.onSuccess?.(params.imageUrl) : undefined,
@@ -335,7 +358,7 @@ async function sendVoiceWithTimeout(
   account: GatewayAccount,
   mediaSender: MediaSender,
   log: DeliverAccountContext["log"],
-): Promise<void> {
+): Promise<boolean> {
   const uploadFormats =
     account.config?.audioFormatPolicy?.uploadDirectFormats ??
     account.config?.voiceDirectUploadFormats;
@@ -363,9 +386,12 @@ async function sendVoiceWithTimeout(
     ]);
     if (result.error) {
       log?.error(`sendVoice error: ${result.error}`);
+      return false;
     }
+    return true;
   } catch (err) {
     log?.error(`sendVoice unexpected error: ${formatErrorMessage(err)}`);
+    return false;
   }
 }
 
@@ -457,34 +483,48 @@ export async function parseAndSendMediaTags(
   log?.debug?.(`Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
   const mediaTarget = resolveMediaTargetContext(event, actx);
+  let deliveredVisibleOutput = false;
 
   for (const item of sendQueue) {
     if (item.type === "text") {
       await sendTextChunks(item.content, event, actx, sendWithRetry, consumeQuoteRef, deps);
+      if (item.content.trim()) {
+        deliveredVisibleOutput = true;
+      }
     } else if (item.type === "image") {
-      await sendPhotoWithLogging({
+      const sent = await sendPhotoWithLogging({
         target: mediaTarget,
         imageUrl: item.content,
         mediaSender: deps.mediaSender,
         log,
         onError: (error) => `sendPhoto error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "voice") {
-      await sendVoiceWithTimeout(mediaTarget, item.content, account, deps.mediaSender, log);
+      const sent = await sendVoiceWithTimeout(
+        mediaTarget,
+        item.content,
+        account,
+        deps.mediaSender,
+        log,
+      );
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "video") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendVideoMsg(mediaTarget, item.content),
         log,
         onError: (error) => `sendVideoMsg error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "file") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendDocument(mediaTarget, item.content),
         log,
         onError: (error) => `sendDocument error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "media") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () =>
           await deps.mediaSender.sendMedia({
             to: actx.qualifiedTarget,
@@ -493,14 +533,27 @@ export async function parseAndSendMediaTags(
             accountId: account.accountId,
             replyToId: event.messageId,
             account,
-            mediaAccess: actx.mediaAccess,
-            mediaLocalRoots: actx.mediaLocalRoots,
-            mediaReadFile: actx.mediaReadFile,
+            ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+            ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+            ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
           }),
         log,
         onError: (error) => `sendMedia(auto) error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     }
+  }
+
+  if (!deliveredVisibleOutput) {
+    await sendTextChunks(
+      DEFAULT_MEDIA_SEND_ERROR,
+      event,
+      actx,
+      sendWithRetry,
+      consumeQuoteRef,
+      deps,
+    );
+    return { handled: true, normalizedText: "" };
   }
 
   return { handled: true, normalizedText: text };
@@ -534,13 +587,16 @@ export async function sendPlainReply(
   const collectedImageUrls: string[] = [];
   const localMediaToSend: string[] = [];
 
-  const collectImageUrl = (url: string | undefined | null): boolean => {
+  const collectImageUrl = (
+    url: string | undefined | null,
+    allowBareRelativeMedia = false,
+  ): boolean => {
     if (!url) {
       return false;
     }
-    const isHttpUrl = url.startsWith("http://") || url.startsWith("https://");
-    const isDataUrl = url.startsWith("data:image/");
-    if (isHttpUrl || isDataUrl) {
+    const isRemoteHttpUrl = isHttpUrl(url);
+    const isDataUrl = isImageDataUrl(url);
+    if (isRemoteHttpUrl || isDataUrl) {
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
         log?.debug?.(
@@ -549,7 +605,7 @@ export async function sendPlainReply(
       }
       return true;
     }
-    if (isLocalFilePath(url)) {
+    if (isLocalFilePath(url) || (allowBareRelativeMedia && isBareRelativeMediaPath(url))) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
         log?.debug?.(`Collected local media for auto-routing: ${url}`);
@@ -561,11 +617,11 @@ export async function sendPlainReply(
 
   if (payload.mediaUrls?.length) {
     for (const url of payload.mediaUrls) {
-      collectImageUrl(url);
+      collectImageUrl(url, true);
     }
   }
   if (payload.mediaUrl) {
-    collectImageUrl(payload.mediaUrl);
+    collectImageUrl(payload.mediaUrl, true);
   }
 
   // Extract markdown images.
@@ -574,7 +630,7 @@ export async function sendPlainReply(
   for (const m of mdMatches) {
     const url = m[2]?.trim();
     if (url && !collectedImageUrls.includes(url)) {
-      if (url.startsWith("http://") || url.startsWith("https://")) {
+      if (isHttpUrl(url)) {
         collectedImageUrls.push(url);
         log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
       } else if (isLocalFilePath(url)) {
@@ -605,7 +661,7 @@ export async function sendPlainReply(
 
   for (const m of mdMatches) {
     const url = m[2]?.trim();
-    if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
+    if (url && !isHttpUrl(url) && !isLocalFilePath(url)) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }
   }
@@ -636,23 +692,40 @@ export async function sendPlainReply(
     );
   }
 
+  const hasVisibleTextOrInlineImage = Boolean(
+    textWithoutImages.trim() || collectedImageUrls.length > 0,
+  );
+  let sentMediaCount = 0;
+  let sentFailureFallback = false;
+
   // Send local media collected from payload.mediaUrl or markdown local paths.
   if (localMediaToSend.length > 0) {
     log?.debug?.(`Sending ${localMediaToSend.length} local media via sendMedia auto-routing`);
-    await autoMediaBatch({
+    sentMediaCount += await autoMediaBatch({
       qualifiedTarget,
       account,
       replyToId: event.messageId,
       mediaUrls: localMediaToSend,
       mediaSender: deps.mediaSender,
-      mediaAccess: actx.mediaAccess,
-      mediaLocalRoots: actx.mediaLocalRoots,
-      mediaReadFile: actx.mediaReadFile,
+      ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+      ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+      ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
       log,
       onSuccess: (mediaPath) => `Sent local media: ${mediaPath}`,
       onResultError: (mediaPath, error) => `sendMedia(auto) error for ${mediaPath}: ${error}`,
       onThrownError: (mediaPath, error) => `sendMedia(auto) failed for ${mediaPath}: ${error}`,
     });
+    if (!hasVisibleTextOrInlineImage && sentMediaCount === 0) {
+      await sendTextChunks(
+        DEFAULT_MEDIA_SEND_ERROR,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      );
+      sentFailureFallback = true;
+    }
   }
 
   // Forward media gathered during the tool phase.
@@ -660,20 +733,30 @@ export async function sendPlainReply(
     log?.debug?.(
       `Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
     );
-    await autoMediaBatch({
+    sentMediaCount += await autoMediaBatch({
       qualifiedTarget,
       account,
       replyToId: event.messageId,
       mediaUrls: toolMediaUrls,
       mediaSender: deps.mediaSender,
-      mediaAccess: actx.mediaAccess,
-      mediaLocalRoots: actx.mediaLocalRoots,
-      mediaReadFile: actx.mediaReadFile,
+      ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+      ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+      ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
       log,
       onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
       onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
       onThrownError: (_mediaUrl, error) => `Tool media forward failed: ${error}`,
     });
+    if (!hasVisibleTextOrInlineImage && sentMediaCount === 0 && !sentFailureFallback) {
+      await sendTextChunks(
+        DEFAULT_MEDIA_SEND_ERROR,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      );
+    }
     toolMediaUrls.length = 0;
   }
 }
@@ -696,9 +779,9 @@ async function sendMarkdownReply(
   const httpImageUrls: string[] = [];
   const base64ImageUrls: string[] = [];
   for (const url of imageUrls) {
-    if (url.startsWith("data:image/")) {
+    if (isImageDataUrl(url)) {
       base64ImageUrls.push(url);
-    } else if (url.startsWith("http://") || url.startsWith("https://")) {
+    } else if (isHttpUrl(url)) {
       httpImageUrls.push(url);
     }
   }
@@ -757,8 +840,8 @@ async function sendMarkdownReply(
   for (const m of mdMatches) {
     const fullMatch = m[0];
     const imgUrl = m[2];
-    const isHttpUrl = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
-    if (isHttpUrl && !hasQQBotImageSize(fullMatch)) {
+    const isRemoteHttpUrl = isHttpUrl(imgUrl);
+    if (isRemoteHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));

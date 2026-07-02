@@ -1132,6 +1132,11 @@ interface StreamingMediaContext extends OutboundMediaAccessContext {
  */
 function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
   const { account, event, log } = ctx;
+  const mediaAccessContext: OutboundMediaAccessContext = {
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
+    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+  };
 
   const mediaTarget: MediaTargetContext = {
     targetType: event.type,
@@ -1144,9 +1149,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     logPrefix: `[qqbot:${account.accountId}]`,
-    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
-    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
-    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+    ...mediaAccessContext,
   };
 
   const qualifiedTarget =
@@ -1158,9 +1161,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     log,
-    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
-    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
-    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+    ...mediaAccessContext,
   };
 }
 

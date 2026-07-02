@@ -250,7 +250,16 @@ export async function executeSendQueue(
     skipInterTagText?: boolean;
   } = {},
 ): Promise<void> {
-  const { mediaTarget, qualifiedTarget, account, replyToId, log } = ctx;
+  const {
+    mediaTarget,
+    qualifiedTarget,
+    account,
+    replyToId,
+    log,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = ctx;
   const prefix = mediaTarget.logPrefix ?? `[qqbot:${account.accountId}]`;
 
   /** 媒体发送失败时的兜底：通过 onSendText 发送错误文本给用户 */
@@ -339,9 +348,9 @@ export async function executeSendQueue(
           accountId: account.accountId,
           replyToId,
           account,
-          mediaAccess: ctx.mediaAccess,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          mediaReadFile: ctx.mediaReadFile,
+          ...(mediaAccess ? { mediaAccess } : {}),
+          ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+          ...(mediaReadFile ? { mediaReadFile } : {}),
         });
         if (result.error) {
           log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);

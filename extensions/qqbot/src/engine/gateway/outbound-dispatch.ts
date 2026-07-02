@@ -10,10 +10,9 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
-import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
@@ -120,6 +119,10 @@ function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
   return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
 }
 
+function isMediaOnlyBlockReply(payload: ReplyDeliverPayload): boolean {
+  return hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+}
+
 // ============ dispatchOutbound ============
 
 /**
@@ -135,18 +138,12 @@ export async function dispatchOutbound(
   const { runtime, cfg, account, log } = deps;
   const { event, qualifiedTarget } = inbound;
 
-  const routeAgentId = inbound.route.agentId;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg as OpenClawConfig, routeAgentId);
-  const workspaceDir = routeAgentId
-    ? resolveAgentWorkspaceDir(cfg as OpenClawConfig, routeAgentId)
-    : undefined;
-  const gatewayMediaContext =
-    mediaLocalRoots.length > 0 || workspaceDir
-      ? {
-          ...(mediaLocalRoots.length > 0 ? { mediaLocalRoots } : {}),
-          ...(workspaceDir ? { mediaAccess: { workspaceDir } } : {}),
-        }
-      : {};
+  const openClawCfg = cfg as OpenClawConfig;
+  const routeAgentId = inbound.route.agentId ?? resolveDefaultAgentId(openClawCfg);
+  const workspaceDir = resolveAgentWorkspaceDir(openClawCfg, routeAgentId);
+  const gatewayMediaContext = workspaceDir
+    ? { mediaAccess: { workspaceDir }, mediaLocalRoots: [workspaceDir] }
+    : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,
@@ -241,7 +238,6 @@ export async function dispatchOutbound(
           thrownError: "Tool fallback failed",
         });
       }
-      return;
     }
     if (toolTexts.length > 0) {
       await sendErrorMessage(toolTexts.slice(-3).join("\n---\n").slice(0, 2000));
@@ -388,10 +384,7 @@ export async function dispatchOutbound(
     });
 
   // ---- Dispatch ----
-  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(
-    cfg,
-    inbound.route.agentId,
-  );
+  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(cfg, routeAgentId);
 
   const targetType =
     event.type === "c2c"
@@ -429,9 +422,8 @@ export async function dispatchOutbound(
   }
 
   const cfgWithSession = cfg as { session?: { store?: unknown } };
-  const agentId = inbound.route.agentId ?? "default";
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
-    agentId,
+    agentId: routeAgentId,
   });
   const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
@@ -543,7 +535,11 @@ export async function dispatchOutbound(
                 }
                 hasVisibleBlockResponse = true;
 
-                if (streamingController && !streamingController.isTerminalPhase) {
+                if (
+                  streamingController &&
+                  !streamingController.isTerminalPhase &&
+                  !isMediaOnlyBlockReply(payload)
+                ) {
                   try {
                     await streamingController.onDeliver(payload);
                   } catch (err) {
@@ -798,7 +794,7 @@ async function buildCtxPayload(
       id: inbound.peerId,
     },
     route: {
-      agentId: inbound.route.agentId ?? "main",
+      agentId: inbound.route.agentId ?? resolveDefaultAgentId(cfg as OpenClawConfig),
       routeSessionKey: inbound.route.sessionKey,
       accountId: inbound.route.accountId,
     },

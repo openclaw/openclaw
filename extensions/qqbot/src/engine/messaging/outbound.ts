@@ -27,6 +27,7 @@ export {
   buildMediaTarget,
   parseTarget,
   resolveOutboundMediaPath,
+  sendAutoDetectedMedia,
   sendDocument,
   sendPhoto,
   sendVideoMsg,
@@ -53,6 +54,7 @@ import {
   buildMediaTarget,
   parseTarget,
   resolveOutboundMediaPath,
+  sendAutoDetectedMedia,
   sendDocument,
   sendPhoto,
   sendVideoMsg,
@@ -78,6 +80,7 @@ import {
 
 const isImageFile = coreIsImageFile;
 const isVideoFile = coreIsVideoFile;
+
 const mediaPathDecodeLog = {
   info: (message: string) => debugLog(`[qqbot] sendText: ${message}`),
   error: (message: string) => debugError(`[qqbot] sendText: ${message}`),
@@ -385,7 +388,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isAudioFile(mediaUrl, mimeType) &&
     !isVideoFile(mediaUrl, mimeType)
   ) {
-    const result = await sendDocument(target, mediaUrl);
+    const result = await sendAutoDetectedMedia(target, mediaUrl);
     if (!result.error && text?.trim()) {
       await sendTextAfterMedia(target, text);
     }

@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   pathExistsSync,
@@ -31,6 +32,13 @@ import {
 } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
+import {
+  isPathWithinRoot,
+  mergeMediaLocalRoots,
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspacePathCandidate,
+  resolveWorkspacePathCandidates,
+} from "./outbound-media-path.js";
 import {
   buildDailyLimitExceededResult,
   buildFileTooLargeResult,
@@ -88,6 +96,7 @@ function shouldDirectUploadUrl(account: GatewayAccount): boolean {
 }
 
 type QQBotMediaKind = "image" | "voice" | "video" | "file" | "media";
+type LoadedOutboundMedia = Awaited<ReturnType<typeof loadOutboundMediaFromUrl>>;
 
 const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
   image: "Image",
@@ -107,28 +116,16 @@ type SendDocumentOptions = {
   allowQQBotDataDownloads?: boolean;
 };
 
-function resolveOutboundMediaLocalRoots(ctx: OutboundMediaAccessContext): string[] | undefined {
-  return mergeLocalRoots(
-    ctx.mediaAccess?.localRoots,
-    ctx.mediaLocalRoots,
-    ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : undefined,
-  );
+function isHttpUrl(pathValue: string): boolean {
+  return pathValue.startsWith("http://") || pathValue.startsWith("https://");
 }
 
-function mergeLocalRoots(...groups: Array<readonly string[] | undefined>): string[] | undefined {
-  const roots = groups
-    .flatMap((group) => group ?? [])
-    .map((root) => root.trim())
-    .filter(Boolean);
-  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
+function isDataUrl(pathValue: string): boolean {
+  return pathValue.startsWith("data:");
 }
 
 function isHttpOrDataSource(pathValue: string): boolean {
-  return (
-    pathValue.startsWith("http://") ||
-    pathValue.startsWith("https://") ||
-    pathValue.startsWith("data:")
-  );
+  return isHttpUrl(pathValue) || isDataUrl(pathValue);
 }
 
 function resolveMissingPathWithinRoots(
@@ -146,41 +143,6 @@ function resolveMissingPathWithinRoots(
       label: "QQ Bot local roots",
       allowMissing: true,
     })?.path ?? null
-  );
-}
-
-function resolveWorkspacePathCandidate(normalizedPath: string, workspaceDir?: string): string {
-  if (!workspaceDir) {
-    return normalizedPath;
-  }
-  if (normalizedPath === "/workspace") {
-    return workspaceDir;
-  }
-  if (normalizedPath.startsWith("/workspace/")) {
-    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
-  }
-  if (path.isAbsolute(normalizedPath)) {
-    return normalizedPath;
-  }
-  return path.resolve(workspaceDir, normalizedPath);
-}
-
-function resolveWorkspacePathCandidates(normalizedPath: string, workspaceDir?: string): string[] {
-  const mappedPath = resolveWorkspacePathCandidate(normalizedPath, workspaceDir);
-  if (mappedPath === normalizedPath) {
-    return [normalizedPath];
-  }
-  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
-}
-
-function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
-  const resolvedRoot = path.resolve(rootPath);
-  if (resolvedRoot === path.parse(resolvedRoot).root) {
-    return false;
-  }
-  const relative = path.relative(resolvedRoot, path.resolve(candidatePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 
@@ -218,7 +180,7 @@ function resolveHostReadMediaAccess(
     return undefined;
   }
   return {
-    ...(ctx.mediaAccess ?? {}),
+    ...ctx.mediaAccess,
     ...(mediaLocalRoots ? { localRoots: mediaLocalRoots } : {}),
   };
 }
@@ -239,12 +201,12 @@ function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
 function senderKindForLoadedMedia(
   mediaKind: QQBotMediaKind,
   loadedKind: "image" | "audio" | "video" | "document" | undefined,
-): "image" | "video" | "file" {
+): "image" | "video" | "file" | null {
   if (mediaKind === "image") {
-    return "image";
+    return loadedKind === "image" ? "image" : null;
   }
   if (mediaKind === "video") {
-    return "video";
+    return loadedKind === "video" ? "video" : null;
   }
   if (mediaKind === "file") {
     return "file";
@@ -258,15 +220,43 @@ function senderKindForLoadedMedia(
   return "file";
 }
 
-function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string {
+function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string | null {
   const normalizedPath = normalizePath(mediaPath);
-  if (
-    path.isAbsolute(normalizedPath) &&
-    isPathWithinAnyRoot(normalizedPath, resolveOutboundMediaLocalRoots(ctx))
-  ) {
-    return normalizedPath;
+  if (path.isAbsolute(normalizedPath)) {
+    const isVirtualWorkspacePath =
+      normalizedPath === "/workspace" || normalizedPath.startsWith("/workspace/");
+    if (isVirtualWorkspacePath) {
+      return ctx.mediaAccess?.workspaceDir
+        ? resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess.workspaceDir)
+        : null;
+    }
+    if (isPathWithinAnyRoot(normalizedPath, resolveOutboundMediaLocalRoots(ctx))) {
+      return normalizedPath;
+    }
+    return null;
   }
-  return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess?.workspaceDir);
+  if (!ctx.mediaAccess?.workspaceDir) {
+    return null;
+  }
+  return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess.workspaceDir);
+}
+
+async function stageLoadedHostReadVoice(
+  mediaPath: string,
+  loaded: LoadedOutboundMedia,
+): Promise<string> {
+  const stagedDir = getQQBotMediaDir("host-read", "voice");
+  await mkdir(stagedDir, { recursive: true });
+  const rawFileName = sanitizeFileName(loaded.fileName || path.basename(mediaPath) || "voice");
+  const ext = path.extname(rawFileName);
+  const inferredExt = extensionForMime(loaded.contentType);
+  const baseName = sanitizeFileName(path.basename(rawFileName, ext)) || "voice";
+  const stagedPath = path.join(
+    stagedDir,
+    `${baseName}-${randomUUID()}${ext || inferredExt || ".bin"}`,
+  );
+  await writeFile(stagedPath, loaded.buffer);
+  return stagedPath;
 }
 
 async function stageHostReadVoice(
@@ -278,6 +268,9 @@ async function stageHostReadVoice(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  if (!hostReadMediaPath) {
+    return null;
+  }
   const mediaAccess = resolveHostReadMediaAccess(ctx);
   const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
     maxBytes: getMaxUploadSize(MediaFileType.VOICE),
@@ -285,14 +278,10 @@ async function stageHostReadVoice(
     mediaReadFile,
     workspaceDir: mediaAccess?.workspaceDir,
   });
-  const stagedDir = getQQBotMediaDir("host-read", "voice");
-  await mkdir(stagedDir, { recursive: true });
-  const rawFileName = sanitizeFileName(loaded.fileName || path.basename(mediaPath) || "voice");
-  const ext = path.extname(rawFileName);
-  const baseName = sanitizeFileName(path.basename(rawFileName, ext)) || "voice";
-  const stagedPath = path.join(stagedDir, `${baseName}-${randomUUID()}${ext || ".bin"}`);
-  await writeFile(stagedPath, loaded.buffer);
-  return stagedPath;
+  if (loaded.kind !== "audio") {
+    throw new Error(`Unsupported voice media type: ${loaded.kind ?? "unknown"}`);
+  }
+  return await stageLoadedHostReadVoice(mediaPath, loaded);
 }
 
 async function trySendViaHostRead(
@@ -305,6 +294,9 @@ async function trySendViaHostRead(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  if (!hostReadMediaPath) {
+    return null;
+  }
   const mediaAccess = resolveHostReadMediaAccess(ctx);
   try {
     const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
@@ -314,6 +306,23 @@ async function trySendViaHostRead(
       workspaceDir: mediaAccess?.workspaceDir,
     });
     const kind = senderKindForLoadedMedia(mediaKind, loaded.kind);
+    if (!kind) {
+      return {
+        channel: "qqbot",
+        error: `Unsupported ${mediaKind} media type: ${loaded.kind ?? "unknown"}`,
+      };
+    }
+    if (loaded.buffer.length === 0) {
+      return { channel: "qqbot", error: `File is empty: ${hostReadMediaPath}` };
+    }
+    if (mediaKind === "media" && loaded.kind === "audio") {
+      const directUploadFormats =
+        ctx.account.config?.audioFormatPolicy?.uploadDirectFormats ??
+        ctx.account.config?.voiceDirectUploadFormats;
+      const transcodeEnabled = ctx.account.config?.audioFormatPolicy?.transcodeEnabled !== false;
+      const stagedPath = await stageLoadedHostReadVoice(mediaPath, loaded);
+      return await sendVoiceFromLocal(ctx, stagedPath, directUploadFormats, transcodeEnabled);
+    }
     const creds = accountToCreds(ctx.account);
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
     if (target.type !== "c2c" && target.type !== "group") {
@@ -352,6 +361,17 @@ async function trySendViaHostRead(
   }
 }
 
+export async function sendAutoDetectedMedia(
+  ctx: MediaTargetContext,
+  mediaPath: string,
+): Promise<OutboundResult> {
+  const hostReadResult = await trySendViaHostRead(ctx, mediaPath, "media");
+  if (hostReadResult) {
+    return hostReadResult;
+  }
+  return await sendDocument(ctx, mediaPath);
+}
+
 export function resolveOutboundMediaPath(
   rawPath: string,
   mediaKind: QQBotMediaKind,
@@ -383,7 +403,7 @@ export function resolveOutboundMediaPath(
   }
 
   if (options.allowMissingLocalPath) {
-    const missingRoots = mergeLocalRoots([getQQBotMediaDir()], options.extraLocalRoots);
+    const missingRoots = mergeMediaLocalRoots([getQQBotMediaDir()], options.extraLocalRoots);
     if (missingRoots) {
       for (const candidatePath of candidatePaths) {
         const allowedMissingPath = resolveMissingPathWithinRoots(candidatePath, missingRoots);
@@ -421,8 +441,8 @@ export async function sendPhoto(
   }
   const mediaPath = resolvedMediaPath.mediaPath;
   const isLocal = isLocalFilePath(mediaPath);
-  const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
-  const isData = mediaPath.startsWith("data:");
+  const isHttp = isHttpUrl(mediaPath);
+  const isData = isDataUrl(mediaPath);
 
   // Force a local download before upload when direct URL upload is disabled.
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -562,7 +582,7 @@ export async function sendVoice(
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaPath = resolvedMediaPath.mediaPath;
-  const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+  const isHttp = isHttpUrl(mediaPath);
 
   if (isHttp) {
     if (shouldDirectUploadUrl(ctx.account)) {
@@ -696,7 +716,7 @@ export async function sendVideoMsg(
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaPath = resolvedMediaPath.mediaPath;
-  const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+  const isHttp = isHttpUrl(mediaPath);
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
     debugLog(`sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
@@ -729,7 +749,6 @@ export async function sendVideoMsg(
   } catch (err) {
     const msg = formatErrorMessage(err);
 
-    // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
       debugWarn(
         `sendVideoMsg: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
@@ -796,7 +815,7 @@ export async function sendDocument(
   if (hostReadResult) {
     return hostReadResult;
   }
-  const extraLocalRoots = mergeLocalRoots(
+  const extraLocalRoots = mergeMediaLocalRoots(
     options.allowQQBotDataDownloads ? [getQQBotDataDir("downloads")] : undefined,
     resolveOutboundMediaLocalRoots(ctx),
   );
@@ -808,7 +827,7 @@ export async function sendDocument(
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaPath = resolvedMediaPath.mediaPath;
-  const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+  const isHttp = isHttpUrl(mediaPath);
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -831,7 +850,7 @@ export async function sendDocument(
           kind: "file",
           source: { url: mediaPath },
           msgId: ctx.replyToId,
-          fileName,
+          ...(fileName ? { fileName } : {}),
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       }
@@ -843,7 +862,6 @@ export async function sendDocument(
   } catch (err) {
     const msg = formatErrorMessage(err);
 
-    // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
       debugWarn(
         `sendDocument: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,

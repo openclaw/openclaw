@@ -82,9 +82,9 @@ async function sendQQBotText(
     accountId: params.accountId,
     replyToId: params.replyToId,
     account: toGatewayAccount(account),
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+    ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
   });
   return {
     channel: "qqbot" as const,
@@ -119,9 +119,9 @@ async function sendQQBotMedia(
     accountId: params.accountId,
     replyToId: params.replyToId,
     account: toGatewayAccount(account),
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaLocalRoots,
-    mediaReadFile: params.mediaReadFile,
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+    ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
   });
   return {
     channel: "qqbot" as const,

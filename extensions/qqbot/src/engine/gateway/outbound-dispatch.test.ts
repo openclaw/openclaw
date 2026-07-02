@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { sendMedia, sendText, setOutboundAudioPort } from "../messaging/outbound.js";
+import {
+  DEFAULT_MEDIA_SEND_ERROR,
+  sendMedia,
+  sendText,
+  setOutboundAudioPort,
+} from "../messaging/outbound.js";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
@@ -12,7 +17,14 @@ const sendVoiceMessageMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendMediaMock = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{ id: string; timestamp: string } | { channel: "qqbot"; error: string }> => ({
+      id: "media-1",
+      timestamp: "2026-04-25T00:00:00.000Z",
+    }),
+  ),
 );
 const sendTextMock = vi.hoisted(() =>
   vi.fn(async (..._params: unknown[]) => ({
@@ -40,6 +52,15 @@ vi.mock("../messaging/sender.js", () => ({
   sendMedia: sendMediaMock,
   withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
+
+vi.mock("../utils/image-size.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../utils/image-size.js")>("../utils/image-size.js");
+  return {
+    ...actual,
+    getImageSize: vi.fn(async () => ({ width: 640, height: 480 })),
+  };
+});
 
 vi.mock("../utils/audio.js", () => ({
   audioFileToSilkBase64: audioFileToSilkBase64Mock,
@@ -445,6 +466,111 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("resolves relative block mediaUrl payloads against the agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-block-mediaurl-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "relative-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ mediaUrl: "relative-report.docx" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves default main route mediaUrl payloads against the main agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-main-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "main-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ mediaUrl: "main-report.docx" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: { agents: { list: [{ id: "main", workspace: tmpRoot }] } },
+        account,
+      });
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves missing route agent mediaUrl payloads against the configured default agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-default-agent-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "default-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      let finalized: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onFinalize: (ctx) => (finalized = ctx),
+        onDeliver: async (deliver) => {
+          await deliver({ mediaUrl: "default-report.docx" }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: { agents: { list: [{ id: "assistant", default: true, workspace: tmpRoot }] } },
+        account,
+      });
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+      expect(runtime.channel.reply.resolveEffectiveMessagesConfig).toHaveBeenCalledWith(
+        expect.anything(),
+        "assistant",
+      );
+      expect(runtime.channel.session.resolveStorePath).toHaveBeenCalledWith(undefined, {
+        agentId: "assistant",
+      });
+      expect(finalized?.AgentId).toBe("assistant");
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("maps sandbox /workspace qqmedia block replies to the agent workspace", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-virtual-workspace-"));
     try {
@@ -510,7 +636,69 @@ describe("dispatchOutbound", () => {
       );
 
       expect(sendMediaMock).not.toHaveBeenCalled();
+      expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([DEFAULT_MEDIA_SEND_ERROR]);
+      const sentText = String(sendTextMock.mock.calls[0]?.[1]);
+      expect(sentText).not.toContain("<qqmedia>");
+      expect(sentText).not.toContain("/workspace/../outside-report.docx");
     } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("sends sanitized fallback when media-only block payload forwarding fails", async () => {
+    sendMediaMock.mockResolvedValueOnce({ channel: "qqbot", error: "upload failed" });
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ mediaUrl: "missing-report.pdf" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account,
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([DEFAULT_MEDIA_SEND_ERROR]);
+    const sentText = String(sendTextMock.mock.calls[0]?.[1]);
+    expect(sentText).not.toContain("missing-report.pdf");
+  });
+
+  it("does not expose default sandbox roots through gateway qqmedia replies", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-root-boundary-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const workspaceDir = path.join(tmpRoot, "workspace");
+      const stateSandboxDir = path.join(tmpRoot, "state", "sandboxes", "other-agent");
+      const stateSandboxFile = path.join(stateSandboxDir, "outside-report.docx");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(stateSandboxDir, { recursive: true });
+      await fs.writeFile(stateSandboxFile, Buffer.from("outside"));
+      process.env.OPENCLAW_STATE_DIR = path.join(tmpRoot, "state");
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqmedia>${stateSandboxFile}</qqmedia>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });
@@ -986,6 +1174,31 @@ describe("dispatchOutbound", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("sends buffered tool text when tool media fallback fails", async () => {
+    vi.useFakeTimers();
+    try {
+      sendMediaMock.mockResolvedValueOnce({ channel: "qqbot", error: "upload failed" });
+      const runtime = makeRuntime({
+        onDispatch: async ({ deliver }) => {
+          await deliver({ mediaUrl: "https://example.com/progress.png" }, { kind: "tool" });
+          await deliver({ text: "visible tool fallback" }, { kind: "tool" });
+          await vi.advanceTimersByTimeAsync(60_000);
+        },
+      });
+
+      await dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: {},
+        account: { ...account, config: { streaming: false } },
+      });
+
+      expect(sendMediaMock).toHaveBeenCalledTimes(1);
+      expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool fallback"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds tool media flushes without racing the fallback timer", async () => {
     vi.useFakeTimers();
     sendMediaMock.mockImplementationOnce(() => new Promise(() => {}));
@@ -1049,6 +1262,30 @@ describe("dispatchOutbound", () => {
       runtime,
       cfg: {},
       account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendMediaMock).toHaveBeenCalledWith({
+      creds: { appId: "app", clientSecret: "secret" },
+      kind: "image",
+      msgId: "msg-1",
+      source: { url: mediaUrl },
+      target: { id: "user-openid", type: "c2c" },
+    });
+  });
+
+  it("delivers media-only final block replies when C2C streaming is enabled", async () => {
+    const mediaUrl = "https://example.com/final.png";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ mediaUrl }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: true } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();

@@ -22,6 +22,10 @@ import { normalizePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
+import {
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspacePathCandidates,
+} from "./outbound-media-path.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
@@ -205,60 +209,31 @@ function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
   return mediaType[0].toUpperCase() + mediaType.slice(1);
 }
 
-function resolveStructuredPayloadLocalRoots(ctx: ReplyContext): string[] | undefined {
-  const roots = [
-    ...(ctx.mediaAccess?.localRoots ?? []),
-    ...(ctx.mediaLocalRoots ?? []),
-    ...(ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : []),
-  ].filter((root) => root.trim());
-  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
-}
-
-function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string {
-  const normalizedPath = normalizePath(payloadPath);
-  const workspaceDir = ctx.mediaAccess?.workspaceDir;
-  if (!workspaceDir) {
-    return normalizedPath;
-  }
-  if (normalizedPath === "/workspace") {
-    return workspaceDir;
-  }
-  if (normalizedPath.startsWith("/workspace/")) {
-    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
-  }
-  if (path.isAbsolute(normalizedPath)) {
-    return normalizedPath;
-  }
-  return path.resolve(workspaceDir, normalizedPath);
-}
-
-function resolveStructuredPayloadCandidates(ctx: ReplyContext, payloadPath: string): string[] {
-  const normalizedPath = normalizePath(payloadPath);
-  const mappedPath = resolveStructuredPayloadCandidate(ctx, payloadPath);
-  if (mappedPath === normalizedPath) {
-    return [normalizedPath];
-  }
-  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
-}
-
 function validateStructuredPayloadLocalPath(
   ctx: ReplyContext,
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const candidatePaths = resolveStructuredPayloadCandidates(ctx, payloadPath);
+  const candidatePaths = resolveWorkspacePathCandidates(
+    normalizePath(payloadPath),
+    ctx.mediaAccess?.workspaceDir,
+  );
+  const localRoots = resolveOutboundMediaLocalRoots(ctx);
+  const allowMissingHostRead = Boolean(resolveStructuredPayloadReadFile(ctx));
   for (const candidatePath of candidatePaths) {
-    const allowedPath = resolveTrustedOutboundMediaPath(candidatePath);
+    const allowedPath = resolveTrustedOutboundMediaPath(candidatePath, {
+      allowMissing: allowMissingHostRead,
+    });
     if (allowedPath) {
       return allowedPath;
     }
 
-    const localRoots = resolveStructuredPayloadLocalRoots(ctx);
     if (localRoots) {
       const scopedPath = resolveLocalPathFromRootsSync({
         filePath: candidatePath,
         roots: localRoots,
         label: "QQ Bot local roots",
+        allowMissing: allowMissingHostRead,
       })?.path;
       if (scopedPath) {
         return scopedPath;
@@ -271,7 +246,7 @@ function validateStructuredPayloadLocalPath(
 }
 
 function isRemoteHttpUrl(p: string): boolean {
-  return p.startsWith("http://") || p.startsWith("https://");
+  return /^https?:\/\//i.test(p);
 }
 
 function isInlineImageDataUrl(p: string): boolean {
@@ -323,17 +298,65 @@ function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): strin
   }
 }
 
-/**
- * Read a local file into memory for image base64 inlining.
- *
- * Non-image media (video / file) should pass `source: { localPath }` to
- * `sender.sendMedia` directly — the sender pipeline handles chunked
- * routing once this function validates the per-type ceiling.
- */
+function resolveStructuredPayloadReadFile(ctx: OutboundMediaAccessContext) {
+  return ctx.mediaAccess?.readFile ?? ctx.mediaReadFile;
+}
+
+function assertBufferWithinTypeLimit(buffer: Buffer, fileType: MediaFileType): void {
+  const maxSize = getMaxUploadSize(fileType);
+  if (buffer.length > maxSize) {
+    throw new Error(
+      `File is too large (${formatFileSize(buffer.length)}); QQ Bot API limit is ${formatFileSize(maxSize)}`,
+    );
+  }
+}
+
+function imageBufferMatchesMime(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/png") {
+    return buffer
+      .subarray(0, 8)
+      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (mimeType === "image/jpeg") {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (mimeType === "image/gif") {
+    const header = buffer.subarray(0, 6).toString("ascii");
+    return header === "GIF87a" || header === "GIF89a";
+  }
+  if (mimeType === "image/webp") {
+    return (
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP"
+    );
+  }
+  if (mimeType === "image/bmp") {
+    return buffer.subarray(0, 2).toString("ascii") === "BM";
+  }
+  return false;
+}
+
 async function readLocalFileForInlineBase64(
+  ctx: ReplyContext,
   filePath: string,
   fileType: MediaFileType,
 ): Promise<Buffer> {
+  const mediaReadFile = resolveStructuredPayloadReadFile(ctx);
+  if (mediaReadFile) {
+    let buffer: Buffer | null = null;
+    try {
+      buffer = await mediaReadFile(filePath);
+    } catch (err) {
+      ctx.log?.debug?.(`Structured payload host read failed: ${formatErrorMessage(err)}`);
+    }
+    if (buffer !== null) {
+      assertBufferWithinTypeLimit(buffer, fileType);
+      if (buffer.length === 0) {
+        throw new Error(`File is empty: ${filePath}`);
+      }
+      return buffer;
+    }
+  }
   const opened = await openLocalFile(filePath, { maxSize: getMaxUploadSize(fileType) });
   try {
     return await opened.handle.readFile();
@@ -342,15 +365,29 @@ async function readLocalFileForInlineBase64(
   }
 }
 
-/**
- * Enforce the per-{@link MediaFileType} upload ceiling before handing a
- * local path to `sender.sendMedia`. The sender's internal `normalizeSource`
- * uses an unlimited cap so it can accept whatever size the policy layer
- * (outbound / reply-dispatcher) approves; the policy gate lives here.
- *
- * Returns the validated byte size. Throws via {@link openLocalFile} with a
- * human-readable "File is too large" message when exceeding the ceiling.
- */
+async function readPayloadFileBuffer(
+  ctx: ReplyContext,
+  filePath: string,
+  fileType: MediaFileType,
+): Promise<Buffer | null> {
+  const mediaReadFile = resolveStructuredPayloadReadFile(ctx);
+  if (!mediaReadFile) {
+    return null;
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await mediaReadFile(filePath);
+  } catch (err) {
+    ctx.log?.debug?.(`Structured payload host read failed: ${formatErrorMessage(err)}`);
+    return null;
+  }
+  assertBufferWithinTypeLimit(buffer, fileType);
+  if (buffer.length === 0) {
+    throw new Error(`File is empty: ${filePath}`);
+  }
+  return buffer;
+}
+
 async function assertLocalFileWithinTypeLimit(
   filePath: string,
   fileType: MediaFileType,
@@ -384,14 +421,17 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
   if (payload.source === "file") {
     try {
-      const fileBuffer = await readLocalFileForInlineBase64(imageUrl, MediaFileType.IMAGE);
-      const base64Data = fileBuffer.toString("base64");
+      const fileBuffer = await readLocalFileForInlineBase64(ctx, imageUrl, MediaFileType.IMAGE);
       const mimeType = getImageMimeType(imageUrl);
       if (!mimeType) {
         const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
         log?.error(`Unsupported image format: ${ext}`);
         return;
       }
+      if (!imageBufferMatchesMime(fileBuffer, mimeType)) {
+        throw new Error(`File is not an image: ${imageUrl}`);
+      }
+      const base64Data = fileBuffer.toString("base64");
       imageUrl = `data:${mimeType};base64,${base64Data}`;
       log?.debug?.(`Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`);
     } catch (readErr) {
@@ -421,11 +461,11 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
             localPathForMeta: originalImagePath,
           });
         } else if (deliveryTarget.type === "dm") {
-          await senderSendText(deliveryTarget, `![](${payload.path})`, creds, {
+          await senderSendText(deliveryTarget, `![](${imageUrl})`, creds, {
             msgId: target.messageId,
           });
         } else {
-          await senderSendText(deliveryTarget, `![](${payload.path})`, creds, {
+          await senderSendText(deliveryTarget, `![](${imageUrl})`, creds, {
             msgId: target.messageId,
           });
         }
@@ -559,12 +599,24 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             msgId: target.messageId,
           });
         } else {
+          const payloadBuffer = await readPayloadFileBuffer(ctx, videoPath, MediaFileType.VIDEO);
+          if (payloadBuffer) {
+            await senderSendMedia({
+              target: deliveryTarget,
+              creds,
+              kind: "video",
+              source: {
+                buffer: payloadBuffer,
+                fileName: sanitizeFileName(path.basename(videoPath)),
+              },
+              msgId: target.messageId,
+            });
+            return;
+          }
           const size = await assertLocalFileWithinTypeLimit(videoPath, MediaFileType.VIDEO);
           log?.debug?.(
             `Video local (${formatFileSize(size)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
-          // Hand the local path straight to the sender — `dispatchUpload`
-          // routes one-shot vs chunked based on size.
           await senderSendMedia({
             target: deliveryTarget,
             creds,
@@ -624,12 +676,22 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
             fileName,
           });
         } else {
+          const payloadBuffer = await readPayloadFileBuffer(ctx, filePath, MediaFileType.FILE);
+          if (payloadBuffer) {
+            await senderSendMedia({
+              target: deliveryTarget,
+              creds,
+              kind: "file",
+              source: { buffer: payloadBuffer, fileName },
+              msgId: target.messageId,
+              fileName,
+            });
+            return;
+          }
           const size = await assertLocalFileWithinTypeLimit(filePath, MediaFileType.FILE);
           log?.debug?.(
             `File local (${formatFileSize(size)}): ${describeMediaTargetForLog(filePath, false)}`,
           );
-          // Hand the local path straight to the sender — `dispatchUpload`
-          // routes one-shot vs chunked based on size.
           await senderSendMedia({
             target: deliveryTarget,
             creds,
