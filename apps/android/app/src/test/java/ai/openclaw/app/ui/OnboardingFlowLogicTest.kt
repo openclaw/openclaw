@@ -688,8 +688,8 @@ class OnboardingFlowLogicTest {
   @Test
   fun recoveryPrimaryActionOnlyAppearsForCompleteFailureOrSlowConnectionStates() {
     assertEquals(GatewayRecoveryPrimaryAction.Finish, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Connected))
-    assertEquals(GatewayRecoveryPrimaryAction.StartOver, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed))
-    assertEquals(GatewayRecoveryPrimaryAction.StartOver, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger))
+    assertEquals(GatewayRecoveryPrimaryAction.Back, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed))
+    assertEquals(GatewayRecoveryPrimaryAction.Back, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger))
     assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.ApprovalRequired))
 
     listOf(
