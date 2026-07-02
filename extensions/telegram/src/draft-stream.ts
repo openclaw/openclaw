@@ -256,6 +256,11 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  // Generations whose in-flight FIRST send was superseded by a reposition
+  // (rotateToNewMessageDeferringDelete). Their late-landing message is a stale
+  // ephemeral preview to delete, NOT a durable content chunk to retain — that
+  // distinguishes a reposition from forceNewMessage's continuation-chunk race.
+  const repositionedSendGenerations = new Set<number>();
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
@@ -336,6 +341,13 @@ export function createTelegramDraftStream(params: {
     const normalizedMessageId = Math.trunc(sentMessageId);
     const visibleSinceMs = Date.now();
     if (sendGeneration !== generation) {
+      if (repositionedSendGenerations.delete(sendGeneration)) {
+        // A reposition rotated past this send while it was in flight: the landed
+        // message is a stale preview, so delete it deferred (same as the
+        // reposition's own old message) instead of leaking an orphaned bubble.
+        scheduleDetachedDelete(normalizedMessageId, visibleSinceMs, REPOSITION_DELETE_DELAY_MS);
+        return true;
+      }
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
         textSnapshot: preview.text,
@@ -610,6 +622,13 @@ export function createTelegramDraftStream(params: {
   const rotateToNewMessageDeferringDelete = (): number | undefined => {
     const supersededMessageId = streamMessageId;
     const supersededVisibleSince = streamVisibleSinceMs;
+    // A FIRST send may still be in flight (no id yet): mark its generation so the
+    // late-landing message is deleted as a reposition, not retained as a durable
+    // chunk (forceNewMessage's contract). resetStreamToNewMessage bumps
+    // generation, so capture the current one before rewinding.
+    if (messageSendAttempted && streamMessageId === undefined) {
+      repositionedSendGenerations.add(generation);
+    }
     // Rewind WITHOUT deleting; the old id is captured above.
     resetStreamToNewMessage();
     if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
@@ -664,7 +683,13 @@ export function createTelegramDraftStream(params: {
     lastSentPreviewKey = "";
     lastRequestedText = text;
     lastRequestedPreview = { ...preview, text };
-    await sendOrEditStreamMessage(text);
+    // The edit can fail to apply (flood-wait 429 or a terminal error both return
+    // false). Report that as "not collapsed in place" so the caller falls back to
+    // posting a durable bar instead of assuming the tall window became the bar.
+    const edited = await sendOrEditStreamMessage(text);
+    if (!edited) {
+      return undefined;
+    }
     return streamMessageId;
   };
 

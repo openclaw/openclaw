@@ -22,6 +22,7 @@ import {
   type ChannelProgressDraftLine,
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
+  isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
@@ -1699,7 +1700,7 @@ export const dispatchTelegramMessage = async ({
     };
     const sendPayload = async (
       payload: ReplyPayload,
-      options?: { durable?: boolean; silent?: boolean },
+      options?: { durable?: boolean; silent?: boolean; mirrorTranscript?: boolean },
     ) => {
       if (isDispatchSuperseded()) {
         return false;
@@ -1757,7 +1758,15 @@ export const dispatchTelegramMessage = async ({
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
-        transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
+        // The collapse bar is a cosmetic activity digest, not an assistant
+        // message: pass mirrorTranscript:false so it never enters the session
+        // transcript (the model must not read it back as its own prior turn).
+        // Discord parity: its summary bar (reply-delivery.ts deliverDiscordReply)
+        // has no transcript-mirror seam either. Real finals keep the default.
+        transcriptMirror:
+          options?.durable && options?.mirrorTranscript !== false
+            ? deliveryBaseOptions.transcriptMirror
+            : undefined,
         replies: [effectivePayload],
         onVoiceRecording: sendRecordVoice,
         silent,
@@ -1963,7 +1972,15 @@ export const dispatchTelegramMessage = async ({
       if (!line) {
         return;
       }
-      await sendPayload({ text: line }, { durable: true });
+      // Cosmetic bar, posted from the cleanup fallback AFTER the real final is
+      // already delivered (message_tool_only/codex turns). A flood-wait/network
+      // throw here must never fail the turn — swallow and log. The once-guard
+      // already fired in resolveProgressCollapseSummaryLine, so no retry storm.
+      try {
+        await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
+      } catch (err) {
+        logVerbose(`telegram: collapse summary bar send failed: ${formatErrorMessage(err)}`);
+      }
     };
     // Apply a pre-resolved bar line to the window: edit the live window message
     // IN PLACE into the bar (no delete — deleting scroll-jumps the client), or
@@ -1981,7 +1998,7 @@ export const dispatchTelegramMessage = async ({
       if (typeof messageId === "number") {
         return "edited";
       }
-      await sendPayload({ text: line }, { durable: true });
+      await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
       return "posted";
     };
     // Reset answer-lane bookkeeping after a bar was edited/posted in place,
@@ -2647,14 +2664,25 @@ export const dispatchTelegramMessage = async ({
                     // own durable messages and must NOT also feed the bar (invariant:
                     // persistent message XOR bar count — D2).
                     if (payload.phase === "start") {
-                      // canPushStreamToolProgress() is false under verbose, so this
-                      // also closes bursts (never counting the tool) when the durable
-                      // lane owns the tool message (invariant: persistent XOR window).
-                      if (!canPushStreamToolProgress()) {
+                      // Count a tool only when the WINDOW actually renders it, so the
+                      // bar's 🛠️ tally matches what streamed. The compositor renders
+                      // a tool line only for work tools (isChannelProgressDraftWorkToolName
+                      // rejects message/reply/react/typing/etc.) and only when
+                      // toolProgress is on; a start-phase message tool (codex/
+                      // message_tool_only) otherwise inflated the count with no tool
+                      // line. canPushStreamToolProgress() is false under verbose (the
+                      // durable lane owns the tool message: persistent XOR window). In
+                      // every non-counting case the tool start is still a burst
+                      // boundary, so close reasoning/commentary without counting it.
+                      const windowRendersTool =
+                        canPushStreamToolProgress() &&
+                        streamToolProgressEnabled &&
+                        isChannelProgressDraftWorkToolName(toolName);
+                      if (windowRendersTool) {
+                        progressSummary.noteToolCall();
+                      } else {
                         progressSummary.closeReasoningBurst();
                         progressSummary.closeCommentaryBurst();
-                      } else {
-                        progressSummary.noteToolCall();
                       }
                     }
                     const progressPromise = pushStreamToolProgress(

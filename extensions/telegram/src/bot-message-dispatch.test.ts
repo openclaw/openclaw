@@ -3085,6 +3085,136 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(texts.some((text) => text.includes("tool call · ⏱️"))).toBe(false);
   });
 
+  it("delivers the collapse bar as a real message but never mirrors it into the transcript", async () => {
+    // Red-team F1: the bar is a cosmetic activity digest. It must be a durable
+    // Telegram message but must NOT enter the session transcript, or the model
+    // reads "🛠️ 1 tool call · ⏱️ Ns" back as its own prior turn. The real final
+    // still mirrors (Discord parity: its summary bar has no mirror seam either).
+    setupDraftStreams(); // no window message id → the bar posts durably (not an in-place edit)
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    deliverReplies.mockImplementation(
+      async (params: {
+        replies?: Array<{ text?: string }>;
+        transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        const text = params.replies
+          ?.map((reply) => reply.text)
+          .filter(Boolean)
+          .join("\n\n");
+        await params.transcriptMirror?.({ text });
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context,
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // The final is sent first (call 0, mirrored), then the bar (call 1, not).
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(0, { text: "Done" });
+    expect(typeof mockCallArg(deliverReplies, 0).transcriptMirror).toBe("function");
+    const barParams = mockCallArg(deliverReplies, 1) as {
+      replies?: Array<{ text?: string }>;
+      transcriptMirror?: unknown;
+    };
+    expect(barParams.replies?.[0]?.text).toContain("🛠️ 1 tool call");
+    expect(barParams.transcriptMirror).toBeUndefined();
+    // Only the final reached the transcript; the bar line never did.
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), { text: "Done" });
+  });
+
+  it("does not count a start-phase message tool toward the collapse bar", async () => {
+    // Red-team F4: progressSummary.noteToolCall() fired for ANY start-phase tool,
+    // but the window renders only work tools (isChannelProgressDraftWorkToolName
+    // rejects message/reply/react/…). A codex message_tool_only turn thus showed
+    // "🛠️ 1 tool call" with no tool line. The count must match the window: one
+    // work tool → 1, the message tool → 0.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolStart?.({ name: "message", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+  });
+
+  it("does not count a work tool toward the collapse bar when toolProgress is off", async () => {
+    // Red-team F4: with streaming.progress.toolProgress=false the window renders
+    // no tool line, so a work tool must not feed the tally either — only the
+    // reasoning that streamed to the window counts.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "thinking" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: false } } },
+    });
+
+    expectWindowCollapsedTo(answerDraftStream, "🧠 1 thought · ⏱️ 1s");
+  });
+
+  it("keeps the turn alive when the cleanup-time collapse bar send throws", async () => {
+    // Red-team F3: the cosmetic bar posts from the cleanup fallback AFTER the
+    // real (out-of-band) final is already delivered. A flood-wait/network throw
+    // from that send must be swallowed, never propagated out of dispatch.
+    setupDraftStreams({ answerMessageId: 2001 });
+    deliverReplies.mockRejectedValue(new Error("Too Many Requests: retry after 5"));
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return {
+        queuedFinal: true,
+        counts: { block: 0, final: 1, tool: 1 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    let thrown: unknown;
+    try {
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress" } },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeUndefined();
+    // The bar send was attempted (and swallowed) rather than skipped.
+    expect(deliverReplies).toHaveBeenCalled();
+  });
+
   it("keeps the progress window alive under /reasoning on so commentary and tools still stream", async () => {
     // /reasoning on removes only the 🧠 lane from the window; commentary, tool
     // lines, and the collapse bar must still stream (Discord parity). A prior

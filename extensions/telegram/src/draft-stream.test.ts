@@ -356,6 +356,31 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it("finalizeToPreview returns undefined when the in-place collapse edit does not apply", async () => {
+    // Red-team F2: a flood-wait (429) on the collapse edit makes the underlying
+    // send return false without applying. finalizeToPreview must report that as
+    // "not collapsed in place" (undefined) so the dispatch falls back to posting
+    // a durable bar — otherwise it assumes success, clears state, posts no bar,
+    // and the tall window is left on screen.
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(
+      Object.assign(
+        new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 5)"),
+        { error_code: 429, parameters: { retry_after: 5 } },
+      ),
+    );
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    stream.update("🛠️ Exec: pnpm test");
+    await stream.flush();
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBeUndefined();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+    // The live window is NOT deleted (the caller posts the bar below it instead).
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
   it("deletes message preview on clear after finalization", async () => {
     vi.useFakeTimers();
     try {
@@ -420,6 +445,48 @@ describe("createTelegramDraftStream", () => {
 
     expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
     expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("deletes a reposition-superseded first send instead of retaining an orphaned bubble", async () => {
+    // Red-team F5: rotateToNewMessageDeferringDelete rewinds while a FIRST send is
+    // still in flight (no message id yet). The late-landing message is a stale
+    // preview to delete — NOT a durable content chunk to retain (that is
+    // forceNewMessage's contract). Previously it fired onSupersededPreview
+    // {retain:true}, which the dispatch handler kept, leaving a ghost bubble.
+    vi.useFakeTimers();
+    try {
+      let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
+      const firstSend = new Promise<{ message_id: number }>((resolve) => {
+        resolveFirstSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+      const onSupersededPreview = vi.fn();
+      const stream = createDraftStream(api, { onSupersededPreview });
+
+      stream.update("Message A partial");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      // Reposition while the first send is still in flight, then stream on.
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Message B partial");
+
+      resolveFirstSend?.({ message_id: 17 });
+      await vi.advanceTimersByTimeAsync(0);
+      await stream.flush();
+
+      // The raced first send is NOT retained as a durable chunk...
+      expect(onSupersededPreview).not.toHaveBeenCalled();
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      // ...it is deleted deferred, so no orphaned stale bubble is left behind.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      // The replacement message still streams normally.
+      expectNthPreviewSend(api, 2, "Message B partial");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates new message after forceNewMessage is called", async () => {
