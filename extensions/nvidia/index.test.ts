@@ -208,6 +208,9 @@ describe("nvidia provider hooks", () => {
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
+      "z-ai/glm-5.2",
+      "moonshotai/kimi-k2.6",
+      "minimaxai/minimax-m3",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
@@ -227,6 +230,9 @@ describe("nvidia provider hooks", () => {
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
+      "z-ai/glm-5.2",
+      "moonshotai/kimi-k2.6",
+      "minimaxai/minimax-m3",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
@@ -296,6 +302,9 @@ describe("nvidia provider hooks", () => {
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "static:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
       "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "static:nvidia/z-ai/glm-5.2",
+      "static:nvidia/moonshotai/kimi-k2.6",
+      "static:nvidia/minimaxai/minimax-m3",
       "static:nvidia/moonshotai/kimi-k2.5",
       "static:nvidia/minimaxai/minimax-m2.7",
       "static:nvidia/z-ai/glm-5.1",

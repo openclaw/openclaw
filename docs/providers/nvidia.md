@@ -84,8 +84,9 @@ OpenClaw falls back to the bundled catalog and bundled default below.
 Nemotron 3 Ultra is the default NVIDIA model in OpenClaw. NVIDIA's build page for
 [`nvidia/nemotron-3-ultra-550b-a55b`](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b)
 lists it as an available free endpoint with a 1M-token context specification.
-The bundled catalog records a 16,384-token max output to match NVIDIA's current
-OpenAI-compatible sample request for the hosted endpoint.
+NVIDIA's featured-model feed currently reports a 1,048,576-token context and
+an 8,192-token max output for the hosted endpoint, which the bundled catalog
+mirrors.
 
 The bundled Ultra row sends
 `chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true }`
@@ -98,15 +99,21 @@ hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 
 ## Bundled fallback catalog
 
-| Model ref                                  | Name                         | Context   | Max output | Notes                                    |
-| ------------------------------------------ | ---------------------------- | --------- | ---------- | ---------------------------------------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default                                  |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 1,048,576 | 8,192      |                                          |
-| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      |                                          |
-| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      |                                          |
-| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752   | 8,192      |                                          |
-| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608   | 8,192      | Deprecated; use `minimaxai/minimax-m2.7` |
-| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752   | 8,192      | Deprecated; use `z-ai/glm-5.1`           |
+The current rows mirror NVIDIA's featured-model feed. Deprecated rows remain
+available so existing configurations keep resolving after an upgrade.
+
+| Model ref                                  | Name                         | Context   | Max output | Notes                             |
+| ------------------------------------------ | ---------------------------- | --------- | ---------- | --------------------------------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,048,576 | 8,192      | Default                           |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 1,000,000 | 8,192      | Featured fallback                 |
+| `nvidia/z-ai/glm-5.2`                      | GLM 5.2                      | 202,752   | 8,192      | Featured fallback                 |
+| `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6                    | 262,144   | 8,192      | Featured fallback                 |
+| `nvidia/minimaxai/minimax-m3`              | Minimax M3                   | 196,608   | 8,192      | Featured fallback                 |
+| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752   | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608   | 8,192      | Deprecated, upgrade compatibility |
+| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752   | 8,192      | Deprecated, upgrade compatibility |
 
 ## Advanced configuration
 
