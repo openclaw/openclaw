@@ -14,7 +14,6 @@ struct ChatProTab: View {
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
-    let openVoiceSettings: (() -> Void)?
     let presentTalk: Binding<Bool>?
 
     init(
@@ -24,7 +23,6 @@ struct ChatProTab: View {
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil,
-        openVoiceSettings: (() -> Void)? = nil,
         presentTalk: Binding<Bool>? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
@@ -33,7 +31,6 @@ struct ChatProTab: View {
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
-        self.openVoiceSettings = openVoiceSettings
         self.presentTalk = presentTalk
     }
 
@@ -43,8 +40,7 @@ struct ChatProTab: View {
                 .navigationDestination(isPresented: self.talkDestinationBinding) {
                     TalkProTab(
                         ownsNavigationStack: false,
-                        openSettings: { self.openSettings?() },
-                        openVoiceSettings: { self.openVoiceSettings?() ?? self.openSettings?() })
+                        openSettings: { self.openSettings?() })
                 }
         }
         .task {

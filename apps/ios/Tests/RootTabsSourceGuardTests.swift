@@ -260,6 +260,8 @@ struct RootTabsSourceGuardTests {
         #expect(!talkSource.contains("TalkProDock("))
         #expect(talkSource.contains("placement: .topBarTrailing"))
         #expect(talkSource.contains("talk-voice-settings-control"))
+        #expect(talkSource.contains("showVoiceSettings"))
+        #expect(talkSource.contains("SettingsProTab(directRoute: .voice, ownsNavigationStack: false)"))
         #expect(settingsList.contains("Section(\"Device\")"))
         #expect(!settingsList.contains("ProCard("))
         #expect(settingsRow.contains("NavigationLink(value: route)"))
@@ -628,6 +630,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `routed gateway pills open gateway settings`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let talkSource = try String(contentsOf: Self.talkProTabSourceURL(), encoding: .utf8)
         let agentSource = try String(contentsOf: Self.agentProTabSourceURL(), encoding: .utf8)
         let agentOverviewSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
@@ -640,8 +643,8 @@ struct RootTabsSourceGuardTests {
             encoding: .utf8)
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
-        #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 1)
-        #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 1)
+        #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 0)
+        #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 0)
         #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
@@ -654,6 +657,7 @@ struct RootTabsSourceGuardTests {
             .matches(of: /AgentProTab\([\s\S]*?openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/)
             .count >= 3)
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
+        #expect(!chatSource.contains("openVoiceSettings"))
         #expect(chatSource.contains("private var connectionStatusButton: some View"))
         #expect(chatSource.contains(".buttonStyle(.plain)"))
         #expect(chatSource.contains(".contentShape(Circle())"))

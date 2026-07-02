@@ -403,7 +403,6 @@ struct RootTabs: View {
                 showsAgentBadge: false,
                 ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) },
-                openVoiceSettings: { self.selectSettingsRoute(.voice) },
                 presentTalk: self.$presentChatTalk)
         case .overview:
             CommandCenterTab(

@@ -8,22 +8,20 @@ struct TalkProTab: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showPermissionPrompt = false
     @State private var showTalkIssueDetails = false
+    @State private var showVoiceSettings = false
     @State private var callStartedAt: Date?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     var openSettings: () -> Void
-    var openVoiceSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
-        openSettings: @escaping () -> Void,
-        openVoiceSettings: (() -> Void)? = nil)
+        openSettings: @escaping () -> Void)
     {
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
-        self.openVoiceSettings = openVoiceSettings ?? openSettings
     }
 
     private var state: TalkProState {
@@ -75,7 +73,7 @@ struct TalkProTab: View {
             if let fallbackIssue = self.fallbackIssue {
                 TalkRuntimeIssueDetailsSheet(
                     issue: fallbackIssue,
-                    onOpenSettings: self.openVoiceSettings)
+                    onOpenSettings: self.presentVoiceSettings)
                     .openClawSheetChrome()
             }
         }
@@ -105,7 +103,7 @@ struct TalkProTab: View {
                 if let fallbackIssue = self.fallbackIssue {
                     TalkRuntimeIssueBanner(
                         issue: fallbackIssue,
-                        onOpenSettings: self.openVoiceSettings,
+                        onOpenSettings: self.presentVoiceSettings,
                         onShowDetails: {
                             self.showTalkIssueDetails = true
                         })
@@ -133,7 +131,10 @@ struct TalkProTab: View {
         .modifier(TalkProNavigationChrome(
             ownsNavigationStack: self.ownsNavigationStack,
             chromeStyle: self.chromeStyle,
-            openVoiceSettings: self.openVoiceSettings))
+            openVoiceSettings: self.presentVoiceSettings))
+        .navigationDestination(isPresented: self.$showVoiceSettings) {
+            SettingsProTab(directRoute: .voice, ownsNavigationStack: false)
+        }
     }
 
     private var talkCenter: some View {
@@ -323,10 +324,14 @@ struct TalkProTab: View {
 
     private func openPrimarySettings() {
         if self.gatewayConnected {
-            self.openVoiceSettings()
+            self.presentVoiceSettings()
         } else {
             self.openSettings()
         }
+    }
+
+    private func presentVoiceSettings() {
+        self.showVoiceSettings = true
     }
 }
 
