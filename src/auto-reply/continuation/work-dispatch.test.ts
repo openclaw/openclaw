@@ -1777,12 +1777,7 @@ describe("durable continuation_work dispatch", () => {
     activeSessions.delete(sessionKey);
     const recovered = await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
 
-    expect(recovered).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
-    await vi.advanceTimersByTimeAsync(55_000);
-    expect(turnGrants).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(turnGrants).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1_000);
+    expect(recovered).toEqual({ dispatched: 3, failed: 0, reaped: 0 });
     expect(turnGrants).toHaveLength(3);
     expect([...mockFlows.values()].map((flow) => flow.status)).toEqual([
       "succeeded",
