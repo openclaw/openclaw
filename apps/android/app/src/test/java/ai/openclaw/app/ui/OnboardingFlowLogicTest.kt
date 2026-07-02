@@ -25,7 +25,8 @@ class OnboardingFlowLogicTest {
       onboardingBackDestination(OnboardingStep.EnterSetupCode),
     )
     assertEquals(OnboardingBackDestination(OnboardingStep.Gateway), onboardingBackDestination(OnboardingStep.Manual))
-    assertEquals(OnboardingBackDestination(OnboardingStep.Recovery), onboardingBackDestination(OnboardingStep.Permissions))
+    assertEquals(OnboardingBackDestination(OnboardingStep.Recovery), onboardingBackDestination(OnboardingStep.NodeApproval))
+    assertEquals(OnboardingBackDestination(OnboardingStep.NodeApproval), onboardingBackDestination(OnboardingStep.Permissions))
   }
 
   @Test
@@ -42,6 +43,17 @@ class OnboardingFlowLogicTest {
       onboardingBackStateAfterBack(
         step = OnboardingStep.EnterSetupCode,
         setupCodeEntryOpenedFromScanner = false,
+      ),
+    )
+  }
+
+  @Test
+  fun onboardingBackStateClearsScannerOriginAfterBack() {
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true, setupCodeEntryOpenedFromScanner = false),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.EnterSetupCode,
+        setupCodeEntryOpenedFromScanner = true,
       ),
     )
   }
@@ -98,25 +110,14 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun nearbyGatewayManualTlsOnlyUsesDiscoveryTlsHints() {
-    assertFalse(
+  fun nearbyGatewayManualTlsPreservesDiscoverySecurityPolicy() {
+    assertTrue(
       nearbyGatewayManualTls(
         GatewayEndpoint(
           stableId = "_openclaw-gw._tcp.|local.|Lan",
           name = "Lan",
           host = "192.168.1.12",
           port = 18789,
-        ),
-      ),
-    )
-    assertTrue(
-      nearbyGatewayManualTls(
-        GatewayEndpoint(
-          stableId = "_openclaw-gw._tcp.|local.|Secure",
-          name = "Secure",
-          host = "192.168.1.12",
-          port = 18789,
-          tlsEnabled = true,
         ),
       ),
     )
@@ -393,6 +394,32 @@ class OnboardingFlowLogicTest {
         statusText = "Connected",
         connectSettling = false,
         nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingStopsAtConnectedEvenWhenNodeApprovalIsStillPending() {
+    assertEquals(
+      GatewayRecoveryUiState.Connected,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        statusText = "Waiting for node approval",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingShowsSlowConnectionWhenGatewayNeverPairs() {
+    assertEquals(
+      GatewayRecoveryUiState.TakingLonger,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        statusText = "Connecting…",
+        connectSettling = false,
+        connectTimedOut = true,
       ),
     )
   }
@@ -736,8 +763,8 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressStartsAtGatewayEndpointWhileConnecting() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Connecting to the Gateway endpoint", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Checking Gateway access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
         GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
@@ -749,11 +776,11 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryProgressMovesDownToGatewayAccessAfterSettling() {
+  fun recoveryProgressDoesNotAdvanceToGatewayAccessJustBecauseSettlingEnds() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Connecting to the Gateway endpoint", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking Gateway access", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
         GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
@@ -768,8 +795,8 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressMovesDownToNodeAccessAfterGatewayConnects() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Connecting to the Gateway endpoint", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking Gateway access", GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Complete),
         GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Current),
       ),
       gatewayRecoveryProgressItems(
