@@ -478,7 +478,7 @@ extension SettingsProTab {
 
                     Divider().padding(.leading, 54)
 
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading) {
                         Text("OpenClaw can show approval prompts and event alerts when the app is not active.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
