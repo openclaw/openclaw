@@ -266,6 +266,9 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+type MessageDeliveryEvidenceForRunner = NonNullable<
+  EmbeddedRunAttemptForRunner["messageDeliveryEvidence"]
+>[number];
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -425,6 +428,28 @@ function normalizeEmbeddedRunAttemptResult(
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
   };
+}
+
+function mergeMessageDeliveryEvidence(
+  target: MessageDeliveryEvidenceForRunner[],
+  evidence: readonly MessageDeliveryEvidenceForRunner[],
+): void {
+  for (const item of evidence) {
+    if (
+      target.some(
+        (current) =>
+          current.channel === item.channel &&
+          current.toolName === item.toolName &&
+          current.providerId === item.providerId &&
+          current.status === item.status &&
+          current.sender === item.sender &&
+          current.recipient === item.recipient,
+      )
+    ) {
+      continue;
+    }
+    target.push(item);
+  }
 }
 
 function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
@@ -1934,6 +1959,9 @@ async function runEmbeddedAgentInternal(
         };
         let authRetryPending = false;
         let accumulatedReplayState = createEmbeddedRunReplayState();
+        const accumulatedMessageDeliveryEvidence: NonNullable<
+          EmbeddedRunAttemptForRunner["messageDeliveryEvidence"]
+        > = [];
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -2275,6 +2303,7 @@ async function runEmbeddedAgentInternal(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            initialMessageDeliveryEvidence: accumulatedMessageDeliveryEvidence,
             suppressNextUserMessagePersistence,
             beforeAgentFinalizeRevisionAttempts,
             maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
@@ -2299,6 +2328,12 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          if (attempt.messageDeliveryEvidence?.length) {
+            mergeMessageDeliveryEvidence(
+              accumulatedMessageDeliveryEvidence,
+              attempt.messageDeliveryEvidence,
+            );
+          }
           if (attemptCancellationRequested) {
             throwIfAborted();
             throw createAgentRunDirectAbortError();
@@ -3618,6 +3653,7 @@ async function runEmbeddedAgentInternal(
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
+            messageDeliveryEvidence: accumulatedMessageDeliveryEvidence,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,

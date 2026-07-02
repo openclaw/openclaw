@@ -119,6 +119,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
+    getMessageDeliveryEvidence: () => [],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     hasToolMediaBlockReply: () => false,

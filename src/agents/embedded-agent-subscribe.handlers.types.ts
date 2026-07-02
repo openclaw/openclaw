@@ -23,6 +23,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
+import type { MessageDeliveryEvidence } from "./message-delivery-receipts.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -63,6 +64,7 @@ type AssistantStreamData = {
 type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
+  guardMessageDeliveryReceipt: boolean;
 };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
@@ -76,6 +78,7 @@ export type EmbeddedAgentSubscribeState = {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
+  messageDeliveryEvidence: MessageDeliveryEvidence[];
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -122,6 +125,7 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
+  suppressedReceiptPartialText?: string;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
@@ -255,7 +259,7 @@ export type EmbeddedAgentSubscribeContext = {
   getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
     data: AssistantStreamData,
-    options?: { emitPartialReply?: boolean },
+    options?: { emitPartialReply?: boolean; guardMessageDeliveryReceipt?: boolean },
   ) => void;
   emitBlockReply: (payload: BlockReplyPayload) => void;
   flushDeferredAssistantEvents: () => void;
@@ -300,6 +304,7 @@ type ToolHandlerState = Pick<
   EmbeddedAgentSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "messageDeliveryEvidence"
   | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"

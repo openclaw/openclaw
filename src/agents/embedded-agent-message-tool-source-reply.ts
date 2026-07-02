@@ -29,6 +29,7 @@ const BROADCAST_SEND_ENVELOPE_KEYS = ["payload", "result", "sendResult", "toolRe
 const PARTIAL_DELIVERY_ENVELOPE_KEYS = [...RESULT_ENVELOPE_KEYS, "error", "cause"];
 const SESSIONS_SEND_DELIVERY_STATUSES = new Set(["accepted", "ok"]);
 const BARE_OK_DELIVERY_STATUS = "ok";
+const DELIVERY_ENVELOPE_MAX_DEPTH = 5;
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -101,7 +102,7 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
 }
 
 function deliveryEnvelopeHasCreatedConversationId(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -144,7 +145,7 @@ function deliveryEnvelopeIndicatesOk(value: unknown, depth = 0): boolean {
   if (isBareOkDeliveryStatus(value)) {
     return true;
   }
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -174,7 +175,7 @@ function deliveryEnvelopeIndicatesOk(value: unknown, depth = 0): boolean {
 }
 
 function deliveryEnvelopeIndicatesNonDelivery(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -208,7 +209,7 @@ function deliveryEnvelopeIndicatesNonDelivery(value: unknown, depth = 0): boolea
 }
 
 function deliveryEnvelopeIndicatesNoOp(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -265,7 +266,7 @@ function broadcastEntryHasSuccessfulBareOkSend(
 }
 
 function deliveryEnvelopeIndicatesSuccessfulBroadcast(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -304,7 +305,7 @@ function deliveryEnvelopeIndicatesSuccessfulBroadcast(value: unknown, depth = 0)
 }
 
 function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -357,7 +358,7 @@ function deliveryEnvelopeIndicatesDelivered(
   if (!requireReceipt && isBareSentDeliveryStatus(value)) {
     return true;
   }
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -413,7 +414,7 @@ export function hasMessagingDeliveryReceipt(value: unknown): boolean {
 }
 
 function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
@@ -445,7 +446,7 @@ function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0
 }
 
 function deliveryEnvelopeIndicatesPartialDelivery(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== "object" || depth > 4) {
+  if (!value || typeof value !== "object" || depth > DELIVERY_ENVELOPE_MAX_DEPTH) {
     return false;
   }
   if (Array.isArray(value)) {
