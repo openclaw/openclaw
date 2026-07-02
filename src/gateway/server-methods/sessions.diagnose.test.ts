@@ -3,8 +3,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsDiagnoseResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
 } from "../../agents/embedded-agent-runner/run-state.js";
+import { resolveEmbeddedSessionFileKey } from "../../agents/embedded-agent-runner/session-file-key.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   markDiagnosticRunProgressForTest,
@@ -33,6 +35,7 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore } =
 
 afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
   resetDiagnosticRunActivityForTest();
 });
@@ -182,6 +185,54 @@ test("sessions.diagnose picks an embedded active session beyond the bounded newe
     live: {
       embeddedRun: {
         active: true,
+        streaming: true,
+      },
+    },
+  });
+});
+
+test("sessions.diagnose keeps file-indexed embedded active sessions during final ranking", async () => {
+  const { dir } = await createSessionStoreDir();
+  const sessionFile = path.join(dir, "sess-file-indexed.jsonl");
+  const now = Date.now();
+  await writeSessionStore({
+    entries: {
+      "agent:main:file-indexed": sessionStoreEntry("sess-stored-file-indexed", {
+        sessionFile,
+        status: "running",
+        updatedAt: 1,
+      }),
+      "agent:main:newer": sessionStoreEntry("sess-newer", {
+        updatedAt: now,
+      }),
+    },
+  });
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+    resolveEmbeddedSessionFileKey(sessionFile),
+    "sess-live-file-indexed",
+  );
+  ACTIVE_EMBEDDED_RUNS.set("sess-live-file-indexed", {
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: () => {},
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "agent:main:file-indexed",
+      sessionId: "sess-stored-file-indexed",
+      hasActiveRun: true,
+    },
+    live: {
+      embeddedRun: {
+        active: true,
+        sessionId: "sess-live-file-indexed",
         streaming: true,
       },
     },
