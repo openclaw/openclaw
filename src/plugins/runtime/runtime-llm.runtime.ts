@@ -492,11 +492,15 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         usage: {
-          input: normalizedUsage?.input ?? 0,
-          output: normalizedUsage?.output ?? 0,
-          cacheRead: normalizedUsage?.cacheRead ?? 0,
-          cacheWrite: normalizedUsage?.cacheWrite ?? 0,
-          total: normalizedUsage?.total ?? 0,
+          ...(normalizedUsage?.input !== undefined ? { input: normalizedUsage.input } : {}),
+          ...(normalizedUsage?.output !== undefined ? { output: normalizedUsage.output } : {}),
+          ...(normalizedUsage?.cacheRead !== undefined
+            ? { cacheRead: normalizedUsage.cacheRead }
+            : {}),
+          ...(normalizedUsage?.cacheWrite !== undefined
+            ? { cacheWrite: normalizedUsage.cacheWrite }
+            : {}),
+          ...(normalizedUsage?.total !== undefined ? { total: normalizedUsage.total } : {}),
         },
       });
 
