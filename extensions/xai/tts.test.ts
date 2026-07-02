@@ -2,6 +2,8 @@
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertXaiNativeTtsStreamEndpoint,
+  decodeWebSocketTextMessage,
   isValidXaiTtsVoice,
   listXaiTtsVoices,
   toXaiTtsWsUrl,
@@ -112,6 +114,7 @@ describe("xai tts", () => {
     ssrfMock = undefined;
     globalThis.fetch = originalFetch;
     FakeWebSocket.instances = [];
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -129,6 +132,33 @@ describe("xai tts", () => {
       for (const voice of ["", "   ", "\n"]) {
         expect(isValidXaiTtsVoice(voice)).toBe(false);
       }
+    });
+  });
+
+  describe("decodeWebSocketTextMessage", () => {
+    it("decodes supported WebSocket payload shapes", () => {
+      expect(decodeWebSocketTextMessage('{"type":"audio.done"}')).toBe('{"type":"audio.done"}');
+      expect(decodeWebSocketTextMessage(Buffer.from("buf", "utf8"))).toBe("buf");
+      expect(decodeWebSocketTextMessage(new TextEncoder().encode("view").buffer)).toBe("view");
+      expect(decodeWebSocketTextMessage([Buffer.from("a"), Buffer.from("b")])).toBe("ab");
+    });
+
+    it("rejects unsupported WebSocket payload shapes", () => {
+      expect(() => decodeWebSocketTextMessage(42 as unknown as string)).toThrow(
+        "unsupported WebSocket message payload",
+      );
+    });
+  });
+
+  describe("assertXaiNativeTtsStreamEndpoint", () => {
+    it("accepts the native api.x.ai host", () => {
+      expect(() => assertXaiNativeTtsStreamEndpoint(XAI_BASE_URL)).not.toThrow();
+    });
+
+    it("rejects non-native streaming hosts", () => {
+      expect(() => assertXaiNativeTtsStreamEndpoint("https://proxy.example/v1")).toThrow(
+        'only supports the native api.x.ai endpoint; got host "proxy.example"',
+      );
     });
   });
 
@@ -305,6 +335,87 @@ describe("xai tts", () => {
       await expect(resultPromise).rejects.toThrow(
         "xAI TTS stream connection failed (401): Unauthorized",
       );
+    });
+
+    it("rejects non-native baseUrl hosts before opening a WebSocket", async () => {
+      await expect(
+        xaiTTSStream({
+          text: "hello",
+          apiKey: "ok-key",
+          baseUrl: "https://proxy.example/v1",
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow('only supports the native api.x.ai endpoint; got host "proxy.example"');
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("fails promptly when the socket closes before open", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 60_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("close");
+      await expect(resultPromise).rejects.toThrow("xAI TTS stream connection closed before open");
+    });
+
+    it("closes idempotently when released before audio.done", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+      const result = await resultPromise;
+      await result.release();
+      ws?.emit("close");
+      await result.release();
+      await expect(result.audioStream.getReader().read()).resolves.toEqual({
+        done: true,
+        value: undefined,
+      });
+    });
+
+    it("refreshes the synthesis idle timeout for each audio chunk", async () => {
+      vi.useFakeTimers();
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+      const result = await resultPromise;
+      const reader = result.audioStream.getReader();
+
+      vi.advanceTimersByTime(4_000);
+      ws?.emit(
+        "message",
+        JSON.stringify({ type: "audio.delta", delta: Buffer.from("ok").toString("base64") }),
+      );
+      await reader.read();
+      vi.advanceTimersByTime(4_999);
+
+      const timeoutRead = reader.read();
+      vi.advanceTimersByTime(1);
+      await expect(timeoutRead).rejects.toThrow("xAI TTS stream synthesis timeout");
     });
 
     it("caps streamed audio responses instead of forwarding oversized output", async () => {

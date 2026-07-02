@@ -725,7 +725,7 @@ Per-provider notes:
 - **Google Gemini:** returns raw 24 kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48 kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
 - **Gradium:** WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **Inworld:** MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
-- **xAI:** MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. Buffered synthesis uses xAI's batch REST `/v1/tts` endpoint; streaming playback uses native `wss://api.x.ai/v1/tts` with those existing controls. Native Opus voice-note format is not supported.
+- **xAI:** MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. Buffered synthesis uses xAI's batch REST `/v1/tts` endpoint; `textToSpeechStream` playback uses native `wss://api.x.ai/v1/tts` with those existing controls, not the realtime voice contract. Native Opus voice-note format is not supported.
 - **Microsoft:** uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
 - **Feishu / WhatsApp**: when a voice-note reply is produced as MP3/WebM/WAV/M4A
   or another likely audio file, the channel plugin transcodes it to 48kHz

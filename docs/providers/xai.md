@@ -136,7 +136,7 @@ below or under known limits.
 | Images                     | `image_generate`                        | Yes                                                           |
 | Videos                     | `video_generate`                        | Classic full workflow; Video 1.5 image-to-video               |
 | Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                           |
-| Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts`                               |
+| Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts` (not realtime voice)          |
 | Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                           |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                           |
 | Realtime voice             | -                                       | Not exposed yet; needs a different session/WebSocket contract |
@@ -346,9 +346,13 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     <Note>
     OpenClaw uses xAI's batch `/v1/tts` endpoint for buffered synthesis,
     authenticated `/v1/tts/voices` catalog discovery, and native
-    `wss://api.x.ai/v1/tts` for streaming synthesis. Streaming uses the existing
-    language, voice, codec, and speed controls; xAI defaults apply to sample rate
-    and bit rate. It is separate from realtime voice sessions.
+    `wss://api.x.ai/v1/tts` for streaming synthesis. Streaming is restricted to
+    the native `api.x.ai` host, so custom `baseUrl` values are rejected on this
+    path. It uses the existing language, voice, codec, and speed controls; xAI
+    defaults apply to sample rate and bit rate. The stream sends `text.delta` then
+    `text.done`, receives `audio.delta`, `audio.done`, or `error`, and applies an
+    idle `timeoutMs` that refreshes for every audio chunk. It is separate from
+    realtime voice sessions. See xAI's [Streaming TTS (WebSocket)](https://docs.x.ai/docs/guides/voice#streaming-tts-websocket) contract.
     </Note>
 
   </Accordion>
