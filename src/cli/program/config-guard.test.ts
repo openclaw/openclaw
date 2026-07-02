@@ -457,6 +457,28 @@ describe("ensureConfigReady", () => {
     expect(output).not.toContain("Doctor warnings");
   });
 
+  it("keeps legacy plugin index migration warnings off stdout for ACP startup", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      note(
+        "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: demo",
+        "Doctor warnings",
+      );
+      return {
+        snapshot: makeSnapshot(),
+        baseConfig: {},
+      };
+    });
+
+    const output = await withCapturedStdout(async () => {
+      await runEnsureConfigReady(["acp"], true);
+    });
+
+    expect(output).not.toContain("Doctor warnings");
+    expect(output).not.toContain("Left plugin install index");
+  });
+
   it("allows preflight note noise when suppression is not enabled", async () => {
     writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {

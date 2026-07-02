@@ -11,6 +11,7 @@ import {
 const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   bypassConfigGuard: false,
   routeConfigGuard: "never",
+  suppressDoctorStdout: false,
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   hideBanner: false,
@@ -61,6 +62,14 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
       ensureCliPath: false,
+      networkProxy: "bypass",
+    });
+  });
+
+  it("resolves ACP as a protocol-stdout command", () => {
+    expectResolvedPolicy(["acp"], {
+      suppressDoctorStdout: true,
+      hideBanner: true,
       networkProxy: "bypass",
     });
   });

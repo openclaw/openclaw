@@ -32,8 +32,8 @@ export function resolveCliStartupPolicy(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const suppressDoctorStdout = params.jsonOutputMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  const suppressDoctorStdout = params.jsonOutputMode || commandPolicy.suppressDoctorStdout;
   const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,
