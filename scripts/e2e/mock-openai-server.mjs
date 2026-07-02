@@ -17,6 +17,7 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+const generatedMediaWakeFalseProofMarker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
 
 function responseEvents(text) {
   const itemId = "msg_e2e_1";
@@ -290,6 +291,32 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function generatedMediaWakeFalseProofEvents(body, bodyText) {
+  if (!bodyText.includes(generatedMediaWakeFalseProofMarker)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (toolOutput) {
+    return responseEvents(
+      [
+        "Generated media wake-false proof hook armed.",
+        generatedMediaWakeFalseProofMarker,
+        "The generated image task prompt carries the marker so the trusted SUT can force a recoverable scheduler-level delivery miss.",
+      ].join(" "),
+    );
+  }
+  if (!hasDeclaredTool(bodyText, "image_generate")) {
+    return null;
+  }
+  return toolCallEvents("image_generate", {
+    action: "generate",
+    prompt: `Generate a tiny Telegram proof image for ${generatedMediaWakeFalseProofMarker}.`,
+    model: "openai/gpt-image-1",
+    size: "1024x1024",
+    outputFormat: "png",
+  });
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -338,6 +365,11 @@ const server = http.createServer((req, res) => {
       const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
       if (codeModeEvents) {
         writeResponsesEvents(res, body.stream, codeModeEvents);
+        return;
+      }
+      const generatedMediaEvents = generatedMediaWakeFalseProofEvents(body, bodyText);
+      if (generatedMediaEvents) {
+        writeResponsesEvents(res, body.stream, generatedMediaEvents);
         return;
       }
       const responseText = resolveResponseText(bodyText);

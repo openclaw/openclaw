@@ -1,6 +1,6 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -35,6 +35,10 @@ beforeEach(() => {
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({ entry: undefined });
   detachedTaskRuntimeMocks.createRunningTaskRun.mockClear();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function createImageMediaLifecycle() {
@@ -183,6 +187,206 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     );
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
     expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it("direct-delivers generated media after a detailed recoverable wake miss", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const onWakeFailure = vi.fn();
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => false),
+      wakeTaskCompletionDetailed: vi.fn(async () => ({
+        delivered: false,
+        delivery: {
+          delivered: false,
+          path: "direct" as const,
+          reason: "generated_media_missing" as const,
+          error: "completion agent did not deliver generated media",
+        },
+      })),
+    };
+    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-image-detailed-direct",
+        runId: "tool:image_generate:detailed-direct",
+        requesterSessionKey: "agent:main:discord:channel:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure,
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(lifecycle.wakeTaskCompletion).not.toHaveBeenCalled();
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:123",
+        content: "Image generation completed.",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    );
+    expect(onWakeFailure).toHaveBeenCalledWith(
+      "Image generation completion delivery was not confirmed after successful generation",
+      expect.objectContaining({
+        deliveryError: "completion agent did not deliver generated media",
+        deliveryReason: "generated_media_missing",
+        runId: "tool:image_generate:detailed-direct",
+        taskId: "task-image-detailed-direct",
+      }),
+    );
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalResult: undefined,
+      }),
+    );
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+  });
+
+  it("does not direct-deliver detailed requester-abandoned wake misses", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => false),
+      wakeTaskCompletionDetailed: vi.fn(async () => ({
+        delivered: false,
+        delivery: {
+          delivered: false,
+          path: "none" as const,
+          reason: "requester_abandoned" as const,
+          error: "requester session abandoned after timeout",
+        },
+      })),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-image-detailed-abandoned",
+        runId: "tool:image_generate:detailed-abandoned",
+        requesterSessionKey: "agent:main:discord:channel:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalResult: {
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
+        },
+      }),
+    );
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+  });
+
+  it("does not direct-deliver detailed generic wake misses", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => false),
+      wakeTaskCompletionDetailed: vi.fn(async () => ({
+        delivered: false,
+        delivery: {
+          delivered: false,
+          path: "direct" as const,
+          error: "gateway request timeout for agent",
+        },
+      })),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-image-detailed-generic",
+        runId: "tool:image_generate:detailed-generic",
+        requesterSessionKey: "agent:main:discord:channel:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalResult: {
+          terminalOutcome: "blocked",
+          terminalSummary:
+            "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
+        },
+      }),
+    );
+    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
   });
 
   it("completes a generated media task when completion wake throws", async () => {
@@ -557,6 +761,62 @@ describe("createMediaGenerationTaskLifecycle", () => {
         result: "generated",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("forces generated-media wake-false proof misses only for the dedicated marker", async () => {
+    vi.stubEnv("OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE", "1");
+    const lifecycle = createImageMediaLifecycle();
+    const marker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-wake-false-proof",
+          runId: "tool:image_generate:wake-false-proof",
+          requesterSessionKey: "agent:main:telegram:proof-room",
+          taskLabel: `Generate proof image ${marker}`,
+          requesterOrigin: {
+            channel: "telegram",
+            to: "proof-room",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/openclaw-proof.png"],
+      }),
+    ).resolves.toBe(false);
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal generated-media wake delivery when the proof marker is absent", async () => {
+    vi.stubEnv("OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE", "1");
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+    });
+    const lifecycle = createImageMediaLifecycle();
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-normal-proof-env",
+          runId: "tool:image_generate:normal-proof-env",
+          requesterSessionKey: "agent:main:telegram:proof-room",
+          taskLabel: "Generate ordinary proof image",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "proof-room",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/openclaw-proof.png"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("treats terminal generated-media fallback failure as handled", async () => {
