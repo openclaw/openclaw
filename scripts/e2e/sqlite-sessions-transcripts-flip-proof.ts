@@ -1459,8 +1459,8 @@ async function runDowngradeReupgradeProof(
   );
   return {
     activeJsonlArchived: !fsSync.existsSync(transcriptPath),
-    doctorImportedEntries: Number(totals.importedEntries),
-    doctorImportedTranscriptEvents: Number(totals.importedTranscriptEvents),
+    doctorImportedEntries: totals.importedEntries,
+    doctorImportedTranscriptEvents: totals.importedTranscriptEvents,
     sessionId: DOWNGRADE_REUPGRADE_SESSION_ID,
     sessionKey: DOWNGRADE_REUPGRADE_SESSION_KEY,
     transcriptEvents: countSqliteTranscriptEvents(
