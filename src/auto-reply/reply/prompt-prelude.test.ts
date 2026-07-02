@@ -87,6 +87,7 @@ describe("buildReplyPromptEnvelope", () => {
       isBareSessionReset: false,
       startupAction: "new",
       inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: "message_tool_only",
     });
 
     expect(envelope.prefixedCommandBody).toBe("[OpenClaw room event]");
@@ -96,6 +97,7 @@ describe("buildReplyPromptEnvelope", () => {
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
+        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -108,13 +110,14 @@ describe("buildReplyPromptEnvelope", () => {
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
         "Current event:\n#35676 Keśava: No wtf",
-        "Treat this as observed room activity. Decide whether to act.",
+        "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).toBe(
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
+        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -123,7 +126,7 @@ describe("buildReplyPromptEnvelope", () => {
           "```",
         ].join("\n"),
         "Current event:\n#35676 Keśava: No wtf",
-        "Treat this as observed room activity. Decide whether to act.",
+        "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
@@ -159,6 +162,13 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.currentInboundContext?.text).toContain(
       "Current event:\n#2002 Bob: current note",
+    );
+    expect(envelope.currentInboundContext?.text).toContain(
+      "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.",
+    );
+    expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
+    expect(envelope.currentInboundContext?.text).not.toContain(
+      "your final text here stays private",
     );
     expect(envelope.currentInboundContext?.text).not.toContain(
       "Current event:\n#2002 Bob: [Chat history]",

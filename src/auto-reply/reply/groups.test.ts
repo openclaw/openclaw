@@ -61,6 +61,9 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
+    expect(toolOnlyContext).toContain(
+      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+    );
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
       sessionCtx: { ChatType: "channel", Provider: "mattermost" },
@@ -81,12 +84,14 @@ describe("group runtime loading", () => {
     expect(telegramContext).not.toContain("Avoid Markdown tables");
     expect(
       isolatedGroups.buildGroupIntro({
-        cfg: {} as OpenClawConfig,
-        sessionCtx: { Provider: "whatsapp" },
         defaultActivation: "mention",
-        silentToken: "NO_REPLY",
       }),
     ).toContain("Activation: trigger-only");
+    expect(
+      isolatedGroups.buildGroupIntro({
+        defaultActivation: "always",
+      }),
+    ).toContain("You see every message; most need no response. When you do reply");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
