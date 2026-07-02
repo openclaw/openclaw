@@ -173,6 +173,7 @@ export function execDockerRaw(
 import { formatCliCommand } from "../../cli/command-format.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
+import { splitSandboxBindSpec } from "./bind-spec.js";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -186,6 +187,7 @@ import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
   formatReadOnlyWorkspaceSkillMountHashState,
+  resolveProtectedContainerPaths,
   resolveReadOnlyWorkspaceSkillMounts,
   SANDBOX_MOUNT_FORMAT_VERSION,
   type ReadOnlyWorkspaceSkillMount,
@@ -518,11 +520,21 @@ export function buildSandboxCreateArgs(params: {
   return args;
 }
 
-function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
+function appendCustomBinds(
+  args: string[],
+  cfg: SandboxDockerConfig,
+  protectedPaths?: Set<string>,
+): void {
   if (!cfg.binds?.length) {
     return;
   }
   for (const bind of cfg.binds) {
+    if (protectedPaths) {
+      const spec = splitSandboxBindSpec(bind);
+      if (spec && protectedPaths.has(spec.container)) {
+        continue;
+      }
+    }
     args.push("-v", bind);
   }
 }
@@ -560,7 +572,7 @@ async function createSandboxContainer(params: {
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
     includeReadOnlyWorkspaceSkillMounts: false,
   });
-  appendCustomBinds(args, cfg);
+  appendCustomBinds(args, cfg, resolveProtectedContainerPaths(params.readOnlyWorkspaceSkillMounts));
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
