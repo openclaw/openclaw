@@ -1,8 +1,11 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayTalkSetupRow
 import ai.openclaw.app.VoiceCaptureMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceScreenLogicTest {
@@ -33,6 +36,22 @@ class VoiceScreenLogicTest {
         voiceAttentionStatus = attention,
       ),
     )
+  }
+
+  @Test
+  fun voiceAttentionStatusKeepsRelayFailureVisibleAfterTalkAutoStops() {
+    val attention =
+      voiceAttentionStatus(
+        talkModeStatusText = "Talk failed: provider closed realtime relay",
+        voiceCaptureMode = VoiceCaptureMode.Off,
+        micEnabled = false,
+        micIsSending = false,
+        talkModeEnabled = false,
+        talkModeListening = false,
+        talkModeSpeaking = false,
+      )
+
+    assertEquals("provider closed realtime relay", attention)
   }
 
   @Test
@@ -71,5 +90,52 @@ class VoiceScreenLogicTest {
       "Realtime transcription provider is not configured.",
       voiceRuntimeAttentionStatus("Transcription unavailable: UNAVAILABLE: Error: No realtime transcription provider registered"),
     )
+  }
+
+  @Test
+  fun voiceRuntimeProviderIssueKeepsReadableDetailsAndRedactsSecrets() {
+    val issue =
+      voiceRuntimeProviderIssue(
+        "Transcription unavailable: UNAVAILABLE: Error: OpenAI 404 invalid_request_error: model not found Authorization: Bearer sk-testsecret123456 token=abc123 {\"authorization\":\"Bearer ghp_test123456\",\"apiKey\":\"AIzaTestSecret123\"} url=https://api.example.test/v1?key=AIzaStandalone123456789&client_secret=secret123 aws=AKIA1234567890ABCDEF",
+      )
+
+    assertEquals("OpenAI provider request failed.", issue?.summary)
+    assertEquals(
+      "OpenAI 404 invalid_request_error: model not found Authorization: Bearer [redacted] token=[redacted] {\"authorization\":\"Bearer [redacted]\",\"apiKey\":\"[redacted]\"} url=https://api.example.test/v1?key=[redacted]&client_secret=[redacted] aws=aws_[redacted]",
+      issue?.details,
+    )
+  }
+
+  @Test
+  fun providerIssueRedactsSecretsBeforeTruncatingDetails() {
+    val longSecret = "sk-" + "a".repeat(1_300)
+    val details = sanitizeProviderErrorDetails("OpenAI failed $longSecret")
+
+    assertTrue(details.length <= 1_200)
+    assertTrue(details.contains("sk-[redacted]"))
+    assertFalse(details.contains("sk-aaaaaaaa"))
+  }
+
+  @Test
+  fun voiceActionAllowsStartWhenCatalogReadinessIsUnknown() {
+    val unavailableRow = GatewayTalkSetupRow.unavailable(title = "Realtime Talk", reason = "Gateway talk catalog not loaded")
+
+    assertEquals(false, voiceActionNeedsSetup(gatewayReady = true, setupRow = unavailableRow))
+    assertEquals(true, voiceActionCanStart(gatewayReady = true, setupRow = unavailableRow))
+  }
+
+  @Test
+  fun voiceActionRoutesConfirmedUnconfiguredProviderToSetup() {
+    val needsSetupRow =
+      GatewayTalkSetupRow(
+        title = "Realtime Talk",
+        subtitle = "Configure OpenAI Realtime on the Gateway.",
+        statusText = "Needs setup",
+        ready = false,
+        setupKnown = true,
+      )
+
+    assertEquals(true, voiceActionNeedsSetup(gatewayReady = true, setupRow = needsSetupRow))
+    assertEquals(false, voiceActionCanStart(gatewayReady = true, setupRow = needsSetupRow))
   }
 }

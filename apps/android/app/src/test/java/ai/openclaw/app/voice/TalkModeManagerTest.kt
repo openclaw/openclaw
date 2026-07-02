@@ -141,6 +141,27 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
+    var stoppedByRelay = false
+    val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertFalse(manager.isEnabled.value)
+    assertTrue(stoppedByRelay)
+    assertEquals(
+      "Talk failed: Realtime provider closed before the session became ready.",
+      manager.statusText.value,
+    )
+  }
+
+  @Test
   fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
     val manager = createManager()
 

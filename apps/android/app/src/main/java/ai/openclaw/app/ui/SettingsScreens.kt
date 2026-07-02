@@ -5,6 +5,8 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupRow
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
@@ -388,11 +390,17 @@ private fun VoiceSettingsScreen(
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
 
-  SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
+  LaunchedEffect(Unit) {
+    viewModel.refreshTalkSetupReadiness()
+  }
+
+  SettingsDetailFrame(title = "Voice Setup", subtitle = "Realtime Talk and Dictation from the Gateway catalog.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       VoiceSetupPanel(
         voiceActive = micEnabled || talkModeEnabled,
+        talkSetupReadiness = talkSetupReadiness,
       )
       Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -413,30 +421,34 @@ private fun VoiceSettingsScreen(
 @Composable
 private fun VoiceSetupPanel(
   voiceActive: Boolean,
+  talkSetupReadiness: GatewayTalkSetupReadiness,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-    VoiceSetupActionRow(
-      title = "Realtime Provider",
-      subtitle = "Gateway voice relay",
+    VoiceSetupCatalogRow(
+      row = talkSetupReadiness.realtimeTalk,
       icon = Icons.Default.GraphicEq,
-      statusText = if (voiceActive) "Live" else "Ready",
-      ready = true,
+      statusText = if (voiceActive && talkSetupReadiness.realtimeTalk.ready) "Live" else talkSetupReadiness.realtimeTalk.statusText,
     )
-    VoiceSetupActionRow(
-      title = "Voice",
-      subtitle = "Voice input",
+    VoiceSetupCatalogRow(
+      row = talkSetupReadiness.dictation,
       icon = Icons.Default.Mic,
-      statusText = "Configured",
-      ready = true,
-    )
-    VoiceSetupActionRow(
-      title = "Transport",
-      subtitle = "Socket relay",
-      icon = Icons.Default.Bolt,
-      statusText = "Configured",
-      ready = true,
     )
   }
+}
+
+@Composable
+private fun VoiceSetupCatalogRow(
+  row: GatewayTalkSetupRow,
+  icon: ImageVector,
+  statusText: String = row.statusText,
+) {
+  VoiceSetupActionRow(
+    title = row.title,
+    subtitle = row.subtitle,
+    icon = icon,
+    statusText = statusText,
+    ready = row.ready,
+  )
 }
 
 @Composable

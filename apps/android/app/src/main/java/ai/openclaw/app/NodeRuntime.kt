@@ -369,6 +369,8 @@ class NodeRuntime(
   val modelCatalogRefreshing: StateFlow<Boolean> = _modelCatalogRefreshing.asStateFlow()
   private val _modelCatalogErrorText = MutableStateFlow<String?>(null)
   val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.asStateFlow()
+  private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unavailable())
+  val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
@@ -485,6 +487,7 @@ class NodeRuntime(
         _gatewayAgents.value = emptyList()
         _modelCatalog.value = emptyList()
         _modelAuthProviders.value = emptyList()
+        _talkSetupReadiness.value = GatewayTalkSetupReadiness.unavailable()
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
         _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
@@ -805,6 +808,7 @@ class NodeRuntime(
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
+      refreshTalkSetupReadinessFromGateway()
       refreshCronFromGateway()
       refreshUsageFromGateway()
       refreshSkillsFromGateway()
@@ -818,6 +822,12 @@ class NodeRuntime(
   fun refreshModelCatalog() {
     scope.launch {
       refreshModelCatalogFromGateway()
+    }
+  }
+
+  fun refreshTalkSetupReadiness() {
+    scope.launch {
+      refreshTalkSetupReadinessFromGateway()
     }
   }
 
@@ -1223,6 +1233,8 @@ class NodeRuntime(
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
       stopManualVoiceSession()
+    } else {
+      refreshTalkSetupReadiness()
     }
     // Don't re-enable on active=true; mic toggle drives that
   }
@@ -2018,6 +2030,27 @@ class NodeRuntime(
       _modelCatalogErrorText.value = "Could not load provider catalog."
     } finally {
       _modelCatalogRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshTalkSetupReadinessFromGateway() {
+    if (!operatorConnected) {
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unavailable()
+      return
+    }
+    try {
+      val catalogRes = operatorSession.request("talk.catalog", "{}")
+      val catalogRoot = json.parseToJsonElement(catalogRes).asObjectOrNull()
+      val configRoot =
+        try {
+          val configRes = operatorSession.request("talk.config", "{}")
+          json.parseToJsonElement(configRes).asObjectOrNull()?.get("config").asObjectOrNull()
+        } catch (_: Throwable) {
+          null
+        }
+      _talkSetupReadiness.value = parseGatewayTalkSetupReadiness(catalog = catalogRoot, config = configRoot)
+    } catch (_: Throwable) {
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unavailable("Could not load Gateway talk catalog.")
     }
   }
 

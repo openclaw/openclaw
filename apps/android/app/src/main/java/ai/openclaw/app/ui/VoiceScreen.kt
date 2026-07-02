@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupRow
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -102,6 +104,7 @@ fun VoiceScreen(
   val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
   val talkModeStatusText by viewModel.talkModeStatusText.collectAsState()
   val talkModeConversation by viewModel.talkModeConversation.collectAsState()
+  val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
 
   var pendingAction by remember { mutableStateOf<VoiceAction?>(null) }
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -132,6 +135,11 @@ fun VoiceScreen(
       talkModeEnabled = talkModeEnabled,
       talkModeListening = talkModeListening,
       talkModeSpeaking = talkModeSpeaking,
+    )
+  val voiceAttentionIssue =
+    voiceProviderIssue(
+      statusText = talkModeStatusText,
+      active = voiceCaptureMode != VoiceCaptureMode.Off || micEnabled || micIsSending || talkModeEnabled || talkModeListening || talkModeSpeaking,
     )
   val activeStatus =
     voiceStatusLabel(
@@ -168,6 +176,7 @@ fun VoiceScreen(
       sending = micIsSending,
       statusText = activeStatus,
       gatewayStatus = gatewayStatus,
+      setupRow = talkSetupReadiness.dictation,
       onCancel = { viewModel.cancelMicCapture() },
       onSend = { viewModel.setMicEnabled(false) },
       onOpenVoiceSettings = onOpenVoiceSettings,
@@ -200,6 +209,8 @@ fun VoiceScreen(
       micLiveTranscript = micLiveTranscript,
       gatewayReady = gatewayReady,
       voiceAttentionStatus = voiceAttentionStatus,
+      voiceAttentionIssue = voiceAttentionIssue,
+      talkSetupReadiness = talkSetupReadiness,
       onStartTalk = {
         runVoiceAction(
           action = VoiceAction.Talk,
@@ -224,6 +235,7 @@ fun VoiceScreen(
         )
       },
       onConnectGateway = onOpenGatewaySettings,
+      onOpenVoiceSettings = onOpenVoiceSettings,
     )
 
     if (!hasMicPermission) {
@@ -252,15 +264,17 @@ private fun DictationScreen(
   sending: Boolean,
   statusText: String,
   gatewayStatus: String,
+  setupRow: GatewayTalkSetupRow,
   onCancel: () -> Unit,
   onSend: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
   val lastUserText = conversation.lastOrNull { it.role == VoiceConversationRole.User }?.text
   val draftText = liveTranscript?.takeIf { it.isNotBlank() } ?: lastUserText.orEmpty()
-  val providerAttentionStatus = voiceRuntimeAttentionStatus(statusText)
+  val providerIssue = voiceRuntimeProviderIssue(statusText)
+  val providerAttentionStatus = providerIssue?.summary
   val displayStatusText = providerAttentionStatus ?: statusText
-  val speechProviderReady = providerAttentionStatus == null && gatewayStatus.isVoiceGatewayReady()
+  val speechProviderReady = providerAttentionStatus == null && gatewayStatus.isVoiceGatewayReady() && setupRow.ready
   Column(
     modifier =
       Modifier
@@ -302,6 +316,14 @@ private fun DictationScreen(
       }
     }
 
+    if (providerIssue != null) {
+      VoiceProviderIssuePanel(
+        issue = providerIssue,
+        setupActionLabel = "Open Voice Setup",
+        onOpenVoiceSettings = onOpenVoiceSettings,
+      )
+    }
+
     ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Surface(
@@ -317,11 +339,10 @@ private fun DictationScreen(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text(text = "Speech provider", style = ClawTheme.type.section, color = ClawTheme.colors.text)
           Text(
-            text = providerAttentionStatus ?: gatewayStatus.voiceGatewayLabel(),
+            text = providerAttentionStatus ?: if (gatewayStatus.isVoiceGatewayReady()) setupRow.subtitle else gatewayStatus.voiceGatewayLabel(),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            maxLines = 2,
           )
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -599,10 +620,17 @@ private fun VoiceHero(
   micLiveTranscript: String?,
   gatewayReady: Boolean,
   voiceAttentionStatus: String?,
+  voiceAttentionIssue: VoiceProviderIssue?,
+  talkSetupReadiness: GatewayTalkSetupReadiness,
   onStartTalk: () -> Unit,
   onStartDictation: () -> Unit,
   onConnectGateway: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
 ) {
+  val talkNeedsSetup = voiceActionNeedsSetup(gatewayReady, talkSetupReadiness.realtimeTalk)
+  val dictationNeedsSetup = voiceActionNeedsSetup(gatewayReady, talkSetupReadiness.dictation)
+  val talkCanStart = voiceActionCanStart(gatewayReady, talkSetupReadiness.realtimeTalk)
+  val dictationCanStart = voiceActionCanStart(gatewayReady, talkSetupReadiness.dictation)
   Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
     VoiceOrb(
       active = micEnabled || talkModeEnabled,
@@ -657,11 +685,11 @@ private fun VoiceHero(
         subtitle =
           when {
             talkModeEnabled -> "Conversation is live"
-            gatewayReady -> "Natural conversation in real time"
+            gatewayReady -> talkSetupReadiness.realtimeTalk.subtitle
             else -> "Connect gateway to start"
-          },
+        },
         icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.RecordVoiceOver,
-        onClick = onStartTalk,
+        onClick = if (talkCanStart || talkModeEnabled) onStartTalk else onOpenVoiceSettings,
         enabled = gatewayReady || talkModeEnabled,
       )
       VoiceModeRow(
@@ -669,31 +697,55 @@ private fun VoiceHero(
         subtitle =
           when {
             micEnabled -> "Listening for one turn"
-            gatewayReady -> "Convert speech to text"
+            gatewayReady -> talkSetupReadiness.dictation.subtitle
             else -> "Connect gateway to start"
-          },
+        },
         icon = if (micEnabled) Icons.Default.MicOff else Icons.Default.TextFields,
-        onClick = onStartDictation,
+        onClick = if (dictationCanStart || micEnabled) onStartDictation else onOpenVoiceSettings,
         enabled = gatewayReady || micEnabled,
       )
     }
 
-    VoiceProviderCard(gatewayStatus = gatewayStatus, voiceAttentionStatus = voiceAttentionStatus)
+    VoiceProviderCard(
+      gatewayStatus = gatewayStatus,
+      voiceAttentionStatus = voiceAttentionStatus,
+      talkSetupReadiness = talkSetupReadiness,
+    )
+
+    if (voiceAttentionIssue != null) {
+      VoiceProviderIssuePanel(
+        issue = voiceAttentionIssue,
+        setupActionLabel = "Open Voice Setup",
+        onOpenVoiceSettings = onOpenVoiceSettings,
+      )
+    } else if (talkNeedsSetup || dictationNeedsSetup) {
+      VoiceSetupPromptPanel(
+        talkSetupReadiness = talkSetupReadiness,
+        onOpenVoiceSettings = onOpenVoiceSettings,
+      )
+    }
 
     VoicePrimaryAction(
       text =
         when {
           talkModeEnabled -> "End Talk"
-          gatewayReady -> "Start Talk"
+          talkCanStart -> "Start Talk"
+          talkNeedsSetup -> "Set Up Talk"
           else -> "Connect Gateway"
         },
       icon =
         when {
           talkModeEnabled -> Icons.Default.PhoneDisabled
-          gatewayReady -> Icons.Default.Phone
+          talkCanStart -> Icons.Default.Phone
+          talkNeedsSetup -> Icons.Default.Settings
           else -> Icons.Default.Cloud
         },
-      onClick = if (gatewayReady || talkModeEnabled) onStartTalk else onConnectGateway,
+      onClick =
+        when {
+          talkModeEnabled || talkCanStart -> onStartTalk
+          talkNeedsSetup -> onOpenVoiceSettings
+          else -> onConnectGateway
+        },
     )
   }
 }
@@ -743,8 +795,20 @@ private fun VoiceModeRow(
 private fun VoiceProviderCard(
   gatewayStatus: String,
   voiceAttentionStatus: String?,
+  talkSetupReadiness: GatewayTalkSetupReadiness,
 ) {
-  val ready = voiceAttentionStatus == null && gatewayStatus.isVoiceGatewayReady()
+  val ready =
+    voiceAttentionStatus == null &&
+      gatewayStatus.isVoiceGatewayReady() &&
+      talkSetupReadiness.realtimeTalk.ready &&
+      talkSetupReadiness.dictation.ready
+  val needsSetup =
+    voiceAttentionStatus == null &&
+      gatewayStatus.isVoiceGatewayReady() &&
+      (
+        (talkSetupReadiness.realtimeTalk.setupKnown && !talkSetupReadiness.realtimeTalk.ready) ||
+          (talkSetupReadiness.dictation.setupKnown && !talkSetupReadiness.dictation.ready)
+      )
   Surface(
     modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
@@ -769,13 +833,12 @@ private fun VoiceProviderCard(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = "Provider", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = "Voice setup", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
         Text(
-          text = voiceAttentionStatus ?: gatewayStatus.voiceGatewayLabel(),
+          text = voiceAttentionStatus ?: voiceSetupSummary(gatewayStatus, talkSetupReadiness),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          maxLines = 2,
         )
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -787,6 +850,7 @@ private fun VoiceProviderCard(
               .background(
                 when {
                   ready -> ClawTheme.colors.success
+                  needsSetup -> ClawTheme.colors.warning
                   voiceAttentionStatus != null -> ClawTheme.colors.warning
                   else -> ClawTheme.colors.textSubtle
                 },
@@ -796,13 +860,68 @@ private fun VoiceProviderCard(
           text =
             when {
               ready -> "Ready"
+              needsSetup -> "Setup"
               voiceAttentionStatus != null -> "Attention"
+              gatewayStatus.isVoiceGatewayReady() -> "Unavailable"
               else -> "Offline"
             },
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
         )
+      }
+    }
+  }
+}
+
+@Composable
+private fun VoiceSetupPromptPanel(
+  talkSetupReadiness: GatewayTalkSetupReadiness,
+  onOpenVoiceSettings: () -> Unit,
+) {
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawStatusPill(text = "Setup needed", status = ClawStatus.Warning)
+      Text(text = "Voice setup is incomplete.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = voiceSetupSummary("Connected", talkSetupReadiness),
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+      )
+      ClawSecondaryButton(text = "Open Voice Setup", icon = Icons.Default.Settings, onClick = onOpenVoiceSettings)
+    }
+  }
+}
+
+@Composable
+private fun VoiceProviderIssuePanel(
+  issue: VoiceProviderIssue,
+  setupActionLabel: String,
+  onOpenVoiceSettings: () -> Unit,
+) {
+  var expanded by remember(issue.details) { mutableStateOf(false) }
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawStatusPill(text = "Attention", status = ClawStatus.Warning)
+      Text(text = issue.summary, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      if (issue.details != null) {
+        Text(
+          text = if (expanded) issue.details else issue.details.lineSequence().firstOrNull().orEmpty(),
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+          maxLines = if (expanded) Int.MAX_VALUE else 2,
+        )
+      }
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawSecondaryButton(text = setupActionLabel, icon = Icons.Default.Settings, onClick = onOpenVoiceSettings, modifier = Modifier.weight(1f))
+        if (issue.details != null) {
+          ClawSecondaryButton(
+            text = if (expanded) "Hide Details" else "Details",
+            icon = Icons.Default.Info,
+            onClick = { expanded = !expanded },
+            modifier = Modifier.weight(1f),
+          )
+        }
       }
     }
   }
@@ -1032,9 +1151,18 @@ internal fun voiceAttentionStatus(
   talkModeListening: Boolean,
   talkModeSpeaking: Boolean,
 ): String? {
-  if (voiceCaptureMode != VoiceCaptureMode.Off || micEnabled || micIsSending) return null
-  if (talkModeEnabled || talkModeListening || talkModeSpeaking) return null
-  val status = talkModeStatusText.trim()
+  return voiceProviderIssue(
+    statusText = talkModeStatusText,
+    active = voiceCaptureMode != VoiceCaptureMode.Off || micEnabled || micIsSending || talkModeEnabled || talkModeListening || talkModeSpeaking,
+  )?.summary
+}
+
+private fun voiceProviderIssue(
+  statusText: String,
+  active: Boolean,
+): VoiceProviderIssue? {
+  if (active) return null
+  val status = statusText.trim()
   if (status.isBlank()) return null
   val lower = status.lowercase()
   if (lower == "off" || lower == "ready" || lower == "listening" || lower == "connecting…") return null
@@ -1045,10 +1173,14 @@ internal fun voiceAttentionStatus(
         lower.contains("permission required") ||
         lower.contains("not connected") ||
         lower.contains("error")
-    }?.let(::userFacingVoiceAttentionStatus)
+    }?.let(::providerIssueFromStatus)
 }
 
 internal fun voiceRuntimeAttentionStatus(statusText: String): String? {
+  return voiceRuntimeProviderIssue(statusText)?.summary
+}
+
+internal fun voiceRuntimeProviderIssue(statusText: String): VoiceProviderIssue? {
   val status = statusText.trim()
   if (status.isBlank()) return null
   val lower = status.lowercase()
@@ -1059,20 +1191,35 @@ internal fun voiceRuntimeAttentionStatus(statusText: String): String? {
         (lower.contains("provider") && lower.contains("not configured")) ||
         lower.contains("no realtime transcription provider") ||
         lower.contains("failed")
-    }?.let(::userFacingVoiceAttentionStatus)
+    }?.let(::providerIssueFromStatus)
+}
+
+internal fun voiceActionCanStart(
+  gatewayReady: Boolean,
+  setupRow: GatewayTalkSetupRow,
+): Boolean = gatewayReady && !voiceActionNeedsSetup(gatewayReady, setupRow)
+
+internal fun voiceActionNeedsSetup(
+  gatewayReady: Boolean,
+  setupRow: GatewayTalkSetupRow,
+): Boolean = gatewayReady && setupRow.setupKnown && !setupRow.ready
+
+internal data class VoiceProviderIssue(
+  val summary: String,
+  val details: String?,
+)
+
+private fun providerIssueFromStatus(status: String): VoiceProviderIssue {
+  val normalized = normalizeProviderStatus(status)
+  val summary = userFacingVoiceAttentionStatus(normalized)
+  val details =
+    sanitizeProviderErrorDetails(normalized)
+      .takeIf { it.isNotBlank() && it != summary }
+  return VoiceProviderIssue(summary = summary, details = details)
 }
 
 private fun userFacingVoiceAttentionStatus(status: String): String {
-  val normalized =
-    status
-      .removePrefix("Start failed:")
-      .trim()
-      .removePrefix("Transcription unavailable:")
-      .trim()
-      .removePrefix("UNAVAILABLE:")
-      .trim()
-      .removePrefix("Error:")
-      .trim()
+  val normalized = normalizeProviderStatus(status)
   val lower = normalized.lowercase()
   if (lower.contains("realtime voice provider") && lower.contains("not configured")) {
     return "Realtime voice provider is not configured."
@@ -1083,7 +1230,78 @@ private fun userFacingVoiceAttentionStatus(status: String): String {
   if (lower.contains("microphone permission required")) {
     return "Microphone permission is required."
   }
+  if (lower.contains("openai") && (lower.contains("404") || lower.contains("invalid"))) {
+    return "OpenAI provider request failed."
+  }
   return if (normalized.length <= 90) normalized else "${normalized.take(87)}..."
+}
+
+private fun normalizeProviderStatus(status: String): String =
+  status
+    .trim()
+    .removePrefix("Start failed:")
+    .trim()
+    .removePrefix("Talk failed:")
+    .trim()
+    .removePrefix("Transcription unavailable:")
+    .trim()
+    .removePrefix("Transcription failed:")
+    .trim()
+    .removePrefix("UNAVAILABLE:")
+    .trim()
+    .removePrefix("Error:")
+    .trim()
+
+internal fun sanitizeProviderErrorDetails(raw: String): String {
+  val normalized =
+    raw
+      .lineSequence()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .joinToString("\n")
+  return redactProviderSecrets(normalized).take(1_200)
+}
+
+private fun redactProviderSecrets(value: String): String =
+  listOf(
+    Regex("sk-[A-Za-z0-9_-]{8,}") to "sk-[redacted]",
+    Regex("\\bghp_[A-Za-z0-9_]{8,}\\b") to "ghp_[redacted]",
+    Regex("\\bgithub_pat_[A-Za-z0-9_]{8,}\\b") to "github_pat_[redacted]",
+    Regex("\\bAIza[0-9A-Za-z_-]{10,}\\b") to "AIza[redacted]",
+    Regex("\\b(?:AKIA|ASIA)[A-Z0-9]{12,}\\b") to "aws_[redacted]",
+  ).fold(redactLabeledSecret(redactBearerSecret(value))) { text, (regex, replacement) ->
+    regex.replace(text, replacement)
+  }
+
+private fun redactBearerSecret(value: String): String =
+  Regex("(?i)((?:\"authorization\"|authorization|\"proxy-authorization\"|proxy-authorization)\\s*[:=]\\s*\"?(?:bearer|basic)\\s+)[^\"'\\s,}]+")
+    .replace(value) {
+      "${it.groupValues[1]}[redacted]"
+    }
+    .let { text ->
+      Regex("(?i)(\\bbearer\\s+)[A-Za-z0-9._\\-+=]{18,}").replace(text) {
+        "${it.groupValues[1]}[redacted]"
+      }
+    }
+
+private fun redactLabeledSecret(value: String): String =
+  Regex("(?i)((?:\"api[_-]?key\"|api[_-]?key|\"access[_-]?token\"|access[_-]?token|\"client[_-]?secret\"|client[_-]?secret|\"token\"|token|\"secret\"|secret)\\s*[:=]\\s*\"?)[^\"'\\s,}]+")
+    .replace(value) {
+      "${it.groupValues[1]}[redacted]"
+    }
+    .let { text ->
+      Regex("(?i)((?:[?&])(?:api[_-]?key|key|access[_-]?token|token|client[_-]?secret|secret)=)[^&#\\s]+").replace(text) {
+        "${it.groupValues[1]}[redacted]"
+      }
+    }
+
+private fun voiceSetupSummary(
+  gatewayStatus: String,
+  readiness: GatewayTalkSetupReadiness,
+): String {
+  if (!gatewayStatus.isVoiceGatewayReady()) return gatewayStatus.voiceGatewayLabel()
+  return listOf(readiness.realtimeTalk, readiness.dictation)
+    .joinToString(" · ") { row -> "${row.title} ${row.statusText.lowercase()}" }
 }
 
 private fun String.isVoiceGatewayReady(): Boolean {
