@@ -11,6 +11,7 @@ struct CommandCenterTab: View {
     @State private var defaultChatSessionEntry: OpenClawChatSessionEntry?
     @State private var recentChatSessions: [OpenClawChatSessionEntry] = []
     var ownsNavigationStack: Bool = true
+    var usesNativeNavigationChrome: Bool = false
     var headerTitle: String = "OpenClaw"
     var headerLeadingAction: OpenClawSidebarHeaderAction?
     var showsHeaderMark: Bool = true
@@ -57,7 +58,9 @@ struct CommandCenterTab: View {
                 self.commandAmbientOverlay
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        self.header
+                        if !self.usesNativeNavigationChrome {
+                            self.header
+                        }
                         self.gatewayCard
                         if Self.usesSplitSectionsLayout(
                             horizontalSizeClass: self.horizontalSizeClass,
@@ -83,7 +86,19 @@ struct CommandCenterTab: View {
                 .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
         }
-        .navigationBarHidden(true)
+        .navigationTitle(self.headerTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: self.openSettings) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
+        }
     }
 
     static func usesSplitSectionsLayout(
@@ -242,7 +257,9 @@ struct CommandCenterTab: View {
                                 .buttonStyle(.plain)
                             } else {
                                 NavigationLink {
-                                    CommandSessionsScreen(openChat: self.openChat)
+                                    CommandSessionsScreen(
+                                        usesNativeNavigationChrome: self.usesNativeNavigationChrome,
+                                        openChat: self.openChat)
                                 } label: {
                                     CommandViewMoreRow()
                                 }
@@ -598,10 +615,16 @@ struct CommandSessionsScreen: View {
     @State private var isLoading = false
     @State private var loadErrorText: String?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, openChat: @escaping () -> Void) {
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        openChat: @escaping () -> Void)
+    {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
     }
 
@@ -610,7 +633,9 @@ struct CommandSessionsScreen: View {
             CommandControlBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    self.header
+                    if !self.usesNativeNavigationChrome {
+                        self.header
+                    }
                     self.sessionsPanel
                 }
                 .padding(.top, 16)
@@ -620,6 +645,7 @@ struct CommandSessionsScreen: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
         .task(id: self.refreshID) {
             await self.refreshSessions()
         }

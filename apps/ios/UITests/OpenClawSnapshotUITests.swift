@@ -41,6 +41,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 self.launchApp(for: target, appearance: appearance)
                 let name = appearance == .light ? target.name : "\(target.name)-dark"
                 snapshot(name, timeWaitingForIdle: 5)
+                self.attachScreenshot(named: name)
             }
         }
     }
@@ -56,7 +57,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(overview?.waitForExistence(timeout: 5) == true)
         overview?.tap()
 
-        XCTAssertTrue(self.app?.buttons["Back to Control"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.navigationBars.buttons["Control"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Gateway settings"].waitForExistence(timeout: 5) == true)
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
@@ -122,16 +124,38 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertNotEqual(speakerphone.value as? String, initialValue)
     }
 
-    func testAppearancePickerHasNoRedundantDescription() throws {
+    func testAppearanceUsesToolbarMenu() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
             name: "appearance-compact"))
 
-        XCTAssertTrue(self.app?.segmentedControls["settings-appearance-picker"].waitForExistence(timeout: 8) == true)
-        XCTAssertFalse(self.app?.staticTexts["Always uses light appearance."].exists == true)
-        self.attachScreenshot(named: "appearance-compact")
+        let menu = try XCTUnwrap(self.app?.buttons["settings-appearance-menu"])
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
+        XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
+        menu.tap()
+        XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
+        XCTAssertTrue(self.app?.buttons["Light"].exists == true)
+        XCTAssertTrue(self.app?.buttons["Dark"].exists == true)
+        self.attachScreenshot(named: "appearance-menu")
+    }
+
+    func testAgentUsesToolbarFilter() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "agent",
+            initialDestination: "agents",
+            name: "agent-toolbar-filter"))
+
+        let menu = try XCTUnwrap(self.app?.buttons["agent-status-filter-menu"])
+        XCTAssertTrue(menu.waitForExistence(timeout: 8))
+        XCTAssertFalse(self.app?.segmentedControls["Agent status"].exists == true)
+        menu.tap()
+        XCTAssertTrue(self.app?.buttons["All"].waitForExistence(timeout: 3) == true)
+        XCTAssertTrue(self.app?.buttons["Online"].exists == true)
+        XCTAssertTrue(self.app?.buttons["Ready"].exists == true)
+        self.attachScreenshot(named: "agent-toolbar-filter")
     }
 
     func testLiveGatewayControlOverviewNavigation() throws {
@@ -178,7 +202,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(overview.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "live-gateway-control")
         overview.tap()
-        XCTAssertTrue(app.buttons["Back to Control"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars.buttons["Control"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Gateway settings"].waitForExistence(timeout: 5))
         self.attachScreenshot(named: "live-gateway-overview")
         XCTAssertEqual(app.state, .runningForeground)
     }

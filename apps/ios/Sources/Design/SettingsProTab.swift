@@ -109,20 +109,23 @@ struct SettingsProTab: View {
     }
 
     private var settingsNavigationContent: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    self.settingsHeader
-                    self.appearanceSection
-                    self.gatewaySection
-                    self.settingsListSection
+        List {
+            self.gatewaySection
+            self.settingsListSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
-                .padding(.top, 18)
-                .padding(.bottom, 18)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                self.appearanceMenu
             }
         }
-        .navigationBarHidden(true)
         .navigationDestination(for: SettingsRoute.self) { route in
             self.destination(for: route)
         }

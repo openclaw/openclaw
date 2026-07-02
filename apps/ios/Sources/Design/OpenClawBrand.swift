@@ -29,6 +29,14 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    var systemImage: String {
+        switch self {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max"
+        case .dark: "moon.stars"
+        }
+    }
+
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
