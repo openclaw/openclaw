@@ -568,6 +568,245 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks a session-wide no-progress streak across stable tool patterns", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        3,
+      );
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/next.txt" }, config);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(4);
+        expect(loopResult.warningKey).toContain("global:session:");
+      }
+    });
+
+    it("ignores a session tail made only of unique progress outcomes", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "old file" }], details: { ok: true } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "tmp listing" }], details: { ok: true } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "search",
+        { query: "needle" },
+        { content: [{ type: "text", text: "match found" }], details: { ok: true } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "inspect",
+        { id: "different-args" },
+        { content: [{ type: "text", text: "object changed" }], details: { ok: true } },
+        3,
+      );
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/next.txt" }, config);
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("stops the session-wide no-progress streak when a repeated tool pattern changes output", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "old file" }], details: { ok: true } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "new file" }], details: { ok: true } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        3,
+      );
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/next.txt" }, config);
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("resets the session-wide no-progress streak after unique progress", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        3,
+      );
+      recordSuccessfulCall(
+        state,
+        "search",
+        { query: "needle" },
+        { content: [{ type: "text", text: "new result" }], details: { ok: true } },
+        4,
+      );
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/next.txt" }, config);
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("counts a stable per-pattern tail after earlier unique progress", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(
+        state,
+        "search",
+        { query: "needle" },
+        { content: [{ type: "text", text: "new result" }], details: { ok: true } },
+        0,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        1,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        2,
+      );
+      recordSuccessfulCall(
+        state,
+        "read",
+        { path: "/a.txt" },
+        { content: [{ type: "text", text: "file unchanged" }], details: { ok: true } },
+        3,
+      );
+      recordSuccessfulCall(
+        state,
+        "list",
+        { path: "/tmp" },
+        { content: [{ type: "text", text: "same listing" }], details: { ok: true } },
+        4,
+      );
+
+      const loopResult = detectToolCallLoop(state, "write", { path: "/next.txt" }, config);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(4);
+      }
+    });
+
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
       const state = createState();
       const params = { command: "grafana-api.sh datasources" };
@@ -1264,5 +1503,4 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
-
 });
