@@ -361,6 +361,10 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
   return firstMockCall(runEmbeddedAttemptMock, "embedded attempt")[0] as { sessionKey?: string };
 }
 
+function warnMessages(): string[] {
+  return loggerWarnMock.mock.calls.map(([message]) => String(message));
+}
+
 describe("runEmbeddedAgent", () => {
   it("uses the configured default model when the caller omits provider and model", async () => {
     const sessionFile = nextSessionFile();
@@ -1053,6 +1057,114 @@ describe("runEmbeddedAgent", () => {
     expect(result.payloads?.[0]?.text).toBe(
       "I'll inspect the files, make the change, and run the checks.",
     );
+  });
+
+  it("retries a fault-injected provider 5xx after prior side effects without duplicating delivery", async () => {
+    const sessionFile = nextSessionFile();
+    const sessionKey = nextSessionKey();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const priorToolCallId = "call_prior_exec";
+    const priorToolResult = "[redacted prior exec output]";
+    const provider = "openrouter";
+    const model = "minimax/minimax-m3";
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: priorToolCallId,
+          name: "exec",
+          arguments: { command: "echo redacted" },
+        },
+      ],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider,
+      model,
+      usage: createMockUsage(8, 0),
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: priorToolCallId,
+      toolName: "exec",
+      content: [{ type: "text", text: priorToolResult }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const faultInjectedAssistant = buildEmbeddedRunnerAssistant({
+      provider,
+      model,
+      stopReason: "error",
+      content: [],
+      usage: createMockUsage(100, 0),
+      errorMessage: "Internal Server Error",
+    });
+    runEmbeddedAttemptMock
+      .mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          toolMetas: [],
+          lastAssistant: faultInjectedAssistant,
+          currentAttemptAssistant: faultInjectedAssistant,
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: false,
+            replaySafe: true,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          assistantTexts: ["Recovered after retry."],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            provider,
+            model,
+            content: [{ type: "text", text: "Recovered after retry." }],
+            usage: createMockUsage(100, 5),
+          }),
+        }),
+      );
+
+    const result = await runEmbeddedAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "continue after the prior tool result",
+      provider,
+      model,
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("provider-5xx-after-prior-side-effects"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(warnMessages().join("\n")).toContain("[empty-error-retry]");
+    expect(result.payloads?.[0]?.text).toBe("Recovered after retry.");
+    expect(result.didSendViaMessagingTool).toBe(false);
+    expect(result.messagingToolSentTexts).toEqual([]);
+    expect(result.acceptedSessionSpawns).toEqual([]);
+
+    const retryAttempt = runEmbeddedAttemptMock.mock.calls[1]?.[0] as {
+      initialReplayState?: { hadPotentialSideEffects?: boolean };
+    };
+    expect(retryAttempt.initialReplayState?.hadPotentialSideEffects).toBe(true);
+
+    const messages = await readSessionMessages(sessionFile);
+    const priorToolResults = messages.filter(
+      (message) =>
+        message?.role === "toolResult" && textFromContent(message.content) === priorToolResult,
+    );
+    expect(priorToolResults).toHaveLength(1);
   });
 
   it("handles prompt error paths without dropping user state", async () => {

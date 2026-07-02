@@ -136,11 +136,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -153,7 +150,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "LLM request timed out.",
       ),
     );
 
@@ -161,10 +158,30 @@ describe("runEmbeddedAgent silent-error retry", () => {
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-timeout",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries classified server_error empty turns before assistant failover", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("openrouter", "minimax/minimax-m3", 0, [], "Internal Server Error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("openrouter", "minimax/minimax-m3"),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      runId: "run-empty-error-retry-server-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
@@ -274,6 +291,66 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
+  it("retries when only accumulated replay metadata recorded prior side effects", async () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+      errorMessage: "Internal Server Error",
+      errorCode: "500",
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        replayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+        currentAttemptReplayMetadata: {
+          hadPotentialSideEffects: false,
+          replaySafe: true,
+        },
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("openrouter", "minimax/minimax-m3"),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      runId: "run-empty-error-retry-prior-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("falls back to legacy replay metadata when current-attempt metadata is absent", async () => {
+    const failedAttempt = emptyErrorAttempt("openrouter", "minimax/minimax-m3");
+    delete (failedAttempt as Partial<EmbeddedRunAttemptResult>).currentAttemptReplayMetadata;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(failedAttempt);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("openrouter", "minimax/minimax-m3"),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      runId: "run-empty-error-retry-legacy-replay-metadata",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
   it("does not retry when the failed attempt recorded side effects", async () => {
     // Resubmission would duplicate side effects when replay metadata cannot
     // prove the failed turn is safe to replay.
@@ -289,6 +366,10 @@ describe("runEmbeddedAgent silent-error retry", () => {
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
         replayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+        currentAttemptReplayMetadata: {
           hadPotentialSideEffects: true,
           replaySafe: false,
         },

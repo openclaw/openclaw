@@ -73,6 +73,17 @@ export function makeAttemptResult(
         acceptedSessionSpawns,
         successfulCronAdds,
       }),
+    currentAttemptReplayMetadata:
+      overrides.currentAttemptReplayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+        acceptedSessionSpawns,
+        successfulCronAdds,
+      }),
     itemLifecycle: {
       startedCount: 0,
       completedCount: 0,

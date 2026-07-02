@@ -80,6 +80,7 @@ import {
   isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
+  isServerErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,
   pickFallbackThinkingLevel,
@@ -401,6 +402,9 @@ function normalizeEmbeddedRunAttemptResult(
       | null;
     didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+    currentAttemptReplayMetadata?:
+      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
+      | null;
   };
   return {
     ...attempt,
@@ -419,6 +423,9 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    currentAttemptReplayMetadata: resolveAttemptReplayMetadata({
+      replayMetadata: raw.currentAttemptReplayMetadata ?? raw.replayMetadata,
+    }),
   };
 }
 
@@ -3356,8 +3363,13 @@ async function runEmbeddedAgentInternal(
             assistantFailoverReason === "timeout" &&
             isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
             Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+          const serverSideSilentErrorReason =
+            assistantFailoverReason === "server_error" ||
+            (assistantFailoverReason === "timeout" &&
+              isServerErrorMessage(assistantForFailover?.errorMessage ?? ""));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
+            serverSideSilentErrorReason ||
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||

@@ -2720,6 +2720,61 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("retries errored empty turns when only accumulated replay metadata has side effects", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: false,
+            replaySafe: true,
+          },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to legacy replay metadata when current-attempt metadata is absent", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      replayMetadata: {
+        hadPotentialSideEffects: false,
+        replaySafe: true,
+      },
+      lastAssistant: assistant,
+    });
+    delete (attempt as Partial<EmbeddedRunAttemptResult>).currentAttemptReplayMetadata;
+
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt,
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     {
       name: "visible text",
@@ -2775,6 +2830,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         attempt: makeAttemptResult({
           assistantTexts: [],
           replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          currentAttemptReplayMetadata: {
             hadPotentialSideEffects: true,
             replaySafe: false,
           },
