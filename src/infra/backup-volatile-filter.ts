@@ -13,6 +13,8 @@ import path from "node:path";
  */
 
 const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const STATE_LOCK_EXTENSIONS = new Set([".lock", ".partial", "-journal", "-wal", "-shm"]);
+const AGENT_VOLATILE_SUBDIRS = new Set(["tmp", ".tmp", "cache", "shell_snapshots"]);
 
 function normalizePosix(input: string): string {
   if (!input) {
@@ -118,6 +120,42 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
           isUnder(filePosix, queueRoot) &&
           hasExtension(filePosix, [".json", ".delivered", ".tmp"])
         ) {
+          return true;
+        }
+      }
+
+      // Agent runtime volatile dirs (tmp, cache, shell_snapshots)
+      const agentsRoot = path.posix.join(stateDirPosix, "agents");
+      if (isUnder(filePosix, agentsRoot)) {
+        const agentRelative = path.posix.relative(agentsRoot, filePosix);
+        const parts = agentRelative.split("/").filter(Boolean);
+        if (parts.length >= 3 && parts[1] === "agent") {
+          const subdir = parts[2] || "";
+          if (AGENT_VOLATILE_SUBDIRS.has(subdir)) {
+            return true;
+          }
+        }
+      }
+
+      // Browser cache paths
+      const browserRoot = path.posix.join(stateDirPosix, "browser");
+      if (isUnder(filePosix, browserRoot)) {
+        return true;
+      }
+
+      // Retired archive paths
+      const archivedRoot = path.posix.join(stateDirPosix, "archived");
+      if (isUnder(filePosix, archivedRoot)) {
+        return true;
+      }
+
+      // Lock and DB journal files (match compound extensions like .db-journal)
+      if (STATE_LOCK_EXTENSIONS.has(path.posix.extname(filePosix).toLowerCase())) {
+        return true;
+      }
+      // Also match compound suffixes: .db-journal → -journal
+      for (const suffix of STATE_LOCK_EXTENSIONS) {
+        if (filePosix.toLowerCase().endsWith(suffix)) {
           return true;
         }
       }

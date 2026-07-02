@@ -118,4 +118,31 @@ describe("isVolatileBackupPath", () => {
       ),
     ).toBe(true);
   });
+
+  it("filters agent runtime tmp/cache/shell_snapshot dirs (regression for #98865)", () => {
+    expect(isVolatileBackupPath(`${stateDir}/agents/main/agent/tmp/data.bin`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/agents/main/agent/.tmp/scratch`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/agents/main/agent/cache/model.bin`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/agents/main/agent/shell_snapshots/1.log`, plan)).toBe(
+      true,
+    );
+    expect(isVolatileBackupPath(`${stateDir}/agents/main/agent/config.json`, plan)).toBe(false);
+  });
+
+  it("filters browser cache paths (regression for #98865)", () => {
+    expect(isVolatileBackupPath(`${stateDir}/browser/cache/data.bin`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/browser/user-data/Cache/f_000001`, plan)).toBe(true);
+  });
+
+  it("filters retired archive paths (regression for #98865)", () => {
+    expect(isVolatileBackupPath(`${stateDir}/archived/2026-01-01/backup.tar.gz`, plan)).toBe(true);
+  });
+
+  it("filters lock and DB journal files (regression for #98865)", () => {
+    expect(isVolatileBackupPath(`${stateDir}/some.db.lock`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/some.db.partial`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/some.db-journal`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/some.db-wal`, plan)).toBe(true);
+    expect(isVolatileBackupPath(`${stateDir}/some.db-shm`, plan)).toBe(true);
+  });
 });
