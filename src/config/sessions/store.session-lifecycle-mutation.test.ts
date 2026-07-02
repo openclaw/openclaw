@@ -13,6 +13,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
+  applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
@@ -368,7 +369,7 @@ describe("session store lifecycle mutations", () => {
     }
   });
 
-  it("deletes a SQLite entry without archiving transcripts when archiveTranscript is false", async () => {
+  it("deletes a SQLite entry without deleting transcripts when archiveTranscript is false", async () => {
     const now = Date.now();
     await replaceSessionEntry(
       { sessionKey: "agent:main:delete-entry-only", storePath },
@@ -406,6 +407,138 @@ describe("session store lifecycle mutations", () => {
         storePath,
       }),
     ).resolves.toEqual([createTranscriptEvent("entry-only-session", "preserve transcript rows")]);
+  });
+
+  it("deletes SQLite transcript rows for non-archived lifecycle removals", async () => {
+    const now = Date.now();
+    const entry: SessionEntry = {
+      sessionId: "lifecycle-remove-no-archive-session",
+      updatedAt: now,
+    };
+    await replaceSessionEntry({ sessionKey: "agent:main:no-archive-removal", storePath }, entry);
+    await replaceSqliteTranscriptEvents(
+      {
+        sessionKey: "agent:main:no-archive-removal",
+        sessionId: "lifecycle-remove-no-archive-session",
+        storePath,
+      },
+      [createTranscriptEvent("lifecycle-remove-no-archive-session", "remove rows without archive")],
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          sessionKey: "agent:main:no-archive-removal",
+          expectedEntry: entry,
+          archiveRemovedTranscript: false,
+        },
+      ],
+      maintenanceOverride: { mode: "enforce" },
+    });
+
+    expect(result.removedSessionKeys).toEqual(["agent:main:no-archive-removal"]);
+    expect(result.archivedTranscriptDirectories).toEqual([]);
+    expect(
+      readArchiveNames(
+        path.dirname(storePath),
+        "lifecycle-remove-no-archive-session.jsonl.deleted.",
+      ),
+    ).toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:no-archive-removal",
+        sessionId: "lifecycle-remove-no-archive-session",
+        storePath,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("archives shared SQLite transcript rows when any lifecycle removal requests archive", async () => {
+    const now = Date.now();
+    const entry: SessionEntry = {
+      sessionId: "mixed-archive-shared-session",
+      updatedAt: now,
+    };
+    await replaceSessionEntry({ sessionKey: "agent:main:mixed-archive-a", storePath }, entry);
+    await replaceSessionEntry({ sessionKey: "agent:main:mixed-archive-b", storePath }, entry);
+    await replaceSqliteTranscriptEvents(
+      {
+        sessionKey: "agent:main:mixed-archive-a",
+        sessionId: "mixed-archive-shared-session",
+        storePath,
+      },
+      [createTranscriptEvent("mixed-archive-shared-session", "shared mixed archive")],
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          sessionKey: "agent:main:mixed-archive-a",
+          expectedEntry: entry,
+          archiveRemovedTranscript: false,
+        },
+        {
+          sessionKey: "agent:main:mixed-archive-b",
+          expectedEntry: entry,
+          archiveRemovedTranscript: true,
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    expect(result.removedSessionKeys).toEqual([
+      "agent:main:mixed-archive-a",
+      "agent:main:mixed-archive-b",
+    ]);
+    expect(result.archivedTranscriptDirectories).toEqual([path.dirname(storePath)]);
+    const archiveNames = readArchiveNames(
+      path.dirname(storePath),
+      "mixed-archive-shared-session.jsonl.deleted.",
+    );
+    expect(archiveNames).toHaveLength(1);
+    expect(readArchiveLines(path.join(path.dirname(storePath), archiveNames[0] ?? ""))).toEqual([
+      createTranscriptEventLine("mixed-archive-shared-session", "shared mixed archive"),
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:mixed-archive-a",
+        sessionId: "mixed-archive-shared-session",
+        storePath,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("forced maintenance preserves raw SQLite transcript-only rows", async () => {
+    await replaceSqliteTranscriptEvents(
+      {
+        sessionKey: "agent:main:raw-maintenance",
+        sessionId: "raw-maintenance-session",
+        storePath,
+      },
+      [createTranscriptEvent("raw-maintenance-session", "raw transcript-only row")],
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      activeSessionKey: "agent:main:raw-maintenance",
+      maintenanceOverride: { mode: "enforce" },
+    });
+
+    expect(result.archivedTranscriptDirectories).toEqual([]);
+    expect(
+      readArchiveNames(path.dirname(storePath), "raw-maintenance-session.jsonl.deleted."),
+    ).toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:raw-maintenance",
+        sessionId: "raw-maintenance-session",
+        storePath,
+      }),
+    ).resolves.toEqual([
+      createTranscriptEvent("raw-maintenance-session", "raw transcript-only row"),
+    ]);
   });
 
   it("preserves shared SQLite transcript rows until the final session reference is deleted", async () => {
@@ -552,6 +685,13 @@ function readArchiveLines(archivePath: string | undefined): string[] {
     .readFileSync(archivePath ?? "", "utf-8")
     .trim()
     .split("\n");
+}
+
+function readArchiveNames(archiveDirectory: string, prefix: string): string[] {
+  if (!fs.existsSync(archiveDirectory)) {
+    return [];
+  }
+  return fs.readdirSync(archiveDirectory).filter((file) => file.startsWith(prefix));
 }
 
 function readArchiveLinesForSession(

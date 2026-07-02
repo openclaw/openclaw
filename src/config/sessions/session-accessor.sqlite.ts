@@ -804,6 +804,7 @@ export async function deleteSqliteSessionEntryLifecycle(
     const deletePlans = params.archiveTranscript
       ? planSqliteSessionStateAfterEntryRemoval({
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+          archiveTranscript: true,
           database,
           entry: current.entry,
           reason: "deleted",
@@ -923,7 +924,11 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         materializedRemovalPlans,
       );
     }, toDatabaseOptions(resolved));
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    const maintenanceArchivedTranscripts = finalizeSqliteSessionEntryMaintenancePlansBestEffort(
+      resolved,
+      maintenancePlans,
+    );
+    archivedTranscripts = [...archivedTranscripts, ...maintenanceArchivedTranscripts];
     afterCount = readSqliteSessionEntryCount(
       openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
     );
@@ -2919,6 +2924,7 @@ function materializeSqliteSessionStateDeletePlans(
 
 // Multiple removed entries can point at one transcript session; dedupe before
 // validation so the first row deletion does not stale a duplicate plan.
+// If any owner asked to keep an archive, the shared row gets exported once.
 function dedupeSqliteSessionStateDeletePlans(
   plans: readonly SqliteSessionStateDeletePlan[],
 ): SqliteSessionStateDeletePlan[] {
@@ -2929,12 +2935,11 @@ function dedupeSqliteSessionStateDeletePlans(
       deduped.set(plan.sessionId, plan);
       continue;
     }
-    if (
-      existing.archiveTranscript !== plan.archiveTranscript ||
-      existing.content !== plan.content ||
-      existing.reason !== plan.reason
-    ) {
+    if (existing.content !== plan.content || existing.reason !== plan.reason) {
       throw new Error(`Conflicting SQLite transcript archive plans for ${plan.sessionId}`);
+    }
+    if (!existing.archiveTranscript && plan.archiveTranscript) {
+      deduped.set(plan.sessionId, { ...existing, archiveTranscript: true });
     }
   }
   return [...deduped.values()];
@@ -3003,6 +3008,7 @@ function deleteMaterializedSqliteSessionStatePlans(
 // have projected which ids remain referenced.
 function planSqliteSessionStateAfterEntryRemoval(params: {
   archiveDirectory: string;
+  archiveTranscript?: boolean;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   reason: "deleted" | "reset";
@@ -3013,7 +3019,7 @@ function planSqliteSessionStateAfterEntryRemoval(params: {
   const plans: SqliteSessionStateDeletePlan[] = [];
   for (const sessionId of collectSqliteSessionStateIdsForEntry(params.entry)) {
     const plan = planSqliteSessionStateDeleteIfUnreferenced({
-      archiveTranscript: true,
+      archiveTranscript: params.archiveTranscript,
       archiveDirectory: params.archiveDirectory,
       database: params.database,
       reason: params.reason,
@@ -3038,7 +3044,7 @@ async function projectSqliteSessionEntryLifecycleMutation(
   },
 ): Promise<SqliteProjectedLifecycleMutation> {
   const store = readSqliteSessionEntryStore(database);
-  const removedEntries: SessionEntry[] = [];
+  const removedEntries: Array<{ archiveTranscript: boolean; entry: SessionEntry }> = [];
   const changedSessionKeys = new Set<string>();
   const projectedRemovals: SqliteProjectedLifecycleMutation["removals"] = [];
   for (const removal of params.removals) {
@@ -3052,9 +3058,10 @@ async function projectSqliteSessionEntryLifecycleMutation(
       removal,
       sessionKey,
     });
-    if (removal.archiveRemovedTranscript === true) {
-      removedEntries.push(entry);
-    }
+    removedEntries.push({
+      archiveTranscript: removal.archiveRemovedTranscript === true,
+      entry,
+    });
     changedSessionKeys.add(sessionKey);
     delete store[sessionKey];
   }
@@ -3086,9 +3093,10 @@ async function projectSqliteSessionEntryLifecycleMutation(
     excludedSessionKeys: changedSessionKeys,
     projectedStore: store,
   });
-  const deletePlans = removedEntries.flatMap((entry) =>
+  const deletePlans = removedEntries.flatMap(({ archiveTranscript, entry }) =>
     planSqliteSessionStateAfterEntryRemoval({
       archiveDirectory: params.archiveDirectory,
+      archiveTranscript,
       database,
       entry,
       reason: "deleted",
