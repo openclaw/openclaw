@@ -231,6 +231,43 @@ struct GatewayEndpointStoreTests {
         #expect(config.password == "launchd-pass")
     }
 
+    @Test func `local config uses launchd generated env wrapper auth`() throws {
+        let dir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-local-config-env-\(UUID().uuidString)", isDirectory: true)
+        let serviceEnvDir = dir.appendingPathComponent("service-env", isDirectory: true)
+        try FileManager().createDirectory(at: serviceEnvDir, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: dir) }
+
+        let envFile = serviceEnvDir.appendingPathComponent("com.openclaw.gateway.env")
+        try """
+        export OPENCLAW_GATEWAY_TOKEN='file-token'
+        export OPENCLAW_GATEWAY_PASSWORD='file-pass'
+        """.write(to: envFile, atomically: true, encoding: .utf8)
+
+        let plistURL = dir.appendingPathComponent("openclaw-launchd.plist")
+        let wrapper = serviceEnvDir.appendingPathComponent("com.openclaw.gateway-env-wrapper.sh")
+        let plist: [String: Any] = [
+            "ProgramArguments": [wrapper.path, envFile.path, "openclaw", "gateway", "--port", "19000"],
+            "EnvironmentVariables": [
+                "OPENCLAW_GATEWAY_TOKEN": "inline-token",
+                "OPENCLAW_GATEWAY_PASSWORD": "inline-pass",
+            ],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL, options: [.atomic])
+        let snapshot = try #require(LaunchAgentPlist.snapshot(url: plistURL))
+
+        let config = GatewayEndpointStore._testLocalConfig(
+            root: [:],
+            env: [:],
+            launchdSnapshot: snapshot,
+            tailscaleIP: nil)
+
+        #expect(config.url.absoluteString == "ws://127.0.0.1:19000")
+        #expect(config.token == "file-token")
+        #expect(config.password == "file-pass")
+    }
+
     @Test func `dashboard URL uses local base path in local mode`() throws {
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
