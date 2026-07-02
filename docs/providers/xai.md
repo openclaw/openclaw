@@ -136,7 +136,7 @@ below or under known limits.
 | Images                     | `image_generate`                        | Yes                                                           |
 | Videos                     | `video_generate`                        | Classic full workflow; Video 1.5 image-to-video               |
 | Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                           |
-| Streaming TTS              | -                                       | Not implemented by the xAI provider yet                       |
+| Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts`                               |
 | Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                           |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                           |
 | Realtime voice             | -                                       | Not exposed yet; needs a different session/WebSocket contract |
@@ -344,9 +344,11 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     ```
 
     <Note>
-    OpenClaw uses xAI's batch `/v1/tts` endpoint and authenticated
-    `/v1/tts/voices` catalog. xAI also offers streaming TTS over WebSocket, but
-    the bundled xAI provider does not implement that streaming hook yet.
+    OpenClaw uses xAI's batch `/v1/tts` endpoint for buffered synthesis,
+    authenticated `/v1/tts/voices` catalog discovery, and native
+    `wss://api.x.ai/v1/tts` for streaming synthesis. Streaming uses the existing
+    language, voice, codec, and speed controls; xAI defaults apply to sample rate
+    and bit rate. It is separate from realtime voice sessions.
     </Note>
 
   </Accordion>

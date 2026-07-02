@@ -25,6 +25,7 @@ import {
   XAI_BASE_URL,
   XAI_TTS_FALLBACK_VOICES,
   xaiTTS,
+  xaiTTSStream,
 } from "./tts.js";
 
 const XAI_SPEECH_RESPONSE_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
@@ -260,6 +261,30 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         outputFormat: responseFormat,
         fileExtension: responseFormatToFileExtension(responseFormat),
         voiceCompatible: false,
+      };
+    },
+    streamSynthesize: async (req) => {
+      const config = readXaiProviderConfig(req.providerConfig);
+      const overrides = readXaiOverrides(req.providerOverrides);
+      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
+      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
+      const stream = await xaiTTSStream({
+        text: req.text,
+        apiKey,
+        baseUrl: config.baseUrl,
+        voiceId: overrides.voiceId ?? config.voiceId,
+        language: overrides.language ?? config.language,
+        speed: overrides.speed ?? config.speed,
+        responseFormat,
+        timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedAudioMaxBytes(req),
+      });
+      return {
+        audioStream: stream.audioStream,
+        outputFormat: responseFormat,
+        fileExtension: responseFormatToFileExtension(responseFormat),
+        voiceCompatible: false,
+        release: stream.release,
       };
     },
     synthesizeTelephony: async (req) => {

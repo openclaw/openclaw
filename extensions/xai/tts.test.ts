@@ -4,10 +4,75 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
   isValidXaiTtsVoice,
   listXaiTtsVoices,
+  toXaiTtsWsUrl,
   XAI_BASE_URL,
   XAI_TTS_FALLBACK_VOICES,
   xaiTTS,
+  xaiTTSStream,
 } from "./tts.js";
+
+const { FakeWebSocket } = vi.hoisted(() => {
+  type Listener = (...args: unknown[]) => void;
+
+  class MockWebSocket {
+    static readonly OPEN = 1;
+    static readonly CONNECTING = 0;
+    static readonly CLOSED = 3;
+    static instances: MockWebSocket[] = [];
+
+    readonly listeners = new Map<string, Listener[]>();
+    readonly headers?: Record<string, string>;
+    readonly url?: string;
+    readyState = MockWebSocket.CONNECTING;
+    sent: string[] = [];
+
+    constructor(url?: string, options?: { headers?: Record<string, string> }) {
+      this.url = url;
+      this.headers = options?.headers;
+      MockWebSocket.instances.push(this);
+    }
+
+    once(event: string, listener: Listener): this {
+      const listeners = this.listeners.get(event) ?? [];
+      listeners.push(listener);
+      this.listeners.set(event, listeners);
+      return this;
+    }
+
+    on(event: string, listener: Listener): this {
+      const listeners = this.listeners.get(event) ?? [];
+      listeners.push(listener);
+      this.listeners.set(event, listeners);
+      return this;
+    }
+
+    emit(event: string, ...args: unknown[]): void {
+      for (const listener of this.listeners.get(event) ?? []) {
+        listener(...args);
+      }
+    }
+
+    send(payload: string): void {
+      this.sent.push(payload);
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED;
+      this.emit("close");
+    }
+
+    terminate(): void {
+      this.readyState = MockWebSocket.CLOSED;
+      this.emit("close");
+    }
+  }
+
+  return { FakeWebSocket: MockWebSocket };
+});
+
+vi.mock("ws", () => ({
+  default: FakeWebSocket,
+}));
 
 function createStreamingAudioResponse(params: {
   chunkCount: number;
@@ -46,6 +111,7 @@ describe("xai tts", () => {
     ssrfMock?.mockRestore();
     ssrfMock = undefined;
     globalThis.fetch = originalFetch;
+    FakeWebSocket.instances = [];
     vi.restoreAllMocks();
   });
 
@@ -167,6 +233,101 @@ describe("xai tts", () => {
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
         "xAI TTS voices: JSON response exceeds 1048576 bytes",
       );
+    });
+  });
+
+  describe("toXaiTtsWsUrl", () => {
+    it("builds a websocket URL with voice, language, codec, and speed", () => {
+      const url = new URL(
+        toXaiTtsWsUrl({
+          baseUrl: XAI_BASE_URL,
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+          speed: 1.1,
+        }),
+      );
+      expect(url.protocol).toBe("wss:");
+      expect(url.pathname).toBe("/v1/tts");
+      expect(url.searchParams.get("voice")).toBe("eve");
+      expect(url.searchParams.get("language")).toBe("en");
+      expect(url.searchParams.get("codec")).toBe("mp3");
+      expect(url.searchParams.get("speed")).toBe("1.1");
+    });
+  });
+
+  describe("xaiTTSStream", () => {
+    it("streams decoded audio chunks without buffering the full body", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      expect(ws?.url).toContain("wss://api.x.ai/v1/tts");
+      expect(ws?.headers?.Authorization).toBe("Bearer ok-key");
+      ws?.emit("open");
+      expect(ws?.sent).toEqual([
+        JSON.stringify({ type: "text.delta", delta: "hello" }),
+        JSON.stringify({ type: "text.done" }),
+      ]);
+
+      const audioChunk = Buffer.from("abc").toString("base64");
+      ws?.emit("message", JSON.stringify({ type: "audio.delta", delta: audioChunk }));
+      ws?.emit("message", JSON.stringify({ type: "audio.done", trace_id: "trace-1" }));
+
+      const result = await resultPromise;
+      const reader = result.audioStream.getReader();
+      const first = await reader.read();
+      expect(first.done).toBe(false);
+      expect(Buffer.from(first.value ?? []).toString("utf8")).toBe("abc");
+      const second = await reader.read();
+      expect(second.done).toBe(true);
+      await result.release();
+    });
+
+    it("rejects upgrade failures before streaming starts", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "bad-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("unexpected-response", {}, { statusCode: 401, statusMessage: "Unauthorized" });
+      await expect(resultPromise).rejects.toThrow(
+        "xAI TTS stream connection failed (401): Unauthorized",
+      );
+    });
+
+    it("caps streamed audio responses instead of forwarding oversized output", async () => {
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+        maxBytes: 4,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      ws?.emit("open");
+      const chunk = Buffer.from("abcdef").toString("base64");
+      ws?.emit("message", JSON.stringify({ type: "audio.delta", delta: chunk }));
+
+      const result = await resultPromise;
+      await expect(result.audioStream.getReader().read()).rejects.toThrow(
+        "xAI TTS audio stream exceeds 4 bytes",
+      );
+      await result.release();
     });
   });
 
