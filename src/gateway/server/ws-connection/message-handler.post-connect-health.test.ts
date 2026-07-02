@@ -246,7 +246,7 @@ function attachGatewayHarness(options: {
     setHandshakeState: vi.fn(),
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
-    originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+    originCheckMetrics: { hostHeaderFallbackAccepted: 0, originPatternAccepted: 0 },
     logGateway: createLogger() as never,
     logHealth: createLogger() as never,
     logWsControl: createLogger() as never,

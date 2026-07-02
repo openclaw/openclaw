@@ -62,6 +62,7 @@ export function resolveHttpBrowserOriginPolicy(
     requestHost: getHeader(req, "host"),
     origin: getHeader(req, "origin"),
     allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowedOriginPatterns: cfg.gateway?.controlUi?.allowedOriginPatterns,
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };
