@@ -331,4 +331,31 @@ describe("gateway cli backend live helpers", () => {
     ).toBe(false);
     expect(shouldRetryCliCronMcpProbeReply("live-mcp-abc123")).toBe(false);
   });
+
+  describe("parseJsonStringArray", () => {
+    it("parses a valid JSON array of strings", async () => {
+      const { parseJsonStringArray } = await import("./gateway-cli-backend.live-helpers.js");
+      expect(parseJsonStringArray("test", '["a","b","c"]')).toEqual(["a", "b", "c"]);
+    });
+
+    it("returns undefined for empty input", async () => {
+      const { parseJsonStringArray } = await import("./gateway-cli-backend.live-helpers.js");
+      expect(parseJsonStringArray("test", "")).toBeUndefined();
+      expect(parseJsonStringArray("test", undefined)).toBeUndefined();
+    });
+
+    it("throws a descriptive error for malformed JSON", async () => {
+      const { parseJsonStringArray } = await import("./gateway-cli-backend.live-helpers.js");
+      expect(() => parseJsonStringArray("test", "NOT_JSON")).toThrow(
+        "test must be a JSON array of strings.",
+      );
+    });
+
+    it("throws for non-array JSON", async () => {
+      const { parseJsonStringArray } = await import("./gateway-cli-backend.live-helpers.js");
+      expect(() => parseJsonStringArray("test", '{"a":1}')).toThrow(
+        "test must be a JSON array of strings.",
+      );
+    });
+  });
 });
