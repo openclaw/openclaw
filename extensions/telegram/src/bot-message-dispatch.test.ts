@@ -3394,7 +3394,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     // The interim block text never reached the window (neither update nor preview).
     const windowTexts = [
-      ...answerDraftStream.update.mock.calls.map((call) => call[0] as string),
+      ...answerDraftStream.update.mock.calls.map((call) => call[0]),
       ...answerDraftStream.updatePreview.mock.calls.map(
         (call) => (call[0] as { text?: string }).text ?? "",
       ),
@@ -3441,7 +3441,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        replyOptions?.onVerboseProgressVisibility?.(true);
+        replyOptions?.onVerboseProgressVisibility?.(() => true);
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
         await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
         return { queuedFinal: true };
