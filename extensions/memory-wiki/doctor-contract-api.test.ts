@@ -230,13 +230,74 @@ describe("memory-wiki doctor source sync migration", () => {
     });
     // Migration succeeds; the malformed file is left in place with a warning.
     const result = await migration.migrateLegacyState(params);
-    expect(result.warnings).toEqual([expect.stringContaining("malformed legacy import-run file")]);
+    expect(result.warnings).toEqual([expect.stringContaining("legacy import-run file")]);
     // Valid file -> archived (renamed).
     await expect(fs.stat(validPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(`${validPath}.migrated`)).resolves.toBeDefined();
     // Malformed file -> left in place (not archived, not renamed).
     await expect(fs.stat(malformedPath)).resolves.toBeDefined();
     await expect(fs.stat(`${malformedPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("skips schema-invalid legacy import-run files, leaving them in place with a warning", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vault");
+    const validPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-valid");
+    const badSchemaPath = resolveLegacyImportRunRecordPath(vaultRoot, "chatgpt-bad");
+    await fs.mkdir(path.dirname(validPath), { recursive: true });
+    await fs.writeFile(
+      validPath,
+      JSON.stringify({
+        version: 1,
+        runId: "chatgpt-valid",
+        importType: "chatgpt",
+        exportPath: "/tmp/a",
+        sourcePath: "/tmp/a/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/a.md"],
+        updatedPaths: [],
+      }) + "\n",
+    );
+    // Syntactically valid JSON, but version 99 — schema-invalid (reader skips it).
+    await fs.writeFile(
+      badSchemaPath,
+      JSON.stringify({
+        version: 99,
+        runId: "chatgpt-bad",
+        importType: "chatgpt",
+        exportPath: "/tmp/b",
+        sourcePath: "/tmp/b/conv.json",
+        appliedAt: "2026-04-10T10:00:00.000Z",
+        conversationCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        skippedCount: 0,
+        createdPaths: ["sources/b.md"],
+        updatedPaths: [],
+      }) + "\n",
+    );
+
+    const params = migrationParams({ stateDir, vaultRoot });
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "memory-wiki-import-runs-json-to-plugin-state",
+    );
+    if (!migration) throw new Error("Expected import-run migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("Memory Wiki import runs:")],
+    });
+    const result = await migration.migrateLegacyState(params);
+    expect(result.warnings).toEqual([expect.stringContaining("legacy import-run file")]);
+    // Valid file -> archived.
+    await expect(fs.stat(validPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${validPath}.migrated`)).resolves.toBeDefined();
+    // Schema-invalid file -> left in place.
+    await expect(fs.stat(badSchemaPath)).resolves.toBeDefined();
+    await expect(fs.stat(`${badSchemaPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("merges legacy entries with existing plugin state before archiving", async () => {

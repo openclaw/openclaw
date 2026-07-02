@@ -11,6 +11,7 @@ import {
   listMemoryWikiImportRunRecords,
   MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
   MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE,
+  normalizeMemoryWikiImportRunRecord,
   readLegacyMemoryWikiImportRunRecords,
   resolveMemoryWikiImportRunsDir,
   writeMemoryWikiImportRunRecord,
@@ -101,16 +102,21 @@ async function archiveLegacyImportRunRecords(params: {
       continue;
     }
     const filePath = path.join(importRunsDir, entry.name);
-    // Only archive files that were successfully read and migrated. If the file
-    // is malformed (partial write, truncation, syntax error) it was skipped by
-    // readLegacyMemoryWikiImportRunRecords; leave it in place so the user can
-    // inspect and repair it instead of silently renaming it away.
+    // Only archive files that the reader (readLegacyMemoryWikiImportRunRecords)
+    // would actually accept as a valid import-run record. The reader runs the
+    // raw parse through normalizeMemoryWikiImportRunRecord, which checks
+    // version, importType, mandatory fields, and schema shape; files that fail
+    // that check are skipped by the reader. Use the same criterion here so a
+    // syntactically-valid-but-schema-invalid file is also left in place.
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      JSON.parse(raw);
+      const record = normalizeMemoryWikiImportRunRecord(JSON.parse(raw));
+      if (!record) {
+        throw new Error("schema-invalid");
+      }
     } catch {
       params.warnings.push(
-        `Skipped malformed legacy import-run file ${filePath} — not archived. ` +
+        `Skipped legacy import-run file ${filePath} (malformed or schema-invalid) — not archived. ` +
           `Inspect or delete the file, then re-run \`openclaw doctor --fix\`.`,
       );
       continue;
