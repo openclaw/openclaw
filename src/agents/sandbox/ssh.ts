@@ -15,6 +15,9 @@ import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
+/** Safety cap for stdout+stderr accumulated per SSH sandbox command (16 MiB). */
+const SSH_SANDBOX_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 export type SshSandboxSettings = {
   command: string;
   target: string;
@@ -681,13 +684,46 @@ export async function runSshSandboxCommand(
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    let outputBytes = 0;
+    let outputCapped = false;
 
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+    child.stdout.on("data", (chunk) => {
+      if (outputCapped) {
+        return;
+      }
+      outputBytes += chunk.length;
+      if (outputBytes > SSH_SANDBOX_MAX_OUTPUT_BYTES) {
+        outputCapped = true;
+        child.kill("SIGTERM");
+        return;
+      }
+      stdoutChunks.push(Buffer.from(chunk));
+    });
+    child.stderr.on("data", (chunk) => {
+      if (outputCapped) {
+        return;
+      }
+      outputBytes += chunk.length;
+      if (outputBytes > SSH_SANDBOX_MAX_OUTPUT_BYTES) {
+        outputCapped = true;
+        child.kill("SIGTERM");
+        return;
+      }
+      stderrChunks.push(Buffer.from(chunk));
+    });
     child.on("error", reject);
     child.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
+      if (outputCapped) {
+        reject(
+          Object.assign(
+            new Error(`Command output exceeded ${SSH_SANDBOX_MAX_OUTPUT_BYTES} byte limit`),
+            { code: code ?? null, stdout, stderr },
+          ),
+        );
+        return;
+      }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !params.allowFailure) {
         reject(
