@@ -59,7 +59,7 @@ const RECOVERABLE_ERROR_NAMES = new Set([
 
 const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
 const GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE =
-  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed\s+after\b.*[!.]?$/i;
+  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed(?:\s+after\b.*)?[!.]?$/i;
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
