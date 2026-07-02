@@ -5,6 +5,10 @@
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
 import type { Model } from "../llm/types.js";
+import {
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  isTraditionalAzureOpenAIHost,
+} from "../shared/azure-openai-responses-client-compat.js";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -15,6 +19,7 @@ type OpenAICompletionsCompatDefaultsInput = {
   supportsNativeStreamingUsageCompat?: boolean;
   supportsOpenAICompletionsStreamingUsageCompat?: boolean;
   usesExplicitProxyLikeEndpoint?: boolean;
+  supportsPromptCacheKeyCompat?: boolean;
 };
 
 type OpenAICompletionsCompatDefaults = {
@@ -26,6 +31,8 @@ type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  supportsPromptCacheKey: boolean;
+  supportsLongCacheRetention: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
 };
@@ -50,6 +57,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsNativeStreamingUsageCompat = false,
     supportsOpenAICompletionsStreamingUsageCompat = false,
     usesExplicitProxyLikeEndpoint = false,
+    supportsPromptCacheKeyCompat = false,
   } = input;
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
@@ -123,6 +131,8 @@ export function resolveOpenAICompletionsCompatDefaults(
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    supportsPromptCacheKey: supportsPromptCacheKeyCompat,
+    supportsLongCacheRetention: true,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
   };
@@ -138,9 +148,30 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
     | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
+    supportsPromptCacheKeyCompat?: boolean;
   },
 ): OpenAICompletionsCompatDefaults {
   return resolveOpenAICompletionsCompatDefaults(input);
+}
+
+function isAzureOpenAIChatCompletionsRoute(
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl">,
+): boolean {
+  if (model.provider === "azure-openai") {
+    return true;
+  }
+  if (typeof model.baseUrl !== "string" || model.baseUrl.trim().length === 0) {
+    return false;
+  }
+  try {
+    const url = new URL(model.baseUrl);
+    return (
+      isTraditionalAzureOpenAIHost(url.hostname.toLowerCase()) ||
+      isOpenAICompatibleAzureResponsesBaseUrl(model.baseUrl)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
@@ -166,6 +197,7 @@ export function detectOpenAICompletionsCompat(
     defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
       provider: model.provider,
       ...capabilities,
+      supportsPromptCacheKeyCompat: isAzureOpenAIChatCompletionsRoute(model),
     }),
   };
 }

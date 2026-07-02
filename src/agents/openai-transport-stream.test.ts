@@ -7306,6 +7306,39 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
 
+  it.each([
+    ["Azure OpenAI", "azure-openai", "https://example.openai.azure.com/openai/v1"],
+    [
+      "regional Azure Foundry",
+      "custom-azure-openai",
+      "https://westus.api.cognitive.microsoft.com/openai/v1",
+    ],
+  ])("forwards prompt_cache_key for %s completions by default", (_label, provider, baseUrl) => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider,
+        baseUrl,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123", cacheRetention: "long" },
+    ) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.prompt_cache_retention).toBe("24h");
+  });
+
   it("omits prompt_cache_key for completions when caching is disabled or not opted in", () => {
     const baseModel = {
       id: "custom-model",

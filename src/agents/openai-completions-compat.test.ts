@@ -116,6 +116,38 @@ describe("detectOpenAICompletionsCompat", () => {
 
     expect(detected.defaults.supportsUsageInStreaming).toBe(true);
   });
+
+  it.each([
+    ["provider id", "azure-openai", "https://proxy.example.com/openai/v1"],
+    ["traditional host", "custom-azure", "https://example.openai.azure.com/openai/v1"],
+    [
+      "cognitive services host",
+      "custom-azure",
+      "https://example.cognitiveservices.azure.com/openai/v1",
+    ],
+    [
+      "Foundry project host",
+      "custom-azure",
+      "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+    ],
+    [
+      "regional Foundry host",
+      "custom-azure",
+      "https://westus.api.cognitive.microsoft.com/openai/v1",
+    ],
+  ])(
+    "enables prompt cache keys for Azure OpenAI chat completions by %s",
+    (_label, provider, baseUrl) => {
+      const detected = detectOpenAICompletionsCompat({
+        provider,
+        baseUrl,
+        id: "gpt-5.5",
+      });
+
+      expect(detected.defaults.supportsPromptCacheKey).toBe(true);
+      expect(detected.defaults.supportsLongCacheRetention).toBe(true);
+    },
+  );
 });
 
 describe("xiaomi compat detection", () => {

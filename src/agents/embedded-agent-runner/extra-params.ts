@@ -36,6 +36,7 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
+import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
@@ -527,10 +528,23 @@ function createStreamFnWithExtraParams(
 
   const readSupportsPromptCacheKey = (m: unknown): boolean => {
     const compat = (m as { compat?: unknown })?.compat;
-    if (!compat || typeof compat !== "object") {
-      return false;
+    if (compat && typeof compat === "object") {
+      const explicit = (compat as Record<string, unknown>).supportsPromptCacheKey;
+      if (typeof explicit === "boolean") {
+        return explicit;
+      }
     }
-    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
+    if (
+      m &&
+      typeof m === "object" &&
+      (m as { api?: unknown }).api === "openai-completions" &&
+      typeof (m as { provider?: unknown }).provider === "string" &&
+      typeof (m as { id?: unknown }).id === "string"
+    ) {
+      return detectOpenAICompletionsCompat(m as Parameters<typeof detectOpenAICompletionsCompat>[0])
+        .defaults.supportsPromptCacheKey;
+    }
+    return false;
   };
 
   const initialCacheRetention = resolveCacheRetention(
