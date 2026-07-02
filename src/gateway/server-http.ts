@@ -126,7 +126,7 @@ async function resolvePluginGatewayAuthBypassPaths(
     return paths;
   }
   for (const channelId of Object.keys(configuredChannels)) {
-    for (const path of resolveBundledChannelGatewayAuthBypassPaths({
+    for (const path of await resolveBundledChannelGatewayAuthBypassPaths({
       channelId,
       cfg: configSnapshot,
     })) {
