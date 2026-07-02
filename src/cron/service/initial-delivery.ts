@@ -7,7 +7,9 @@ export function resolveInitialCronDelivery(input: CronJobCreate): CronDelivery |
     return input.delivery;
   }
   if (
-    input.sessionTarget === "isolated" &&
+    (input.sessionTarget === "isolated" ||
+      input.sessionTarget === "current" ||
+      (typeof input.sessionTarget === "string" && input.sessionTarget.startsWith("session:"))) &&
     (input.payload.kind === "agentTurn" || input.payload.kind === "command")
   ) {
     return { mode: "announce" };
