@@ -771,6 +771,15 @@ extension SettingsProTab {
                     .textFieldStyle(.roundedBorder)
                 SecureField("Gateway Password", text: self.$gatewayPassword)
                     .textFieldStyle(.roundedBorder)
+                Text("Reverse proxy (optional)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                TextField("Proxy Username", text: self.$gatewayProxyUsername)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Proxy Password", text: self.$gatewayProxyPassword)
+                    .textFieldStyle(.roundedBorder)
                 Button(role: .destructive) {
                     self.showResetOnboardingAlert = true
                 } label: {

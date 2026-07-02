@@ -171,6 +171,8 @@ extension SettingsProTab {
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+        self.gatewayProxyUsername = GatewaySettingsStore.loadGatewayProxyUsername(instanceId: trimmedInstanceId) ?? ""
+        self.gatewayProxyPassword = GatewaySettingsStore.loadGatewayProxyPassword(instanceId: trimmedInstanceId) ?? ""
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -339,6 +341,8 @@ extension SettingsProTab {
         defer { self.suppressCredentialPersist = false }
         self.gatewayToken = ""
         self.gatewayPassword = ""
+        self.gatewayProxyUsername = ""
+        self.gatewayProxyPassword = ""
         GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
         self.onboardingComplete = false
         self.hasConnectedOnce = false
@@ -486,6 +490,18 @@ extension SettingsProTab {
         guard !instanceId.isEmpty else { return }
         GatewaySettingsStore.saveGatewayPassword(
             value.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: instanceId)
+    }
+
+    /// Persist reverse-proxy Basic auth credentials together, so username and password
+    /// can never drift apart in the Keychain.
+    func persistGatewayProxyBasicAuth() {
+        guard !self.suppressCredentialPersist else { return }
+        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instanceId.isEmpty else { return }
+        GatewaySettingsStore.saveGatewayProxyBasicAuth(
+            username: self.gatewayProxyUsername,
+            password: self.gatewayProxyPassword,
             instanceId: instanceId)
     }
 

@@ -2028,6 +2028,7 @@ extension NodeAppModel {
         token: String?,
         bootstrapToken: String?,
         password: String?,
+        additionalHeaders: [String: String] = [:],
         connectOptions: GatewayConnectOptions,
         forceReconnect: Bool = false)
     {
@@ -2041,6 +2042,7 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
+            additionalHeaders: additionalHeaders,
             nodeOptions: connectOptions)
         let operatorLoopRequired = self.shouldStartOperatorGatewayLoop(
             token: token,
@@ -2095,6 +2097,7 @@ extension NodeAppModel {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
+            additionalHeaders: cfg.additionalHeaders,
             connectOptions: cfg.nodeOptions,
             forceReconnect: forceReconnect)
     }
@@ -2334,6 +2337,7 @@ extension NodeAppModel {
             token: config.token,
             bootstrapToken: nil,
             password: config.password,
+            additionalHeaders: config.additionalHeaders,
             nodeOptions: config.nodeOptions)
     }
 
@@ -2468,6 +2472,7 @@ extension NodeAppModel {
                         token: reconnectAuth.token,
                         bootstrapToken: reconnectAuth.bootstrapToken,
                         password: reconnectAuth.password,
+                        additionalHeaders: self.activeGatewayConnectConfig?.additionalHeaders ?? [:],
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
@@ -2609,6 +2614,7 @@ extension NodeAppModel {
                         token: reconnectAuth.token,
                         bootstrapToken: reconnectAuth.bootstrapToken,
                         password: reconnectAuth.password,
+                        additionalHeaders: self.activeGatewayConnectConfig?.additionalHeaders ?? [:],
                         connectOptions: connectedOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in

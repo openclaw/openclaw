@@ -16,6 +16,15 @@ struct GatewayConnectConfig {
     let token: String?
     let bootstrapToken: String?
     let password: String?
+    /// Extra HTTP headers for the WebSocket upgrade, used to satisfy a reverse proxy
+    /// that fronts the gateway (for example HTTP Basic auth). Empty for direct
+    /// connections. Distinct from `token`/`password`, which are gateway auth carried
+    /// inside the connect protocol message.
+    ///
+    /// Declared `var` (with a default) so the synthesized memberwise initializer keeps
+    /// this parameter optional; existing call sites that don't use a reverse proxy stay
+    /// unchanged. Instances are still treated as immutable configuration.
+    var additionalHeaders: [String: String] = [:]
     let nodeOptions: GatewayConnectOptions
 
     /// Stable, non-empty identifier used for gateway-scoped persistence keys.
@@ -33,6 +42,7 @@ struct GatewayConnectConfig {
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
             self.password == other.password &&
+            self.additionalHeaders == other.additionalHeaders &&
             Self.sameOptions(self.nodeOptions, other.nodeOptions)
     }
 

@@ -176,6 +176,54 @@ enum GatewaySettingsStore {
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }
 
+    /// Reverse-proxy HTTP Basic auth credentials. Used only to traverse a proxy that
+    /// fronts the gateway (e.g. Caddy/nginx); this is separate from the gateway's own
+    /// token/password auth, which travels inside the connect protocol message.
+    static func loadGatewayProxyUsername(instanceId: String) -> String? {
+        let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayProxyUsernameAccount(instanceId: instanceId))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    static func loadGatewayProxyPassword(instanceId: String) -> String? {
+        // The password is intentionally not trimmed: HTTP Basic secrets may contain
+        // leading/trailing whitespace.
+        let value = KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayProxyPasswordAccount(instanceId: instanceId))
+        return (value?.isEmpty == false) ? value : nil
+    }
+
+    static func saveGatewayProxyBasicAuth(username: String, password: String, instanceId: String) {
+        let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedUser.isEmpty {
+            // No username means no proxy auth; clear both so a partial secret never lingers.
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayProxyUsernameAccount(instanceId: instanceId))
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayProxyPasswordAccount(instanceId: instanceId))
+            return
+        }
+        _ = KeychainStore.saveString(
+            trimmedUser,
+            service: self.gatewayService,
+            account: self.gatewayProxyUsernameAccount(instanceId: instanceId))
+        if password.isEmpty {
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayProxyPasswordAccount(instanceId: instanceId))
+        } else {
+            _ = KeychainStore.saveString(
+                password,
+                service: self.gatewayService,
+                account: self.gatewayProxyPasswordAccount(instanceId: instanceId))
+        }
+    }
+
     enum LastGatewayConnection: Equatable {
         case manual(host: String, port: Int, useTLS: Bool, stableID: String)
         case discovered(stableID: String, useTLS: Bool)
@@ -315,6 +363,12 @@ enum GatewaySettingsStore {
         _ = KeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayProxyUsernameAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayProxyPasswordAccount(instanceId: trimmed))
     }
 
     static func loadGatewayClientIdOverride(stableID: String) -> String? {
@@ -371,6 +425,14 @@ enum GatewaySettingsStore {
 
     private static func gatewayPasswordAccount(instanceId: String) -> String {
         "gateway-password.\(instanceId)"
+    }
+
+    private static func gatewayProxyUsernameAccount(instanceId: String) -> String {
+        "gateway-proxy-username.\(instanceId)"
+    }
+
+    private static func gatewayProxyPasswordAccount(instanceId: String) -> String {
+        "gateway-proxy-password.\(instanceId)"
     }
 
     private static func talkProviderApiKeyAccount(providerId: String) -> String {

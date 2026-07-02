@@ -41,6 +41,8 @@ struct SettingsProTab: View {
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
+    @State var gatewayProxyUsername = ""
+    @State var gatewayProxyPassword = ""
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
@@ -164,6 +166,12 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.gatewayPassword) { _, newValue in
                 self.persistGatewayPassword(newValue)
+            }
+            .onChange(of: self.gatewayProxyUsername) { _, _ in
+                self.persistGatewayProxyBasicAuth()
+            }
+            .onChange(of: self.gatewayProxyPassword) { _, _ in
+                self.persistGatewayProxyBasicAuth()
             }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
