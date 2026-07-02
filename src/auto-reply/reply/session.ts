@@ -72,6 +72,7 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -884,6 +885,7 @@ async function initSessionStateAttemptLocked(
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
     sessionKey,
+    snapshotEntry: initializationSnapshot.currentEntry,
     storePath,
   });
   if (!committed.ok) {
