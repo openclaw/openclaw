@@ -27,7 +27,12 @@ export function parseRequest(data: RawData): JsonRpcRequest {
       ? data
       : Buffer.from(data);
   const text = buffer.toString("utf8");
-  const parsed = JSON.parse(text) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("JSON-RPC request body is not valid JSON.");
+  }
   return requireObject(parsed, "JSON-RPC request") as JsonRpcRequest;
 }
 
