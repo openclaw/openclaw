@@ -3406,11 +3406,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("delivers a turn-budget timeout notice when a tool-execution timeout leaves no visible reply", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const setTerminalLifecycleMeta = vi.fn();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         timedOut: true,
         timedOutDuringToolExecution: true,
+        setTerminalLifecycleMeta,
       }),
     );
 
@@ -3425,6 +3427,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("time budget");
     expect(result.meta.livenessState).toBe("abandoned");
+    // The notice branch must keep hard-timeout attribution parity with the
+    // prompt-timeout path: wait/session consumers rely on timeoutPhase and
+    // providerStarted to classify the terminal timeout.
+    expect(result.meta.timeoutPhase).toBe("provider");
+    expect(result.meta.providerStarted).toBe(true);
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith(
+      expect.objectContaining({
+        livenessState: "abandoned",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        aborted: false,
+      }),
+    );
   });
 
   it("stays silent on a timed-out turn in a silent-reply context (allowEmptyAssistantReplyAsSilent)", async () => {

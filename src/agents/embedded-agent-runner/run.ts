@@ -4111,9 +4111,13 @@ async function runEmbeddedAgentInternal(
               attempt,
               incompleteTurnText: turnBudgetTimeoutNotice,
             });
-            attempt.setTerminalLifecycleMeta?.({
+            const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
+            const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
+            setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
+              timeoutPhase,
+              providerStarted,
             });
             return {
               payloads: [
@@ -4132,6 +4136,8 @@ async function runEmbeddedAgentInternal(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                timeoutPhase,
+                providerStarted,
                 toolSummary: attemptToolSummary,
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
