@@ -1353,6 +1353,14 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
           return await collectStalePluginRuntimeSymlinkHealthFindings();
         },
+        async repair(ctx, findings) {
+          const { repairStalePluginRuntimeSymlinkFindings } =
+            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+          return await repairStalePluginRuntimeSymlinkFindings({
+            findings,
+            dryRun: ctx.dryRun,
+          });
+        },
       },
       run: async () => {},
     }),

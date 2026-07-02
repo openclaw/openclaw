@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../../../packages/terminal-core/src/note.js";
-import type { HealthFinding } from "../../../flows/health-checks.js";
+import type {
+  HealthFinding,
+  HealthRepairEffect,
+  HealthRepairResult,
+} from "../../../flows/health-checks.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import { shortenHomePath } from "../../../utils.js";
 
@@ -130,6 +134,20 @@ export async function collectStalePluginRuntimeSymlinkHealthFindings(
   );
 }
 
+function stalePluginRuntimeSymlinkRemovalEffect(
+  target: string,
+  dryRun: boolean,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: dryRun
+      ? "would-remove-stale-plugin-runtime-symlink"
+      : "remove-stale-plugin-runtime-symlink",
+    target,
+    dryRunSafe: false,
+  };
+}
+
 /** Emit a doctor note describing stale plugin-runtime symlinks, if any exist. */
 export async function noteStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
@@ -180,6 +198,77 @@ export async function removeStalePluginRuntimeSymlinks(
     }
   }
   return { changes, warnings };
+}
+
+/** Repairs or previews selected stale plugin-runtime symlink findings. */
+export async function repairStalePluginRuntimeSymlinkFindings(params: {
+  packageRoot?: string | null;
+  findings: readonly HealthFinding[];
+  dryRun?: boolean;
+  options?: PluginRuntimeSymlinkOptions;
+}): Promise<HealthRepairResult> {
+  const selectedPaths = new Set(
+    params.findings
+      .filter(
+        (finding) =>
+          finding.checkId === "core/doctor/stale-plugin-runtime-symlinks" &&
+          finding.requirement === "stale-plugin-runtime-symlink-removed" &&
+          typeof finding.path === "string",
+      )
+      .map((finding) => path.resolve(finding.path as string)),
+  );
+  if (selectedPaths.size === 0) {
+    return {
+      status: "skipped",
+      reason: "no repairable stale plugin-runtime symlink findings were present",
+      changes: [],
+    };
+  }
+
+  const packageRoot =
+    params.packageRoot ??
+    resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
+  const fsApi = params.options?.fs ?? DEFAULT_FS;
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const effects: HealthRepairEffect[] = [];
+  const staleSymlinks = (
+    await collectStalePluginRuntimeSymlinks(packageRoot, params.options)
+  ).filter((item) => selectedPaths.has(path.resolve(item.path)));
+  if (staleSymlinks.length === 0) {
+    return {
+      status: "skipped",
+      reason: "selected stale plugin-runtime symlinks no longer need repair",
+      changes,
+    };
+  }
+
+  for (const item of staleSymlinks) {
+    if (params.dryRun === true) {
+      changes.push(`Would remove stale plugin-runtime symlink: ${item.path}`);
+    } else {
+      try {
+        if (fsApi.unlink) {
+          await fsApi.unlink(item.path);
+        } else {
+          await fsApi.rm(item.path, { force: true });
+        }
+        changes.push(`Removed stale plugin-runtime symlink: ${item.path}`);
+      } catch (error) {
+        warnings.push(
+          `Failed to remove stale plugin-runtime symlink ${item.path}: ${String(error)}`,
+        );
+        continue;
+      }
+    }
+    effects.push(stalePluginRuntimeSymlinkRemovalEffect(item.path, params.dryRun === true));
+  }
+
+  return { changes, warnings, effects };
 }
 
 function uniqueResolvedRoots(values: readonly string[]): string[] {

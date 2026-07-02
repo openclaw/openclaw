@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   collectStalePluginRuntimeSymlinkHealthFindings,
   collectStalePluginRuntimeSymlinks,
+  repairStalePluginRuntimeSymlinkFindings,
   stalePluginRuntimeSymlinkToHealthFinding,
 } from "./plugin-runtime-symlinks.js";
 
@@ -70,6 +71,52 @@ describe("plugin runtime symlink health findings", () => {
     ]);
     await expectSymlinkPresent(staleLink);
     await expectSymlinkPresent(liveLink);
+  });
+
+  it("previews selected stale symlink cleanup as dry-run effects", async () => {
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const missingTarget = path.join(
+      tempDir,
+      "state",
+      "plugin-runtime-deps",
+      "openclaw-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const scopeRoot = path.join(nodeModulesRoot, "@slack");
+    const staleLink = path.join(scopeRoot, "web-api");
+
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(scopeRoot, { recursive: true });
+    await fs.symlink(missingTarget, staleLink, "dir");
+
+    const result = await repairStalePluginRuntimeSymlinkFindings({
+      packageRoot,
+      dryRun: true,
+      findings: [
+        {
+          checkId: "core/doctor/stale-plugin-runtime-symlinks",
+          severity: "warning",
+          message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
+          path: staleLink,
+          target: staleLink,
+          requirement: "stale-plugin-runtime-symlink-removed",
+        },
+      ],
+    });
+
+    expect(result.changes).toStrictEqual([
+      `Would remove stale plugin-runtime symlink: ${staleLink}`,
+    ]);
+    expect(result.effects).toContainEqual({
+      kind: "file",
+      action: "would-remove-stale-plugin-runtime-symlink",
+      target: staleLink,
+      dryRunSafe: false,
+    });
+    await expectSymlinkPresent(staleLink);
   });
 
   it("reports symlinks that point inside classified stale roots", async () => {
