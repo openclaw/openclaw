@@ -1338,6 +1338,42 @@ describe("feishuPlugin actions", () => {
     expect(removeReactionFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("blocks Feishu clear-all reaction reads when the target message is outside the group allowlist", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      content: "outside",
+      contentType: "text",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "react",
+        params: {
+          messageId: "om_blocked",
+          clearAll: true,
+          to: "chat:oc_group_1",
+        },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(listReactionsFeishuMock).not.toHaveBeenCalled();
+    expect(removeReactionFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("fails for missing params on supported actions", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({

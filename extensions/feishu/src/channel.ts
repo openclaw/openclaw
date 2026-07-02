@@ -671,6 +671,32 @@ function assertFeishuMessageReadTargetAllowed(params: {
   });
 }
 
+async function assertFeishuMessageIdReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  accountId?: string;
+  messageId: string;
+  getMessageFeishu: (args: {
+    cfg: ClawdbotConfig;
+    messageId: string;
+    accountId?: string;
+  }) => Promise<FeishuMessageInfo | null>;
+}) {
+  if (!shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account })) {
+    return;
+  }
+  const message = await params.getMessageFeishu({
+    cfg: params.cfg,
+    messageId: params.messageId,
+    accountId: params.accountId,
+  });
+  assertFeishuMessageReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    message,
+  });
+}
+
 function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
   return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
@@ -1184,14 +1210,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               }
               const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-                const message = await getMessageFeishu({
-                  cfg: ctx.cfg,
-                  messageId,
-                  accountId: ctx.accountId ?? undefined,
-                });
-                assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
-              }
+              await assertFeishuMessageIdReadTargetAllowed({
+                cfg: ctx.cfg,
+                account,
+                messageId,
+                accountId: ctx.accountId ?? undefined,
+                getMessageFeishu,
+              });
               const matches = await listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1218,14 +1243,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               }
               const { getMessageFeishu, listReactionsFeishu, removeReactionFeishu } =
                 await loadFeishuChannelRuntime();
-              if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-                const message = await getMessageFeishu({
-                  cfg: ctx.cfg,
-                  messageId,
-                  accountId: ctx.accountId ?? undefined,
-                });
-                assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
-              }
+              await assertFeishuMessageIdReadTargetAllowed({
+                cfg: ctx.cfg,
+                account,
+                messageId,
+                accountId: ctx.accountId ?? undefined,
+                getMessageFeishu,
+              });
               const reactions = await listReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
@@ -1259,14 +1283,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu reactions lookup requires messageId.");
             }
             const { getMessageFeishu, listReactionsFeishu } = await loadFeishuChannelRuntime();
-            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
-              const message = await getMessageFeishu({
-                cfg: ctx.cfg,
-                messageId,
-                accountId: ctx.accountId ?? undefined,
-              });
-              assertFeishuMessageReadTargetAllowed({ cfg: ctx.cfg, account, message });
-            }
+            await assertFeishuMessageIdReadTargetAllowed({
+              cfg: ctx.cfg,
+              account,
+              messageId,
+              accountId: ctx.accountId ?? undefined,
+              getMessageFeishu,
+            });
             const reactions = await listReactionsFeishu({
               cfg: ctx.cfg,
               messageId,
