@@ -6,6 +6,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
@@ -270,7 +271,7 @@ export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return text.slice(text.length - max);
+  return sliceUtf16Safe(text, text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {

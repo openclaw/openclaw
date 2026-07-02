@@ -485,6 +485,22 @@ describe("exec notifyOnExit suppression", () => {
     expect(message).toContain("…");
     expect(message).toContain(head);
   });
+
+  it("keeps the notify tail source on a UTF-16 boundary", async () => {
+    // The notify path first takes a 400-char tail, then compacts that tail to a
+    // 180-char snippet. If the 400-char tail starts inside an emoji, the final
+    // compacted snippet must not preserve the dangling low surrogate.
+    const prefix = "a".repeat(101);
+    const tailHead = "b".repeat(179);
+    const overflowingOutput = `${prefix}🎉${tailHead}${"c".repeat(220)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(tailHead);
+  });
 });
 
 describe("formatExecFailureReason", () => {
