@@ -207,6 +207,33 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * If gatewayUrl is cross-origin, set the gateway-url cookie and reload so the
+ * server includes the origin in CSP connect-src on the next page load.
+ *
+ * This handles the in-page gatewayUrl edit case where the user types a remote
+ * URL in the settings UI and clicks connect — without the cookie handoff the
+ * tightened CSP would block the cross-origin WebSocket.
+ *
+ * @returns true if a page reload was triggered (caller should return early).
+ */
+function setGatewayUrlCookieForCsp(gatewayUrl: string): boolean {
+  let remoteOrigin: string;
+  try {
+    remoteOrigin = new URL(gatewayUrl).origin;
+  } catch {
+    return false; // Invalid URL, proceed without cookie
+  }
+  const pageOrigin = globalThis.location?.origin;
+  if (!pageOrigin || remoteOrigin === pageOrigin) {
+    return false; // Same-origin, no cookie needed
+  }
+  // Persist the origin in a cookie the server reads on the next page load.
+  document.cookie = `gateway-url=${encodeURIComponent(remoteOrigin)}; path=/; SameSite=Lax; max-age=2592000`;
+  globalThis.location.reload();
+  return true;
+}
+
 export class OpenClawApp extends LitElement {
   readonly i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
@@ -1454,6 +1481,15 @@ export class OpenClawApp extends LitElement {
       token: nextToken,
     });
     restoreChatComposerState(this, { preserveCurrent: true });
+
+    // If connecting to a cross-origin gateway URL, set the gateway-url cookie
+    // and reload so the server includes the origin in CSP connect-src before
+    // the WebSocket connects. This handles the in-page gatewayUrl edit case
+    // where the user types a remote URL in the settings UI and clicks connect.
+    if (setGatewayUrlCookieForCsp(nextGatewayUrl)) {
+      return; // Page is reloading
+    }
+
     this.connect();
   }
 

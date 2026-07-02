@@ -197,11 +197,41 @@ function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | nul
   };
 }
 
-function applyControlUiSecurityHeaders(res: ServerResponse) {
+function applyControlUiSecurityHeaders(
+  res: ServerResponse,
+  opts?: { extraConnectSrcs?: string[] },
+) {
   res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ extraConnectSrcs: opts?.extraConnectSrcs }),
+  );
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+}
+
+/** Read a named cookie value from the incoming request Cookie header. */
+function readCookie(req: IncomingMessage, name: string): string | undefined {
+  const header = req.headers?.cookie;
+  if (!header) {
+    return undefined;
+  }
+  const joined = Array.isArray(header) ? header.join("; ") : header;
+  for (const pair of joined.split(";")) {
+    const trimmed = pair.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) {
+      continue;
+    }
+    if (trimmed.slice(0, eq).trim() === name) {
+      try {
+        return decodeURIComponent(trimmed.slice(eq + 1).trim());
+      } catch {
+        return trimmed.slice(eq + 1).trim();
+      }
+    }
+  }
+  return undefined;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -758,13 +788,18 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  basePath?: string,
+  extraConnectSrcs?: string[],
+) {
   const prepared = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
   const hashes = computeInlineScriptHashes(prepared);
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
-      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
+      buildControlUiCspHeader({ inlineScriptHashes: hashes, extraConnectSrcs }),
     );
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -921,6 +956,40 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+
+  // If the Control UI is opened with a ?gatewayUrl=... parameter pointing to a
+  // different origin, add that origin to CSP connect-src so the browser allows
+  // the cross-origin WebSocket connection.
+  const extraConnectSrcs: string[] = [];
+  let gatewayOriginToPersist: string | undefined;
+  const gatewayUrlParam = url.searchParams.get("gatewayUrl") || url.searchParams.get("gateway-url");
+  if (gatewayUrlParam) {
+    try {
+      const parsedGateway = new URL(gatewayUrlParam);
+      const gatewayOrigin = parsedGateway.origin;
+      if (gatewayOrigin && gatewayOrigin !== url.origin) {
+        extraConnectSrcs.push(gatewayOrigin);
+        gatewayOriginToPersist = gatewayOrigin;
+      }
+    } catch {
+      // Malformed URL — same origin (fallback) CSP still covers the baseline.
+    }
+  }
+  // Also check for a saved gateway URL from a previous load (cookie). This
+  // covers the reload case: the browser sends the cookie even though the URL
+  // no longer carries the ?gatewayUrl= query param.
+  const savedGatewayUrl = readCookie(req, "gateway-url");
+  if (savedGatewayUrl) {
+    try {
+      const parsed = new URL(savedGatewayUrl);
+      const savedOrigin = parsed.origin;
+      if (savedOrigin && savedOrigin !== url.origin && !extraConnectSrcs.includes(savedOrigin)) {
+        extraConnectSrcs.push(savedOrigin);
+      }
+    } catch {
+      // Stale cookie — will be overwritten on next explicit ?gatewayUrl= load.
+    }
+  }
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -930,20 +999,32 @@ export async function handleControlUiHttpRequest(
   if (route.kind === "not-control-ui") {
     return false;
   }
+
+  // Persist the gateway origin as a cookie so page reloads (where JS has
+  // removed the query param) still get the remote origin in CSP connect-src.
+  // Set-Cookie is done after route classification so non-Control-UI requests
+  // (e.g. /api?gatewayUrl=...) cannot plant a cookie that later expands CSP.
+  if (gatewayOriginToPersist) {
+    const cookiePath = basePath || "/";
+    res.setHeader(
+      "Set-Cookie",
+      `gateway-url=${encodeURIComponent(gatewayOriginToPersist)}; Path=${cookiePath}; SameSite=Lax; Max-Age=2592000`,
+    );
+  }
   if (route.kind === "not-found") {
-    applyControlUiSecurityHeaders(res);
+    applyControlUiSecurityHeaders(res, { extraConnectSrcs });
     respondControlUiNotFound(res);
     return true;
   }
   if (route.kind === "redirect") {
-    applyControlUiSecurityHeaders(res);
+    applyControlUiSecurityHeaders(res, { extraConnectSrcs });
     res.statusCode = 302;
     res.setHeader("Location", route.location);
     res.end();
     return true;
   }
 
-  applyControlUiSecurityHeaders(res);
+  applyControlUiSecurityHeaders(res, { extraConnectSrcs });
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     if (
@@ -1086,7 +1167,12 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
+        serveResolvedIndexHtml(
+          res,
+          await readOpenedFileText(safeFile.fd),
+          basePath,
+          extraConnectSrcs,
+        );
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1114,7 +1200,12 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
+      serveResolvedIndexHtml(
+        res,
+        await readOpenedFileText(safeIndex.fd),
+        basePath,
+        extraConnectSrcs,
+      );
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

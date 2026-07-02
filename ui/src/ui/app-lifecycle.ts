@@ -95,6 +95,54 @@ type LifecycleHost = {
   topbarObserver: ResizeObserver | null;
 };
 
+/**
+ * Migrate a saved cross-origin gatewayUrl from localStorage to a server-visible
+ * cookie so the server includes the origin in CSP connect-src on page reload.
+ *
+ * Existing users who saved a remote Gateway URL before the CSP hardening upgrade
+ * have the URL only in localStorage — no cookie exists. On first detection, this
+ * function sets the cookie and triggers a one-time page reload so the server
+ * picks it up. A sessionStorage flag prevents infinite reload loops.
+ *
+ * @returns true if a page reload was triggered (caller should return early).
+ */
+function migrateSavedGatewayUrlCookie(host: LifecycleHost): boolean {
+  const gatewayUrl = host.settings?.gatewayUrl;
+  if (!gatewayUrl) {
+    return false;
+  }
+
+  let remoteOrigin: string;
+  try {
+    remoteOrigin = new URL(gatewayUrl).origin;
+  } catch {
+    return false; // Invalid URL, nothing to migrate
+  }
+
+  const pageOrigin = globalThis.location?.origin;
+  if (!pageOrigin || remoteOrigin === pageOrigin) {
+    return false; // Same-origin or missing page origin
+  }
+
+  // If the server-side cookie already exists, the origin is already in CSP.
+  if (document.cookie.includes("gateway-url=")) {
+    return false;
+  }
+
+  // Persist the origin in a cookie the server reads on the next page load.
+  document.cookie = `gateway-url=${encodeURIComponent(remoteOrigin)}; path=/; SameSite=Lax; max-age=2592000`;
+
+  // One-time reload so the server sees the cookie and includes the origin in
+  // CSP connect-src. The sessionStorage flag prevents infinite reload loops.
+  if (!sessionStorage.getItem("_gw_cookie_migrated")) {
+    sessionStorage.setItem("_gw_cookie_migrated", "1");
+    globalThis.location.reload();
+    return true;
+  }
+
+  return false;
+}
+
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
@@ -118,6 +166,9 @@ export function handleConnected(host: LifecycleHost) {
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   if (host.connectGeneration === connectGeneration) {
+    if (migrateSavedGatewayUrlCookie(host)) {
+      return;
+    }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   }
   if (host.tab === "nodes") {

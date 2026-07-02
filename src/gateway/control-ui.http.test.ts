@@ -355,7 +355,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' https://api.openai.com wss://generativelanguage.googleapis.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -1591,6 +1591,90 @@ describe("handleControlUiHttpRequest", () => {
         });
         expectNotFoundResponse({ handled, res, end });
       },
+    });
+  });
+
+  describe("gatewayUrl cookie CSP", () => {
+    it("sets gateway-url cookie when ?gatewayUrl= query param is present", async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, setHeader } = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            { url: "/?gatewayUrl=https://remote-gateway:9443", method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          const setCookieCall = setHeader.mock.calls.find(
+            (call: unknown[]) =>
+              call[0] === "Set-Cookie" && String(call[1]).startsWith("gateway-url="),
+          );
+          expect(setCookieCall).toBeDefined();
+          expect(String(setCookieCall?.[1])).toContain("remote-gateway");
+          expect(String(setCookieCall?.[1])).toContain("SameSite=Lax");
+        },
+      });
+    });
+
+    it("includes saved gateway origin from cookie in CSP connect-src", async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, setHeader } = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            {
+              url: "/",
+              method: "GET",
+              headers: { cookie: "gateway-url=https%3A%2F%2Fremote-gateway%3A9443" },
+            } as unknown as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          const csp = setHeader.mock.calls.find(
+            (call: unknown[]) => call[0] === "Content-Security-Policy",
+          )?.[1] as string;
+          expect(csp).toContain("connect-src");
+          expect(csp).toContain("https://remote-gateway:9443");
+        },
+      });
+    });
+
+    it("deduplicates gateway origin when both query param and cookie point to the same host", async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, setHeader } = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            {
+              url: "/?gatewayUrl=https://remote-gateway:9443",
+              method: "GET",
+              headers: { cookie: "gateway-url=https%3A%2F%2Fremote-gateway%3A9443" },
+            } as unknown as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          const csp = setHeader.mock.calls.find(
+            (call: unknown[]) => call[0] === "Content-Security-Policy",
+          )?.[1] as string;
+          const matches = csp.match(/https:\/\/remote-gateway:9443/g);
+          expect(matches).toHaveLength(1);
+        },
+      });
+    });
+
+    it("does not set cookie for same-origin gatewayUrl", async () => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, setHeader } = makeMockHttpResponse();
+          await handleControlUiHttpRequest(
+            { url: "/?gatewayUrl=http://localhost/same-origin", method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          const setCookieCall = setHeader.mock.calls.find(
+            (call: unknown[]) =>
+              call[0] === "Set-Cookie" && String(call[1]).startsWith("gateway-url="),
+          );
+          expect(setCookieCall).toBeUndefined();
+        },
+      });
     });
   });
 });
