@@ -1649,6 +1649,22 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
             channelPluginBlockerHitToHealthFinding,
           );
         },
+        async repair(ctx) {
+          const { channelPluginBlockerHitToRepairEffect, scanConfiguredChannelPluginBlockers } =
+            await import("../commands/doctor/shared/channel-plugin-blockers.js");
+          const effects = scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+            channelPluginBlockerHitToRepairEffect,
+          );
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "channel plugin enablement remains an explicit operator action",
+            changes: [],
+            effects,
+          };
+        },
       },
       run: runStartupChannelMaintenanceHealth,
     }),

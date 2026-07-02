@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { HealthFinding } from "../../../flows/health-checks.js";
+import type { HealthFinding, HealthRepairEffect } from "../../../flows/health-checks.js";
 import {
   hasExplicitChannelConfig,
   listExplicitConfiguredChannelIdsForConfig,
@@ -378,6 +378,18 @@ export function channelPluginBlockerHitToHealthFinding(
     target: hit.pluginId,
     requirement: hit.reason,
     fixHint: "Fix plugin enablement before relying on setup guidance for this channel.",
+  };
+}
+
+/** Preview the manual plugin activation work required before startup maintenance can help. */
+export function channelPluginBlockerHitToRepairEffect(
+  hit: ChannelPluginBlockerHit,
+): HealthRepairEffect {
+  return {
+    kind: "other",
+    action: "would-require-channel-plugin-activation",
+    target: `${hit.pluginId} for channels.${hit.channelId}`,
+    dryRunSafe: true,
   };
 }
 
