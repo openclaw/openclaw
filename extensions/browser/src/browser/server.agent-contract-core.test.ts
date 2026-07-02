@@ -197,6 +197,46 @@ describe("browser control server", () => {
   );
 
   it(
+    "accepts tabId aliases for top-level action targetId",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        targetId: "t1",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("abcd1234");
+      const actCall = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "act");
+      expectRecordFields(actCall, { targetId: "abcd1234" });
+      expectRecordFields(actCall.action, { targetId: "abcd1234" });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "accepts tabId aliases for batched action targetIds",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "batch",
+        targetId: "t1",
+        actions: [{ kind: "click", ref: "5", targetId: "t1" }],
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("abcd1234");
+      const actCall = mockFirstArg(pwMocks.executeActViaPlaywright, 0, "act");
+      expectRecordFields(actCall, { targetId: "abcd1234" });
+      expectRecordFields(actCall.action, { targetId: "abcd1234" });
+      const action = actCall.action as { actions?: Array<Record<string, unknown>> };
+      expectRecordFields(action.actions?.[0], { targetId: "abcd1234" });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns the replacement targetId after an action-triggered target swap",
     async () => {
       const base = await startServerAndBase();

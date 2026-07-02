@@ -27,6 +27,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { resolveTargetIdFromTabs } from "../target-id.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -35,7 +36,7 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
@@ -357,6 +358,66 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
   throw new Error("Unsupported browser act kind");
 }
 
+type TargetComparableTab = {
+  targetId: string;
+  suggestedTargetId?: string;
+  tabId?: string;
+  label?: string;
+};
+
+function actionContainsTargetId(action: BrowserActRequest): boolean {
+  if (action.targetId) {
+    return true;
+  }
+  return action.kind === "batch" && action.actions.some(actionContainsTargetId);
+}
+
+function actionTargetIdMatchesTab(params: {
+  requestedTargetId: string;
+  selectedTargetId: string;
+  tabs: TargetComparableTab[];
+}): boolean {
+  if (params.requestedTargetId === params.selectedTargetId) {
+    return true;
+  }
+  const resolved = resolveTargetIdFromTabs(params.requestedTargetId, params.tabs);
+  return resolved.ok && resolved.targetId === params.selectedTargetId;
+}
+
+function normalizeActionTargetIdsForSelectedTab(params: {
+  action: BrowserActRequest;
+  selectedTargetId: string;
+  tabs: TargetComparableTab[];
+  mismatchMessage: string;
+}): string | null {
+  if (params.action.targetId) {
+    if (
+      !actionTargetIdMatchesTab({
+        requestedTargetId: params.action.targetId,
+        selectedTargetId: params.selectedTargetId,
+        tabs: params.tabs,
+      })
+    ) {
+      return params.mismatchMessage;
+    }
+    params.action.targetId = params.selectedTargetId;
+  }
+  if (params.action.kind === "batch") {
+    for (const nestedAction of params.action.actions) {
+      const nestedError = normalizeActionTargetIdsForSelectedTab({
+        action: nestedAction,
+        selectedTargetId: params.selectedTargetId,
+        tabs: params.tabs,
+        mismatchMessage: "batched action targetId must match request targetId",
+      });
+      if (nestedError) {
+        return nestedError;
+      }
+    }
+  }
+  return null;
+}
+
 /** Register browser action endpoints, including hook and download subroutes. */
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
@@ -412,6 +473,9 @@ export function registerBrowserAgentActRoutes(
           const hasNavigationResultPolicy = Boolean(
             withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
           );
+          const targetComparableTabs = actionContainsTargetId(action)
+            ? await profileCtx.listTabs().catch(() => [] as TargetComparableTab[])
+            : [];
           const jsonOk = async (
             extra?: Record<string, unknown>,
             options?: { resolveCurrentTarget?: boolean },
@@ -441,13 +505,14 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
+          const targetIdError = normalizeActionTargetIdsForSelectedTab({
+            action,
+            selectedTargetId: tab.targetId,
+            tabs: targetComparableTabs,
+            mismatchMessage: "action targetId must match request targetId",
+          });
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
@@ -660,12 +725,6 @@ export function registerBrowserAgentActRoutes(
           const pw = await requirePwAi(res, `act:${kind}`);
           if (!pw) {
             return;
-          }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
-            if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-            }
           }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
