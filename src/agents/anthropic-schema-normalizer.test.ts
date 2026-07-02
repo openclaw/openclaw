@@ -75,25 +75,25 @@ describe("normalizeAnthropicSchema", () => {
   });
 
   describe("additionalItems → items conversion", () => {
-    it("converts additionalItems: false to items: false", () => {
+    it("drops standalone additionalItems (ignored in draft-07 without tuple items)", () => {
+      // draft-07 §9.3.1.2: additionalItems is only meaningful alongside
+      // tuple-form items; standalone additionalItems must be ignored.
       const schema = {
         type: "array",
         additionalItems: false,
       };
       expect(normalizeAnthropicSchema(schema)).toEqual({
         type: "array",
-        items: false,
       });
     });
 
-    it("converts additionalItems schema to items", () => {
+    it("drops standalone additionalItems schema (ignored in draft-07 without tuple items)", () => {
       const schema = {
         type: "array",
         additionalItems: { type: "string" },
       };
       expect(normalizeAnthropicSchema(schema)).toEqual({
         type: "array",
-        items: { type: "string" },
       });
     });
 
@@ -205,7 +205,8 @@ describe("normalizeAnthropicSchema", () => {
       });
     });
 
-    it("normalizes additionalItems inside properties map values", () => {
+    it("drops standalone additionalItems in properties values", () => {
+      // standalone additionalItems without tuple items is ignored in draft-07.
       const schema = {
         type: "object",
         properties: {
@@ -215,7 +216,7 @@ describe("normalizeAnthropicSchema", () => {
       expect(normalizeAnthropicSchema(schema)).toEqual({
         type: "object",
         properties: {
-          arr: { type: "array", items: { type: "number" } },
+          arr: { type: "array" },
         },
       });
     });

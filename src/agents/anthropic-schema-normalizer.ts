@@ -66,8 +66,11 @@ function normalizeDraft2020_12Recursive(schema: unknown): unknown {
     changed ||= next !== value;
   }
 
-  // Convert draft-07 tuple items: [A, B] → draft 2020-12 prefixItems: [A, B]
-  if (Array.isArray(normalized.items)) {
+  // Convert draft-07 tuple items: [A, B] → draft 2020-12 prefixItems: [A, B].
+  // Track whether the original items was a tuple so we only transfer
+  // additionalItems when it was semantically active (draft-07 §9.3.1.1).
+  const hadTupleItems = Array.isArray(normalized.items);
+  if (hadTupleItems) {
     if (!("prefixItems" in normalized)) {
       normalized.prefixItems = normalized.items;
     }
@@ -75,9 +78,11 @@ function normalizeDraft2020_12Recursive(schema: unknown): unknown {
     changed = true;
   }
 
-  // Convert draft-07 additionalItems → draft 2020-12 items
+  // Convert draft-07 additionalItems → draft 2020-12 items.
+  // additionalItems is only meaningful alongside tuple items in draft-07;
+  // standalone additionalItems must be ignored (draft-07 §9.3.1.2).
   if ("additionalItems" in normalized) {
-    if (!("items" in normalized)) {
+    if (hadTupleItems && !("items" in normalized)) {
       normalized.items = normalized.additionalItems;
     }
     delete normalized.additionalItems;
@@ -94,7 +99,8 @@ function normalizeDraft2020_12Recursive(schema: unknown): unknown {
  *
  * Conversions:
  * - `items: [A, B, C]` → `prefixItems: [A, B, C]` (tuple arrays only)
- * - `additionalItems: X`  → `items: X`
+ * - `additionalItems: X`  → `items: X` (only when tuple items was present;
+ *   standalone additionalItems is ignored in draft-07 and is dropped)
  *
  * Single-schema `items: {…}` and `items: false` are left unchanged.
  * Returns the original object reference when no changes are needed.
