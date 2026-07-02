@@ -286,7 +286,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
                         .font(.title3.weight(.semibold))
                     Text(self.message)
@@ -310,7 +310,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .tint(Color(uiColor: .systemBlue))
+        .tint(OpenClawBrand.accent)
         .padding(24)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

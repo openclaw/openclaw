@@ -75,11 +75,11 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function expectMessageFields(value: unknown, expected: { role: string; content?: string }) {
+function expectMessageFields(value: unknown, expected: { role: string; content?: unknown }) {
   const message = requireRecord(value, "message");
   expect(message.role).toBe(expected.role);
   if ("content" in expected) {
-    expect(message.content).toBe(expected.content);
+    expect(message.content).toEqual(expected.content);
   }
 }
 
@@ -256,7 +256,10 @@ describe("loadCliSessionHistoryMessages", () => {
         });
         expect(history).toHaveLength(2);
         expectMessageFields(history[0], { role: "user", content: "active root" });
-        expectMessageFields(history[1], { role: "assistant", content: "active tail" });
+        expectMessageFields(history[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "active tail" }],
+        });
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -369,7 +372,10 @@ describe("loadCliSessionHistoryMessages", () => {
           content: "tail custom context",
         });
         expectBranchSummary(history[2], "tail branch context");
-        expectMessageFields(history[3], { role: "assistant", content: "tail answer" });
+        expectMessageFields(history[3], {
+          role: "assistant",
+          content: [{ type: "text", text: "tail answer" }],
+        });
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

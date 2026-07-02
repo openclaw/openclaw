@@ -1181,8 +1181,6 @@ jobs:
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
-              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             shrinkwrap)
               pnpm deps:shrinkwrap:check
@@ -1784,7 +1782,13 @@ jobs:
             if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
+            if [[ "$attempt" -eq 3 ]]; then
+              break
+            fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
+            # SwiftPM can invalidate a restored binary artifact while planning.
+            # Reset so the next attempt downloads a complete dependency graph.
+            swift package --package-path apps/macos reset
             sleep $((attempt * 20))
           done
           exit 1

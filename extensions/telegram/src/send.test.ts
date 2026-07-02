@@ -900,6 +900,36 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("records prompt-context text messages with a transcript timestamp override", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-context-override-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const transcriptTimestamp = 1_779_394_740_123;
+    botApi.sendMessage.mockResolvedValueOnce({
+      message_id: 1497,
+      date: 1_779_394_745,
+      chat: { id: "123", type: "private" },
+      from: { id: 42, is_bot: true, first_name: "Kelaw" },
+      text: "Final answer",
+    });
+
+    await sendMessageTelegram("123", "Final answer", {
+      cfg,
+      token: "tok",
+      promptContextTimestampMs: transcriptTimestamp,
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "1497",
+    });
+
+    expect(node?.timestamp).toBe(transcriptTimestamp);
+  });
+
   it("normalizes raw code language HTML before sending", async () => {
     const chatId = "123";
     const text = [

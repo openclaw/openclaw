@@ -50,11 +50,11 @@ struct GatewayProblemBanner: View {
              .pairingRoleUpgradeRequired,
              .pairingScopeUpgradeRequired,
              .pairingMetadataUpgradeRequired:
-            .orange
+            OpenClawBrand.warn
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            .yellow
+            OpenClawBrand.warn
         default:
-            .red
+            OpenClawBrand.danger
         }
     }
 
