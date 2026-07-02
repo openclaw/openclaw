@@ -500,6 +500,64 @@ describe("deliverDiscordReply", () => {
     expect(params.mediaAccess).toEqual({ localRoots: ["/tmp/openclaw-media"] });
   });
 
+  it("falls back to text-only final delivery when Discord rejects oversized attachments", async () => {
+    sendDurableMessageBatchMock
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: new Error("Request entity too large", {
+          cause: { status: 413, message: "Discord API failed (413): Request entity too large" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        status: "sent",
+        results: [{ messageId: "msg-fallback", channelId: "channel-1" }],
+      });
+
+    await deliverDiscordReply({
+      replies: [{ text: "Here is the summary.", mediaUrl: "https://example.com/large.mp3" }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledTimes(2);
+    const fallbackParams = (sendDurableMessageBatchMock.mock.calls[1]?.[0] ?? {}) as DeliverParams;
+    expect(fallbackParams.payloads).toEqual([
+      {
+        text: "Here is the summary.\n⚠️ Attachment omitted because it exceeds Discord upload limits.",
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        ttsSupplement: undefined,
+      },
+    ]);
+  });
+
+  it("does not text-fallback attachment failures for non-413 delivery errors", async () => {
+    sendDurableMessageBatchMock.mockResolvedValueOnce({
+      status: "failed",
+      error: new Error("Discord API failed (500): Internal Server Error"),
+    });
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "This should fail.", mediaUrl: "https://example.com/large.mp3" }],
+        target: "channel:101",
+        token: "token",
+        accountId: "default",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      }),
+    ).rejects.toThrow("Internal Server Error");
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("bridges Discord voice sends through the outbound dependency bag", async () => {
     await deliverDiscordReply({
       replies: [{ text: "voice", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],

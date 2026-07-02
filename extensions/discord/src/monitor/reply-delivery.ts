@@ -21,6 +21,72 @@ import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
+const DISCORD_ATTACHMENT_TOO_LARGE_NOTICE =
+  "⚠️ Attachment omitted because it exceeds Discord upload limits.";
+
+function hasOversizedAttachmentError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { status?: unknown; message?: unknown; cause?: unknown };
+    if (record.status === 413) {
+      return true;
+    }
+    const message =
+      typeof record.message === "string"
+        ? record.message.toLowerCase()
+        : String(record).toLowerCase();
+    if (
+      message.includes("request entity too large") ||
+      (message.includes("payload") && message.includes("too large")) ||
+      (message.includes("attachment") && message.includes("too large")) ||
+      (message.includes("413") && message.includes("too large"))
+    ) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
+}
+
+function appendAttachmentTooLargeNotice(text: string): string {
+  if (text.includes(DISCORD_ATTACHMENT_TOO_LARGE_NOTICE)) {
+    return text;
+  }
+  return `${text}\n${DISCORD_ATTACHMENT_TOO_LARGE_NOTICE}`;
+}
+
+function stripMediaForOversizedAttachmentFallback(payloads: ReplyPayload[]): ReplyPayload[] {
+  const fallback: ReplyPayload[] = [];
+  let emittedStandaloneNotice = false;
+  for (const payload of payloads) {
+    const hasMedia = Boolean(
+      payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url?.trim()),
+    );
+    if (!hasMedia) {
+      fallback.push(payload);
+      continue;
+    }
+    const text = payload.text?.trim();
+    if (text) {
+      fallback.push({
+        ...payload,
+        text: appendAttachmentTooLargeNotice(payload.text ?? ""),
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        ttsSupplement: undefined,
+      });
+      continue;
+    }
+    if (!emittedStandaloneNotice) {
+      fallback.push({ text: DISCORD_ATTACHMENT_TOO_LARGE_NOTICE, isError: true });
+      emittedStandaloneNotice = true;
+    }
+  }
+  return fallback;
+}
+
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
   channelId: string;
@@ -223,6 +289,44 @@ export async function deliverDiscordReply(params: {
     }),
   });
   if (send.status === "failed" || send.status === "partial_failed") {
+    const hasDeliveredResults = send.status === "partial_failed" && send.results.length > 0;
+    if (
+      params.kind === "final" &&
+      !hasDeliveredResults &&
+      hasOversizedAttachmentError(send.error)
+    ) {
+      const fallbackPayloads = stripMediaForOversizedAttachmentFallback(payloads);
+      if (fallbackPayloads.length > 0) {
+        const fallbackSend = await sendDurableMessageBatch({
+          cfg: params.cfg,
+          channel: "discord",
+          to: delivery.to,
+          accountId: params.accountId,
+          payloads: fallbackPayloads,
+          replyToId: normalizeOptionalString(params.replyToId),
+          replyToMode: delivery.replyToMode,
+          formatting: delivery.formatting,
+          threadId: delivery.threadId,
+          identity: delivery.identity,
+          deps: createDiscordDeliveryDeps({
+            cfg: params.cfg,
+            token: params.token,
+            rest: params.rest,
+          }),
+          mediaAccess: delivery.mediaAccess,
+          session: buildOutboundSessionContext({
+            cfg: params.cfg,
+            sessionKey: params.sessionKey,
+            agentId: delivery.agentId,
+            requesterAccountId: params.accountId,
+          }),
+        });
+        if (fallbackSend.status === "failed" || fallbackSend.status === "partial_failed") {
+          throw fallbackSend.error;
+        }
+        return;
+      }
+    }
     throw send.error;
   }
   const results = send.status === "sent" ? send.results : [];
