@@ -289,11 +289,27 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "workspace-configured-channel-plugin",
+        channels: ["workspace-configured-channel"],
+        origin: "workspace",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "global-activation-channel-plugin",
         channels: [],
         activation: {
           onChannels: ["global-activation-channel"],
         },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "external-configured-channel-plugin",
+        channels: ["external-configured-channel"],
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
@@ -2939,6 +2955,18 @@ describe("resolveConfiguredChannelPluginIds", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps external manifest channel owners trusted by explicit channel config", () => {
+    expect(
+      resolveConfiguredChannelPluginIds({
+        config: createStartupConfig({
+          channelIds: ["external-configured-channel"],
+        }),
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["external-configured-channel-plugin"]);
+  });
+
   it("includes trusted external channel owners configured only by manifest env vars", () => {
     expect(
       resolveConfiguredChannelPluginIds({
@@ -2974,6 +3002,76 @@ describe("resolveConfiguredChannelPluginIds", () => {
         env: process.env,
       }),
     ).toStrictEqual([]);
+  });
+});
+
+describe("resolveGatewayStartupPluginIds with effective channel activation", () => {
+  beforeEach(() => {
+    listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
+      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+        return Object.keys(config.channels ?? {});
+      }
+      return [];
+    });
+    listPotentialConfiguredChannelPresenceSignals
+      .mockReset()
+      .mockImplementation((config: OpenClawConfig) => {
+        return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
+          channelId,
+          source: "config",
+        }));
+      });
+    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
+      if (Object.prototype.hasOwnProperty.call(config, "channels")) {
+        return Object.keys(config.channels ?? {}).length > 0;
+      }
+      return false;
+    });
+    useManifestRegistryFixture();
+  });
+
+  it("starts external channel plugins auto-enabled from explicit channel config", () => {
+    const rawConfig = createStartupConfig({
+      channelIds: ["external-configured-channel"],
+    });
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          "external-configured-channel-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "external-configured-channel-plugin", "memory-core"],
+    });
+  });
+
+  it("keeps workspace channel plugins behind explicit activation", () => {
+    const rawConfig = createStartupConfig({
+      channelIds: ["workspace-configured-channel"],
+    });
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          "workspace-configured-channel-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "memory-core"],
+    });
   });
 });
 
