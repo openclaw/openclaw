@@ -236,6 +236,45 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(page.setViewportSize).not.toHaveBeenCalled();
   });
 
+  it("reads LinkedIn invitation state without unsafe body innerText evaluation", async () => {
+    const locatorEvaluate = vi.fn(async (fn: (el: { textContent: string }) => unknown) =>
+      fn({
+        textContent: "Manage invitations Received No new invitations All (0) People you may know",
+      }),
+    );
+    const locator = vi.fn(() => ({
+      first: () => ({ evaluate: locatorEvaluate }),
+    }));
+    const page = {
+      url: vi.fn(() => "https://www.linkedin.com/mynetwork/invitation-manager/"),
+      title: vi.fn(async () => "Invitations | LinkedIn"),
+      locator,
+      evaluate: vi.fn(async () => {
+        throw new Error("unsafe body innerText evaluation failed");
+      }),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.readPageStateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      kind: "linkedin_invitations",
+    });
+
+    expect(result).toEqual({
+      kind: "linkedin_invitations",
+      state: "empty",
+      url: "https://www.linkedin.com/mynetwork/invitation-manager/",
+      title: "Invitations | LinkedIn",
+      text: "Manage invitations Received No new invitations All (0) People you may know",
+      cards: [],
+    });
+    expect(page.evaluate).not.toHaveBeenCalled();
+    expect(locator).toHaveBeenCalledWith("main, [role='main'], body");
+    expect(locatorEvaluate).toHaveBeenCalled();
+  });
+
   it("stores role fallback metadata when backend markers are unavailable", async () => {
     const page = { id: "page-1" };
     const mod = await import("./pw-tools-core.snapshot.js");

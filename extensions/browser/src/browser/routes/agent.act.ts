@@ -200,10 +200,10 @@ function buildExistingSessionWaitPredicate(params: {
 }): string | null {
   const checks: string[] = [];
   if (params.text) {
-    checks.push(`Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`);
+    checks.push(`Boolean(document.body?.textContent?.includes(${JSON.stringify(params.text)}))`);
   }
   if (params.textGone) {
-    checks.push(`!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`);
+    checks.push(`!document.body?.textContent?.includes(${JSON.stringify(params.textGone)})`);
   }
   if (params.selector) {
     checks.push(`Boolean(document.querySelector(${JSON.stringify(params.selector)}))`);
@@ -348,6 +348,8 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         : null;
     case "evaluate":
       return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+    case "readPageState":
+      return EXISTING_SESSION_LIMITS.act.readPageState;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":
@@ -644,6 +646,13 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk({ result });
               }
+              case "readPageState":
+                return jsonActError(
+                  res,
+                  501,
+                  ACT_ERROR_CODES.unsupportedForExistingSession,
+                  EXISTING_SESSION_LIMITS.act.readPageState,
+                );
               case "close":
                 await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile);
                 return await jsonOk();
@@ -688,6 +697,7 @@ export function registerBrowserAgentActRoutes(
                 { resolveCurrentTarget: true },
               );
             case "evaluate":
+            case "readPageState":
               return await jsonOk({ result: result.result }, { resolveCurrentTarget: true });
             case "click":
             case "clickCoords":

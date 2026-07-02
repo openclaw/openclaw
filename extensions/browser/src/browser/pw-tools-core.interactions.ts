@@ -40,7 +40,11 @@ import {
   requireRefOrSelector,
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
-import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
+import {
+  closePageViaPlaywright,
+  readPageStateViaPlaywright,
+  resizeViewportViaPlaywright,
+} from "./pw-tools-core.snapshot.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
   type AnnotationItem,
@@ -1667,6 +1671,15 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         signal,
       });
+    case "readPageState":
+      return await readPageStateViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        ssrfPolicy,
+        kind: action.stateKind,
+        selector: action.selector,
+        maxChars: action.maxChars,
+      });
     case "close":
       await closePageViaPlaywright({
         cdpUrl,
@@ -1736,7 +1749,7 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
-    if (opts.action.kind === "evaluate") {
+    if (opts.action.kind === "evaluate" || opts.action.kind === "readPageState") {
       return { result };
     }
     return {};

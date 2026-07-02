@@ -26,6 +26,7 @@ const BROWSER_ACT_KINDS = [
   "resize",
   "wait",
   "evaluate",
+  "readPageState",
   "close",
 ] as const;
 
@@ -98,6 +99,8 @@ const BrowserActSchema = Type.Object({
   loadState: Type.Optional(Type.String()),
   textGone: Type.Optional(Type.String()),
   timeoutMs: optionalPositiveIntegerSchema(),
+  stateKind: Type.Optional(stringEnum(["page", "linkedin_invitations"] as const)),
+  maxChars: optionalNonNegativeIntegerSchema(),
   // evaluate
   fn: Type.Optional(Type.String()),
 });

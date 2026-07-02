@@ -28,6 +28,8 @@ export const EXISTING_SESSION_LIMITS = {
     fillTimeout: "existing-session fill does not support timeoutMs overrides.",
     waitNetworkIdle: "existing-session wait does not support loadState=networkidle yet.",
     evaluateTimeout: "existing-session evaluate does not support timeoutMs overrides.",
+    readPageState:
+      "existing-session readPageState is not supported yet; use snapshot for existing-session profiles.",
     batch: "existing-session batch is not supported yet; send actions individually.",
   },
   hooks: {
