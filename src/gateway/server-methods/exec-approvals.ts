@@ -137,22 +137,46 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
         allowed.reason === "command not allowlisted" &&
         Array.isArray(nodeSession.declaredCommands) &&
         nodeSession.declaredCommands.includes(params.command);
-      const message = isPolicyDenial
-        ? `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`
-        : `Node ${nodeId} does not support ${params.command}. ` +
-          `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`;
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, message, {
-          details: {
-            supportedCommands: nodeSession.commands,
-            requestedCommand: params.command,
-            reason: allowed.reason,
-          },
-        }),
-      );
-      return;
+      const errorDetails = {
+        supportedCommands: nodeSession.commands,
+        requestedCommand: params.command,
+        reason: allowed.reason,
+      };
+      if (isPolicyDenial) {
+        // Admin-scoped exec-approvals node RPCs: allow based on raw declared
+        // capability when the effective command surface omits the command due
+        // to pairing allowlist or runtime command policy filtering.  Only
+        // explicit denyCommands can block this admin RPC.
+        const isDenied = (cfg.gateway?.nodes?.denyCommands ?? []).some(
+          (cmd: string) => cmd.trim() === params.command,
+        );
+        if (isDenied) {
+          params.respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`,
+              { details: errorDetails },
+            ),
+          );
+          return;
+        }
+        // Falls through to nodeRegistry.invoke — the node declared the
+        // capability and the operator did not explicitly deny it.
+      } else {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Node ${nodeId} does not support ${params.command}. ` +
+              `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`,
+            { details: errorDetails },
+          ),
+        );
+        return;
+      }
     }
   }
   await respondUnavailableOnThrow(params.respond, async () => {

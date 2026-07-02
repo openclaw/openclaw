@@ -37,8 +37,10 @@ describe("exec-approvals node preflight (real gateway)", () => {
   let gateway: Awaited<ReturnType<typeof startServerWithClient>>;
   let limitedNode: Awaited<ReturnType<typeof connectGatewayClient>>;
   let capableNode: Awaited<ReturnType<typeof connectGatewayClient>>;
+  let naiveCapableNode: Awaited<ReturnType<typeof connectGatewayClient>>;
   let limitedNodeId: string;
   let capableNodeId: string;
+  let naiveCapableNodeId: string;
   let capableIdent: DeviceIdentity;
 
   beforeAll(async () => {
@@ -129,22 +131,62 @@ describe("exec-approvals node preflight (real gateway)", () => {
       timeoutMessage: "timeout waiting for capable-node to connect",
     });
 
+    // Connect a node that declares exec-approvals commands WITHOUT
+    // pre-pairing.  reconcileNodePairingOnConnect returns effectiveCommands:[]
+    // (first-connect pending pairing), but declaredCommands still carries the
+    // exec-approvals capability.  The admin-scoped preflight gate should allow
+    // based on raw declared capability rather than the empty effective surface.
+    naiveCapableNode = await connectGatewayClient({
+      url: `ws://127.0.0.1:${gateway.port}`,
+      token: "secret",
+      role: "node",
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: "naive-capable-node",
+      clientVersion: "1.0.0",
+      platform: "linux",
+      deviceFamily: "Linux",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      scopes: [],
+      commands: [
+        "system.run",
+        "system.notify",
+        "browser.proxy",
+        "system.execApprovals.get",
+        "system.execApprovals.set",
+      ],
+      deviceIdentity: loadOrCreateDeviceIdentity(
+        path.join(
+          process.env.OPENCLAW_STATE_DIR ?? os.tmpdir(),
+          "test-device-identities",
+          "exec-approvals-naive-capable.json",
+        ),
+      ),
+      timeoutMessage: "timeout waiting for naive-capable-node to connect",
+    });
+
     // Look up connected node IDs from the operator client.
     const listRes = await rpcReq<{ nodes?: NodeListEntry[] }>(gateway.ws, "node.list", {});
     const nodes = listRes.payload?.nodes ?? [];
     const limited = nodes.find((n) => n.displayName === "limited-node");
     const capable = nodes.find((n) => n.displayName === "capable-node");
-    if (!limited?.nodeId || !capable?.nodeId) {
+    const naive = nodes.find((n) => n.displayName === "naive-capable-node");
+    if (!limited?.nodeId || !capable?.nodeId || !naive?.nodeId) {
       throw new Error(
-        `Failed to find connected nodes in node.list: limited=${limited?.nodeId}, capable=${capable?.nodeId}`,
+        `Failed to find connected nodes in node.list: ` +
+          `limited=${limited?.nodeId}, capable=${capable?.nodeId}, naive=${naive?.nodeId}`,
       );
     }
     limitedNodeId = limited.nodeId;
     capableNodeId = capable.nodeId;
+    naiveCapableNodeId = naive.nodeId;
   }, 60_000);
 
   afterAll(async () => {
-    await Promise.all([disconnectGatewayClient(limitedNode), disconnectGatewayClient(capableNode)]);
+    await Promise.all([
+      disconnectGatewayClient(limitedNode),
+      disconnectGatewayClient(capableNode),
+      disconnectGatewayClient(naiveCapableNode),
+    ]);
     gateway?.ws.close();
     await gateway?.server.close();
   }, 30_000);
@@ -190,6 +232,27 @@ describe("exec-approvals node preflight (real gateway)", () => {
     // set succeeds because the capable node declares system.execApprovals.set
     // in its effective command surface and the preflight allowlist includes it.
     expect(res.ok).toBe(true);
+  });
+
+  // ---- naive-capable-node scenario (no pre-pairing) ----
+
+  test("naive first-connect node succeeds on exec.approvals.node.get when it declared capability", async () => {
+    // The node connected without pre-pairing, so effectiveCommands are empty
+    // (pending pairing).  The admin-scoped preflight gate allows based on raw
+    // declaredCommands — the node declared system.execApprovals.get during
+    // connect, and no explicit denyCommands blocks it.
+    const res = await rpcReq<{ hash?: string; file?: unknown }>(
+      gateway.ws,
+      "exec.approvals.node.get",
+      { nodeId: naiveCapableNodeId },
+    );
+
+    console.log(JSON.stringify(res, null, 2));
+
+    // The preflight gate must allow the admin RPC based on the node's declared
+    // capability rather than its (empty) effective command surface.
+    expect(res.ok).toBe(true);
+    expect(res.payload).toBeDefined();
   });
 
   // ---- unknown-node scenarios ----

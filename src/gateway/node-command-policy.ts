@@ -117,14 +117,16 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    ...NODE_EXEC_APPROVALS_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS],
+  linux: [...SYSTEM_COMMANDS, ...NODE_EXEC_APPROVALS_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    ...NODE_EXEC_APPROVALS_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
