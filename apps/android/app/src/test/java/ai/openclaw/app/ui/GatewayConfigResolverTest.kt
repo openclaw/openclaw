@@ -608,18 +608,20 @@ class GatewayConfigResolverTest {
 
   @Test
   fun composeGatewayManualUrl_bracketsIpv6ForEndpointParsing() {
-    val url = composeGatewayManualUrl("::1", "18789", tls = false)
+    for (hostInput in listOf("::1", "[::1]")) {
+      val url = composeGatewayManualUrl(hostInput, "18789", tls = false)
 
-    assertEquals("http://[::1]:18789", url)
-    assertEquals(
-      GatewayEndpointConfig(
-        host = "::1",
-        port = 18789,
-        tls = false,
-        displayUrl = "http://[::1]:18789",
-      ),
-      parseGatewayEndpoint(url!!),
-    )
+      assertEquals("http://[::1]:18789", url)
+      assertEquals(
+        GatewayEndpointConfig(
+          host = "::1",
+          port = 18789,
+          tls = false,
+          displayUrl = "http://[::1]:18789",
+        ),
+        parseGatewayEndpoint(url!!),
+      )
+    }
   }
 
   @Test
