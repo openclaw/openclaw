@@ -4,7 +4,10 @@ import {
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
 } from "../../auto-reply/continuation-delegate-store.js";
-import { resetContinueDelegateTurnAdmissionForTests } from "../../auto-reply/continuation/delegate-turn-admission.js";
+import {
+  resetContinueDelegateTurnAdmissionForTests,
+  resetContinueDelegateTurnBudget,
+} from "../../auto-reply/continuation/delegate-turn-admission.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
@@ -135,27 +138,22 @@ describe("continue_delegate tool", () => {
     expect(JSON.stringify(tool.parameters)).not.toContain("traceparent");
   });
 
-  it("does not let far-future queued delegates consume a fresh turn budget", async () => {
+  it("resets the per-turn budget at the assistant-turn boundary for the same tool instance", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 2 } } },
     });
-    const firstTurnTool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+    // The embedded runner builds the tool list once per run; the SAME instance
+    // is reused across every assistant turn. Far-future queued delegates must
+    // not permanently consume the budget across turns (#1144 r3514647794).
+    const runTool = createContinueDelegateTool({ agentSessionKey: "test-session" });
 
     await expect(
-      executeTool(firstTurnTool, 0, {
-        task: "delayed delegate 1",
-        delaySeconds: 86_400,
-      }),
+      executeTool(runTool, 0, { task: "delayed delegate 1", delaySeconds: 86_400 }),
     ).resolves.toMatchObject({ status: "scheduled", delegatesThisTurn: 1 });
     await expect(
-      executeTool(firstTurnTool, 1, {
-        task: "delayed delegate 2",
-        delaySeconds: 86_400,
-      }),
+      executeTool(runTool, 1, { task: "delayed delegate 2", delaySeconds: 86_400 }),
     ).resolves.toMatchObject({ status: "scheduled", delegatesThisTurn: 2 });
-    await expect(
-      executeTool(firstTurnTool, 2, { task: "same-turn overflow" }),
-    ).resolves.toMatchObject({
+    await expect(executeTool(runTool, 2, { task: "same-turn overflow" })).resolves.toMatchObject({
       status: "rejected",
       guard: "maxDelegatesPerTurn",
       delegatesThisTurn: 2,
@@ -165,10 +163,11 @@ describe("continue_delegate tool", () => {
       stagedPostCompactionDelegates: 0,
     });
 
-    const nextTurnTool = createContinueDelegateTool({ agentSessionKey: "test-session" });
-    await expect(
-      executeTool(nextTurnTool, 0, { task: "fresh turn immediate" }),
-    ).resolves.toMatchObject({
+    // New assistant turn boundary (onAssistantMessageStart) resets the budget.
+    resetContinueDelegateTurnBudget("test-session");
+
+    // The SAME tool instance now gets a fresh budget for the new turn.
+    await expect(executeTool(runTool, 3, { task: "fresh turn immediate" })).resolves.toMatchObject({
       status: "scheduled",
       delegateIndex: 1,
       delegatesThisTurn: 1,

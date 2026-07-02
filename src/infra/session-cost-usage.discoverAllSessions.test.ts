@@ -82,6 +82,36 @@ describe("discoverAllSessions — checkpoint dedup", () => {
     expect(discovered[0]?.sessionFile.endsWith(`${PARENT_UUID}.jsonl`)).toBe(true);
   });
 
+  it("(b2) newer checkpoint mtime is preserved when primary replaces the placeholder (#1144)", async () => {
+    // Directory iteration order is non-deterministic (readdir + concurrent
+    // stat), so whether the checkpoint or the primary is scanned first varies.
+    // A freshly-written checkpoint can carry a newer mtime than its parent
+    // primary; the discovered session's mtime must be the MAX of the two and
+    // its sessionFile must stay the primary — regardless of scan order.
+    const root = await suiteRootTracker.make("case-b2");
+    const sessionsDir = await makeAgentSessionsDir(root);
+    const primaryPath = path.join(sessionsDir, `${PARENT_UUID}.jsonl`);
+    const checkpointPath = path.join(
+      sessionsDir,
+      `${PARENT_UUID}.checkpoint.${CHECKPOINT_UUIDS[0]}.jsonl`,
+    );
+    await fs.writeFile(primaryPath, USER_JSONL_LINE);
+    await fs.writeFile(checkpointPath, EMPTY_JSONL);
+
+    const olderMtime = new Date("2026-01-01T00:00:00.000Z");
+    const newerMtime = new Date("2026-01-02T00:00:00.000Z");
+    // Primary is OLDER; the checkpoint captured more recent activity.
+    await fs.utimes(primaryPath, olderMtime, olderMtime);
+    await fs.utimes(checkpointPath, newerMtime, newerMtime);
+
+    const discovered = await discoverUnder(root);
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0]?.sessionId).toBe(PARENT_UUID);
+    // sessionFile stays the primary; mtime is the newer checkpoint value.
+    expect(discovered[0]?.sessionFile.endsWith(`${PARENT_UUID}.jsonl`)).toBe(true);
+    expect(discovered[0]?.mtime).toBe(newerMtime.getTime());
+  });
+
   it("(c) five checkpoints only, parent primary missing: one discovered entry under parent id", async () => {
     const root = await suiteRootTracker.make("case-c");
     const sessionsDir = await makeAgentSessionsDir(root);

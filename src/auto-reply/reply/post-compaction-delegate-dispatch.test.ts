@@ -108,6 +108,7 @@ function createDispatchDeps(options?: {
   const drainPostCompactionDelegateDeliveries = vi.fn(async () => undefined);
   const deps: PostCompactionDelegateDispatchDeps = {
     consumeStagedPostCompactionDelegates: vi.fn(() => options?.staged ?? []),
+    finalizeStagedPostCompactionDelegates: vi.fn(() => 0),
     drainPostCompactionDelegateDeliveries,
     enqueuePostCompactionDelegateDelivery,
     enqueueSystemEvent,

@@ -49,6 +49,9 @@ const dispatchToolDelegatesMock = vi.fn(
 type ConsumedToolDelegate = { task: string; model?: string };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
+// #1144: capture durable delayed-bracket delegate enqueues (replaces the old
+// volatile setTimeout path).
+const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const spawnSubagentDirectMock = vi.fn(async (_params: Record<string, unknown>, _ctx: unknown) => ({
   status: "accepted" as const,
   childSessionKey: "agent:main:subagent:grandchild",
@@ -213,6 +216,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+  enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
+    enqueuePendingDelegateMock(sessionKey, delegate),
 }));
 
 vi.mock("./subagent-spawn.js", () => ({
@@ -297,6 +302,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
+    enqueuePendingDelegateMock.mockReset();
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:grandchild",
@@ -879,6 +885,103 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(deliverSubagentAnnouncementMock).toHaveBeenCalledWith(
       expect.objectContaining({ continuationTriggerOverride: "delegate-return" }),
     );
+  });
+
+  it("folds the settled child's run tokens into the drain cost basis before dispatch (#1144)", async () => {
+    // A chain-hop child that spent tokens this turn must have those tokens
+    // reflected in the drain's cost basis BEFORE queued child delegates spawn,
+    // so a child run that pushes the chain over costCapTokens cannot launch
+    // another delegate on stale (pre-accumulation) cost.
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:cost": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 5_000,
+            // The child's just-completed run cost (input + output).
+            inputTokens: 300_000,
+            outputTokens: 250_000,
+          },
+          "agent:main:main": {
+            sessionId: "session-main",
+            updatedAt: Date.now(),
+          },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:cost",
+      childRunId: "run-cost",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { accumulatedChainTokens?: number };
+    };
+    // 5_000 inherited + (300_000 + 250_000) child run = 555_000 — which exceeds
+    // costCapTokens (500_000), so the real dispatcher would now reject the hop.
+    expect(call?.chainState?.accumulatedChainTokens).toBe(555_000);
+    expect(call?.chainState?.accumulatedChainTokens).toBeGreaterThan(500_000);
+  });
+
+  it("routes a delayed bracket delegate through the durable pending store, not a volatile timer (#1144)", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:bracket": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 1_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket",
+      childRunId: "run-bracket",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      // A delayed bracket delegate (+30s) emitted by the settled child.
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    // The delayed bracket delegate is persisted under the requester session
+    // (bracket delegates spawn with agentSessionKey=requester) with its delay —
+    // it survives a restart before the delay elapses.
+    expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
+    const [enqueueSessionKey, enqueued] = enqueuePendingDelegateMock.mock.calls[0] as [
+      string,
+      { task: string; delayMs?: number },
+    ];
+    expect(enqueueSessionKey).toBe("agent:main:main");
+    expect(enqueued.task).toBe("keep working");
+    expect(enqueued.delayMs).toBe(30_000);
+
+    // It must NOT be spawned immediately via a volatile in-process path.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
