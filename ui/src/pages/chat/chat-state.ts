@@ -905,7 +905,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private stateValue: TState | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
-  private disposed = false;
 
   constructor(private readonly host: ReactiveControllerHost) {
     host.addController(this);
@@ -968,8 +967,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return true;
   }
 
-  stop() {
-    this.composerPersistence.stop();
+  private stopChatEffects() {
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }
@@ -981,19 +979,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     }
   }
 
-  dispose() {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.stop();
-    this.host.removeController(this.composerPersistence);
-    this.host.removeController(this);
+  hostDisconnected() {
+    this.stopChatEffects();
     this.stateValue = undefined;
     this.pendingCreatedSessionComposer = null;
-  }
-
-  hostDisconnected() {
-    this.stop();
   }
 }

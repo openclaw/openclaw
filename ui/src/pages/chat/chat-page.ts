@@ -84,7 +84,7 @@ export class ChatPage extends LitElement {
   private context!: ChatPageContext;
   @property({ attribute: false }) data!: ChatRouteData;
 
-  private chatState: ChatStateController<ChatPageHost> | undefined;
+  private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
 
@@ -215,7 +215,7 @@ export class ChatPage extends LitElement {
       }
       return false;
     }
-    this.chatState?.captureCreatedSessionComposer(nextSessionKey);
+    this.chatState.captureCreatedSessionComposer(nextSessionKey);
     this.context.navigate("chat", {
       search: searchForSession(nextSessionKey),
     });
@@ -298,8 +298,7 @@ export class ChatPage extends LitElement {
     super.connectedCallback();
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
-    const chatState = new ChatStateController<ChatPageHost>(this);
-    this.chatState = chatState;
+    const chatState = this.chatState;
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
@@ -354,7 +353,7 @@ export class ChatPage extends LitElement {
       } else if (nextSessionKey) {
         this.applyRouteSessionKey(nextSessionKey);
       }
-      this.chatState?.restoreCreatedSessionComposer(nextSessionKey);
+      this.chatState.restoreCreatedSessionComposer(nextSessionKey);
       if (this.data.draft !== undefined && this.data.draft !== this.state.chatMessage) {
         this.state.handleChatDraftChange(this.data.draft);
       }
@@ -362,11 +361,9 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
-    this.chatState?.dispose();
     this.announceCommandPaletteTarget(null);
     resetChatViewState();
     this.state = undefined;
-    this.chatState = undefined;
     this.connectedClient = null;
     super.disconnectedCallback();
   }
