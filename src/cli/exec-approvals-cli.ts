@@ -77,8 +77,8 @@ async function readFileWithBound(
   filePath: string,
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
-  // Open the file handle first, then check via fd to prevent TOCTOU races
-  // and ensure we only read from regular files (not /dev/zero, FIFOs, etc.).
+  // Open the file handle first, then check and read via the same fd to
+  // prevent TOCTOU races and reject non-regular files (/dev/zero, FIFOs, etc.).
   const fd = await fs.open(filePath, "r");
   try {
     const stat = await fd.stat();
@@ -88,7 +88,14 @@ async function readFileWithBound(
     if (stat.size > maxBytes) {
       throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
     }
-    return await fd.readFile("utf8");
+    // Read at most maxBytes + 1 bytes. If the file grew after stat, the
+    // actual read is still bounded and we catch it via bytesRead > maxBytes.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const { bytesRead } = await fd.read(buffer, 0, maxBytes + 1, 0);
+    if (bytesRead > maxBytes) {
+      throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+    }
+    return buffer.toString("utf8", 0, bytesRead);
   } finally {
     await fd.close();
   }
