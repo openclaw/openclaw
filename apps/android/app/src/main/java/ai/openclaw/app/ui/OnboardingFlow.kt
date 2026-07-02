@@ -1387,22 +1387,10 @@ private fun rememberPermissionState(
   val photosPermissions = photoReadPermissionsForRequest()
   var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
   var contactsGranted by rememberSaveable {
-    mutableStateOf(
-      mergedRequiredPermissionGrantState(
-        permissions = emptyMap(),
-        requiredPermissions = requiredContactPermissions,
-        currentlyGranted = { permission -> hasPermission(context, permission) },
-      ),
-    )
+    mutableStateOf(requiredContactPermissions.all { permission -> hasPermission(context, permission) })
   }
   var calendarGranted by rememberSaveable {
-    mutableStateOf(
-      mergedRequiredPermissionGrantState(
-        permissions = emptyMap(),
-        requiredPermissions = requiredCalendarPermissions,
-        currentlyGranted = { permission -> hasPermission(context, permission) },
-      ),
-    )
+    mutableStateOf(requiredCalendarPermissions.all { permission -> hasPermission(context, permission) })
   }
   var notificationsGranted by rememberSaveable {
     mutableStateOf(Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS))
