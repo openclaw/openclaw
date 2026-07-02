@@ -66,10 +66,11 @@ export function resolveDiscordVoiceAgentRoute(params: {
     // different agent while renewing the displaced plugin binding.
     throw new Error("Discord voice cannot dispatch a plugin-owned conversation binding");
   }
-  let route = baseRoute;
-  let configuredBinding: ConfiguredBindingRouteResult["bindingResolution"] = null;
+  let route: typeof baseRoute;
+  let configuredBinding: ConfiguredBindingRouteResult["bindingResolution"];
   if (!runtimeBindingIsStale && runtimeRoute.boundSessionKey) {
     route = runtimeRoute.route;
+    configuredBinding = null;
   } else {
     const configuredRoute = resolveConfiguredBindingRoute({
       cfg: params.cfg,

@@ -134,8 +134,8 @@ describe("CallManager verification on restore", () => {
           responsePolicy: { model: null, systemPrompt: null, timeoutMs: 30000 },
         },
       },
-      configureProvider: (provider) => {
-        provider.getCallStatus = getCallStatus;
+      configureProvider: (configuredProvider) => {
+        configuredProvider.getCallStatus = getCallStatus;
       },
       validateInboundIdentity: () => false,
     });

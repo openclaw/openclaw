@@ -297,8 +297,6 @@ async function processMessage(
   }
   const senderName = message.senderName ?? "";
   const configuredGroupName = message.groupName?.trim() || "";
-  let groupName = configuredGroupName;
-  let groupMembers: string | undefined;
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
@@ -478,8 +476,8 @@ async function processMessage(
           return null;
         })
       : null;
-  groupName = configuredGroupName || groupContext?.name?.trim() || "";
-  groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
+  const groupName = configuredGroupName || groupContext?.name?.trim() || "";
+  const groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
 
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(

@@ -108,10 +108,6 @@ const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => 
   return parsed;
 };
 
-const personalCoreConfig: OpenClawConfig & CoreConfig = {
-  agents: { list: [{ id: "main", default: true }] },
-};
-
 const serviceCoreConfig: OpenClawConfig & CoreConfig = {
   agents: { list: [{ id: "personal", default: true }, { id: "voice-service" }] },
 };
