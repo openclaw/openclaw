@@ -1,4 +1,5 @@
 // Discord plugin module implements native command behavior.
+import path from "node:path";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -550,6 +551,30 @@ async function dispatchDiscordCommandInteraction(params: {
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
+    let pluginSessionEntry = targetSessionEntry;
+    let pluginSessionFile: string | undefined;
+    if (targetSessionEntry?.sessionId) {
+      const storePath = nativeCommandRuntime.resolveStorePath(cfg.session?.store, {
+        agentId: pluginCommandAgentId,
+      });
+      const sessionStore = nativeCommandRuntime.loadSessionStore(storePath, { clone: false });
+      const resolvedSessionEntry = nativeCommandRuntime.resolveSessionStoreEntry({
+        store: sessionStore,
+        sessionKey: effectiveRoute.sessionKey,
+      });
+      pluginSessionEntry = resolvedSessionEntry.existing ?? targetSessionEntry;
+      pluginSessionFile = (
+        await nativeCommandRuntime.resolveAndPersistSessionFile({
+          sessionId: pluginSessionEntry.sessionId,
+          sessionKey: resolvedSessionEntry.normalizedKey,
+          sessionStore,
+          storePath,
+          sessionEntry: pluginSessionEntry,
+          agentId: pluginCommandAgentId,
+          sessionsDir: path.dirname(storePath),
+        })
+      ).sessionFile;
+    }
     const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -560,7 +585,9 @@ async function dispatchDiscordCommandInteraction(params: {
       senderIsOwner: senderIsCommandOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
-      authProfileId: targetSessionEntry?.authProfileOverride,
+      sessionId: pluginSessionEntry?.sessionId,
+      sessionFile: pluginSessionFile,
+      authProfileId: pluginSessionEntry?.authProfileOverride,
       commandBody: prompt,
       config: cfg,
       from: isDirectMessage
