@@ -760,11 +760,23 @@ describe("runAgentLoop tool-name alias resolution", () => {
     );
 
     expect(execute).toHaveBeenCalledTimes(1);
+    // The tool_result message uses the CANONICAL name (memory_search) so that
+    // extension policy, session classifiers, and active-memory recovery see the
+    // resolved tool. The assistant message content still carries the model's
+    // original tool_use with name="KnowledgeSearch" for trajectory replay.
     expect(messages).toContainEqual(
       expect.objectContaining({
         role: "toolResult",
-        toolName: "KnowledgeSearch",
+        toolName: "memory_search",
         isError: false,
+      }),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "toolCall", name: "KnowledgeSearch" }),
+        ]),
       }),
     );
   });
@@ -794,10 +806,11 @@ describe("runAgentLoop tool-name alias resolution", () => {
     );
 
     expect(execute).toHaveBeenCalledTimes(1);
+    // Canonical name flows to tool_result / hooks; assistant message keeps FIND.
     expect(messages).toContainEqual(
       expect.objectContaining({
         role: "toolResult",
-        toolName: "FIND",
+        toolName: "find",
         isError: false,
       }),
     );
@@ -905,10 +918,12 @@ describe("runAgentLoop tool-name alias resolution", () => {
 
     expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(1);
+    // Deferred resolver returned canonical memory_search; tool_result carries
+    // the canonical name so downstream policy/persistence keys correctly.
     expect(messages).toContainEqual(
       expect.objectContaining({
         role: "toolResult",
-        toolName: "KnowledgeSearch",
+        toolName: "memory_search",
         isError: false,
       }),
     );

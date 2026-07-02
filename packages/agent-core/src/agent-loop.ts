@@ -942,14 +942,24 @@ async function prepareToolCall(
     };
   }
 
+  // When an alias resolved the tool, downstream extension hooks, execution
+  // events, persisted results, and session classifiers must see the canonical
+  // tool name so that policies/audits keyed on the canonical name (e.g.
+  // memory_search) don't get bypassed by the raw alias (KnowledgeSearch).
+  // The assistantMessage still carries the model's original tool_use content
+  // for trajectory replay; only the toolCall handed to the dispatch pipeline
+  // is rewritten.
+  const dispatchToolCall: AgentToolCall =
+    tool.name === toolCall.name ? toolCall : { ...toolCall, name: tool.name };
+
   try {
-    const preparedToolCall = prepareToolCallArguments(tool, toolCall);
+    const preparedToolCall = prepareToolCallArguments(tool, dispatchToolCall);
     const validatedArgs = validateToolArguments(tool, preparedToolCall);
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
           assistantMessage,
-          toolCall,
+          toolCall: dispatchToolCall,
           args: validatedArgs,
           context: currentContext,
         },
@@ -979,7 +989,7 @@ async function prepareToolCall(
     }
     return {
       kind: "prepared",
-      toolCall,
+      toolCall: dispatchToolCall,
       tool,
       args: validatedArgs,
     };
