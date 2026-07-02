@@ -299,6 +299,33 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
     if (!approved) {
+      // Check if this might be a node pairing request that the user tried to approve via devices.
+      // This happens when Android/iOS nodes reconnect and need reapproval - the node UUID is not
+      // visible in the app or device list, so users naturally try `devices approve` first.
+      const { listNodePairing } = await import("../../infra/node-pairing.js");
+      const nodeList = await listNodePairing();
+      const matchingNodeRequest = nodeList.pending?.find(
+        (node) => node.requestId === requestId || node.remoteIp === requestId,
+      );
+      if (matchingNodeRequest) {
+        // nodes approve accepts requestId, nodeId, or remoteIp as identifiers.
+        // Use the most specific identifier available - prefer requestId since that's
+        // what the user originally tried to use.
+        const identifier = matchingNodeRequest.requestId;
+        const approveCommand = `openclaw nodes approve ${identifier}`;
+        const displayId = matchingNodeRequest.nodeId ?? identifier;
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `This request ID refers to a pending node approval, not a device pairing. ` +
+              `Run \`${approveCommand}\` instead. ` +
+              `(Node: ${matchingNodeRequest.displayName ?? displayId}${matchingNodeRequest.remoteIp ? ` @ ${matchingNodeRequest.remoteIp}` : ""})`,
+          ),
+        );
+        return;
+      }
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
