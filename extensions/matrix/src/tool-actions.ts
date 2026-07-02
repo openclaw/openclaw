@@ -110,7 +110,7 @@ function assertMatrixReadTargetAllowed(params: {
   const groupPolicy = resolveMatrixReadGroupPolicy(params);
   const roomConfig = roomId ? resolveMatrixRoomConfig({ rooms, roomId, aliases: [] }) : undefined;
   if (groupPolicy === "open") {
-    if (roomConfig?.allowlistConfigured && !roomConfig.allowed) {
+    if (roomConfig?.config && !roomConfig.allowed) {
       throw new Error("Matrix read target room is not allowed.");
     }
     return;

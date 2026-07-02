@@ -283,6 +283,38 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
   });
 
+  it("allows unmatched Matrix room reads under open policy when another room is configured", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          groups: {
+            "!blocked:example": { enabled: false },
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    const result = await handleMatrixAction(
+      {
+        action: "reactions",
+        roomId: "!other:example",
+        messageId: "$msg",
+      },
+      cfg,
+    );
+
+    expect(mocks.listMatrixReactions).toHaveBeenCalledWith("!other:example", "$msg", {
+      cfg,
+      limit: undefined,
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
+    });
+  });
+
   it("rejects fractional reaction limits before listing reactions", async () => {
     const cfg = {
       channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
