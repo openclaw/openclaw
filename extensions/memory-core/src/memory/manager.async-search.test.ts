@@ -72,6 +72,50 @@ describe("memory search async sync", () => {
     await closePromise;
   });
 
+  it("reports pending sync rejection during close", async () => {
+    const onError = vi.fn();
+    const err = new Error("sync failed");
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(err),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledWith(err);
+  });
+
+  it("reports pending provider init rejection during close", async () => {
+    const onError = vi.fn();
+    const err = new Error("provider init failed");
+    await awaitPendingManagerWork({
+      pendingProviderInit: Promise.reject(err),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledWith(err);
+  });
+
+  it("reports both pending work rejections during close", async () => {
+    const onError = vi.fn();
+    const syncErr = new Error("sync failed");
+    const providerErr = new Error("provider init failed");
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(syncErr),
+      pendingProviderInit: Promise.reject(providerErr),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledWith(syncErr);
+    expect(onError).toHaveBeenCalledWith(providerErr);
+  });
+
+  it("does not invoke onError when pending work resolves", async () => {
+    const onError = vi.fn();
+    await awaitPendingManagerWork({
+      pendingSync: Promise.resolve(),
+      pendingProviderInit: Promise.resolve(),
+      onError,
+    });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("skips background search sync when search-triggered sync is disabled", async () => {
     const syncMock = vi.fn(async () => {});
     await startAsyncSearchSync({

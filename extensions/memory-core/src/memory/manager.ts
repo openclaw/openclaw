@@ -1369,9 +1369,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (!pendingSync) {
         return;
       }
-      await awaitPendingManagerWork({ pendingSync });
+      await awaitPendingManagerWork({
+        pendingSync,
+        onError: (err) => {
+          log.warn(`memory sync failed (close): ${String(err)}`);
+        },
+      });
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
+    await awaitPendingManagerWork({
+      pendingProviderInit,
+      onError: (err) => {
+        log.warn(`memory provider init failed (close): ${String(err)}`);
+      },
+    });
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();
