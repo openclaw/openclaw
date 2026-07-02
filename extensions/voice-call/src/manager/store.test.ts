@@ -17,6 +17,8 @@ import { CallRecordSchema } from "../types.js";
 import {
   flushPendingCallRecordWritesForTest,
   getCallHistoryFromStore,
+  getPersistedCallByCallId,
+  getPersistedCallByProviderCallId,
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./store.js";
@@ -38,6 +40,43 @@ function installStateRuntime(): void {
 }
 
 describe("voice-call call record store", () => {
+
+  it("finds a persisted call record by call id (fallback for #96586)", async () => {
+    const storePath = createTestStorePath();
+    const call = CallRecordSchema.parse(
+      makePersistedCall({ callId: "call-by-id", providerCallId: "SID-by-id" }),
+    );
+    persistCallRecord(storePath, call);
+    await flushPendingCallRecordWritesForTest();
+
+    const found = await getPersistedCallByCallId(storePath, "call-by-id");
+    expect(found?.callId).toBe("call-by-id");
+  });
+
+  it("returns null when no persisted call matches the call id", async () => {
+    const storePath = createTestStorePath();
+    const found = await getPersistedCallByCallId(storePath, "missing-call-id");
+    expect(found).toBeNull();
+  });
+
+  it("finds a persisted call record by provider call id (fallback for #96586)", async () => {
+    const storePath = createTestStorePath();
+    const call = CallRecordSchema.parse(
+      makePersistedCall({ callId: "call-by-provider", providerCallId: "SID-by-provider" }),
+    );
+    persistCallRecord(storePath, call);
+    await flushPendingCallRecordWritesForTest();
+
+    const found = await getPersistedCallByProviderCallId(storePath, "SID-by-provider");
+    expect(found?.providerCallId).toBe("SID-by-provider");
+  });
+
+  it("returns null when no persisted call matches the provider call id", async () => {
+    const storePath = createTestStorePath();
+    const found = await getPersistedCallByProviderCallId(storePath, "missing-sid");
+    expect(found).toBeNull();
+  });
+
   beforeEach(() => {
     resetPluginStateStoreForTests();
     installStateRuntime();

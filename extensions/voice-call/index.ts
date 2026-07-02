@@ -387,6 +387,23 @@ export default definePluginEntry({
       return `call is not active (${details.join(", ")})`;
     };
 
+    const findCallWithPersistedFallback = async (
+      rt: VoiceCallRuntime,
+      callId: string,
+    ) => {
+      const active = rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+      if (active) {
+        return active;
+      }
+      // Fall back to the persisted call store when the in-memory manager has
+      // evicted a completed call (issue #96586).
+      return (
+        (await rt.manager.getPersistedCallByCallId(callId)) ??
+        (await rt.manager.getPersistedCallByProviderCallId(callId)) ??
+        null
+      );
+    };
+
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
       const callId = normalizeOptionalString(params?.callId) ?? "";
       const message = normalizeOptionalString(params?.message) ?? "";
@@ -657,7 +674,7 @@ export default definePluginEntry({
             });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call = await findCallWithPersistedFallback(rt, raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -794,8 +811,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                const call = await findCallWithPersistedFallback(rt, callId);
                 return json(
                   call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
                 );
@@ -809,7 +825,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call = await findCallWithPersistedFallback(rt, sid);
             return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 
