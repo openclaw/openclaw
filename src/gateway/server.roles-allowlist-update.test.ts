@@ -2,6 +2,7 @@
 // device/node pairing state, restart sentinels, and runtime plugin visibility.
 import fs from "node:fs/promises";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -340,7 +341,7 @@ async function respondToInvoke(
 
 function createDeviceIdentityForTest(prefix: string) {
   return loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
+    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${randomUUID()}.json`),
   );
 }
 
@@ -484,13 +485,13 @@ describe("gateway node command allowlist", () => {
 
     try {
       const systemDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
+        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${randomUUID()}.json`),
       );
       const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
+        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${randomUUID()}.json`),
       );
       const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
+        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${randomUUID()}.json`),
       );
 
       systemClient = await connectNodeClientWithPairing({

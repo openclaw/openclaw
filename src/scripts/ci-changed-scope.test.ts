@@ -1,5 +1,6 @@
 // CI changed scope tests cover script detection of changed files and lanes.
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -863,7 +864,7 @@ describe("detectChangedScope", () => {
   it("treats base and head as literal git args", () => {
     const markerPath = path.join(
       os.tmpdir(),
-      `openclaw-ci-changed-scope-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`,
+      `openclaw-ci-changed-scope-${Date.now()}-${randomUUID()}.tmp`,
     );
     markerPaths.push(markerPath);
 

@@ -1,5 +1,6 @@
 /** Tests request-scoped secret ref resolution for runtime operations. */
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,9 +17,7 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
   try {
     await fs.writeFile(tempPath, content, "utf8");
     await fs.chmod(tempPath, mode);
