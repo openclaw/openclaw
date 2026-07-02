@@ -11,6 +11,7 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { logError } from "../logger.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
 
@@ -173,7 +174,8 @@ export function registerChatAbortController(params: {
               params.chatAbortControllers.delete(params.runId);
             }
           })
-          .catch(() => {
+          .catch((error) => {
+            logError("Project session terminal persistence failed during abort", error);
             if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
               params.chatAbortControllers.delete(params.runId);
             }
