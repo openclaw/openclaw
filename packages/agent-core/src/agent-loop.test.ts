@@ -693,6 +693,147 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 });
 
+describe("runAgentLoop tool-name alias resolution", () => {
+  function makeToolCallStream(toolName: string): StreamFn {
+    let streamCalls = 0;
+    return () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-alias",
+                    name: toolName,
+                    arguments: {},
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+  }
+
+  it("resolves KnowledgeSearch to the first available alias tool (memory_search)", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "search result" }],
+        details: { ok: true },
+      }),
+    );
+    const memSearchTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search for files", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [memSearchTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "KnowledgeSearch",
+        isError: false,
+      }),
+    );
+  });
+
+  it("resolves tool names case-insensitively", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "find result" }],
+        details: { ok: true },
+      }),
+    );
+    const findTool: AgentTool = {
+      name: "find",
+      label: "find",
+      description: "Find tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "run find", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [findTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("FIND"),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "FIND",
+        isError: false,
+      }),
+    );
+  });
+
+  it("includes available tool names in the not-found error", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "ok" }],
+        details: { ok: true },
+      }),
+    );
+    const readTool: AgentTool = {
+      name: "Read",
+      label: "Read",
+      description: "Read tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "call unknown", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [readTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("UnknownTool"),
+    );
+
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(/Available tools:.*Read/);
+  });
+});
+
 describe("agentLoop tool termination", () => {
   function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
     return {

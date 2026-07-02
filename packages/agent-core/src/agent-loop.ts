@@ -794,6 +794,50 @@ function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): Age
   };
 }
 
+// Lowercase-normalised alias map.  Keys are normalised requested names (lower,
+// non-alphanumeric stripped); values are ordered fallback tool-name candidates —
+// the first one present in the agent's tool context wins.
+// Claude Code trains models on these tool names; OpenClaw exposes different names.
+const TOOL_NAME_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  knowledgesearch: ["memory_search", "knowledge_search", "wiki_search", "search"],
+  glob: ["find"],
+  grep: ["grep"],
+  agent: ["sessions_spawn"],
+  task: ["sessions_spawn"],
+};
+
+function normalizeToolName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function resolveToolAlias(
+  requestedName: string,
+  tools: readonly AgentTool[] | undefined,
+): AgentTool | undefined {
+  if (!tools?.length) return undefined;
+  // 1. Case-insensitive exact match.
+  const lower = requestedName.trim().toLowerCase();
+  const caseMatch = tools.find((t) => t.name.toLowerCase() === lower);
+  if (caseMatch) return caseMatch;
+  // 2. Normalised alias map — strip non-alphanumeric, look up candidates.
+  const normalizedIndex = new Map<string, AgentTool>();
+  for (const tool of tools) {
+    const n = normalizeToolName(tool.name);
+    if (n && !normalizedIndex.has(n)) normalizedIndex.set(n, tool);
+  }
+  const aliasTargets = TOOL_NAME_ALIASES[normalizeToolName(requestedName)];
+  if (aliasTargets) {
+    for (const target of aliasTargets) {
+      const found = normalizedIndex.get(normalizeToolName(target));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 async function resolveToolCallTool(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -809,6 +853,9 @@ async function resolveToolCallTool(
   let resolution: ResolvedToolCallOutcome;
   try {
     let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+    if (!tool) {
+      tool = resolveToolAlias(toolCall.name, currentContext.tools);
+    }
     if (!tool) {
       const resolvedTool = await config.resolveDeferredTool?.(
         {
@@ -869,9 +916,12 @@ async function prepareToolCall(
   }
   const tool = resolution.tool;
   if (!tool) {
+    const available = currentContext.tools?.map((t) => t.name) ?? [];
+    const availableClause =
+      available.length > 0 ? ` Available tools: ${available.join(", ")}.` : "";
     return {
       kind: "immediate",
-      result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+      result: createErrorToolResult(`Tool ${toolCall.name} not found.${availableClause}`),
       isError: true,
     };
   }
