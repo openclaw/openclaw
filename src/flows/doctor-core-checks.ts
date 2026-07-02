@@ -678,7 +678,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
-const legacyCronStoreCheck: HealthCheck = {
+const legacyCronStoreCheck: SplitHealthCheckInput = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -688,20 +688,6 @@ const legacyCronStoreCheck: HealthCheck = {
     const { collectLegacyCronStoreHealthFindings } =
       await import("../commands/doctor/cron/index.js");
     return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
-  },
-  async repair(ctx) {
-    const { collectLegacyCronStoreRepairEffects } =
-      await import("../commands/doctor/cron/index.js");
-    const effects = await collectLegacyCronStoreRepairEffects({ cfg: ctx.cfg });
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor cron contribution owns real cron store repair",
-      changes: [],
-      effects,
-    };
   },
 };
 

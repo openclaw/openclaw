@@ -104,8 +104,7 @@ const mocks = vi.hoisted(() => ({
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
-  collectLegacyCronStoreHealthFindings: vi.fn(async () => []),
-  collectLegacyCronStoreRepairEffects: vi.fn(async () => []),
+  collectLegacyCronStoreHealthFindings: vi.fn(async (): Promise<readonly HealthFinding[]> => []),
   collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => undefined),
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
@@ -359,7 +358,6 @@ vi.mock("../commands/doctor-device-pairing.js", () => ({
 
 vi.mock("../commands/doctor/cron/index.js", () => ({
   collectLegacyCronStoreHealthFindings: mocks.collectLegacyCronStoreHealthFindings,
-  collectLegacyCronStoreRepairEffects: mocks.collectLegacyCronStoreRepairEffects,
   collectLegacyWhatsAppCrontabHealthWarning: mocks.collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore: mocks.maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
@@ -574,8 +572,6 @@ describe("doctor health contributions", () => {
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
     mocks.collectLegacyCronStoreHealthFindings.mockReset();
     mocks.collectLegacyCronStoreHealthFindings.mockResolvedValue([]);
-    mocks.collectLegacyCronStoreRepairEffects.mockReset();
-    mocks.collectLegacyCronStoreRepairEffects.mockResolvedValue([]);
     mocks.collectLegacyWhatsAppCrontabHealthWarning.mockReset();
     mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyCronStore.mockReset();
@@ -1928,48 +1924,6 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
     });
     expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
-  });
-
-  it("previews legacy cron store repair effects without taking over real repair", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const cronStoreCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/legacy-cron-store",
-    );
-    expect(cronStoreCheck?.repair).toBeDefined();
-    mocks.collectLegacyCronStoreRepairEffects.mockResolvedValue([
-      {
-        kind: "state",
-        action: "would-migrate-legacy-cron-store",
-        target: "/tmp/openclaw-cron/jobs.json",
-        dryRunSafe: false,
-      },
-    ]);
-    const ctx = {
-      cfg: { cron: { store: "/tmp/openclaw-cron/jobs.json" } },
-      mode: "fix",
-      dryRun: true,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
-
-    await expect(cronStoreCheck!.repair!(ctx, [])).resolves.toEqual({
-      status: "repaired",
-      changes: [],
-      effects: [
-        {
-          kind: "state",
-          action: "would-migrate-legacy-cron-store",
-          target: "/tmp/openclaw-cron/jobs.json",
-          dryRunSafe: false,
-        },
-      ],
-    });
-    await expect(cronStoreCheck!.repair!({ ...ctx, dryRun: false }, [])).resolves.toMatchObject({
-      status: "skipped",
-      reason: "legacy doctor cron contribution owns real cron store repair",
-      changes: [],
-      effects: [expect.objectContaining({ action: "would-migrate-legacy-cron-store" })],
-    });
-    expect(mocks.collectLegacyCronStoreRepairEffects).toHaveBeenCalledWith({ cfg: ctx.cfg });
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {
