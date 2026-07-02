@@ -169,8 +169,16 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
     return undefined;
   }
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
-    return endpoint;
+  const signalPathMatch = /\/v1\/(?:traces|metrics|logs)$/iu.exec(endpointWithoutQueryOrFragment);
+  if (signalPathMatch) {
+    const configuredPath = signalPathMatch[0].slice(1);
+    if (configuredPath.toLowerCase() === path.toLowerCase()) {
+      return endpoint;
+    }
+    const signalPathStart = signalPathMatch.index;
+    const prefix = endpoint.slice(0, signalPathStart);
+    const suffix = endpoint.slice(endpointWithoutQueryOrFragment.length);
+    return `${prefix}/${path}${suffix}`;
   }
   if (/[?#]/u.test(endpoint)) {
     try {

@@ -1490,6 +1490,24 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("routes each signal from a shared signal-qualified endpoint", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp/v1/traces?timeout=30s", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.url).toBe("https://collector.example.com/otlp/v1/traces?timeout=30s");
+    expect(metricOptions.url).toBe("https://collector.example.com/otlp/v1/metrics?timeout=30s");
+    expect(logOptions.url).toBe("https://collector.example.com/otlp/v1/logs?timeout=30s");
+    await service.stop?.(ctx);
+  });
+
   test("inserts signal path before shared endpoint query params", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext("https://collector.example.com/otlp?timeout=30s");
