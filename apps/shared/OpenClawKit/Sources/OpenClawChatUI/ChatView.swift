@@ -132,9 +132,12 @@ public struct OpenClawChatView: View {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
             self.composer
-                .padding(.horizontal, Layout.composerPaddingHorizontal)
-                .padding(.top, Layout.stackSpacing)
-                .padding(.bottom, Layout.outerPaddingVertical)
+                // The message list has layoutPriority(1) and would compress the
+                // composer to its minimum height, pinning the field to one line.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+                    .padding(.top, Layout.stackSpacing)
+                    .padding(.bottom, Layout.outerPaddingVertical)
         }
         .padding(.top, Layout.outerPaddingVertical)
         .frame(maxWidth: .infinity)

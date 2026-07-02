@@ -336,13 +336,17 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 self.compactAccessory(self.attachmentPicker)
 
-                HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 8) {
                     self.editorOverlay
                         .padding(.vertical, self.cleanEditorTextPadding)
                         .frame(minHeight: self.cleanEditorMinHeight)
 
                     if let talkControl {
                         self.compactTalkButton(talkControl)
+                            // Bottom-aligned so the button stays put while the
+                            // field grows; the inset matches the centered resting
+                            // position at the one-line minimum height.
+                                .padding(.bottom, (self.cleanEditorMinHeight - self.cleanIconControlSize) / 2)
                     }
                 }
                 .padding(.leading, 14)
