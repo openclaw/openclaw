@@ -23,9 +23,10 @@ let passed = 0;
 let failed = 0;
 
 function section(title) {
-  console.log(`\n${"─".repeat(61)}`);
+  const rule = "─".repeat(61);
+  console.log(`\n${rule}`);
   console.log(`  ${title}`);
-  console.log(`${"─".repeat(61)}`);
+  console.log(rule);
 }
 
 function pass(label) {
@@ -113,26 +114,28 @@ try {
   }
 
   section("Test 2: Normal loopback JSON (~180 B) → accepted via readProviderTextResponse");
-  const happyServer = createServer(async (request, response) => {
-    const body = JSON.parse(await readRequestBody(request));
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: body.id ?? null,
-        result:
-          body.method === "tools/list"
-            ? {
-                tools: [
-                  {
-                    name: "cron",
-                    inputSchema: { type: "object", properties: { action: { type: "string" } } },
-                  },
-                ],
-              }
-            : { protocolVersion: "2025-03-26", capabilities: {} },
-      }),
-    );
+  const happyServer = createServer((request, response) => {
+    void (async () => {
+      const body = JSON.parse(await readRequestBody(request));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id ?? null,
+          result:
+            body.method === "tools/list"
+              ? {
+                  tools: [
+                    {
+                      name: "cron",
+                      inputSchema: { type: "object", properties: { action: { type: "string" } } },
+                    },
+                  ],
+                }
+              : { protocolVersion: "2025-03-26", capabilities: {} },
+        }),
+      );
+    })();
   });
   const happyPort = await listen(happyServer);
   activateLoopbackRuntime(happyPort);
@@ -197,8 +200,9 @@ try {
   clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
 }
 
-console.log(`\n${"═".repeat(63)}`);
+const resultRule = "═".repeat(63);
+console.log(`\n${resultRule}`);
 console.log(`  Results: ${passed} passed, ${failed} failed`);
-console.log(`${"═".repeat(63)}\n`);
+console.log(`${resultRule}\n`);
 
 process.exit(failed === 0 ? 0 : 1);
