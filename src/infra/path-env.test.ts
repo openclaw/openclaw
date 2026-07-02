@@ -232,6 +232,38 @@ describe("ensureOpenClawCliOnPath", () => {
     },
   );
 
+  it("skips project-local bin fallback when cwd was deleted", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    const localCli = path.join(localBinDir, "openclaw");
+    setDir(path.join(tmp, "node_modules"));
+    setDir(localBinDir);
+    setExe(localCli);
+
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      ensureOpenClawCliOnPath({
+        execPath: appCli,
+        homeDir: tmp,
+        platform: "darwin",
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    // A deleted project cwd must not be remapped to $HOME/node_modules/.bin
+    // (that would change project-local PATH trust semantics). The lookup is
+    // skipped entirely.
+    expect((process.env.PATH ?? "").split(path.delimiter).includes(localBinDir)).toBe(false);
+  });
+
   it("prepends XDG_BIN_HOME ahead of other user bin fallbacks", () => {
     const { tmp, appCli } = setupAppCliRoot("case-xdg-bin-home");
     const xdgBinHome = path.join(tmp, "xdg-bin");

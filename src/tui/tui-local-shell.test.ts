@@ -146,4 +146,46 @@ describe("createLocalShellRunner", () => {
     // the previous head-cut kept all stdout and dropped stderr entirely.
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
   });
+
+  it("refuses to run and surfaces a clear error when process.cwd() is deleted", async () => {
+    const spawnCommand = vi.fn((_command: string, _options: unknown) => {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      return {
+        stdout,
+        stderr,
+        on: (event: string, callback: (...args: unknown[]) => void) => {
+          if (event === "close") {
+            setImmediate(() => callback(0, null));
+          }
+        },
+      };
+    });
+
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      const run = harness.runLocalShellLine("!pwd");
+      harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+      await run;
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    // No implicit HOME/executable-dir fallback: the command is refused with a
+    // clear error so the operator can `cd` to an existing directory first,
+    // instead of silently running `!pwd` in a directory they did not choose.
+    expect(spawnCommand).not.toHaveBeenCalled();
+    expect(
+      harness.messages.some((m) => m.includes("local shell: working directory was deleted")),
+    ).toBe(true);
+  });
 });

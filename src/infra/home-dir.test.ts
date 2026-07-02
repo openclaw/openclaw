@@ -1,6 +1,6 @@
 // Tests OpenClaw home directory resolution.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -8,6 +8,7 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -147,7 +148,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: process.cwd(),
+      expected: path.resolve(process.cwd()),
     },
     {
       name: "returns a fully resolved path for OPENCLAW_HOME",
@@ -161,7 +162,7 @@ describe("resolveRequiredHomeDir", () => {
       homedir: () => {
         throw new Error("no home");
       },
-      expected: process.cwd(),
+      expected: path.resolve(process.cwd()),
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
@@ -268,5 +269,57 @@ describe("resolveOsHomeRelativePath", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(path.resolve("/home/alice/docs"));
+  });
+});
+
+describe("resolveRequiredHomeDir (deleted cwd)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("throws a clear actionable error when no home source exists and cwd was deleted", () => {
+    // Every home source is unavailable and the launch cwd is gone. Rather than
+    // silently writing state under the Node/Bun binary dir (an unsafe state
+    // root, since resolveStateDir() derives mutable state from this value),
+    // surface the unrecoverable condition with an actionable error. The error
+    // mentions both the missing-home and deleted-cwd causes and how to recover.
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      expect(() =>
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toThrow(/could not determine a home directory/);
+      expect(() =>
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toThrow(/Set OPENCLAW_HOME/);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("resolveRequiredOsHomeDir throws a clear actionable error for the same condition", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      expect(() =>
+        resolveRequiredOsHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toThrow(/could not determine an OS home directory/);
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });

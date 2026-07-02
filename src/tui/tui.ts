@@ -18,6 +18,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { resolveProcessCwdOrFallback, tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -152,7 +153,10 @@ export function resolveLocalAuthSpawnInvocation(params: {
 }
 
 export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
-  const defaultCwd = params.defaultCwd ?? process.cwd();
+  // Fall back to the CLI wrapper's directory when the launch cwd was deleted,
+  // so the local auth login spawn still has a valid cwd instead of crashing.
+  const defaultCwd =
+    params.defaultCwd ?? resolveProcessCwdOrFallback(path.dirname(OPENCLAW_CLI_WRAPPER_PATH));
   const entryArg = params.args[0]?.trim();
   if (!entryArg) {
     return defaultCwd;
@@ -213,10 +217,11 @@ export function resolveInitialTuiAgentId(params: {
     return normalizeAgentId(parsed.agentId);
   }
 
-  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
-    params.cfg,
-    params.cwd ?? process.cwd(),
-  );
+  // Skip workspace inference when the launch cwd was deleted — there is no
+  // project path to match an agent workspace against, so fall back instead of
+  // crashing on process.cwd().
+  const cwd = params.cwd ?? tryProcessCwd();
+  const inferredFromWorkspace = cwd ? resolveAgentIdByWorkspacePath(params.cfg, cwd) : null;
   if (inferredFromWorkspace) {
     return inferredFromWorkspace;
   }
@@ -530,6 +535,18 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  // Resolve the launch cwd once for startup-only paths (agent workspace
+  // inference): if it was already deleted at launch there is no project path to
+  // match against, so that path skips. Paths that run later and only need *some*
+  // valid cwd (auth spawn, autocomplete provider) re-validate the cwd at use
+  // time via resolveLaunchCwd() so a cwd deleted *after* launch is not silently
+  // reused as a stale (now-deleted) path.
+  const launchCwd = tryProcessCwd();
+  const wrapperDir = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  // Re-checked at each use: returns the live cwd when it still exists, else the
+  // CLI wrapper's directory (a neutral, always-existing internal path that does
+  // not change operator command/state trust semantics).
+  const resolveLaunchCwd = () => tryProcessCwd() ?? wrapperDir;
   const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
@@ -539,7 +556,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
-    cwd: process.cwd(),
+    ...(launchCwd ? { cwd: launchCwd } : {}),
   });
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
@@ -819,7 +836,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           thinkingLevels: sessionInfo.thinkingLevels,
           dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),
-        process.cwd(),
+        resolveLaunchCwd(),
       ),
     );
   };
@@ -1213,7 +1230,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
                 const invocation = resolveLocalAuthSpawnInvocation({ command, args });
                 const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveLaunchCwd() }),
                   env: process.env,
                   stdio: "inherit",
                   ...invocation.options,
