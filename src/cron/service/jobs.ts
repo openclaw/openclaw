@@ -635,6 +635,21 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       }
     }
     if (params.job.state.nextRunAtMs !== newNext) {
+      if (
+        newNext === undefined &&
+        hasScheduledNextRunAtMs(params.job.state.nextRunAtMs) &&
+        isJobEnabled(params.job)
+      ) {
+        params.state.deps.log.warn(
+          {
+            jobId: params.job.id,
+            jobName: params.job.name,
+            scheduleKind: params.job.schedule.kind,
+            previousNextRunAtMs: params.job.state.nextRunAtMs,
+          },
+          "cron: next run unresolved during maintenance recompute; job will not reschedule",
+        );
+      }
       params.job.state.nextRunAtMs = newNext;
       changed = true;
     }

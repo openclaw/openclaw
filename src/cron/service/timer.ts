@@ -914,6 +914,15 @@ export function applyJobResult(
         if (normalNext === undefined) {
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveErrors: retryDecision.consecutiveErrors,
+              retryCategory: retryDecision.retryCategory,
+            },
+            "cron: next run unresolved during transient error retry; falling back to error backoff",
+          );
         } else if (retryNextRunAtMs < normalNext) {
           job.state.nextRunAtMs = retryNextRunAtMs;
           state.deps.log.info(
@@ -989,6 +998,16 @@ export function applyJobResult(
           context: "completion",
         });
       } else {
+        if (naturalNext === undefined) {
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              scheduleKind: job.schedule.kind,
+            },
+            "cron: next run unresolved after successful completion; job will not reschedule",
+          );
+        }
         job.state.nextRunAtMs = naturalNext;
       }
     } else {
