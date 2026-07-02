@@ -16,7 +16,17 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider?: string; model?: string; page?: number; index?: number }
+  | {
+      type: "select";
+      provider?: string;
+      model?: string;
+      page?: number;
+      index?: number;
+      /** 4-hex-char fingerprint of the model at callback-creation time.
+       *  When present, resolveModelSelection verifies the resolved model's
+       *  fingerprint matches. Absent on legacy callbacks — skipped. */
+      modelFingerprint?: string;
+    }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -52,6 +62,19 @@ const CALLBACK_PREFIX = {
 } as const;
 
 /**
+ * Compute a compact 4-hex-char fingerprint of a model ID for stale-index
+ * guard. 16 bits → ~1.9% collision rate at 50 models, acceptable for
+ * preventing accidental stale selections.
+ */
+function computeModelFingerprint(modelId: string): string {
+  let hash = 5381;
+  for (let i = 0; i < modelId.length; i++) {
+    hash = ((hash << 5) + hash + modelId.charCodeAt(i)) | 0;
+  }
+  return ((hash >>> 0) & 0xffff).toString(16).padStart(4, "0");
+}
+
+/**
  * Parse a model callback_data string into a structured object.
  * Returns null if the data doesn't match a known pattern.
  */
@@ -75,10 +98,21 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel_idx_{provider}_{page}_{index}  (current index-based format)
-  const idxSelMatch = trimmed.match(/^mdl_sel_idx_([a-z0-9_.-]+)_(\d+)_(\d+)$/i);
-  if (idxSelMatch) {
-    const [, provider, pageStr, indexStr] = idxSelMatch;
+  // mdl_sel_idx_{provider}_{page}_{index}_{fingerprint}  (current format)
+  const idxSelNewMatch = trimmed.match(/^mdl_sel_idx_([a-z0-9_.-]+)_(\d+)_(\d+)_([a-f0-9]{4})$/i);
+  if (idxSelNewMatch) {
+    const [, provider, pageStr, indexStr, modelFingerprint] = idxSelNewMatch;
+    const page = parseStrictPositiveInteger(pageStr);
+    const index = parseStrictPositiveInteger(indexStr);
+    if (provider && page !== undefined && index !== undefined) {
+      return { type: "select", provider, page, index, modelFingerprint };
+    }
+  }
+
+  // mdl_sel_idx_{provider}_{page}_{index}  (legacy — backward compat, no fingerprint)
+  const idxSelLegacyMatch = trimmed.match(/^mdl_sel_idx_([a-z0-9_.-]+)_(\d+)_(\d+)$/i);
+  if (idxSelLegacyMatch) {
+    const [, provider, pageStr, indexStr] = idxSelLegacyMatch;
     const page = parseStrictPositiveInteger(pageStr);
     const index = parseStrictPositiveInteger(indexStr);
     if (provider && page !== undefined && index !== undefined) {
@@ -121,11 +155,14 @@ export function buildModelSelectionCallbackData(params: {
   provider: string;
   page: number;
   index: number;
+  model: string;
 }): string {
-  // Index-based callback data — always fits within Telegram's 64-byte limit
-  // since the format is `mdl_sel_idx_{provider}_{page}_{index}` which caps at
-  // ~40 bytes even for the longest provider names.
-  return `${CALLBACK_PREFIX.selectIdx}${params.provider}_${params.page}_${params.index}`;
+  // Index-based callback data with model fingerprint guard — always fits
+  // within Telegram's 64-byte limit. The format is
+  // `mdl_sel_idx_{provider}_{page}_{index}_{fingerprint}`, which caps at
+  // ~45 bytes even for the longest provider names.
+  const fingerprint = computeModelFingerprint(params.model);
+  return `${CALLBACK_PREFIX.selectIdx}${params.provider}_${params.page}_${params.index}_${fingerprint}`;
 }
 
 export function resolveModelSelection(params: {
@@ -147,6 +184,22 @@ export function resolveModelSelection(params: {
       const globalIndex = (params.callback.page - 1) * pageSize + (params.callback.index - 1);
       const model = sortedModels[globalIndex];
       if (model) {
+        // Stale-index guard: when a fingerprint is present, verify the
+        // resolved model's fingerprint matches the one baked into the
+        // callback at keyboard-creation time. A mismatch means the provider
+        // model list has shifted — reject the selection so the caller
+        // refreshes the keyboard instead of silently selecting a different
+        // model.
+        if (
+          params.callback.modelFingerprint &&
+          computeModelFingerprint(model) !== params.callback.modelFingerprint
+        ) {
+          return {
+            kind: "ambiguous",
+            model: `${params.callback.provider} page=${params.callback.page} idx=${params.callback.index} (stale index)`,
+            matchingProviders: [],
+          };
+        }
         return {
           kind: "resolved",
           provider: params.callback.provider,
@@ -258,6 +311,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       provider,
       page: currentPage,
       index: idx + 1,
+      model,
     });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });

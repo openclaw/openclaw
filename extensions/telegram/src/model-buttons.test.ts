@@ -20,7 +20,20 @@ describe("parseModelCallbackData", () => {
       ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
-      // New index-based select format (1-based index in callback data)
+      // New index-based select format with model fingerprint guard
+      [
+        "mdl_sel_idx_anthropic_1_1_72d8",
+        { type: "select", provider: "anthropic", page: 1, index: 1, modelFingerprint: "72d8" },
+      ],
+      [
+        "mdl_sel_idx_amazon-bedrock_3_6_815d",
+        { type: "select", provider: "amazon-bedrock", page: 3, index: 6, modelFingerprint: "815d" },
+      ],
+      [
+        "mdl_sel_idx_openrouter_99_8_2839",
+        { type: "select", provider: "openrouter", page: 99, index: 8, modelFingerprint: "2839" },
+      ],
+      // Legacy index-based format (backward compat — no fingerprint)
       ["mdl_sel_idx_anthropic_1_1", { type: "select", provider: "anthropic", page: 1, index: 1 }],
       [
         "mdl_sel_idx_amazon-bedrock_3_6",
@@ -64,6 +77,8 @@ describe("parseModelCallbackData", () => {
       "mdl_sel/",
       "mdl_sel_idx_", // incomplete index format
       "mdl_sel_idx_only", // no separators
+      "mdl_sel_idx_openai_1_1_", // trailing underscore, no fingerprint
+      "mdl_sel_idx_openai_1_1_xyz", // non-hex fingerprint chars
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -86,7 +101,7 @@ describe("resolveModelSelection", () => {
 
   it("resolves index-based selection by looking up the model in the provider's list", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", page: 1, index: 2 },
+      callback: { type: "select", provider: "openai", page: 1, index: 2, modelFingerprint: "40a1" },
       providers: ["openai", "anthropic"],
       byProvider: new Map([
         ["openai", new Set(["gpt-4.1", "gpt-5.4", "gpt-5.3-codex-spark"])],
@@ -103,7 +118,7 @@ describe("resolveModelSelection", () => {
     // Page 2, index 2 (1-based) → global index = (2-1)*8 + (2-1) = 9
     // localeCompare sort: model-17 is the 10th element (index 9)
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", page: 2, index: 2 },
+      callback: { type: "select", provider: "openai", page: 2, index: 2, modelFingerprint: "ce2b" },
       providers: ["openai"],
       byProvider: new Map([["openai", new Set(models)]]),
     });
@@ -112,11 +127,42 @@ describe("resolveModelSelection", () => {
 
   it("returns ambiguous when index is out of bounds", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", page: 9, index: 1 },
+      callback: { type: "select", provider: "openai", page: 9, index: 1, modelFingerprint: "8050" },
       providers: ["openai"],
       byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
     expect(result.kind).toBe("ambiguous");
+  });
+
+  it("detects stale index via fingerprint mismatch and returns ambiguous", () => {
+    // Callback created for slot that had "gpt-4.1" (fingerprint 8050).
+    // Model list shifted: the same index now points to "gpt-5.4" (8494 ≠ 8050).
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, index: 1, modelFingerprint: "8050" },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-5.4", "something-else"])]]),
+    });
+    expect(result.kind).toBe("ambiguous");
+    expect(result.model).toContain("stale index");
+  });
+
+  it("passes fingerprint check when model at index still matches expected identity", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, index: 1, modelFingerprint: "8050" },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-4.1" });
+  });
+
+  it("bypasses fingerprint check when callback has no fingerprint (legacy compat)", () => {
+    // Old-format callbacks without a fingerprint should still resolve normally.
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, index: 1 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "gpt-4.1" });
   });
 
   it("resolves compact callbacks when exactly one provider matches", () => {
@@ -163,16 +209,26 @@ describe("resolveModelSelection", () => {
 });
 
 describe("buildModelSelectionCallbackData", () => {
-  it("returns index-based callback data in expected format", () => {
-    expect(buildModelSelectionCallbackData({ provider: "openai", page: 1, index: 1 })).toBe(
-      "mdl_sel_idx_openai_1_1",
-    );
-    expect(buildModelSelectionCallbackData({ provider: "amazon-bedrock", page: 3, index: 6 })).toBe(
-      "mdl_sel_idx_amazon-bedrock_3_6",
-    );
-    expect(buildModelSelectionCallbackData({ provider: "openrouter", page: 12, index: 8 })).toBe(
-      "mdl_sel_idx_openrouter_12_8",
-    );
+  it("returns index-based callback data with model fingerprint in expected format", () => {
+    expect(
+      buildModelSelectionCallbackData({ provider: "openai", page: 1, index: 1, model: "gpt-4.1" }),
+    ).toBe("mdl_sel_idx_openai_1_1_8050");
+    expect(
+      buildModelSelectionCallbackData({
+        provider: "amazon-bedrock",
+        page: 3,
+        index: 6,
+        model: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      }),
+    ).toBe("mdl_sel_idx_amazon-bedrock_3_6_815d");
+    expect(
+      buildModelSelectionCallbackData({
+        provider: "openrouter",
+        page: 12,
+        index: 8,
+        model: "openai/gpt-5.4-mini",
+      }),
+    ).toBe("mdl_sel_idx_openrouter_12_8_2839");
   });
 
   it("always returns a valid callback data under 64 bytes regardless of model name length", () => {
@@ -182,6 +238,7 @@ describe("buildModelSelectionCallbackData", () => {
       provider: "amazon-bedrock",
       page: 99,
       index: 7,
+      model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     });
     expect(Buffer.byteLength(cb, "utf8")).toBeLessThanOrEqual(64);
     // The format is consistent: mdl_sel_idx_{provider}_{page}_{index}
@@ -284,9 +341,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_1");
+      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_1_72d8");
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
-      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_2");
+      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_anthropic_1_2_a588");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
   });
@@ -308,8 +365,8 @@ describe("buildModelsKeyboard", () => {
     expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
     expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
     // callback_data uses index-based format
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_1");
-    expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_2");
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_1_815d");
+    expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_idx_nexos_1_2_a588");
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {
@@ -465,8 +522,8 @@ describe("buildModelsKeyboard", () => {
       totalPages: 1,
     });
 
-    // Index-based format always used, regardless of model name length
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_amazon-bedrock_1_1");
+    // Index-based format with model fingerprint always used
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_idx_amazon-bedrock_1_1_fa00");
   });
 });
 
