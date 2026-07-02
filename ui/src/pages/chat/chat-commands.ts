@@ -8,6 +8,13 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/index.ts";
+import { executeSlashCommand } from "./chat-command-executor.ts";
+import { clearChatHistory } from "./chat-history.ts";
+import { enqueuePendingRunMessage } from "./chat-queue.ts";
+import type { ChatHost } from "./chat-send.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 
 let refreshSeq = 0;
 const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
@@ -22,6 +29,23 @@ let remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, RemoteSlashCommandCacheEntry>
 >();
+
+export type ChatCommandResetOptions = {
+  previousDraft?: string;
+  restoreDraft?: boolean;
+};
+
+export type ChatCommandSendOptions = ChatCommandResetOptions & {
+  sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
+};
+
+function setChatCommandError(
+  host: { lastError?: string | null; chatError?: string | null },
+  error: string | null,
+) {
+  host.lastError = error;
+  host.chatError = error;
+}
 
 function remoteSlashCommandCacheKey(agentId: string | undefined): string {
   return agentId ?? "";
@@ -141,4 +165,102 @@ export function resetChatSlashCommandMetadataForTest(): void {
   refreshSeq = 0;
   remoteSlashCommandCache = new WeakMap();
   replaceSlashCommands(buildFallbackSlashCommands());
+}
+
+export function shouldQueueLocalSlashCommand(name: string): boolean {
+  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+}
+
+export async function dispatchChatSlashCommand(
+  host: ChatHost,
+  name: string,
+  args: string,
+  opts: ChatCommandSendOptions,
+) {
+  switch (name) {
+    case "stop":
+      await handleAbortChat(host);
+      return;
+    case "new":
+      if (!host.createChatSession) {
+        setChatCommandError(host, "New Chat is unavailable.");
+        return;
+      }
+      await host.createChatSession();
+      return;
+    case "reset":
+      await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", opts);
+      return;
+    case "clear":
+      await clearChatHistory(host);
+      return;
+    case "export-session":
+      await host.exportCurrentChat?.();
+      return;
+  }
+
+  if (!host.client || !host.connected) {
+    setChatCommandError(host, "Gateway not connected");
+    injectCommandResult(
+      host,
+      `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
+
+  const targetSessionKey = host.sessionKey;
+  let result: Awaited<ReturnType<typeof executeSlashCommand>>;
+  try {
+    result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+      sessions: host.sessions,
+      chatModelCatalog: host.chatModelCatalog,
+      sessionsResult: host.sessionsResult,
+      agentId: scopedAgentIdForSession(host, targetSessionKey),
+    });
+  } catch (err) {
+    setChatCommandError(host, String(err));
+    injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
+
+  if (result.content) {
+    injectCommandResult(host, result.content);
+  }
+
+  if (result.trackRunId) {
+    host.chatRunId = result.trackRunId;
+    host.chatStream = "";
+    host.chatSending = false;
+  }
+
+  if (result.pendingCurrentRun && host.chatRunId) {
+    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
+  }
+
+  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
+    host.sessions.setModelOverride(
+      targetSessionKey,
+      result.sessionPatch.modelOverride?.value ?? null,
+    );
+    await host.refreshCurrentSessionTools?.();
+  }
+
+  if (result.action === "refresh") {
+    await host.refreshCurrentChat?.();
+  }
+
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+}
+
+function injectCommandResult(host: ChatHost, content: string) {
+  host.chatMessages = [
+    ...host.chatMessages,
+    {
+      role: "system",
+      content,
+      timestamp: Date.now(),
+    },
+  ];
 }

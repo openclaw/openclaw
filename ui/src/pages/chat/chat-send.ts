@@ -44,9 +44,12 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { executeSlashCommand } from "./chat-command-executor.ts";
 import {
-  clearChatHistory,
+  dispatchChatSlashCommand,
+  type ChatCommandResetOptions,
+  shouldQueueLocalSlashCommand,
+} from "./chat-commands.ts";
+import {
   loadChatHistory,
   type ChatEventPayload,
   type ChatHistoryResult,
@@ -54,7 +57,6 @@ import {
 } from "./chat-history.ts";
 import {
   enqueueChatMessage,
-  enqueuePendingRunMessage,
   excludeComposerAttachments,
   persistQueuedMessagesForSession,
   readChatQueueForSession,
@@ -148,6 +150,18 @@ function setChatError(
 ) {
   host.lastError = error;
   host.chatError = error;
+}
+
+function sendResetSlashCommand(
+  host: ChatHost,
+  message: string,
+  opts: ChatCommandResetOptions,
+): Promise<void> {
+  return sendChatMessageNow(host, message, {
+    refreshSessions: true,
+    previousDraft: opts.previousDraft,
+    restoreDraft: opts.restoreDraft,
+  }).then(() => undefined);
 }
 
 type AcceptedChatSendAck = ChatSendAck & { status: "started" | "in_flight" | "ok" };
@@ -1454,7 +1468,9 @@ async function flushChatQueue(host: ChatHost) {
   try {
     if (next.localCommandName) {
       host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
-      await dispatchSlashCommand(host, next.localCommandName, next.localCommandArgs ?? "");
+      await dispatchChatSlashCommand(host, next.localCommandName, next.localCommandArgs ?? "", {
+        sendResetMessage: (message, resetOpts) => sendResetSlashCommand(host, message, resetOpts),
+      });
       ok = true;
     } else {
       ok = await sendChatMessageNow(host, next.text, {
@@ -1722,9 +1738,11 @@ export async function handleSendChat(
         host.chatAttachments = [];
         resetChatInputHistoryNavigation(host);
       }
-      await dispatchSlashCommand(host, parsed.command.key, parsed.args, {
+      await dispatchChatSlashCommand(host, parsed.command.key, parsed.args, {
         previousDraft: prevDraft,
         restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+        sendResetMessage: (resetMessage, resetOpts) =>
+          sendResetSlashCommand(host, resetMessage, resetOpts),
       });
       return;
     }
@@ -1828,10 +1846,6 @@ export async function handleSendChat(
   });
 }
 
-function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
-}
-
 function prependReplyQuote(
   message: string,
   replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
@@ -1850,106 +1864,6 @@ function prependReplyQuote(
 
 function escapeMarkdownInline(value: string): string {
   return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
-}
-
-// ── Slash Command Dispatch ──
-
-async function dispatchSlashCommand(
-  host: ChatHost,
-  name: string,
-  args: string,
-  sendOpts?: { previousDraft?: string; restoreDraft?: boolean },
-) {
-  switch (name) {
-    case "stop":
-      await handleAbortChat(host);
-      return;
-    case "new":
-      if (!host.createChatSession) {
-        setChatError(host, "New Chat is unavailable.");
-        return;
-      }
-      await host.createChatSession();
-      return;
-    case "reset":
-      await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
-      });
-      return;
-    case "clear":
-      await clearChatHistory(host);
-      return;
-    case "export-session":
-      await host.exportCurrentChat?.();
-      return;
-  }
-
-  if (!host.client || !host.connected) {
-    setChatError(host, "Gateway not connected");
-    injectCommandResult(
-      host,
-      `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
-    );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-    return;
-  }
-
-  const targetSessionKey = host.sessionKey;
-  let result: Awaited<ReturnType<typeof executeSlashCommand>>;
-  try {
-    result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
-      sessions: host.sessions,
-      chatModelCatalog: host.chatModelCatalog,
-      sessionsResult: host.sessionsResult,
-      agentId: scopedAgentIdForSession(host, targetSessionKey),
-    });
-  } catch (err) {
-    setChatError(host, String(err));
-    injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-    return;
-  }
-
-  if (result.content) {
-    injectCommandResult(host, result.content);
-  }
-
-  if (result.trackRunId) {
-    host.chatRunId = result.trackRunId;
-    host.chatStream = "";
-    host.chatSending = false;
-  }
-
-  if (result.pendingCurrentRun && host.chatRunId) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
-  }
-
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
-    host.sessions.setModelOverride(
-      targetSessionKey,
-      result.sessionPatch.modelOverride?.value ?? null,
-    );
-    await host.refreshCurrentSessionTools?.();
-  }
-
-  if (result.action === "refresh") {
-    await host.refreshCurrentChat?.();
-  }
-
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-}
-
-function injectCommandResult(host: ChatHost, content: string) {
-  host.chatMessages = [
-    ...host.chatMessages,
-    {
-      role: "system",
-      content,
-      timestamp: Date.now(),
-    },
-  ];
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
