@@ -3489,11 +3489,6 @@
       "translated": "Traumtagebuch-Tag"
     },
     {
-      "id": "native.apple.21d92f01c5cc2412",
-      "source": "\\(day.entryCount) \\(day.entryCount == 1 ? \"entry\" : \"entries\")",
-      "translated": "\\(day.entryCount) \\(day.entryCount == 1 ? \"entry\" : \"entries\")"
-    },
-    {
       "id": "native.apple.f0df95f0790fe675",
       "source": "Connect a gateway to load dreaming entries.",
       "translated": "Verbinden Sie ein Gateway, um Träum-Einträge zu laden."
