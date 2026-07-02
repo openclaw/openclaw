@@ -1,8 +1,6 @@
 // Coverage for keeping attempt workspace and runtime cwd distinct.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { withTempDir } from "../../../test-helpers/temp-dir.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -33,36 +31,35 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     // Bootstrap still reads the agent workspace, while coding tools execute in
     // the task repo cwd when a subagent targets a separate checkout.
     const bootstrap = createContextEngineBootstrapAndAssemble();
-    const taskRepo = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-task-repo-"));
-    tempPaths.push(taskRepo);
+    await withTempDir({ prefix: "openclaw-task-repo-" }, async (taskRepo) => {
+      await createContextEngineAttemptRunner({
+        contextEngine: bootstrap,
+        sessionKey: "agent:main:subagent:child",
+        tempPaths,
+        attemptOverrides: {
+          cwd: taskRepo,
+          disableTools: false,
+        },
+      });
 
-    await createContextEngineAttemptRunner({
-      contextEngine: bootstrap,
-      sessionKey: "agent:main:subagent:child",
-      tempPaths,
-      attemptOverrides: {
-        cwd: taskRepo,
-        disableTools: false,
-      },
+      const bootstrapCall = hoisted.resolveBootstrapFilesForRunMock.mock.calls[0]?.[0] as
+        | { agentId?: string; workspaceDir?: string }
+        | undefined;
+      expect(bootstrapCall?.workspaceDir).not.toBe("/tmp/task-repo");
+      expect(bootstrapCall?.agentId).toBe("main");
+
+      const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+        | { cwd?: string; workspaceDir?: string; spawnWorkspaceDir?: string }
+        | undefined;
+      expect(toolsCall?.cwd).toBe(taskRepo);
+      expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
+      expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
+
+      const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
+        | { cwd?: string }
+        | undefined;
+      expect(resourceLoaderInit?.cwd).toBe(taskRepo);
     });
-
-    const bootstrapCall = hoisted.resolveBootstrapFilesForRunMock.mock.calls[0]?.[0] as
-      | { agentId?: string; workspaceDir?: string }
-      | undefined;
-    expect(bootstrapCall?.workspaceDir).not.toBe("/tmp/task-repo");
-    expect(bootstrapCall?.agentId).toBe("main");
-
-    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | { cwd?: string; workspaceDir?: string; spawnWorkspaceDir?: string }
-      | undefined;
-    expect(toolsCall?.cwd).toBe(taskRepo);
-    expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
-    expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
-
-    const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
-      | { cwd?: string }
-      | undefined;
-    expect(resourceLoaderInit?.cwd).toBe(taskRepo);
   });
 
   it("forwards native and routable channel targets into runtime tools", async () => {
