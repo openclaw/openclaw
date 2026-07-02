@@ -55,6 +55,8 @@ export type FollowupRun = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   currentInboundEventKind?: InboundEventKind;
+  /** Native inbound event timestamp in epoch milliseconds, when the transport provides one. */
+  currentInboundEventTimestampMs?: number;
   /** Whether the current inbound message contained audio for inbound-only TTS policy. */
   currentInboundAudio?: boolean;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */

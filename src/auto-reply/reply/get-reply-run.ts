@@ -1316,6 +1316,7 @@ export async function runPreparedReply(
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
+    ...(userTurnTimestamp ? { currentInboundEventTimestampMs: userTurnTimestamp } : {}),
     currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),

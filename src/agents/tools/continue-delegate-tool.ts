@@ -14,10 +14,6 @@ import {
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
-import {
-  DIAGNOSTIC_TRACEPARENT_PATTERN,
-  normalizeDiagnosticTraceparent,
-} from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -76,15 +72,6 @@ const ContinueDelegateToolSchema = Type.Object({
       'Broadcast return targeting. "tree" returns to every ancestor in the current continuation/subagent chain; ' +
       '"all" returns to every known session on this host. Do not combine with targetSessionKey/targetSessionKeys.',
   }),
-  traceparent: Type.Optional(
-    Type.String({
-      description:
-        "Optional W3C traceparent override. When omitted, the tool derives the parent " +
-        "context from the openclaw runtime's active trace scope (set at gateway entry points). " +
-        "Supply this only when injecting cross-process trace context.",
-      pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
-    }),
-  ),
   model: Type.Optional(
     Type.String({
       description:
@@ -201,13 +188,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
-      const traceparentRaw = readStringParam(params, "traceparent");
-      const explicitTraceparent =
-        traceparentRaw !== undefined ? normalizeDiagnosticTraceparent(traceparentRaw) : undefined;
-      if (traceparentRaw !== undefined && !explicitTraceparent) {
-        throw new ToolInputError("traceparent must be a valid W3C traceparent header.");
-      }
-      const traceparent = explicitTraceparent ?? formatActiveContinuationTraceparent();
+      const traceparent = formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
@@ -264,7 +245,6 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
           delegateIndex: delegatesThisTurn,
           delegatesThisTurn,
           ...targetingFields,
-          ...traceContextFields,
           ...modelField,
           note:
             "Delegate will fire when compaction occurs, not on a timer. " +
@@ -295,7 +275,6 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         delegateIndex: dispatchIndex,
         delegatesThisTurn: dispatchIndex,
         ...targetingFields,
-        ...traceContextFields,
         ...modelField,
         note:
           "Delegate will be dispatched after your response completes. " +

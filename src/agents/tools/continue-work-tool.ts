@@ -5,10 +5,6 @@ import {
 } from "../../auto-reply/continuation/config.js";
 import type { ContinueWorkRequest } from "../../auto-reply/continuation/types.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
-import {
-  DIAGNOSTIC_TRACEPARENT_PATTERN,
-  normalizeDiagnosticTraceparent,
-} from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam, ToolInputError } from "./common.js";
@@ -29,15 +25,6 @@ const ContinueWorkToolSchema = Type.Object({
       description:
         "Seconds to wait before the next turn fires. 0 or omitted = immediate. " +
         "Positive delays are clamped to continuation.minDelayMs / maxDelayMs from config.",
-    }),
-  ),
-  traceparent: Type.Optional(
-    Type.String({
-      description:
-        "Optional W3C traceparent override. When omitted, the tool derives the parent " +
-        "context from the openclaw runtime's active trace scope (set at gateway entry points). " +
-        "Supply this only when injecting cross-process trace context.",
-      pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
     }),
   ),
 });
@@ -74,13 +61,7 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
         throw new ToolInputError("delaySeconds must be a non-negative number.");
       }
       const delaySeconds = parsedDelaySeconds ?? 0;
-      const traceparentRaw = readStringParam(params, "traceparent");
-      const explicitTraceparent =
-        traceparentRaw !== undefined ? normalizeDiagnosticTraceparent(traceparentRaw) : undefined;
-      if (traceparentRaw !== undefined && !explicitTraceparent) {
-        throw new ToolInputError("traceparent must be a valid W3C traceparent header.");
-      }
-      const traceparent = explicitTraceparent ?? formatActiveContinuationTraceparent();
+      const traceparent = formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       log.debug(
@@ -106,7 +87,6 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
               note: `Requested ${delaySeconds}s, clamped to ${resolvedDelaySeconds}s by continuation config.`,
             }
           : {}),
-        ...traceContextFields,
       });
     },
   };

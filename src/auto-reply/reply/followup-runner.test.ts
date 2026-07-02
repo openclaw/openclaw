@@ -650,17 +650,21 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });
 
-  it("blocks a queued room-event followup before runEmbeddedAgent once the no-op replay streak is tripped (#1138/#1142)", async () => {
+  it("runs timestamp-less room-event followups even when a continuation no-op streak is tripped (#1148)", async () => {
     const sessionKey = "main";
-    // Seed the per-session no-op streak as a stale room-event backlog storm would.
+    // Seed the per-session no-op streak with continuation-owned no-op outcomes.
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
         sessionKey,
-        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        wakeClass: { kind: "self_rearm", source: "continuation" },
         runId: `seed-room-${i}`,
         outcome: { kind: "no_op", reason: "seed" },
       });
     }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { toolSummary: { calls: 1, tools: ["message_react"] } },
+    });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
@@ -671,19 +675,53 @@ describe("createFollowupRunner reply-lane admission", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
         run: { sessionKey, provider: "anthropic", model: "claude" },
       }),
     );
 
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("records message-tool-only final text as no-op when no message tool delivery happened (#1138/#1142)", async () => {
+  it("admits fresh room-event followups without treating normal room activity as backlog (#1148)", async () => {
     const sessionKey = "main";
-    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD - 1; i += 1) {
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
         sessionKey,
-        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-fresh-room-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { toolSummary: { calls: 1, tools: ["message_react"] } },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: Date.now(),
+        messageId: "fresh-room-reaction",
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not let message-tool-only room acknowledgements build suppression when no delivery happened (#1148)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
         runId: `seed-message-tool-only-${i}`,
         outcome: { kind: "no_op", reason: "seed" },
       });
@@ -703,6 +741,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
         run: {
           sessionKey,
           provider: "anthropic",
@@ -714,6 +753,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
         run: {
           sessionKey,
           provider: "anthropic",
@@ -723,19 +763,20 @@ describe("createFollowupRunner reply-lane admission", () => {
       }),
     );
 
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks a restart-recovery followup before runEmbeddedAgent absent a fresh edge (#1138/#1142)", async () => {
+  it("runs restart-recovery followups because generic system recovery is not continuation-owned (#1151)", async () => {
     const sessionKey = "main";
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
         sessionKey,
-        wakeClass: { kind: "self_rearm", source: "restart_recovery" },
+        wakeClass: { kind: "self_rearm", source: "continuation" },
         runId: `seed-restart-${i}`,
         outcome: { kind: "no_op", reason: "seed" },
       });
     }
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
@@ -754,7 +795,7 @@ describe("createFollowupRunner reply-lane admission", () => {
       }),
     );
 
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("admits and runs a queued room-event followup when a fresh human edge reset the streak (#1138/#1142)", async () => {
@@ -762,7 +803,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
         sessionKey,
-        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        wakeClass: { kind: "self_rearm", source: "continuation" },
         runId: `seed-reset-${i}`,
         outcome: { kind: "no_op", reason: "seed" },
       });
@@ -787,6 +828,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     await runner(
       createQueuedRun({
         currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
         run: { sessionKey, provider: "anthropic", model: "claude" },
       }),
     );

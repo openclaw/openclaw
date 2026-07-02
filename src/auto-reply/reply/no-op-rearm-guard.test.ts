@@ -28,6 +28,14 @@ function freshHumanWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmW
   };
 }
 
+function continuationWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmWakeInput {
+  return {
+    sessionKey: "agent:main:discord:channel:1466192485440164011",
+    isContinuationWake: true,
+    ...overrides,
+  };
+}
+
 function noOpResult(toolNames: string[] = ["continue_work"]): EmbeddedAgentRunResult {
   return {
     payloads: [],
@@ -74,11 +82,33 @@ describe("classifyNoOpRearmWake", () => {
     expect(wake).toEqual({ kind: "fresh_human_edge", messageId: "msg-no-provenance" });
   });
 
-  it("treats stale human room-event backlog as self-rearm, not a fresh edge", () => {
+  it("treats room-event activity as neutral, not streak-building backlog", () => {
+    const wake = classifyNoOpRearmWake(
+      roomEventWake({
+        provenance: { kind: "external_user" },
+        messageId: "msg-2",
+        eventTimestampMs: 10_000,
+      }),
+    );
+    expect(wake).toEqual({ kind: "neutral", reason: "room-event", messageId: "msg-2" });
+  });
+
+  it("treats timestamp-less room-event activity as neutral room life", () => {
     const wake = classifyNoOpRearmWake(
       roomEventWake({ provenance: { kind: "external_user" }, messageId: "msg-2" }),
     );
-    expect(wake).toEqual({ kind: "self_rearm", source: "room_event_backlog" });
+    expect(wake).toEqual({ kind: "neutral", reason: "room-event", messageId: "msg-2" });
+  });
+
+  it("treats old room-event timestamps as neutral unless the wake is continuation-owned", () => {
+    const wake = classifyNoOpRearmWake(
+      roomEventWake({
+        provenance: { kind: "external_user" },
+        messageId: "msg-2",
+        eventTimestampMs: 0,
+      }),
+    );
+    expect(wake).toEqual({ kind: "neutral", reason: "room-event", messageId: "msg-2" });
   });
 
   it("treats inter-session preserved completion tools as structured completion", () => {
@@ -108,13 +138,13 @@ describe("classifyNoOpRearmWake", () => {
     expect(wake).toEqual({ kind: "exempt_backend_wake", source: "heartbeat" });
   });
 
-  it("treats a heartbeat that carries room-event work as self-rearm", () => {
+  it("treats a heartbeat that carries room-event work as neutral room life", () => {
     const wake = classifyNoOpRearmWake(roomEventWake({ isHeartbeat: true }));
-    expect(wake).toEqual({ kind: "self_rearm", source: "room_event_backlog" });
+    expect(wake).toEqual({ kind: "neutral", reason: "room-event" });
   });
 
-  it("classifies continuation, restart-sentinel, and internal_system self-rearm sources", () => {
-    expect(classifyNoOpRearmWake({ sessionKey: "s", isContinuationWake: true })).toEqual({
+  it("classifies only continuation-owned wakes as self-rearm sources", () => {
+    expect(classifyNoOpRearmWake(continuationWake({ sessionKey: "s" }))).toEqual({
       kind: "self_rearm",
       source: "continuation",
     });
@@ -123,26 +153,23 @@ describe("classifyNoOpRearmWake", () => {
         sessionKey: "s",
         provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
       }),
-    ).toEqual({ kind: "self_rearm", source: "restart_recovery" });
+    ).toEqual({ kind: "neutral", reason: "unmarked-wake" });
     expect(
       classifyNoOpRearmWake({ sessionKey: "s", provenance: { kind: "internal_system" } }),
-    ).toEqual({ kind: "self_rearm", source: "internal_system" });
+    ).toEqual({ kind: "neutral", reason: "unmarked-wake" });
   });
 
-  it("ignores parentRunId: aligned parent/main session stays self-rearm, not a child split", () => {
-    const base = roomEventWake({ provenance: { kind: "external_user" }, messageId: "m" });
+  it("ignores parentRunId: aligned parent/main continuation wake keeps its guard key", () => {
+    const base = continuationWake({ sessionKey: "agent:main" });
     const withParent = classifyNoOpRearmWake({ ...base, parentRunId: "run-parent" });
     const withoutParent = classifyNoOpRearmWake(base);
     expect(withParent).toEqual(withoutParent);
     expect(resolveNoOpRearmKey({ sessionKey: base.sessionKey })).toBe(base.sessionKey);
   });
 
-  it("treats an explicitly stale human edge as backlog when a staleness bound is set", () => {
-    const wake = classifyNoOpRearmWake(
-      { ...freshHumanWake(), eventTimestampMs: 0 },
-      { nowMs: 10_000, staleHumanEdgeAfterMs: 5_000 },
-    );
-    expect(wake.kind).toBe("self_rearm");
+  it("treats a direct external_user edge as fresh even when it has an old timestamp", () => {
+    const wake = classifyNoOpRearmWake({ ...freshHumanWake(), eventTimestampMs: 0 });
+    expect(wake).toEqual({ kind: "fresh_human_edge", messageId: "msg-1" });
   });
 
   it("treats an unmarked wake (no provenance or markers) as neutral", () => {
@@ -261,7 +288,7 @@ describe("NoOpRearmGuard admission + recording", () => {
   }
 
   function recordSelfRearmNoOps(guard: NoOpRearmGuard, sessionKey: string, count: number): void {
-    const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "room_event_backlog" };
+    const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "continuation" };
     for (let i = 0; i < count; i += 1) {
       guard.record({ sessionKey, wakeClass: wake, runId: `run-${i}`, result: noOpResult() });
     }
@@ -273,17 +300,17 @@ describe("NoOpRearmGuard admission + recording", () => {
     const sessionKey = "s";
 
     // Below threshold: admitted.
-    expect(guard.evaluate(roomEventWake({ sessionKey })).admit).toBe(true);
+    expect(guard.evaluate(continuationWake({ sessionKey })).admit).toBe(true);
 
     // Three rapid self-rearm no-op outcomes trip the streak.
     recordSelfRearmNoOps(guard, sessionKey, 3);
     expect(guard.peekStreak({ sessionKey })).toBe(3);
 
-    const blocked = guard.evaluate(roomEventWake({ sessionKey }));
+    const blocked = guard.evaluate(continuationWake({ sessionKey }));
     expect(blocked.admit).toBe(false);
     if (!blocked.admit) {
       expect(blocked.diagnostic?.code).toBe("noop-rearm-suppressed");
-      expect(blocked.diagnostic?.wakeSource).toBe("room_event_backlog");
+      expect(blocked.diagnostic?.wakeSource).toBe("continuation");
     }
   });
 
@@ -293,9 +320,9 @@ describe("NoOpRearmGuard admission + recording", () => {
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
 
-    const first = guard.evaluate(roomEventWake({ sessionKey }));
-    const second = guard.evaluate(roomEventWake({ sessionKey }));
-    const third = guard.evaluate(roomEventWake({ sessionKey }));
+    const first = guard.evaluate(continuationWake({ sessionKey }));
+    const second = guard.evaluate(continuationWake({ sessionKey }));
+    const third = guard.evaluate(continuationWake({ sessionKey }));
     expect(first.admit).toBe(false);
     expect(second.admit).toBe(false);
     expect(third.admit).toBe(false);
@@ -311,25 +338,34 @@ describe("NoOpRearmGuard admission + recording", () => {
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
-    expect(guard.evaluate(roomEventWake({ sessionKey })).admit).toBe(false);
+    expect(guard.evaluate(continuationWake({ sessionKey })).admit).toBe(false);
 
     const fresh = guard.evaluate(freshHumanWake({ sessionKey, messageId: "fresh-1" }));
     expect(fresh.admit).toBe(true);
     expect(guard.peekStreak({ sessionKey })).toBe(0);
     // After reset, a self-rearm wake is admitted again and re-emits one diagnostic next episode.
-    expect(guard.evaluate(roomEventWake({ sessionKey })).admit).toBe(true);
+    expect(guard.evaluate(continuationWake({ sessionKey })).admit).toBe(true);
   });
 
-  it("does not reset on stale human backlog (room_event external_user)", () => {
+  it("admits old/timestamp-less room events without accruing or resetting continuation streaks", () => {
     const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
 
-    const stale = guard.evaluate(
-      roomEventWake({ sessionKey, provenance: { kind: "external_user" }, messageId: "old" }),
+    const oldRoom = guard.evaluate(
+      roomEventWake({
+        sessionKey,
+        provenance: { kind: "external_user" },
+        messageId: "old",
+        eventTimestampMs: 0,
+      }),
     );
-    expect(stale.admit).toBe(false);
+    expect(oldRoom).toEqual({
+      admit: true,
+      reason: "neutral",
+      wake: { kind: "neutral", reason: "room-event", messageId: "old" },
+    });
     expect(guard.peekStreak({ sessionKey })).toBe(3);
   });
 
@@ -363,7 +399,7 @@ describe("NoOpRearmGuard admission + recording", () => {
     const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
-    const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "room_event_backlog" };
+    const wake: NoOpRearmWakeClass = { kind: "self_rearm", source: "continuation" };
     guard.record({ sessionKey, wakeClass: wake, runId: "dup", result: noOpResult() });
     guard.record({ sessionKey, wakeClass: wake, runId: "dup", result: noOpResult() });
     expect(guard.peekStreak({ sessionKey })).toBe(1);
@@ -405,6 +441,72 @@ describe("NoOpRearmGuard admission + recording", () => {
     expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 
+  it("does not accrue or block fresh room events or reaction-only acknowledgements", () => {
+    const t = 1_000;
+    const guard = makeGuard(() => t);
+    const sessionKey = "s";
+    const first = guard.evaluate(
+      roomEventWake({ sessionKey, messageId: "reaction-1", eventTimestampMs: t }),
+    );
+    expect(first).toEqual({
+      admit: true,
+      reason: "neutral",
+      wake: { kind: "neutral", reason: "room-event", messageId: "reaction-1" },
+    });
+
+    guard.record({
+      sessionKey,
+      wakeClass: first.wake,
+      runId: "reaction-run",
+      result: noOpResult(["message_react"]),
+    });
+
+    expect(guard.peekStreak({ sessionKey })).toBe(0);
+  });
+
+  it("admits replayed room-event ids without bleeding or accruing across sessions", () => {
+    const t = 1_000;
+    const guard = new NoOpRearmGuard({ threshold: 1, windowMs: 60_000, now: () => t });
+    const sessionKey = "room-a";
+    const otherSessionKey = "room-b";
+    recordSelfRearmNoOps(guard, sessionKey, 1);
+    const first = guard.evaluate(
+      roomEventWake({ sessionKey, messageId: "same-room-event", eventTimestampMs: t }),
+    );
+    expect(first.admit).toBe(true);
+    expect(first.wake.kind).toBe("neutral");
+
+    const replay = guard.evaluate(
+      roomEventWake({ sessionKey, messageId: "same-room-event", eventTimestampMs: t }),
+    );
+    expect(replay.admit).toBe(true);
+    expect(replay.wake).toEqual({
+      kind: "neutral",
+      reason: "room-event",
+      messageId: "same-room-event",
+    });
+    guard.record({
+      sessionKey,
+      wakeClass: replay.wake,
+      runId: "room-replay",
+      result: noOpResult(["message_react"]),
+    });
+    expect(guard.evaluate(roomEventWake({ sessionKey, messageId: "same-room-event" })).admit).toBe(
+      true,
+    );
+    expect(guard.peekStreak({ sessionKey })).toBe(1);
+
+    const otherRoom = guard.evaluate(
+      roomEventWake({
+        sessionKey: otherSessionKey,
+        messageId: "same-room-event",
+        eventTimestampMs: t,
+      }),
+    );
+    expect(otherRoom.admit).toBe(true);
+    expect(otherRoom.wake.kind).toBe("neutral");
+  });
+
   it("starts a fresh streak when no-ops are spaced beyond the cadence window", () => {
     let t = 1_000;
     const guard = makeGuard(() => t);
@@ -423,15 +525,15 @@ describe("NoOpRearmGuard admission + recording", () => {
     const guard = makeGuard(() => t);
     const sessionKey = "s";
     recordSelfRearmNoOps(guard, sessionKey, 3);
-    expect(guard.evaluate(roomEventWake({ sessionKey })).admit).toBe(false);
+    expect(guard.evaluate(continuationWake({ sessionKey })).admit).toBe(false);
 
     t += 120_000; // beyond the 60s window
-    const later = guard.evaluate(roomEventWake({ sessionKey }));
+    const later = guard.evaluate(continuationWake({ sessionKey }));
     expect(later).toMatchObject({ admit: true, reason: "below-threshold" });
     expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 
-  it("downgrades a replayed (already-seen) human message id to self-rearm", () => {
+  it("admits a repeated direct human message id as a fresh edge rather than continuation replay", () => {
     const t = 1_000;
     const guard = makeGuard(() => t);
     const sessionKey = "s";
@@ -441,12 +543,14 @@ describe("NoOpRearmGuard admission + recording", () => {
     expect(first.wake.kind).toBe("fresh_human_edge");
     // Trip the streak via self-rearm no-ops.
     recordSelfRearmNoOps(guard, sessionKey, 3);
-    // Replaying the same human id no longer counts as a fresh edge; it is blocked.
+    // A duplicate direct human id is not continuation-owned, so it stays admitted.
     const replay = guard.evaluate(freshHumanWake({ sessionKey, messageId: "same" }));
-    expect(replay.admit).toBe(false);
-    if (!replay.admit) {
-      expect(replay.wake).toEqual({ kind: "self_rearm", source: "human_replay" });
-    }
+    expect(replay).toEqual({
+      admit: true,
+      reason: "fresh-human-edge",
+      wake: { kind: "fresh_human_edge", messageId: "same" },
+    });
+    expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 
   it("admits same-turn fanout and concrete awaited completion", () => {

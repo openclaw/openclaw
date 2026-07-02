@@ -1618,6 +1618,130 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
+  it("bounds the observed 3x same-turn continue_work delays as three scheduled terminal wakes (#1147)", async () => {
+    const sessionKey = "agent:main:three-continue-work";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const threeWorkConfig = { ...config, maxDelayMs: 65_000 } satisfies ContinuationRuntimeConfig;
+
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-three-work",
+      },
+      requests: [
+        { reason: "1 of 3 - did this fire for you", delaySeconds: 55 },
+        { reason: "2 of 3 - did this turn compress with the next", delaySeconds: 60 },
+        { reason: "3 of 3 - or this one?", delaySeconds: 61 },
+      ],
+      config: threeWorkConfig,
+    });
+
+    expect(batch).toMatchObject({ scheduledCount: 3, cappedCount: 0, capped: false });
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(55_000);
+    expect(turnGrants).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(turnGrants).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(3);
+
+    expect(
+      turnGrants.map((grant) => (grant as { context: { Body: string } }).context.Body),
+    ).toEqual([
+      expect.stringContaining("1 of 3 - did this fire for you"),
+      expect.stringContaining("2 of 3 - did this turn compress with the next"),
+      expect.stringContaining("3 of 3 - or this one?"),
+    ]);
+    expect([...mockFlows.values()].map((flow) => flow.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(
+      [...mockFlows.values()].map(
+        (flow) =>
+          (
+            flow.stateJson as {
+              busySkipCount?: number;
+              parentRunId?: string;
+              turnGrantedAt?: number;
+            }
+          ).busySkipCount,
+      ),
+    ).toEqual([0, 0, 0]);
+    expect(
+      [...mockFlows.values()].map(
+        (flow) => (flow.stateJson as { parentRunId?: string }).parentRunId,
+      ),
+    ).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("parks a 3x same-turn continue_work burst while requests are in flight without a tight wake loop (#1147)", async () => {
+    const sessionKey = "agent:main:three-continue-work-busy";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    const threeWorkConfig = { ...config, maxDelayMs: 65_000 } satisfies ContinuationRuntimeConfig;
+
+    await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-three-work-busy",
+      },
+      requests: [
+        { reason: "1 of 3 - busy", delaySeconds: 55 },
+        { reason: "2 of 3 - busy", delaySeconds: 60 },
+        { reason: "3 of 3 - busy", delaySeconds: 61 },
+      ],
+      config: threeWorkConfig,
+    });
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await flushAsyncWork();
+
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(
+      [...mockFlows.values()].map((flow) => ({
+        status: flow.status,
+        busySkipCount: (flow.stateJson as { busySkipCount?: number }).busySkipCount,
+        idleRetry: (flow.stateJson as { idleRetry?: unknown }).idleRetry,
+      })),
+    ).toEqual([
+      {
+        status: "queued",
+        busySkipCount: 1,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+      {
+        status: "queued",
+        busySkipCount: 1,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+      {
+        status: "queued",
+        busySkipCount: 1,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+    ]);
+
+    activeSessions.delete(sessionKey);
+    const recovered = await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+
+    expect(recovered).toEqual({ dispatched: 3, failed: 0, reaped: 0 });
+    expect(turnGrants).toHaveLength(3);
+    expect([...mockFlows.values()].map((flow) => flow.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+  });
+
   it("does not let a delayed batch election postpone an already-due zero-delay wake", async () => {
     const sessionKey = "agent:main:zero-delay-batch";
     mockSessionStore[sessionKey] = { sessionKey };

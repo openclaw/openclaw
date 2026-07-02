@@ -139,7 +139,7 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
   //   - targetSessionKey  (optional)
   //   - targetSessionKeys (optional)
   //   - fanoutMode        (optional, enum)
-  //   - traceparent       (optional, W3C trace-context carrier)
+  // Diagnostic trace context is runtime-owned and intentionally not model-facing.
   //
   // Extension to the mode-only trap, not duplication: it lives in
   // `src/auto-reply/continuation/types.mode-shape.test.ts` and asserts
@@ -171,13 +171,12 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
       "targetSessionKey",
       "targetSessionKeys",
       "fanoutMode",
-      "traceparent",
       "model",
     ].toSorted();
     const actualKeys = Object.keys(properties).toSorted();
     expect(
       actualKeys,
-      `continue_delegate descriptor must advertise exactly [task, delaySeconds, mode, targetSessionKey, targetSessionKeys, fanoutMode, traceparent, model]; got [${actualKeys.join(", ")}]`,
+      `continue_delegate descriptor must advertise exactly [task, delaySeconds, mode, targetSessionKey, targetSessionKeys, fanoutMode, model]; got [${actualKeys.join(", ")}]`,
     ).toEqual(expectedKeys);
 
     // task is required (model-facing contract).

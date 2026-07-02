@@ -1896,6 +1896,7 @@ export async function runReplyAgent(replyParams: {
         provenance: followupRun.run.inputProvenance,
         inboundEventKind: followupRun.currentInboundEventKind,
         messageId: followupRun.messageId,
+        eventTimestampMs: followupRun.currentInboundEventTimestampMs,
         isHeartbeat,
         isContinuationWake: isContinuationWake === true,
       });

@@ -228,6 +228,7 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "currentInboundEventKind"
+  | "currentInboundEventTimestampMs"
   | "currentInboundAudio"
   | "currentInboundContext"
   | "abortSignal"
@@ -294,6 +295,7 @@ function collectRuntimeMetadata(
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundEventTimestampMs: currentTurnSource?.currentInboundEventTimestampMs,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: currentTurnSource?.currentInboundContext,
     abortSignal,

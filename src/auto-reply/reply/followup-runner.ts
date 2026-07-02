@@ -706,16 +706,15 @@ export function createFollowupRunner(params: {
         });
       }
 
-      // Pre-provider no-op replay guard (#1138/#1142). Followup turns bypass
-      // runReplyAgent and are the primary stale room-event backlog storm path, so
-      // admission must be decided here before any provider-bound work (including
-      // preflight compaction, which can itself call the model). A suppressed wake
-      // releases the run cleanly via the finally block; it never calls the provider.
+      // No-op replay guard bookkeeping (#1138/#1142). Followup room/system events
+      // are neutral unless a future caller marks the wake as continuation-owned;
+      // this path records substantive outcomes without suppressing room life.
       const noOpRearmWake = {
         sessionKey: replySessionKey ?? run.sessionKey ?? "",
         provenance: run.inputProvenance,
         inboundEventKind: queued.currentInboundEventKind,
         messageId: resolveFollowupCurrentMessageId() ?? queued.messageId,
+        eventTimestampMs: queued.currentInboundEventTimestampMs,
         isHeartbeat: opts?.isHeartbeat === true,
       };
       let noOpRearmWakeClass: NoOpRearmWakeClass | undefined;
@@ -1403,8 +1402,8 @@ export function createFollowupRunner(params: {
       // visible/substantive outcome: automatic final delivery is intentionally
       // suppressed later unless the message tool actually sent content. Keep the
       // rest of the classifier facts, but base visibility on committed delivery
-      // evidence for that mode so stale backlog cannot reset the streak with an
-      // undelivered final text.
+      // evidence for that mode so undelivered final text cannot reset a
+      // continuation-owned streak.
       if (noOpRearmWakeClass && (replySessionKey ?? run.sessionKey)) {
         const facts = summarizeEmbeddedRunOutcome(runResult);
         const messageToolOnlyWithoutDelivery =

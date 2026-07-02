@@ -1,10 +1,6 @@
 import { Type } from "typebox";
 import { createExpiringMapCache } from "../../config/cache-utils.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
-import {
-  DIAGNOSTIC_TRACEPARENT_PATTERN,
-  normalizeDiagnosticTraceparent,
-} from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -74,15 +70,6 @@ const RequestCompactionToolSchema = Type.Object({
         "Optional instructions that steer what the compaction summary should preserve. " +
         "Use this to name load-bearing facts, decisions, files, or open questions the summarizer must keep.",
       maxLength: 4096,
-    }),
-  ),
-  traceparent: Type.Optional(
-    Type.String({
-      description:
-        "Optional W3C traceparent override. When omitted, the tool derives the parent " +
-        "context from the openclaw runtime's active trace scope (set at gateway entry points). " +
-        "Supply this only when injecting cross-process trace context.",
-      pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
     }),
   ),
 });
@@ -195,13 +182,7 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
 
       const reasonText = readStringParam(params, "reason", { required: true }).slice(0, 1024);
       const focusText = readStringParam(params, "focus")?.slice(0, 4096);
-      const traceparentRaw = readStringParam(params, "traceparent");
-      const explicitTraceparent =
-        traceparentRaw !== undefined ? normalizeDiagnosticTraceparent(traceparentRaw) : undefined;
-      if (traceparentRaw !== undefined && !explicitTraceparent) {
-        throw new ToolInputError("traceparent must be a valid W3C traceparent header.");
-      }
-      const traceparent = explicitTraceparent ?? formatActiveContinuationTraceparent();
+      const traceparent = formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       // ----- Guard 0: Dedup — compaction already pending -----
@@ -347,7 +328,6 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
         trigger: "volitional",
         contextUsage: Math.round(contextUsage * 100),
         reason: reasonText,
-        ...traceContextFields,
         note:
           "Compaction has been enqueued and will run after your turn completes. " +
           "Post-compaction context (AGENTS.md, SOUL.md) will be injected on the next turn. " +

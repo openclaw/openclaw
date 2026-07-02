@@ -10,6 +10,11 @@ import {
   type Tracer,
 } from "../../infra/continuation-tracer.js";
 import {
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import {
   createRequestCompactionTool,
   _resetGuardState,
   _resetVolitionalCounts,
@@ -20,7 +25,12 @@ import {
   type RequestCompactionToolOpts,
 } from "./request-compaction-tool.js";
 
-const VALID_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const ACTIVE_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00";
+const ACTIVE_TRACE_CONTEXT: DiagnosticTraceContext = {
+  traceId: "0af7651916cd43dd8448eb211c80319c",
+  spanId: "b7ad6b7169203331",
+  traceFlags: "00",
+};
 
 type RecordedSpan = {
   name: string;
@@ -117,6 +127,7 @@ describe("request_compaction tool", () => {
     _resetGuardState();
     _resetVolitionalCounts();
     resetContinuationTracer();
+    resetDiagnosticTraceContextForTest();
     vi.restoreAllMocks();
   });
 
@@ -361,6 +372,12 @@ describe("request_compaction tool", () => {
     );
   });
 
+  it("does not expose diagnostic traceparent as a model-facing parameter", () => {
+    const tool = makeTool();
+
+    expect(JSON.stringify(tool.parameters)).not.toContain("traceparent");
+  });
+
   it("keeps traceparent absent when the optional carrier is omitted", async () => {
     const tool = makeTool();
 
@@ -380,7 +397,7 @@ describe("request_compaction tool", () => {
     expect(result).not.toHaveProperty("traceparent");
   });
 
-  it("threads a valid optional traceparent carrier into the compaction span", async () => {
+  it("threads the active runtime trace context into the compaction span", async () => {
     const { tracer, spans } = createRecordingTracer();
     setContinuationTracer(tracer);
     mockTriggerCompaction.mockImplementation(async (request) => {
@@ -393,42 +410,31 @@ describe("request_compaction tool", () => {
     });
     const tool = makeTool();
 
-    const result = await executeTool(tool, {
-      reason: "thermal evacuation complete",
-      traceparent: VALID_TRACEPARENT,
-    });
+    const result = await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      executeTool(tool, {
+        reason: "thermal evacuation complete",
+      }),
+    );
     await flushBackgroundCompaction();
 
     expect(mockTriggerCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "thermal evacuation complete",
-        traceparent: VALID_TRACEPARENT,
+        traceparent: ACTIVE_TRACEPARENT,
       }),
     );
     expect(result).toMatchObject({
       status: "compaction_requested",
       trigger: "volitional",
-      traceparent: VALID_TRACEPARENT,
     });
+    expect(result).not.toHaveProperty("traceparent");
     expect(spans).toHaveLength(1);
     expect(spans[0]).toMatchObject({
       name: "continuation.compaction.released",
-      options: { traceparent: VALID_TRACEPARENT },
+      options: { traceparent: ACTIVE_TRACEPARENT },
       statusCalls: [{ status: "OK", message: undefined }],
       ended: true,
     });
-  });
-
-  it("rejects malformed traceparent carriers", async () => {
-    const tool = makeTool();
-
-    await expect(
-      tool.execute("call-bad-traceparent", {
-        reason: "thermal evacuation complete",
-        traceparent: "not-a-traceparent",
-      }),
-    ).rejects.toThrow("traceparent must be a valid W3C traceparent header");
-    expect(mockTriggerCompaction).not.toHaveBeenCalled();
   });
 
   it("truncates long reasons to 1024 characters", async () => {
