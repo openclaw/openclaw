@@ -278,11 +278,6 @@ private struct SettingsGatewayStatesPreview: View {
                     }
 
                     self.stateSection("Error") {
-                        GatewayProblemBanner(
-                            problem: Self.pairingProblem,
-                            primaryActionTitle: "Retry",
-                            onPrimaryAction: {},
-                            onShowDetails: {})
                         self.gatewayStatusCard(
                             title: "Tailscale warning",
                             detail: "Tailscale is off on this device. Turn it on, then try again.",
@@ -395,15 +390,5 @@ private struct SettingsGatewayStatesPreview: View {
         .controlSize(.small)
         .disabled(isBusy)
     }
-
-    private static let pairingProblem = GatewayConnectionProblem(
-        kind: .pairingRequired,
-        owner: .gateway,
-        title: "Pairing required",
-        message: "Run /pair approve in your OpenClaw chat before this iPad can connect.",
-        actionCommand: "/pair approve req-ipad-preview",
-        requestId: "req-ipad-preview",
-        retryable: false,
-        pauseReconnect: true)
 }
 #endif
