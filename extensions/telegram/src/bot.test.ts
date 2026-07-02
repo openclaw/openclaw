@@ -45,6 +45,7 @@ const {
   telegramBotRuntimeForTest,
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
+const { recordOutboundMessageForPromptContext } = await import("./outbound-message-context.js");
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
@@ -230,6 +231,7 @@ function systemEventOptions(index = 0) {
 }
 
 const ORIGINAL_TZ = process.env.TZ;
+
 describe("createTelegramBot", () => {
   beforeAll(async () => {
     ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
@@ -267,6 +269,88 @@ describe("createTelegramBot", () => {
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
+  });
+
+  it("starts with retired includeGroupHistoryContext still present in raw config", async () => {
+    loadConfig.mockReturnValue({
+      messages: { groupChat: { unmentionedInbound: "room_event" } },
+      channels: {
+        telegram: {
+          includeGroupHistoryContext: "mention-only",
+        },
+      },
+    } as never);
+
+    createTelegramBot({ token: "tok" });
+
+    expect(getOnHandler("message")).toEqual(expect.any(Function));
+  });
+
+  it("records outbound prompt-context sends into ambient group history", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    loadConfig.mockReturnValue(cfg);
+    createTelegramBot({
+      token: "tok",
+      botInfo: {
+        id: 999,
+        is_bot: true,
+        first_name: "OpenClaw",
+        username: "openclaw_bot",
+        can_join_groups: true,
+        can_read_all_group_messages: false,
+        can_manage_bots: false,
+        supports_inline_queries: false,
+        can_connect_to_business: false,
+        has_main_web_app: false,
+        has_topics_enabled: false,
+        allows_users_to_create_topics: false,
+      },
+    });
+    await recordOutboundMessageForPromptContext({
+      cfg,
+      account: { accountId: "default", name: "OpenClaw" },
+      chatId: -42,
+      message: {
+        chat: { id: -42, type: "group", title: "Ops" },
+        date: 1_736_380_700,
+        message_id: 700,
+        text: "Bot just replied",
+      },
+      messageId: 700,
+      text: "Bot just replied",
+    });
+
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+      message: {
+        chat: { id: -42, type: "group", title: "Ops" },
+        text: "What now?",
+        date: 1_736_380_800,
+        message_id: 701,
+        from: { id: 201, is_bot: false, first_name: "Sam" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.InboundEventKind).toBe("room_event");
+    expect(payload.InboundHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ body: "Bot just replied", sender: "OpenClaw (you)" }),
+      ]),
+    );
   });
 
   it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
@@ -1842,7 +1926,6 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
-          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -1928,7 +2011,7 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
-  it("omits ambient group messages from default conversation prompt context", async () => {
+  it("keeps skipped group messages in default recent group history context", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
 
@@ -1980,8 +2063,80 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toEqual([
+      {
+        label: "Conversation context",
+        payload: {
+          messages: [
+            expect.objectContaining({
+              body: "Please run the maintenance step later.",
+              sender: "Requester",
+            }),
+          ],
+          order: "chronological",
+          relation: "selected_for_current_message",
+        },
+        source: "telegram",
+        type: "chat_window",
+      },
+    ]);
+  });
+
+  it("honors historyLimit zero for group chat-window context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["111", "222"],
+          historyLimit: 0,
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Do not include this cached group line.",
+        date: 1736380800,
+        message_id: 601,
+        from: { id: 111, is_bot: false, first_name: "Requester" },
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot Hello",
+        date: 1736380860,
+        message_id: 602,
+        from: { id: 222, is_bot: false, first_name: "Operator" },
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
     expect(payload.UntrustedStructuredContext).toBeUndefined();
-    expect(payload.Body).not.toContain("Please run the maintenance step later.");
+    expect(payload.Body).not.toContain("Do not include this cached group line.");
   });
 
   it("updates cached bot messages from Telegram edit updates", async () => {
@@ -1997,7 +2152,6 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           groupPolicy: "open",
-          includeGroupHistoryContext: "recent",
           groups: { "*": { requireMention: false } },
         },
       },
@@ -2511,7 +2665,6 @@ describe("createTelegramBot", () => {
         telegram: {
           groupPolicy: "open",
           contextVisibility: "allowlist_quote",
-          includeGroupHistoryContext: "recent",
           allowFrom,
         },
       },
@@ -2661,7 +2814,6 @@ describe("createTelegramBot", () => {
         telegram: {
           groupPolicy: "allowlist",
           contextVisibility: "allowlist",
-          includeGroupHistoryContext: "recent",
           groups: {
             "-1007": {
               requireMention: false,
@@ -2812,7 +2964,6 @@ describe("createTelegramBot", () => {
           telegram: {
             groupPolicy: "open",
             contextVisibility: "allowlist",
-            includeGroupHistoryContext: "recent",
             ...(runtimeGroupAllowFrom ? { groupAllowFrom: runtimeGroupAllowFrom } : {}),
             groups: {
               [String(chatId)]: {
@@ -2826,7 +2977,6 @@ describe("createTelegramBot", () => {
         channels: {
           telegram: {
             groupPolicy: "open",
-            includeGroupHistoryContext: "recent",
             ...(startupGroupAllowFrom ? { groupAllowFrom: startupGroupAllowFrom } : {}),
             groups: { [String(chatId)]: { requireMention: false } },
           },

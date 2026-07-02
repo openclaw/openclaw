@@ -36,6 +36,7 @@ import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
+import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 /** Re-export CLI reliability helpers used by older runner call sites. */
 export {
@@ -45,6 +46,8 @@ export {
 } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
+const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const sweptCliImageRoots = new Set<string>();
 
 function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
@@ -295,6 +298,53 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT",
+  );
+}
+
+async function sweepCliImageRoot(imageRoot: string): Promise<void> {
+  if (sweptCliImageRoots.has(imageRoot)) {
+    return;
+  }
+  sweptCliImageRoots.add(imageRoot);
+  try {
+    const cutoffMs = Date.now() - CLI_IMAGE_SWEEP_TTL_MS;
+    const entries = await fs.readdir(imageRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      const entryPath = path.join(imageRoot, entry.name);
+      const stat = await fs.stat(entryPath).catch((error: unknown) => {
+        if (isFileNotFoundError(error)) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (!stat) {
+        continue;
+      }
+      if (stat.mtimeMs >= cutoffMs) {
+        continue;
+      }
+      try {
+        await fs.rm(entryPath, { force: true });
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          throw error;
+        }
+      }
+    }
+  } catch (error) {
+    cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
+  }
+}
+
 function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
@@ -353,6 +403,7 @@ export async function writeCliImages(params: {
     workspaceDir: params.workspaceDir,
   });
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
+  await sweepCliImageRoot(imageRoot);
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
   for (const image of params.images) {
