@@ -384,21 +384,20 @@ export class NodeExecutionEnv implements ExecutionEnv {
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
-        if (stdoutTruncated) {
-          return;
-        }
-        const chunkBytes = Buffer.byteLength(chunk, "utf8");
-        if (totalStdoutBytes + chunkBytes > maxOutputBytes) {
-          const remaining = maxOutputBytes - totalStdoutBytes;
-          if (remaining > 0) {
-            stdout += truncateToBytes(chunk, remaining);
+        if (!stdoutTruncated) {
+          const chunkBytes = Buffer.byteLength(chunk, "utf8");
+          if (totalStdoutBytes + chunkBytes > maxOutputBytes) {
+            const remaining = maxOutputBytes - totalStdoutBytes;
+            if (remaining > 0) {
+              stdout += truncateToBytes(chunk, remaining);
+            }
+            stdout += "\n[output truncated]";
+            stdoutTruncated = true;
+          } else {
+            totalStdoutBytes += chunkBytes;
+            stdout += chunk;
           }
-          stdout += "\n[output truncated]";
-          stdoutTruncated = true;
-          return;
         }
-        totalStdoutBytes += chunkBytes;
-        stdout += chunk;
         try {
           options?.onStdout?.(chunk);
         } catch (error) {
@@ -408,21 +407,20 @@ export class NodeExecutionEnv implements ExecutionEnv {
         }
       });
       child.stderr?.on("data", (chunk: string) => {
-        if (stderrTruncated) {
-          return;
-        }
-        const chunkBytes = Buffer.byteLength(chunk, "utf8");
-        if (totalStderrBytes + chunkBytes > maxOutputBytes) {
-          const remaining = maxOutputBytes - totalStderrBytes;
-          if (remaining > 0) {
-            stderr += truncateToBytes(chunk, remaining);
+        if (!stderrTruncated) {
+          const chunkBytes = Buffer.byteLength(chunk, "utf8");
+          if (totalStderrBytes + chunkBytes > maxOutputBytes) {
+            const remaining = maxOutputBytes - totalStderrBytes;
+            if (remaining > 0) {
+              stderr += truncateToBytes(chunk, remaining);
+            }
+            stderr += "\n[output truncated]";
+            stderrTruncated = true;
+          } else {
+            totalStderrBytes += chunkBytes;
+            stderr += chunk;
           }
-          stderr += "\n[output truncated]";
-          stderrTruncated = true;
-          return;
         }
-        totalStderrBytes += chunkBytes;
-        stderr += chunk;
         try {
           options?.onStderr?.(chunk);
         } catch (error) {

@@ -286,4 +286,38 @@ describe("NodeExecutionEnv exec output bounding", () => {
     expect(result.value.stdout).toBe("z".repeat(500));
     expect(result.value.stdout).not.toContain("[output truncated]");
   });
+
+  it("truncates at a UTF-8 byte boundary, not a code-unit boundary", async () => {
+    // "🙂" is 4 UTF-8 bytes. Cap at 5 bytes should keep one emoji (4 bytes) plus one ASCII (1 byte).
+    const result = await env.exec(
+      'node -e \'process.stdout.write("🙂🙂🙂🙂🙂" + "x".repeat(1000))\'',
+      { maxOutputBytes: 5 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
+    expect(result.value.stdout).toContain("[output truncated]");
+    expect(Buffer.byteLength(result.value.stdout, "utf8")).toBeLessThanOrEqual(5 + 64); // cap + marker + newline
+    expect(Buffer.byteLength(result.value.stdout, "utf8")).toBeGreaterThanOrEqual(5);
+  });
+
+  it("keeps streaming callbacks firing after capture truncation", async () => {
+    let callbackBytes = 0;
+    let callbackChunks = 0;
+    const result = await env.exec("node -e 'process.stdout.write(\"x\".repeat(10_000))'", {
+      maxOutputBytes: 1024,
+      onStdout: (chunk: string) => {
+        callbackBytes += chunk.length;
+        callbackChunks++;
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
+    expect(result.value.stdout).toContain("[output truncated]");
+    expect(callbackBytes).toBe(10_000);
+    expect(callbackChunks).toBeGreaterThan(0);
+  });
 });
