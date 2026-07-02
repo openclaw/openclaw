@@ -90,6 +90,15 @@ export {
 };
 export { isCliProvider } from "./model-selection-cli.js";
 
+const BUILT_IN_EXACT_REF_PROVIDER_IDS = new Set([
+  "anthropic",
+  "azure-openai",
+  "google",
+  "google-vertex",
+  "mistral",
+  "openai",
+]);
+
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
 }
@@ -349,18 +358,41 @@ export function resolveSubagentConfiguredModelSelection(params: {
  * a fully qualified `provider/model` string.  If the value is already qualified
  * or not a known alias, returns it unchanged.
  */
-function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
-  // Already a provider/model ref — no alias resolution needed.
-  if (value.includes("/")) {
+function hasExactKnownProviderModelRef(cfg: OpenClawConfig, raw: string): boolean {
+  if (!hasExplicitProviderModelRef(raw)) {
+    return false;
+  }
+  const providerRaw = raw.slice(0, raw.indexOf("/")).trim();
+  if (!providerRaw) {
+    return false;
+  }
+  if (BUILT_IN_EXACT_REF_PROVIDER_IDS.has(normalizeProviderId(providerRaw))) {
+    return true;
+  }
+  if (!cfg.models?.providers) {
+    return false;
+  }
+  const providerKey = normalizeLowercaseStringOrEmpty(providerRaw);
+  return Object.keys(cfg.models.providers).some(
+    (key) => normalizeLowercaseStringOrEmpty(key) === providerKey,
+  );
+}
+
+function resolveModelThroughAliases(
+  value: string,
+  aliasIndex: ModelAliasIndex,
+  cfg: OpenClawConfig,
+): string {
+  if (hasExactKnownProviderModelRef(cfg, value)) {
     return value;
   }
-  // Check if the value is a known alias; if so, resolve to provider/model.
-  // Unknown bare strings are returned as-is (don't guess the provider).
   const aliasKey = normalizeLowercaseStringOrEmpty(value);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
     return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
   }
+  // Unknown strings are returned as-is. That preserves explicit provider/model
+  // refs while still allowing exact aliases that contain a slash.
   return value;
 }
 
@@ -389,7 +421,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     defaultProvider: runtimeDefault.provider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return resolveModelThroughAliases(raw, aliasIndex, params.cfg);
 }
 
 export function resolveConfiguredSubagentSpawnModelSelection(params: {
@@ -419,7 +451,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     defaultProvider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return resolveModelThroughAliases(raw, aliasIndex, params.cfg);
 }
 
 export function buildAllowedModelSet(

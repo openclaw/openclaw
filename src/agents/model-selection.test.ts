@@ -2947,6 +2947,9 @@ describe("resolveSubagentSpawnModelSelection", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" },
+          },
         },
       },
     } as OpenClawConfig;
@@ -2958,6 +2961,80 @@ describe("resolveSubagentSpawnModelSelection", () => {
         modelOverride: "openai/gpt-5.4",
       }),
     ).toBe("openai/gpt-5.4");
+  });
+
+  it("keeps exact built-in provider/model overrides before slash-form aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openrouter/openai/gpt-5.4": { alias: "openai/gpt-5.4" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("resolves slash-form alias overrides before provider/model passthrough", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "xiaomi/mimo-v2-pro-mit",
+      }),
+    ).toBe("openai/xiaomi/mimo-v2-pro-mit");
+  });
+
+  it("keeps exact configured provider/model overrides before slash-form aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/nemotron-bolt/nemotron-3-super-120b": {
+              alias: "nemotron-bolt/nemotron-3-super-120b",
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "nemotron-bolt": {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "nemotron-bolt/nemotron-3-super-120b",
+      }),
+    ).toBe("nemotron-bolt/nemotron-3-super-120b");
   });
 
   it("falls back to runtime default when no override or config", () => {
