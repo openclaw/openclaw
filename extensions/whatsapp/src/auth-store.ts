@@ -79,9 +79,13 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
     }
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
-      // Validate that creds.json is parseable.
-      JSON.parse(raw);
-      return false;
+      try {
+        // Validate that creds.json is parseable.
+        JSON.parse(raw);
+        return false;
+      } catch {
+        // corrupted — try backup below
+      }
     }
 
     const backupRaw = readCredsJsonRaw(backupPath);
@@ -89,8 +93,12 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
       return false;
     }
 
-    // Ensure backup is parseable before restoring.
-    JSON.parse(backupRaw);
+    try {
+      // Ensure backup is parseable before restoring.
+      JSON.parse(backupRaw);
+    } catch {
+      return false; // backup is corrupted, can't restore
+    }
     await writeWebCredsRawAtomically({
       filePath: credsPath,
       content: backupRaw,

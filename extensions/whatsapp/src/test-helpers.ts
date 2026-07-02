@@ -83,7 +83,12 @@ async function updateLastRouteMock(params: {
   deliveryContext: { channel: string; to: string; accountId?: string };
 }) {
   const raw = await fs.readFile(params.storePath, "utf8").catch(() => "{}");
-  const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+  let store: Record<string, Record<string, unknown>>;
+  try {
+    store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+  } catch {
+    store = {};
+  }
   const current = store[params.sessionKey] ?? {};
   store[params.sessionKey] = {
     ...current,
