@@ -392,6 +392,66 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Examples: alias-pinned -> gpt", "Cron");
   });
 
+  describe("in-flight cron job advisory", () => {
+    const RUNNING_AT_MS = Date.parse("2026-05-01T00:00:00.000Z");
+
+    it("warns about jobs still marked in-flight without touching the store", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({ id: "running-job", state: { runningAtMs: RUNNING_AT_MS } }),
+      ]);
+      const prompter = makePrompter(true);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
+
+      expectNoteContaining("1 cron job is still marked in-flight", "Cron");
+      expectNoteContaining("shows it as `running`", "Cron");
+      expectNoteContaining("marks such runs interrupted the next time it starts", "Cron");
+      expectNoteContaining("openclaw cron show <id>", "Cron");
+
+      // Observer-only: no repair prompt and the running marker is left untouched.
+      expect(prompter.confirm).not.toHaveBeenCalled();
+      const jobs = await readPersistedJobs(storePath);
+      const state = requireRecord(requirePersistedJob(jobs, 0).state, "cron state");
+      expect(state.runningAtMs).toBe(RUNNING_AT_MS);
+      expect(state.lastRunStatus).toBeUndefined();
+    });
+
+    it("pluralizes the advisory when multiple jobs are in-flight", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({ id: "running-a", state: { runningAtMs: RUNNING_AT_MS } }),
+        createCurrentCronJob({ id: "running-b", state: { runningAtMs: RUNNING_AT_MS + 1000 } }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 cron jobs are still marked in-flight", "Cron");
+      expectNoteContaining("shows them as `running`", "Cron");
+    });
+
+    it("stays silent when no job is marked in-flight", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [createCurrentCronJob({ id: "idle-job" })]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoNoteContaining("still marked in-flight", "Cron");
+    });
+  });
+
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [createLegacyCronJob()]);

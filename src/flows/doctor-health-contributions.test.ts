@@ -77,6 +77,19 @@ const mocks = vi.hoisted(() => ({
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
+  scanConfiguredChannelPluginBlockers: vi.fn(
+    (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
+  ),
+  channelPluginBlockerHitToHealthFinding: vi.fn(
+    (hit: { channelId: string; pluginId: string; reason: string }) => ({
+      checkId: "core/doctor/channel-plugin-blockers",
+      severity: "warning" as const,
+      message: "channels." + hit.channelId + " blocked",
+      path: "channels." + hit.channelId,
+      target: hit.pluginId,
+      requirement: hit.reason,
+    }),
+  ),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -278,6 +291,11 @@ vi.mock("../commands/doctor-device-pairing.js", () => ({
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
+  scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
+  channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
+}));
+
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
   randomToken: vi.fn(() => "generated-gateway-token"),
@@ -452,6 +470,9 @@ describe("doctor health contributions", () => {
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
+    mocks.scanConfiguredChannelPluginBlockers.mockReset();
+    mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
+    mocks.channelPluginBlockerHitToHealthFinding.mockClear();
   });
 
   afterEach(() => {
@@ -1169,6 +1190,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionIds).toContain("core/doctor/device-pairing");
+    expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 
@@ -1279,7 +1301,6 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
     const checks = [devicePairingCheck!];
-
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
@@ -1296,6 +1317,46 @@ describe("doctor health contributions", () => {
       cfg: ctx.cfg,
       healthOk: false,
     });
+  });
+
+  it("keeps channel plugin blockers opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const blockerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/channel-plugin-blockers",
+    );
+    expect(blockerCheck).toMatchObject({ defaultEnabled: false });
+    expect(blockerCheck).toBeDefined();
+    mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([
+      { channelId: "discord", pluginId: "discord", reason: "missing explicit enablement" },
+    ]);
+
+    const ctx = {
+      cfg: { channels: { discord: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [blockerCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.scanConfiguredChannelPluginBlockers).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-plugin-blockers"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/channel-plugin-blockers",
+          path: "channels.discord",
+          target: "discord",
+        }),
+      ],
+    });
+    expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

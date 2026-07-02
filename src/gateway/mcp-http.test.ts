@@ -104,6 +104,7 @@ vi.mock("./tool-resolution.js", () => ({
 
 import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
 import {
+  createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
@@ -1764,6 +1765,15 @@ describe("createMcpLoopbackServerConfig", () => {
       "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+  });
+
+  it("builds an attach grant config with only token-backed headers", () => {
+    const config = createMcpAttachGrantServerConfig(23119) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(config.mcpServers?.openclaw?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+    });
   });
 
   it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {

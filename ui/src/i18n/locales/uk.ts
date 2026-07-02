@@ -1380,6 +1380,11 @@ export const uk: TranslationMap = {
       retrySend: "Повторити надсилання",
       retryQueuedMessage: "Повторити повідомлення в черзі",
     },
+    pairingQrExpired: {
+      title: "QR-код для пар'ювання застарів",
+      reason: "Виконайте /pair qr знову, щоб згенерувати новий код налаштування.",
+      badge: "Застарів",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

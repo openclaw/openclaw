@@ -1381,6 +1381,11 @@ export const pl: TranslationMap = {
       retrySend: "Ponów wysłanie",
       retryQueuedMessage: "Ponów wiadomość w kolejce",
     },
+    pairingQrExpired: {
+      title: "Kod QR parowania wygasł",
+      reason: "Uruchom ponownie /pair qr, aby wygenerować nowy kod konfiguracyjny.",
+      badge: "Wygasł",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

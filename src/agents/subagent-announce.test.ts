@@ -5,7 +5,7 @@ import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/r
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
-type AgentCallResponse = { runId?: string; status: string; error?: string };
+type AgentCallResponse = { runId?: string; status: string; error?: string; terminal?: boolean };
 
 const agentSpy = vi.fn(
   async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
@@ -149,10 +149,15 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: effectiveOrigin?.threadId,
             }),
       },
-    })) as { status?: string; error?: string };
+    })) as { status?: string; error?: string; terminal?: boolean };
 
     if (response.status === "error") {
-      return { delivered: false, path: "direct", error: response.error ?? "agent delivery failed" };
+      return {
+        delivered: false,
+        path: "direct",
+        error: response.error ?? "agent delivery failed",
+        ...(response.terminal === true ? { terminal: true } : {}),
+      };
     }
 
     return { delivered: true, path: "direct" };
@@ -598,5 +603,52 @@ describe("subagent announce seam flow", () => {
       "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
     );
     logSpy.mockRestore();
+  });
+
+  it("treats terminal direct completion failures as announced for cleanup", async () => {
+    let deliveryResult:
+      | {
+          delivered: boolean;
+          path: string;
+          error?: string;
+          terminal?: boolean;
+        }
+      | undefined;
+    agentSpy.mockResolvedValueOnce({
+      status: "error",
+      error: "prompt lock failed after visible send",
+      terminal: true,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:slack",
+      childRunId: "run-terminal-direct-failure",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "slack",
+        to: "C123",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      onDeliveryResult: (delivery) => {
+        deliveryResult = delivery;
+      },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(deliveryResult).toMatchObject({
+      delivered: false,
+      path: "direct",
+      error: "prompt lock failed after visible send",
+      terminal: true,
+    });
   });
 });
