@@ -20,6 +20,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
+import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMove,
@@ -183,7 +184,7 @@ function filterLegacySessionStoreTargets(
   targets: SessionStoreTarget[],
   mode: DoctorSessionSqliteMode,
 ): SessionStoreTarget[] {
-  if (mode === "inspect" || mode === "restore" || mode === "recover") {
+  if (mode === "inspect" || mode === "compact" || mode === "restore" || mode === "recover") {
     return targets;
   }
   return targets.filter((target) => fs.existsSync(target.storePath));
@@ -198,7 +199,7 @@ async function inspectOrMigrateTarget(params: {
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
   const allRecords = readLegacySessionRecords(params.target, issues, {
-    allowMissingStore: params.mode === "inspect",
+    allowMissingStore: params.mode === "inspect" || params.mode === "compact",
   });
   const records = shouldFilterLegacySessionRecordsByTarget(params.target)
     ? allRecords.filter((record) =>
@@ -231,6 +232,12 @@ async function inspectOrMigrateTarget(params: {
     report.sqliteEntries = readSqliteEntryCount(params.target);
     appendSqliteDbStats(params.target, report);
     appendActiveSqliteTranscriptFileIssues(params.target, report);
+    return report;
+  }
+  if (params.mode === "compact") {
+    compactSqliteDatabase(params.target, report);
+    report.sqliteEntries = readSqliteEntryCount(params.target);
+    appendSqliteDbStats(params.target, report);
     return report;
   }
   for (const record of records) {
@@ -867,6 +874,20 @@ function appendSqliteDbStats(
   }
 }
 
+function compactSqliteDatabase(
+  target: SessionStoreTarget,
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  try {
+    report.compact = compactDoctorSessionSqliteTarget(target);
+  } catch (err) {
+    report.issues.push({
+      code: "sqlite_compact_failed",
+      message: `SQLite database compact failed: ${String(err)}`,
+    });
+  }
+}
+
 function resolveActiveSqliteTranscriptFile(
   target: SessionStoreTarget,
   entry: SessionEntry,
@@ -1059,6 +1080,10 @@ function summarizeDoctorSessionSqliteReport(
       importedTranscriptEvents: sumTargets(targets, "importedTranscriptEvents"),
       issues: targets.reduce((total, target) => total + target.issues.length, 0),
       legacyEntries: sumTargets(targets, "legacyEntries"),
+      reclaimedBytes: targets.reduce(
+        (total, target) => total + (target.compact?.reclaimedBytes ?? 0),
+        0,
+      ),
       sqliteEntries: sumTargets(targets, "sqliteEntries"),
       targets: targets.length,
       unreferencedJsonlFiles: targets.reduce(

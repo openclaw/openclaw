@@ -137,6 +137,24 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
+  it("passes session sqlite compact mode to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "compact",
+      "--session-sqlite-agent",
+      "main",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("compact");
+    expect(options.sessionSqliteAgent).toBe("main");
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
   it("rejects session sqlite selectors without session sqlite mode", async () => {
     await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
 

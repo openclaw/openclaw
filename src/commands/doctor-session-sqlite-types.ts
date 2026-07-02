@@ -34,6 +34,18 @@ export type DoctorSessionSqliteDbStats = {
   walSizeBytes: number;
 };
 
+export type DoctorSessionSqliteCompactReport = {
+  dbSizeAfterBytes: number;
+  dbSizeBeforeBytes: number;
+  freelistAfterPages: number;
+  freelistBeforePages: number;
+  pageSizeBytes: number;
+  reclaimedBytes: number;
+  skipped: boolean;
+  walSizeAfterBytes: number;
+  walSizeBeforeBytes: number;
+};
+
 export type DoctorSessionSqliteCorruptRecovery = {
   movedFiles: string[];
   skippedFiles: string[];
@@ -57,6 +69,7 @@ export type DoctorSessionSqliteMode =
   | "import"
   | "validate"
   | "inspect"
+  | "compact"
   | "restore"
   | "recover";
 
@@ -86,6 +99,7 @@ export type DoctorSessionSqliteTargetReport = {
   unreferencedJsonlFiles: string[];
   validatedEntries: number;
   validatedTranscriptEvents: number;
+  compact?: DoctorSessionSqliteCompactReport;
   corruptRecovery?: DoctorSessionSqliteCorruptRecovery;
   restore?: DoctorSessionSqliteRestoreReport;
 };
@@ -108,6 +122,7 @@ export type DoctorSessionSqliteReport = {
     importedTranscriptEvents: number;
     issues: number;
     legacyEntries: number;
+    reclaimedBytes?: number;
     sqliteEntries: number;
     targets: number;
     unreferencedJsonlFiles: number;

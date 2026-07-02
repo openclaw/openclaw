@@ -8,6 +8,7 @@ import {
   loadSqliteTranscriptEventsSync,
   upsertSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { SessionSqliteMigrationManifest } from "./doctor-session-sqlite-migration-run.js";
@@ -201,6 +202,52 @@ describe("runDoctorSessionSqlite", () => {
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("compacts migrated agent SQLite databases and reports reclaimed pages", async () => {
+    const store = createLegacyStore({
+      transcriptLines: [
+        '{"type":"session","sessionId":"session-1"}',
+        ...Array.from({ length: 240 }, (_, index) =>
+          JSON.stringify({
+            id: `evt-${index}`,
+            message: { content: "x".repeat(2_000), role: "user" },
+            type: "message",
+          }),
+        ),
+      ],
+    });
+    const importReport = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+    const sqlitePath = importReport.targets[0]?.sqlitePath;
+    expect(sqlitePath).toBeTruthy();
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(sqlitePath ?? "");
+    try {
+      db.exec("DELETE FROM transcript_events;");
+    } finally {
+      db.close();
+    }
+
+    const compact = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "compact",
+      store: store.storePath,
+    });
+
+    expect(compact.totals.issues).toBe(0);
+    expect(compact.totals.reclaimedBytes).toBeGreaterThan(0);
+    expect(compact.targets[0]?.compact).toMatchObject({
+      freelistAfterPages: 0,
+      skipped: false,
+    });
+    expect(compact.targets[0]?.compact?.freelistBeforePages).toBeGreaterThan(0);
+    expect(compact.targets[0]?.compact?.dbSizeAfterBytes).toBeLessThan(
+      compact.targets[0]?.compact?.dbSizeBeforeBytes ?? 0,
+    );
   });
 
   it("does not report SQLite markers as missing transcript files", async () => {

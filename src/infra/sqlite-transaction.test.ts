@@ -1,5 +1,5 @@
 // Covers synchronous SQLite transaction helpers.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   runSqliteImmediateTransactionAsync,
@@ -27,6 +27,7 @@ afterEach(() => {
   for (const db of openDatabases.splice(0)) {
     db.close();
   }
+  vi.restoreAllMocks();
 });
 
 describe("runSqliteImmediateTransactionSync", () => {
@@ -123,6 +124,132 @@ describe("runSqliteImmediateTransactionSync", () => {
 
     expect(result).toBe("committed later");
     expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
+  });
+
+  it("wraps begin busy timeouts with actionable wait context", () => {
+    const logger = { warn: vi.fn() };
+    const db = {
+      exec(sql: string) {
+        if (sql === "BEGIN IMMEDIATE") {
+          throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        }
+      },
+    } as import("node:sqlite").DatabaseSync;
+
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => "blocked", {
+        busyTimeoutMs: 5_000,
+        databaseLabel: "agent.sqlite",
+        logger,
+      }),
+    ).toThrow(/begin for agent\.sqlite timed out.*busy_timeout=5000ms.*database is locked/);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "SQLite transaction lock wait failed",
+      expect.objectContaining({
+        busyTimeoutMs: 5_000,
+        code: "SQLITE_BUSY",
+        database: "agent.sqlite",
+        step: "begin",
+      }),
+    );
+  });
+
+  it("retries begin waits until the cumulative transaction cap", () => {
+    const execCalls: string[] = [];
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 2_000;
+      return value;
+    });
+    const db = {
+      exec(sql: string) {
+        execCalls.push(sql);
+        if (sql === "BEGIN IMMEDIATE") {
+          throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        }
+      },
+    } as import("node:sqlite").DatabaseSync;
+
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => "blocked", {
+        busyTimeoutMs: 5_000,
+        databaseLabel: "agent.sqlite",
+        logger,
+        maxBusyWaitMs: 3_000,
+      }),
+    ).toThrow(/begin for agent\.sqlite timed out after waiting 4000ms across 2 attempt/);
+
+    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "BEGIN IMMEDIATE"]);
+  });
+
+  it("logs slow successful transaction lock waits", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1_500;
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 5_000,
+      databaseLabel: "agent.sqlite",
+      logger,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.objectContaining({
+        database: "agent.sqlite",
+        elapsedMs: 1_500,
+        step: "begin",
+      }),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.objectContaining({
+        database: "agent.sqlite",
+        elapsedMs: 1_500,
+        step: "commit",
+      }),
+    );
+  });
+
+  it("stops retrying commits when cumulative busy wait reaches the transaction cap", () => {
+    const execCalls: string[] = [];
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 2_000;
+      return value;
+    });
+    const db = {
+      exec(sql: string) {
+        execCalls.push(sql);
+        if (sql === "COMMIT") {
+          throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        }
+      },
+      close() {},
+    } as import("node:sqlite").DatabaseSync;
+
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => "blocked", {
+        busyTimeoutMs: 5_000,
+        databaseLabel: "agent.sqlite",
+        logger,
+        maxBusyWaitMs: 3_000,
+      }),
+    ).toThrow(/commit for agent\.sqlite timed out after waiting 4000ms across 2 attempt/);
+
+    expect(execCalls.filter((sql) => sql === "COMMIT")).toHaveLength(2);
+    expect(execCalls.at(-1)).toBe("ROLLBACK");
   });
 });
 

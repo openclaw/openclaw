@@ -44,6 +44,11 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
             `  restored=${target.restore.restoredFiles.length}, skipped=${target.restore.skippedFiles.length}, conflicts=${target.restore.conflicts.length}, manifests=${target.restore.manifestPaths.length}`,
           );
         }
+        if (target.compact) {
+          outputRuntime.log(
+            `  compact reclaimed=${target.compact.reclaimedBytes} bytes, db=${target.compact.dbSizeBeforeBytes}->${target.compact.dbSizeAfterBytes} bytes, wal=${target.compact.walSizeBeforeBytes}->${target.compact.walSizeAfterBytes} bytes`,
+          );
+        }
         if (target.corruptRecovery) {
           outputRuntime.log(
             `  corrupt-db-recovery moved=${target.corruptRecovery.movedFiles.length}, skipped=${target.corruptRecovery.skippedFiles.length}`,

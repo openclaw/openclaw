@@ -29,7 +29,7 @@ Doctor has four postures:
 | Inspect                  | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
 | Repair                   | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
 | Lint                     | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
-| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, recovers, or restores legacy session state.       |
+| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, compacts, recovers, or restores session state.    |
 
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a
 human operator intentionally wants doctor to edit config or state.
@@ -53,6 +53,7 @@ openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-agent main --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
 openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite compact --session-sqlite-all-agents
 openclaw doctor --session-sqlite recover --github-issue
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
@@ -79,7 +80,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
 - `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
-- `--session-sqlite <mode>`: run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `recover`, or `restore`
+- `--session-sqlite <mode>`: run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`
 - `--session-sqlite-store <path>`: with `--session-sqlite`, select one legacy `sessions.json` store path
 - `--session-sqlite-agent <id>`: with `--session-sqlite`, select one configured agent
 - `--session-sqlite-all-agents`: with `--session-sqlite`, select configured and discovered agent stores
@@ -247,6 +248,7 @@ Modes:
 | `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
 | `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
+| `compact`  | Checkpoint and VACUUM selected agent SQLite databases to reclaim free pages after large deletes or archive cleanup.    |
 | `recover`  | Restore the latest failed migration run, validate its targets, and prepare a sanitized GitHub issue report.            |
 | `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
 
@@ -264,6 +266,7 @@ openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
 openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite compact --session-sqlite-all-agents
 openclaw doctor --session-sqlite recover --github-issue
 ```
 
@@ -272,6 +275,13 @@ important history. `validate` exits non-zero when a selected legacy entry is
 missing from SQLite, a session id differs, or a transcript event count differs.
 When using `--session-sqlite-store <path>`, check that the report contains the
 expected target count; a nonexistent explicit store path selects no targets.
+
+SQLite deletes reclaim pages inside the database first; they do not necessarily
+shrink the database file immediately. After deleting or archiving large
+transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
+to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
+sizes. This is explicit doctor maintenance so normal Gateway writes do not pause
+for background vacuum work.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
