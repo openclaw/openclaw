@@ -98,6 +98,90 @@ type FeishuHttpInstanceLike = Pick<
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readHeader(headers: unknown, name: string): string | undefined {
+  if (!isRecord(headers)) {
+    return undefined;
+  }
+  const normalizedName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== normalizedName) {
+      continue;
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((entry) => typeof entry === "string");
+      return typeof first === "string" ? first : undefined;
+    }
+  }
+  return undefined;
+}
+
+function isMultipartFormRequest(opts: Lark.HttpRequestOptions<unknown>): boolean {
+  return /^multipart\/form-data(?:;|$)/i.test(readHeader(opts.headers, "content-type") ?? "");
+}
+
+function hasFeishuUploadPart(data: Record<string, unknown>): boolean {
+  return Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image);
+}
+
+function stringifyMultipartFieldValue(value: unknown): string | undefined {
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(value);
+    default:
+      return undefined;
+  }
+}
+
+function bufferToBlobPart(value: Buffer): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(value.byteLength);
+  bytes.set(value);
+  return bytes;
+}
+
+function normalizeMultipartUploadData<D>(
+  opts: Lark.HttpRequestOptions<D>,
+): Lark.HttpRequestOptions<D> {
+  if (!isMultipartFormRequest(opts) || !isRecord(opts.data) || !hasFeishuUploadPart(opts.data)) {
+    return opts;
+  }
+
+  const form = new FormData();
+  const fileName =
+    typeof opts.data.file_name === "string" && opts.data.file_name
+      ? opts.data.file_name
+      : undefined;
+  for (const [key, value] of Object.entries(opts.data)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (Buffer.isBuffer(value)) {
+      form.append(
+        key,
+        new Blob([bufferToBlobPart(value)]),
+        key === "file" && fileName ? fileName : `${key}.bin`,
+      );
+      continue;
+    }
+    const fieldValue = stringifyMultipartFieldValue(value);
+    if (fieldValue !== undefined) {
+      form.append(key, fieldValue);
+    }
+  }
+
+  return { ...opts, data: form as D };
+}
+
 async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
@@ -134,7 +218,7 @@ function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance 
   }
 
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
+    request: (opts) => base.request(normalizeMultipartUploadData(injectTimeout(opts))),
     get: (url, opts) => base.get(url, injectTimeout(opts)),
     post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
     put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
