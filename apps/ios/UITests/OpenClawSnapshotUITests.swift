@@ -62,7 +62,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             initialDestination: "chat",
             name: "chat-settings-back"))
 
-        let gatewaySettings = try XCTUnwrap(self.app?.buttons["chat-gateway-settings-control"])
+        let gatewaySettings = try XCTUnwrap(self.app?.buttons["chat-gateway-status"])
         XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 8))
         gatewaySettings.tap()
         let gatewayNavigationBar = try XCTUnwrap(self.app?.navigationBars["Gateway"])
