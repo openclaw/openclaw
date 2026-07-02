@@ -321,4 +321,32 @@ describe("googlechat message actions", () => {
 
     expect(listGoogleChatReactions).not.toHaveBeenCalled();
   });
+
+  it("blocks reaction reads outside the Google Chat space allowlist", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        groups: {
+          "spaces/BBB": {},
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/AAA/messages/msg-1",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target space is not allowed.");
+
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
 });

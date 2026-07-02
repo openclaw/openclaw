@@ -33,6 +33,7 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
@@ -43,6 +44,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "./runtime-api.js";
+import { resolveDefaultGroupPolicy } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
@@ -79,6 +81,41 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
     return readStringParam(params, "to") ?? "";
   }
   return readStringParam(params, "to", { required: true });
+}
+
+function resolveMatrixReadGroupPolicy(params: {
+  cfg: CoreConfig;
+  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+}): "open" | "allowlist" | "disabled" | undefined {
+  const hasRoomAllowlist =
+    Object.keys(params.accountConfig.groups ?? params.accountConfig.rooms ?? {}).length > 0;
+  const groupPolicy =
+    params.accountConfig.groupPolicy ??
+    resolveDefaultGroupPolicy(params.cfg) ??
+    (hasRoomAllowlist ? "allowlist" : undefined);
+  return params.accountConfig.allowlistOnly === true && groupPolicy === "open"
+    ? "allowlist"
+    : groupPolicy;
+}
+
+function assertMatrixReadTargetAllowed(params: {
+  cfg: CoreConfig;
+  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
+  roomId?: string | null;
+}) {
+  const roomId = params.roomId?.trim();
+  const rooms = params.accountConfig.groups ?? params.accountConfig.rooms;
+  const groupPolicy = resolveMatrixReadGroupPolicy(params);
+  const roomConfig = roomId ? resolveMatrixRoomConfig({ rooms, roomId, aliases: [] }) : undefined;
+  if (!groupPolicy || groupPolicy === "open") {
+    if (roomConfig?.allowlistConfigured && !roomConfig.allowed) {
+      throw new Error("Matrix read target room is not allowed.");
+    }
+    return;
+  }
+  if (!roomId || groupPolicy === "disabled" || !roomConfig?.allowed) {
+    throw new Error("Matrix read target room is not allowed.");
+  }
 }
 
 function toSnakeCaseKey(key: string): string {
@@ -151,7 +188,8 @@ export async function handleMatrixAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
-  const isActionEnabled = createActionGate(resolveMatrixAccountConfig({ cfg, accountId }).actions);
+  const accountConfig = resolveMatrixAccountConfig({ cfg, accountId });
+  const isActionEnabled = createActionGate(accountConfig.actions);
   const clientOpts = {
     cfg,
     ...(accountId ? { accountId } : {}),
@@ -162,6 +200,7 @@ export async function handleMatrixAction(
       throw new Error("Matrix reactions are disabled.");
     }
     const roomId = readRoomId(params);
+    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
@@ -267,6 +306,7 @@ export async function handleMatrixAction(
       }
       case "readMessages": {
         const roomId = readRoomId(params);
+        assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -292,6 +332,9 @@ export async function handleMatrixAction(
       throw new Error("Matrix pins are disabled.");
     }
     const roomId = readRoomId(params);
+    if (action === "listPins") {
+      assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
+    }
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
       const result = await pinMatrixMessage(roomId, messageId, clientOpts);
@@ -331,6 +374,7 @@ export async function handleMatrixAction(
     }
     const userId = readStringParam(params, "userId", { required: true });
     const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
+    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
     const result = await getMatrixMemberInfo(userId, {
       roomId: roomId ?? undefined,
       ...clientOpts,
@@ -343,6 +387,7 @@ export async function handleMatrixAction(
       throw new Error("Matrix room info is disabled.");
     }
     const roomId = readRoomId(params);
+    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
     const result = await getMatrixRoomInfo(roomId, clientOpts);
     return jsonResult({ ok: true, room: result });
   }

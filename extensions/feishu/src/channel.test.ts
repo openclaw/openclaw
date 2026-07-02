@@ -930,6 +930,31 @@ describe("feishuPlugin actions", () => {
     expect(requireRecord(pins[0], "pin").messageId).toBe("om_pin");
   });
 
+  it("blocks pin reads outside the Feishu group allowlist", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "list-pins",
+        params: { chatId: "oc_group_2" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(listPinsFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("removes pins", async () => {
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "unpin",
@@ -996,6 +1021,31 @@ describe("feishuPlugin actions", () => {
     const member = requireRecord(members[0], "member");
     expect(member.member_id).toBe("ou_1");
     expect(member.name).toBe("Alice");
+  });
+
+  it("blocks member list reads outside the Feishu group allowlist", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "member-info",
+        params: { chatId: "oc_group_2" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getChatMembersMock).not.toHaveBeenCalled();
   });
 
   it("fetches individual member info", async () => {

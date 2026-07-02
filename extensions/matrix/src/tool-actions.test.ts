@@ -229,6 +229,32 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("blocks reaction reads outside the Matrix room allowlist", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "reactions",
+          roomId: "!other:example",
+          messageId: "$msg",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
+  });
+
   it("rejects fractional reaction limits before listing reactions", async () => {
     const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
     await expect(
@@ -388,6 +414,31 @@ describe("handleMatrixAction pollVote", () => {
       cfg: roomCfg,
       accountId: "ops",
     });
+  });
+
+  it("blocks room metadata reads outside the Matrix room allowlist", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "channelInfo",
+          roomId: "!other:example",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.getMatrixRoomInfo).not.toHaveBeenCalled();
   });
 
   it("persists self-profile updates through the shared profile helper", async () => {

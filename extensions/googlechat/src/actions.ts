@@ -12,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
@@ -44,6 +45,43 @@ function isReactionsEnabled(accounts: Array<{ config: { actions?: unknown } }>) 
 
 function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
   return new Set(["users/app", account.config.botUser?.trim()].filter(Boolean) as string[]);
+}
+
+function readGoogleChatMessageSpaceName(messageName: string): string | undefined {
+  const match = messageName.trim().match(/^(spaces\/[^/]+)\/messages\//i);
+  return match?.[1];
+}
+
+function resolveGoogleChatReadGroupPolicy(params: {
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveGoogleChatAccount>;
+}): "open" | "allowlist" | "disabled" | undefined {
+  const hasGroupAllowlist = Object.keys(params.account.config.groups ?? {}).length > 0;
+  return (
+    params.account.config.groupPolicy ??
+    resolveDefaultGroupPolicy(params.cfg) ??
+    (hasGroupAllowlist ? "allowlist" : undefined)
+  );
+}
+
+function assertGoogleChatReadTargetAllowed(params: {
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveGoogleChatAccount>;
+  messageName: string;
+}) {
+  const groupPolicy = resolveGoogleChatReadGroupPolicy(params);
+  const spaceName = readGoogleChatMessageSpaceName(params.messageName);
+  const groups = params.account.config.groups ?? {};
+  const entry = spaceName ? (groups[spaceName] ?? groups["*"]) : undefined;
+  if (!groupPolicy || groupPolicy === "open") {
+    if (entry?.enabled === false) {
+      throw new Error("Google Chat read target space is not allowed.");
+    }
+    return;
+  }
+  if (!spaceName || groupPolicy === "disabled" || !entry || entry.enabled === false) {
+    throw new Error("Google Chat read target space is not allowed.");
+  }
 }
 
 async function loadGoogleChatActionMedia(params: {
@@ -184,6 +222,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         removeErrorMessage: "Emoji is required to remove a Google Chat reaction.",
       });
       if (remove || isEmpty) {
+        assertGoogleChatReadTargetAllowed({ cfg, account, messageName });
         const reactions = await listGoogleChatReactions({ account, messageName });
         const appUsers = resolveAppUserNames(account);
         const toRemove = reactions.filter((reaction) => {
@@ -214,6 +253,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageName = readStringParam(params, "messageId", { required: true });
+      assertGoogleChatReadTargetAllowed({ cfg, account, messageName });
       const limit = readPositiveIntegerParam(params, "limit");
       const reactions = await listGoogleChatReactions({
         account,
