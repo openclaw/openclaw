@@ -145,6 +145,21 @@ Talk metrics export only bounded event metadata such as mode, transport,
 provider, and event type. They do not include transcripts, audio payloads,
 session ids, turn ids, call ids, room ids, or handoff tokens.
 
+### Session attribute for telemetry grouping
+
+Set `diagnostics.otel.sessionAttribute` to `true` to emit a SHA-256 hashed
+session identifier on root OTel spans (`openclaw.run` and
+`openclaw.harness.run`). The hash is exported as three attributes:
+
+- `langfuse.session.id` — recognized by Langfuse
+- `session.id` — OpenInference / Arize standard
+- `gen_ai.conversation.id` — GenAI semantic conventions
+
+The raw session key is **never** exported — it remains redacted as `"unknown"`
+in all existing attribute paths regardless of this setting. Enable this option
+only when your telemetry backend and retention policy are approved for
+stable session-derived identifiers.
+
 Outbound model requests may include a W3C `traceparent` header. That header is
 generated only from OpenClaw-owned diagnostic trace context for the active model
 call. Existing caller-supplied `traceparent` headers are replaced, so plugins or
