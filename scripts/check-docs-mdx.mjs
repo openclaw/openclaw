@@ -136,8 +136,11 @@ export function parseArgs(argv) {
   };
 }
 
-function walkMarkdownFiles(entryPath, out = []) {
-  const stat = fs.statSync(entryPath);
+export function walkMarkdownFiles(entryPath, out = []) {
+  const stat = fs.lstatSync(entryPath);
+  if (stat.isSymbolicLink()) {
+    return out;
+  }
   if (stat.isFile()) {
     if (/\.mdx?$/i.test(entryPath)) {
       out.push(path.resolve(entryPath));

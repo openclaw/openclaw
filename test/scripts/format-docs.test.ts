@@ -103,6 +103,26 @@ describe("format-docs", () => {
     );
   });
 
+  it("skips git symlink entries", () => {
+    const root = createTempDir("openclaw-format-docs-symlink-");
+    writeDocsFixture(root);
+
+    expect(
+      docsFiles(root, {
+        spawnSync: () => ({
+          status: 0,
+          stderr: "",
+          stdout: [
+            "100644 1111111111111111111111111111111111111111 0\tREADME.md",
+            "100644 2222222222222222222222222222222222222222 0\tdocs/guide.mdx",
+            "120000 3333333333333333333333333333333333333333 0\tdocs/CLAUDE.md",
+            "",
+          ].join("\n"),
+        }),
+      }),
+    ).toEqual(["README.md", "docs/guide.mdx"]);
+  });
+
   it("uses repository paths in write mode and temporary paths in check mode", () => {
     const root = createTempDir("openclaw-format-docs-mode-");
     writeDocsFixture(root);
@@ -113,7 +133,11 @@ describe("format-docs", () => {
         return {
           status: 0,
           stderr: "",
-          stdout: "README.md\ndocs/guide.mdx\n",
+          stdout: [
+            "100644 1111111111111111111111111111111111111111 0\tREADME.md",
+            "100644 2222222222222222222222222222222222222222 0\tdocs/guide.mdx",
+            "",
+          ].join("\n"),
         };
       }
       oxfmtFileArgs.push(args.slice(-2));

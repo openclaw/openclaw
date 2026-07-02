@@ -71,7 +71,8 @@ function commandFailureMessage(label, result, invocation) {
 
 export function docsFiles(root = ROOT, deps = {}) {
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
-  const result = spawnSyncImpl("git", ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"], {
+  const gitArgs = ["ls-files", "-s", "--", "docs/**/*.md", "docs/**/*.mdx", "README.md"];
+  const result = spawnSyncImpl("git", gitArgs, {
     cwd: root,
     encoding: "utf8",
     maxBuffer: DOCS_FORMAT_MAX_BUFFER_BYTES,
@@ -80,12 +81,19 @@ export function docsFiles(root = ROOT, deps = {}) {
     throw new Error(
       commandFailureMessage("git ls-files", result, {
         command: "git",
-        args: ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"],
+        args: gitArgs,
       }),
     );
   }
   return outputText(result.stdout)
     .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const match = /^(?<mode>\d{6})\s+\S+\s+\d+\t(?<relativePath>.+)$/u.exec(line);
+      return match?.groups?.relativePath && match.groups.mode !== "120000"
+        ? match.groups.relativePath
+        : "";
+    })
     .filter(Boolean)
     .filter((relativePath) => (deps.existsSync ?? fs.existsSync)(path.join(root, relativePath)));
 }
