@@ -2,9 +2,10 @@
 summary: "Install OpenClaw - installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
-  - You want to deploy to a cloud platform
+  - You want to deploy to self-managed infrastructure
   - You need to update, migrate, or uninstall
 title: "Install"
+doc-schema-version: 1
 ---
 
 ## System requirements
@@ -168,7 +169,7 @@ If you want managed startup after install:
 
 ## Hosting and deployment
 
-Deploy OpenClaw on a cloud server or VPS:
+Deploy OpenClaw on infrastructure you administer:
 
 <CardGroup cols={3}>
   <Card title="VPS" href="/vps">
@@ -191,15 +192,6 @@ Deploy OpenClaw on a cloud server or VPS:
   </Card>
   <Card title="Azure" href="/install/azure">
     Azure deployment.
-  </Card>
-  <Card title="Railway" href="/install/railway">
-    Railway deployment.
-  </Card>
-  <Card title="Render" href="/install/render">
-    Render deployment.
-  </Card>
-  <Card title="Northflank" href="/install/northflank">
-    Northflank deployment.
   </Card>
 </CardGroup>
 

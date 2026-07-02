@@ -404,6 +404,18 @@
     "target": "Linux 服务器"
   },
   {
+    "source": "Hostinger VPS",
+    "target": "Hostinger VPS"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
     "source": "Platforms",
     "target": "平台"
   },

@@ -6,22 +6,28 @@ read_when:
   - You want generic Linux server tuning for OpenClaw
 title: "Linux server"
 sidebarTitle: "Linux Server"
+doc-schema-version: 1
 ---
 
 Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux
 tuning that applies everywhere.
 
+<Note>
+These guides cover infrastructure you operate yourself, such as a VPS, VM,
+container host, Kubernetes cluster, or local server. OpenClaw docs do not
+catalog third-party turnkey service offerings unless there is an explicit
+project agreement.
+</Note>
+
 ## Pick a provider
 
 <CardGroup cols={2}>
-  <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
-  <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
   <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
-  <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
+  <Card title="Hostinger VPS" href="/install/hostinger">Self-managed Linux VPS</Card>
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
