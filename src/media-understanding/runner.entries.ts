@@ -397,7 +397,14 @@ function resolveEntryRunOptions(params: {
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
+}): {
+  maxBytes: number;
+  maxChars?: number;
+  timeoutMs: number;
+  prompt: string;
+  promptIsExplicit: boolean;
+  language?: string;
+} {
   const { capability, entry, cfg } = params;
   const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
   const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
@@ -407,12 +414,19 @@ function resolveEntryRunOptions(params: {
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const prompt = resolvePrompt(
-    capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+  const configuredPrompt =
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
+  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  const language =
+    entry.language ?? params.config?.language ?? cfg.tools?.media?.[capability]?.language;
+  return {
+    maxBytes,
     maxChars,
-  );
-  return { maxBytes, maxChars, timeoutMs, prompt };
+    timeoutMs,
+    prompt,
+    promptIsExplicit: Boolean(configuredPrompt?.trim()),
+    language,
+  };
 }
 
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
@@ -427,6 +441,28 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     prompt: overrides["_requestPromptOverride"],
     language: overrides["_requestLanguageOverride"],
   };
+}
+
+function resolveAudioProviderPrompt(params: {
+  prompt: string;
+  promptIsExplicit: boolean;
+  language?: string;
+}): string | undefined {
+  const language = params.language?.trim().toLowerCase();
+  const isEnglish =
+    !language ||
+    language === "en" ||
+    language === "eng" ||
+    language === "english" ||
+    language.startsWith("en-") ||
+    language.startsWith("en_");
+  if (params.promptIsExplicit || isEnglish) {
+    return params.prompt;
+  }
+  // OpenAI-compatible transcription prompts guide style/context and should
+  // match the audio language; omit OpenClaw's English default for non-English
+  // language hints unless the user supplied an explicit prompt.
+  return undefined;
 }
 
 type ProviderExecutionAuth =
@@ -727,12 +763,13 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
-    capability,
-    entry,
-    cfg,
-    config: params.config,
-  });
+  const { maxBytes, maxChars, timeoutMs, prompt, promptIsExplicit, language } =
+    resolveEntryRunOptions({
+      capability,
+      entry,
+      cfg,
+      config: params.config,
+    });
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -803,6 +840,14 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+    const audioLanguage = requestOverrides.language ?? language;
+    const audioPrompt =
+      requestOverrides.prompt ??
+      resolveAudioProviderPrompt({
+        prompt,
+        promptIsExplicit,
+        language: audioLanguage,
+      });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
       capability,
       providerId,
@@ -841,12 +886,8 @@ export async function runProviderEntry(params: {
       headers,
       request,
       model,
-      language:
-        requestOverrides.language ??
-        entry.language ??
-        params.config?.language ??
-        cfg.tools?.media?.audio?.language,
-      prompt: requestOverrides.prompt ?? prompt,
+      language: audioLanguage,
+      prompt: audioPrompt,
       query: providerQuery,
       timeoutMs,
       fetchFn,
