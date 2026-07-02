@@ -686,6 +686,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       profileId: authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
+      fallbackOnIncompatibleProfile: true,
     });
 
     if (!apiKeyInfo.apiKey) {

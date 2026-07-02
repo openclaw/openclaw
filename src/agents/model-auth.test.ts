@@ -43,10 +43,17 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
   ],
 }));
 
-vi.mock("../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProvider: () => [],
-  resolveOwningPluginIdsForProviderRef: () => [],
-}));
+vi.mock("../plugins/providers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/providers.js")>("../plugins/providers.js");
+  return {
+    ...actual,
+    resolveActivatableProviderOwnerPluginIds: () => [],
+    resolveBundledProviderCompatPluginIds: () => [],
+    resolveOwningPluginIdsForProvider: () => [],
+    resolveOwningPluginIdsForProviderRef: () => [],
+  };
+});
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProvider: () => undefined,
@@ -143,6 +150,12 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     },
   };
 });
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: () => undefined,
+  formatProviderAuthProfileApiKeyWithPlugin: () => undefined,
+  refreshProviderOAuthCredentialWithPlugin: () => undefined,
+}));
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
@@ -1128,6 +1141,73 @@ describe("resolveApiKeyForProvider", () => {
       source: "models.json",
       mode: "api-key",
     });
+  });
+
+  it("falls back from an incompatible explicit OAuth profile when requested", async () => {
+    const resolved = await withoutEnv("OPENAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "openai",
+        modelApi: "openai-responses",
+        profileId: "openai:oauth",
+        fallbackOnIncompatibleProfile: true,
+        cfg: {
+          auth: {
+            order: {
+              openai: ["openai:oauth", "openai:api-key"],
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openai:oauth": {
+              type: "oauth",
+              provider: "openai",
+              access: "oauth-access", // pragma: allowlist secret
+              refresh: "oauth-refresh", // pragma: allowlist secret
+              expires: Date.now() + 60 * 60_000,
+            },
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-compaction-fallback", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    );
+
+    expectAuthFields(resolved, {
+      apiKey: "sk-compaction-fallback",
+      source: "profile:openai:api-key",
+      mode: "api-key",
+    });
+  });
+
+  it("keeps explicit incompatible OpenAI Responses profiles fail-fast by default", async () => {
+    await expect(
+      withoutEnv("OPENAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "openai",
+          modelApi: "openai-responses",
+          profileId: "openai:oauth",
+          store: {
+            version: 1,
+            profiles: {
+              "openai:oauth": {
+                type: "oauth",
+                provider: "openai",
+                access: "oauth-access", // pragma: allowlist secret
+                refresh: "oauth-refresh", // pragma: allowlist secret
+                expires: Date.now() + 60 * 60_000,
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Auth profile "openai:oauth" uses oauth auth, but openai/openai-responses requires an OpenAI API key profile.',
+    );
   });
 
   it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {
