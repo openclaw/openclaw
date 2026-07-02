@@ -17,6 +17,7 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
+import { QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT } from "./markdown-table-chunking.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -74,6 +75,26 @@ export interface DeliverDeps {
 
 /** Maximum text length for a single QQ Bot message. */
 export const TEXT_CHUNK_LIMIT = 5000;
+
+/**
+ * When chunker produces multiple chunks whose total merged size fits within the
+ * safe byte limit, merge them into a single chunk so the receiver sees one
+ * message bubble instead of N independent bubbles.
+ *
+ * Merged chunks are joined by a double-newline to preserve paragraph separation.
+ * If the merged result exceeds `byteLimit`, the original chunks are returned
+ * unchanged.
+ */
+function mergeChunksIfSafe(chunks: string[], byteLimit: number): string[] {
+  if (chunks.length <= 1) {
+    return chunks;
+  }
+  const merged = chunks.join("\n\n");
+  if (Buffer.byteLength(merged, "utf8") <= byteLimit) {
+    return [merged];
+  }
+  return chunks;
+}
 
 interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
@@ -198,7 +219,10 @@ async function sendTextChunks(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, log } = actx;
-  const chunks = deps.chunkText(text, TEXT_CHUNK_LIMIT);
+  const chunks = mergeChunksIfSafe(
+    deps.chunkText(text, TEXT_CHUNK_LIMIT),
+    QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
+  );
   await sendTextChunksWithRetry({
     account,
     event,
@@ -226,7 +250,10 @@ export async function sendTextOnlyReply(
     return;
   }
   const { account, log } = actx;
-  const chunks = deps.chunkText(safeText, TEXT_CHUNK_LIMIT);
+  const chunks = mergeChunksIfSafe(
+    deps.chunkText(safeText, TEXT_CHUNK_LIMIT),
+    QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
+  );
   await sendTextChunksWithRetry({
     account,
     event,
@@ -765,7 +792,10 @@ async function sendMarkdownReply(
 
   // Send markdown text.
   if (result.trim()) {
-    const mdChunks = deps.chunkText(result, TEXT_CHUNK_LIMIT);
+    const mdChunks = mergeChunksIfSafe(
+      deps.chunkText(result, TEXT_CHUNK_LIMIT),
+      QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
+    );
     await sendTextChunksWithRetry({
       account,
       event,
@@ -824,7 +854,10 @@ async function sendPlainTextReply(
     }
 
     if (result.trim()) {
-      const plainChunks = deps.chunkText(result, TEXT_CHUNK_LIMIT);
+      const plainChunks = mergeChunksIfSafe(
+        deps.chunkText(result, TEXT_CHUNK_LIMIT),
+        QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
+      );
       await sendTextChunksWithRetry({
         account,
         event,

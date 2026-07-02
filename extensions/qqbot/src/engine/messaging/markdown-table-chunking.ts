@@ -2,7 +2,7 @@
 
 export type QQBotBaseMarkdownChunker = (text: string, limit: number) => string[];
 
-const QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 3600;
+export const QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 3600;
 
 type TableHeader = {
   header: string;
