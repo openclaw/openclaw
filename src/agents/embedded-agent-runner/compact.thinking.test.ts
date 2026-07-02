@@ -1,7 +1,7 @@
 // Verifies compaction thinkingLevel precedence and config fallback.
 // The production expression (compact.ts:637-638) is:
 //   cfgThinkLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
-//   thinkLevel = params.thinkLevel ?? cfgThinkLevel ?? "off";
+//   thinkLevel = cfgThinkLevel ?? params.thinkLevel ?? "off";
 import { describe, expect, it } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
 
@@ -11,7 +11,7 @@ function resolveCompactionThinkLevel(
   config: { agents?: { defaults?: { compaction?: { thinkingLevel?: ThinkLevel } } } } | undefined,
 ): ThinkLevel {
   const cfgThinkLevel = config?.agents?.defaults?.compaction?.thinkingLevel;
-  return paramsThinkLevel ?? cfgThinkLevel ?? "off";
+  return cfgThinkLevel ?? paramsThinkLevel ?? "off";
 }
 
 describe("compaction thinkLevel precedence", () => {
@@ -43,20 +43,7 @@ describe("compaction thinkLevel precedence", () => {
     expect(resolveCompactionThinkLevel(undefined, config)).toBe("off");
   });
 
-  it("params.thinkLevel overrides config compaction.thinkingLevel", () => {
-    const config = {
-      agents: {
-        defaults: {
-          compaction: { thinkingLevel: "high" as const },
-        },
-      },
-    };
-    expect(resolveCompactionThinkLevel("off", config)).toBe("off");
-    expect(resolveCompactionThinkLevel("low", config)).toBe("low");
-    expect(resolveCompactionThinkLevel("adaptive", config)).toBe("adaptive");
-  });
-
-  it("params.thinkLevel overrides config even when config is off", () => {
+  it("config compaction.thinkingLevel overrides inherited params.thinkLevel", () => {
     const config = {
       agents: {
         defaults: {
@@ -64,7 +51,20 @@ describe("compaction thinkLevel precedence", () => {
         },
       },
     };
-    expect(resolveCompactionThinkLevel("high", config)).toBe("high");
+    expect(resolveCompactionThinkLevel("high", config)).toBe("off");
+    expect(resolveCompactionThinkLevel("adaptive", config)).toBe("off");
+  });
+
+  it("config compaction.thinkingLevel wins over inherited session thinking", () => {
+    const config = {
+      agents: {
+        defaults: {
+          compaction: { thinkingLevel: "low" as const },
+        },
+      },
+    };
+    expect(resolveCompactionThinkLevel("high", config)).toBe("low");
+    expect(resolveCompactionThinkLevel("adaptive", config)).toBe("low");
   });
 
   it("supports all valid ThinkLevel values from config", () => {

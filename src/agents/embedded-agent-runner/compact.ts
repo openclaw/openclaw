@@ -645,7 +645,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     });
   }
   const cfgThinkLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? cfgThinkLevel ?? "off";
+  let thinkLevel: ThinkLevel = cfgThinkLevel ?? params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
