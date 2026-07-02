@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw-nod</string>
+    <string name="gateway_connection">Gatewayanslutning</string>
+    <string name="connect_gateway">Anslut gateway</string>
+    <string name="disconnect">Koppla från</string>
+    <string name="trust_this_gateway">Lita på denna gateway?</string>
+    <string name="trust_and_continue">Lita på och fortsätt</string>
+    <string name="cancel">Avbryt</string>
+    <string name="endpoint">Slutpunkt</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Din gateway är aktiv och redo.</string>
+    <string name="connect_gateway_get_started">Anslut till din gateway för att komma igång.</string>
+    <string name="copy_report_for_claw">Kopiera rapport för Claw</string>
+    <string name="advanced_controls">Avancerade kontroller</string>
+    <string name="connection_method">Anslutningsmetod</string>
+    <string name="setup_code">Konfigurationskod</string>
+    <string name="manual">Manuell</string>
+    <string name="paste_setup_code">Klistra in konfigurationskod</string>
+    <string name="host">Värd</string>
+    <string name="use_tls">Använd TLS</string>
+    <string name="token_optional">Token (valfritt)</string>
+    <string name="password">Lösenord</string>
+    <string name="run_onboarding_again">Kör introduktionen igen</string>
+    <string name="resolved_endpoint">Löst slutpunkt</string>
+    <string name="gateway_setup">Gateway-konfiguration</string>
+    <string name="connect_to_gateway">Anslut till din gateway</string>
+    <string name="scan_setup_code">Skanna konfigurationskod</string>
+    <string name="use_gateway_qr">Använd gatewayens QR-kod eller konfigurationskod</string>
+    <string name="nearby_gateway">Gateway i närheten</string>
+    <string name="enter_gateway_url">Ange gateway-URL</string>
+    <string name="connect_manual_url">Anslut med en manuell URL</string>
+    <string name="permissions">Behörigheter</string>
+    <string name="done">Klar</string>
+    <string name="gateway_trust_first_seen">Verifiera certifikatets fingeravtryck innan du litar på denna gateway.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Gateway-certifikatet har ändrats. Fortsätt bara om du förväntade dig denna ändring.\n\nTidigare SHA-256:\n%1$s\n\nNy SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Gateway-återställning</string>
+</resources>

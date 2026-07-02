@@ -15,6 +15,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   isUnmanagedRawSourceSummary,
+  parseWikiMarkdown,
   renderWikiMarkdown,
   type WikiPageSummary,
 } from "./markdown.js";
@@ -24,6 +25,7 @@ type MemoryWikiLintIssue = {
   severity: "error" | "warning";
   category: "structure" | "provenance" | "links" | "contradictions" | "open-questions" | "quality";
   code:
+    | "invalid-frontmatter"
     | "missing-id"
     | "duplicate-id"
     | "missing-page-type"
@@ -369,6 +371,9 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
       body: "# Lint Report\n",
     }),
   );
+  // The lint report is itself a wiki page. Keep its metadata fail-closed before
+  // replacing the managed body so malformed frontmatter is never rewritten.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -388,7 +393,18 @@ export async function lintMemoryWikiVault(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  const issues = collectPageIssues(compileResult.pages, managedImportedSourcePagePaths);
+  const issues = [
+    ...compileResult.frontmatterErrors.map(
+      (error): MemoryWikiLintIssue => ({
+        severity: "error",
+        category: "structure",
+        code: "invalid-frontmatter",
+        path: error.relativePath,
+        message: `Frontmatter failed to parse: ${error.message}`,
+      }),
+    ),
+    ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
+  ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
 

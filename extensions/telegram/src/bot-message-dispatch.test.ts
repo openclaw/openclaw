@@ -568,6 +568,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningForumTopicContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      msg: {
+        chat: { id: -100123, type: "supergroup", is_forum: true },
+        message_id: 456,
+        message_thread_id: 88,
+      } as unknown as TelegramMessageContext["msg"],
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { id: 88, scope: "forum" },
+    });
+  }
+
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
@@ -1604,6 +1621,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDraftStreamParams({ maxChars: 800 });
   });
 
+  it("marks durable non-preview finals with the transcript prompt-context timestamp", async () => {
+    const transcriptTimestamp = Date.now() + 1_000;
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: "Final answer",
+      timestamp: transcriptTimestamp,
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["2001"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      payload: expect.objectContaining({ text: "Final answer" }),
+    });
+    expectRecordFields(expectRecordFields(outbound.payload, {}).channelData, {
+      telegram: { promptContextTimestampMs: transcriptTimestamp },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -1627,12 +1676,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("streams text-only finals into the answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const transcriptTimestamp = Date.now() + 1_000;
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: "Final answer",
+      timestamp: transcriptTimestamp,
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
     });
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({ context });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
     expect(answerDraftStream.stop).toHaveBeenCalled();
@@ -1647,11 +1704,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: 2001,
       text: "Final answer",
       messageThreadId: 777,
+      promptContextTimestampMs: transcriptTimestamp,
     });
   });
 
   it("records streamed final replies into the prompt context cache", async () => {
     const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
+    const transcriptTimestamp = Date.now() + 1_000;
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: "Done already: timeoutSeconds is now 7200s.",
+      timestamp: transcriptTimestamp,
+    });
     setupDraftStreams({ answerMessageId: 1497 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
@@ -1662,7 +1728,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     await dispatchWithContext({
-      context: createContext(),
+      context,
       cfg: { session: { store: storePath } },
       telegramDeps: {
         ...telegramDepsForTest,
@@ -1687,7 +1753,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    const context = await buildTelegramConversationContext({
+    const conversationContext = await buildTelegramConversationContext({
       cache,
       accountId: "default",
       chatId: "123",
@@ -1698,10 +1764,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyTargetWindowSize: 2,
     });
 
-    expect(context.map((entry) => entry.node.messageId)).toContain("1497");
-    expect(context.map((entry) => entry.node.body)).toContain(
+    expect(conversationContext.map((entry) => entry.node.messageId)).toContain("1497");
+    expect(conversationContext.map((entry) => entry.node.body)).toContain(
       "Done already: timeoutSeconds is now 7200s.",
     );
+    expect(
+      conversationContext.find((entry) => entry.node.messageId === "1497")?.node.timestamp,
+    ).toBe(transcriptTimestamp);
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
@@ -3242,6 +3311,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("keeps streamed reasoning visible when tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n• Checking files",
+        "<b>Shelling</b>\n<i>Checking files</i>",
+      ),
+    );
+  });
+
   it.each([{ label: false }, { label: "Shelling", maxLines: 1 }] as const)(
     "does not duplicate Telegram progress HTML rows without a visible label",
     async (progress) => {
@@ -3520,6 +3619,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("preserves forum topic message_thread_id across streamed reasoning and final answer", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningForumTopicContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Answer",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "-100123",
+      messageId: 2001,
+      text: "Answer",
+      messageThreadId: 88,
+    });
+    expectDraftStreamParams({ thread: { id: 88, scope: "forum" } });
+    expectRecordFields(mockCallArg(createTelegramDraftStream, 1), {
+      thread: { id: 88, scope: "forum" },
+    });
+  });
+
   it("replaces reasoning snapshots on the reasoning lane", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
@@ -3608,10 +3742,63 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await run;
   });
 
-  it("suppresses reasoning-only finals without raw text fallback", async () => {
+  it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
+  it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {
+    setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(true);
+  });
+
+  it("keeps shared durable reasoning payloads disabled in progress stream mode", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
+  it("suppresses typed reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "<think>hidden</think>" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
 
@@ -3619,6 +3806,85 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_hidden_");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    const delivered = expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
+    expect(delivered).not.toHaveProperty("isReasoning");
+  });
+
+  it("does not persist typed reasoning-only finals in progress stream mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
+    const { answerDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Before <think>literal tag text after" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not add silent fallback when source delivery is message-tool-only", async () => {

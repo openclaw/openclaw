@@ -27,6 +27,10 @@ import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deploy
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -94,11 +98,20 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "./stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -148,6 +161,8 @@ type BaseStreamOptions = {
   authProfileId?: string;
   onPayload?: (payload: unknown, model: Model) => unknown;
   headers?: Record<string, string>;
+  firstEventTimeoutMs?: number;
+  onFirstEventTimeout?: (reason: Error) => void;
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
@@ -1271,10 +1286,10 @@ function convertResponsesMessages(
         messages.push(...output);
       }
     } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
+      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
+      const hasText = sanitizedTextResult.trim().length > 0;
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -1283,9 +1298,11 @@ function convertResponsesMessages(
         output:
           hasImages && model.input.includes("image")
             ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
+                ...(hasText
+                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  : mediaPlaceholder === "(see attached media)"
+                    ? [{ type: "input_text", text: mediaPlaceholder }]
+                    : []),
                 ...msg.content
                   .filter((item) => item.type === "image")
                   .map((item) => ({
@@ -1294,7 +1311,7 @@ function convertResponsesMessages(
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
+            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;
@@ -1402,61 +1419,6 @@ function shouldLogOpenAIStrictToolDowngradeDiagnostic(
   return true;
 }
 
-function createResponsesFirstEventTimeoutError(model: Model, timeoutMs: number): Error {
-  return new Error(
-    `Azure OpenAI Responses stream did not deliver a first event within ${timeoutMs}ms after HTTP streaming headers. ` +
-      `provider=${model.provider} model=${model.id}. ` +
-      "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
-  );
-}
-
-function withResponsesFirstEventTimeout(
-  openaiStream: AsyncIterable<unknown>,
-  model: Model,
-  timeoutMs: number | undefined,
-): AsyncIterable<unknown> {
-  if (timeoutMs === undefined || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
-    return openaiStream;
-  }
-  return {
-    async *[Symbol.asyncIterator]() {
-      const iterator = openaiStream[Symbol.asyncIterator]();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const clear = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = undefined;
-        }
-      };
-      try {
-        const first = await new Promise<IteratorResult<unknown>>((resolve, reject) => {
-          timer = setTimeout(
-            () => reject(createResponsesFirstEventTimeoutError(model, timeoutMs)),
-            timeoutMs,
-          );
-          iterator.next().then(resolve, reject);
-        }).finally(clear);
-        if (first.done) {
-          return;
-        }
-        yield first.value;
-        for (;;) {
-          const next = await iterator.next();
-          if (next.done) {
-            return;
-          }
-          yield next.value;
-        }
-      } catch (error) {
-        void iterator.return?.().catch(() => undefined);
-        throw error;
-      } finally {
-        clear();
-      }
-    },
-  };
-}
-
 async function processResponsesStream(
   openaiStream: AsyncIterable<unknown>,
   output: MutableAssistantOutput,
@@ -1469,6 +1431,8 @@ async function processResponsesStream(
       serviceTier?: ResponseCreateParamsStreaming["service_tier"],
     ) => void;
     firstEventTimeoutMs?: number;
+    abortFirstEventStream?: (reason: Error) => void;
+    onFirstEventTimeout?: (reason: Error) => void;
     signal?: AbortSignal;
     sessionId?: string;
     authProfileId?: string;
@@ -1589,11 +1553,16 @@ async function processResponsesStream(
       }
     }
   };
-  const guardedStream = withResponsesFirstEventTimeout(
-    openaiStream,
-    model,
-    options?.firstEventTimeoutMs,
-  );
+  const guardedStream = withFirstStreamEventTimeout(openaiStream, {
+    provider: model.provider,
+    api: model.api,
+    model: model.id,
+    timeoutMs: options?.firstEventTimeoutMs ?? 0,
+    stage: "responses",
+    abort: options?.abortFirstEventStream,
+    onTimeout: options?.onFirstEventTimeout,
+    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  });
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawEvent of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
@@ -1807,7 +1776,7 @@ async function processResponsesStream(
             input_tokens?: number;
             output_tokens?: number;
             total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number };
+            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
             output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
@@ -1815,19 +1784,20 @@ async function processResponsesStream(
         | undefined;
       if (usage) {
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+        const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
         const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens);
+        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
-          cacheWrite: 0,
+          cacheWrite: cacheWriteTokens,
           ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
             ? { reasoningTokens }
             : {}),
-          totalTokens: input + outputTokens + cachedTokens,
+          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
       }
@@ -2041,6 +2011,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+      let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const turnState = resolveProviderTransportTurnState(model, {
@@ -2082,7 +2053,8 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           assertCodeModeResponsesToolSurface(params);
         }
         const requestStartedAt = Date.now();
-        const requestOptions = buildOpenAISdkRequestOptions(model, options?.signal, {
+        firstEventAbort = createFirstStreamEventAbortController(options?.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
           stream: true,
         });
         emitModelTransportDebug(
@@ -2106,6 +2078,9 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: responsesOptions?.serviceTier,
           applyServiceTierPricing,
+          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
+          abortFirstEventStream: firstEventAbort.abort,
+          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
           signal: options?.signal,
           authProfileId: responsesOptions?.authProfileId,
           sessionId: options?.sessionId,
@@ -2126,6 +2101,8 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
+      } finally {
+        firstEventAbort?.dispose();
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2490,6 +2467,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+      let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const turnState = resolveProviderTransportTurnState(model, {
@@ -2533,7 +2511,8 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           assertCodeModeResponsesToolSurface(params);
         }
         const requestStartedAt = Date.now();
-        const requestOptions = buildOpenAISdkRequestOptions(model, options?.signal);
+        firstEventAbort = createFirstStreamEventAbortController(options?.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal);
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -2551,7 +2530,10 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
-          firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+          firstEventTimeoutMs:
+            getFirstStreamEventTimeoutMs(options) ?? AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+          abortFirstEventStream: firstEventAbort.abort,
+          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
           signal: options?.signal,
           authProfileId: responsesOptions?.authProfileId,
           sessionId: options?.sessionId,
@@ -2572,6 +2554,8 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
+      } finally {
+        firstEventAbort?.dispose();
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2765,6 +2749,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+      let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
@@ -2792,24 +2777,24 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model as OpenAIModeModel,
           options as OpenAICompletionsOptions | undefined,
         );
+        firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, options?.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
+          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
+          abortFirstEventStream: firstEventAbort.abort,
+          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
         });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
+      } finally {
+        firstEventAbort?.dispose();
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2821,7 +2806,13 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal; emitReasoning?: boolean },
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    firstEventTimeoutMs?: number;
+    abortFirstEventStream?: (reason: Error) => void;
+    onFirstEventTimeout?: (reason: Error) => void;
+  },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -2976,7 +2967,6 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    output.stopReason = "toolUse";
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
@@ -3078,7 +3068,17 @@ async function processOpenAICompletionsStream(
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
-  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+  const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
+    provider: model.provider,
+    api: model.api,
+    model: model.id,
+    timeoutMs: options?.firstEventTimeoutMs ?? 0,
+    stage: "completions",
+    abort: options?.abortFirstEventStream,
+    onTimeout: options?.onFirstEventTimeout,
+    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  });
+  for await (const rawChunk of guardedStream) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
     if (!rawChunk || typeof rawChunk !== "object") {
@@ -3246,6 +3246,8 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+  // Tool-call recovery is executable only after an explicit provider terminal.
+  // EOF alone can mean transport truncation, even when the recovered call parses.
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
   }
@@ -4510,6 +4512,5 @@ export const testing = {
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
-  withResponsesFirstEventTimeout,
 };
 export { testing as __testing };

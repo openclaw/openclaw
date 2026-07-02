@@ -1,5 +1,6 @@
 // Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -10,10 +11,9 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -49,6 +49,11 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "./codex-synthetic-usage.js";
+import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -60,6 +65,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
 function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
@@ -225,15 +231,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
-function shouldUseCodexSyntheticUsage(params: {
-  provider?: string;
-  effectiveHarness?: string;
-}): boolean {
-  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  return harness === "codex" && (provider === "openai" || provider === "codex");
-}
-
 function formatSessionTaskLine(sessionKey: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
   const task = snapshot.focus;
@@ -294,6 +291,15 @@ function resolveStatusRuntimeProvider(params: {
   return params.provider;
 }
 
+function resolveStatusCodexCliCredentialsHome(params: {
+  agentDir: string;
+  effectiveHarness?: string;
+}): string | undefined {
+  return normalizeOptionalLowercaseString(params.effectiveHarness) === "codex"
+    ? path.join(params.agentDir, CODEX_APP_SERVER_HOME_DIRNAME)
+    : undefined;
+}
+
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -352,27 +358,39 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     params.workspaceDir ??
     sessionEntry?.spawnedWorkspaceDir ??
     resolveAgentWorkspaceDir(cfg, statusAgentId);
+  const selectedProvider = sessionEntry?.providerOverride?.trim() ?? provider;
+  const selectedModel = sessionEntry?.modelOverride?.trim() ?? model;
+  const parseSelectedProvider = Boolean(
+    sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
+  );
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
+    selectedProvider,
+    selectedModel,
     sessionEntry,
+    parseSelectedProvider,
   });
+  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
+  const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
   const effectiveHarness =
     params.resolvedHarness ??
     (await resolveStatusHarnessId({
       cfg,
-      provider,
-      model,
+      provider: selectedLookupProvider,
+      model: selectedLookupModel,
       agentId: statusAgentId,
       sessionKey,
       sessionEntry,
     }));
+  const codexCliCredentialsHome = resolveStatusCodexCliCredentialsHome({
+    agentDir: statusAgentDir,
+    effectiveHarness,
+  });
   const selectedStatusProvider = resolveStatusRuntimeProvider({
-    provider,
+    provider: selectedLookupProvider,
     effectiveHarness,
   });
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider,
+    provider: selectedLookupProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
@@ -395,6 +413,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         sessionEntry,
         agentDir: statusAgentDir,
         workspaceDir: statusWorkspaceDir,
+        codexCliCredentialsHome,
         includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
@@ -407,6 +426,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           sessionEntry,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
+          codexCliCredentialsHome,
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
@@ -415,6 +435,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     modelRefs.active.label,
     { config: cfg },
   );
+  const fallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    config: cfg,
+    state: sessionEntry,
+  });
   if (
     shouldPreferActiveRuntimeAliasAuthLabel({
       runtimeAliasModelEquivalent,
@@ -426,14 +452,23 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     // labels differ; prefer the active auth label so status matches execution.
     selectedModelAuth = activeModelAuth;
   }
-  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const activeRuntimeIsAuthoritative =
+    !modelRefs.activeDiffers ||
+    fallbackState.active ||
+    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
+    runtimeAliasModelEquivalent;
+  const usageAuthLabel = activeRuntimeIsAuthoritative ? activeModelAuth : selectedModelAuth;
+  const usageStatusProvider = activeRuntimeIsAuthoritative
+    ? activeStatusProvider
+    : selectedStatusProvider;
+  const usageProvider = activeRuntimeIsAuthoritative ? activeProvider : selectedLookupProvider;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
-    shouldUseCodexSyntheticUsage({
-      provider: activeStatusProvider,
+    selectedUsageCredentialType !== "api_key" &&
+    shouldUseCodexSyntheticUsageForRuntime({
+      provider: usageStatusProvider,
       effectiveHarness,
-    }) &&
-    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+    });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
@@ -443,8 +478,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     : undefined;
   const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
-    resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
+    resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
+    resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
@@ -467,14 +502,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           workspaceDir: statusWorkspaceDir,
           config: cfg,
           auth: useCodexSyntheticUsage
-            ? [
-                {
-                  provider: "openai",
-                  token: CODEX_APP_SERVER_AUTH_MARKER,
-                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
-                  hookProvider: "codex",
-                },
-              ]
+            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
             : undefined,
         }),
         new Promise<never>((_, reject) => {
@@ -573,6 +601,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionEntry,
   });
   const { buildStatusMessage } = await loadStatusMessageRuntime();
+  await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
@@ -590,24 +619,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const selectedContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: selectedStatusProvider,
-    model,
+    model: modelRefs.selected.model || selectedLookupModel,
   });
-  const runtimeSnapshotHasFallbackProvenance =
-    !modelRefs.activeDiffers ||
-    hasSessionAutoModelFallbackProvenance(sessionEntry) ||
-    areRuntimeModelRefsEquivalent(modelRefs.active.label, modelRefs.selected.label, {
-      config: cfg,
-    });
   const statusAgentContextTokens =
     typeof contextTokens === "number" &&
     contextTokens > 0 &&
-    (runtimeSnapshotHasFallbackProvenance ||
+    (activeRuntimeIsAuthoritative ||
       contextTokens === configuredContextTokens ||
       contextTokens === selectedContextTokens)
       ? contextTokens
       : undefined;
-  const statusRuntimeContextTokens = runtimeSnapshotHasFallbackProvenance
-    ? runtimeContextTokens
+  const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
+    ? (runtimeContextTokens ??
+      (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
+        ? contextTokens
+        : undefined))
     : undefined;
   return buildStatusMessage({
     config: cfg,

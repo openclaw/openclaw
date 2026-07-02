@@ -37,4 +37,15 @@ describe("oauth refresh failure hints", () => {
       reason: "invalid_grant",
     });
   });
+
+  it("classifies token invalidation refresh failures", () => {
+    expect(
+      classifyOAuthRefreshFailure(
+        "OAuth token refresh failed for openai: token_invalidated. Please sign in again.",
+      ),
+    ).toEqual({
+      provider: "openai",
+      reason: "token_invalidated",
+    });
+  });
 });

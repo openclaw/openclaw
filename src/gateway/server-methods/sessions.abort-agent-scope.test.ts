@@ -14,6 +14,7 @@ const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
+const isEmbeddedAgentRunActiveMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
   canonicalKey: sessionKey,
   storePath: undefined as string | undefined,
@@ -38,6 +39,16 @@ vi.mock("../session-utils.js", async () => {
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+  };
+});
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
+    "../../agents/embedded-agent-runner/runs.js",
+  );
+  return {
+    ...actual,
+    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
   };
 });
 
@@ -200,6 +211,8 @@ describe("sessions.abort agent scope", () => {
     });
     loadSessionEntryMock.mockClear();
     resetTaskRegistryForTests({ persist: false });
+    isEmbeddedAgentRunActiveMock.mockReset();
+    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -220,6 +233,39 @@ describe("sessions.abort agent scope", () => {
       abortedRunId: null,
       status: "no-active-run",
     });
+  });
+
+  it("marks listed sessions active when the embedded or channel reply run registry owns the session id", async () => {
+    const context = createContext({
+      extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
+    });
+    listSessionsFromStoreAsyncMock.mockResolvedValue({
+      sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
+    });
+    isEmbeddedAgentRunActiveMock.mockImplementation(
+      (sessionId: string) => sessionId === "sess-weixin",
+    );
+
+    const respond = await callSessions(
+      "sessions.list",
+      { agentId: "main" },
+      { context, reqId: "req-channel-active" },
+    );
+
+    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-weixin");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sessions: [
+          expect.objectContaining({
+            key: "agent:main:openclaw-weixin:direct:user",
+            sessionId: "sess-weixin",
+            hasActiveRun: true,
+          }),
+        ],
+      }),
+      undefined,
+    );
   });
 
   it("preserves runId-only aborts for active non-default agent runs", async () => {

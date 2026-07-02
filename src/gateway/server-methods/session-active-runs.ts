@@ -1,5 +1,6 @@
 // Session active-run helpers decide whether session operations should treat a
 // session as busy based on Control UI-visible active chat/agent runs.
+import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -83,4 +84,19 @@ export function hasTrackedActiveSessionRun(params: {
         params.defaultAgentId,
       ),
   );
+}
+
+export function hasVisibleActiveSessionRun(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): boolean {
+  if (hasTrackedActiveSessionRun(params)) {
+    return true;
+  }
+  const sessionId = params.sessionId?.trim();
+  return sessionId ? isEmbeddedAgentRunActive(sessionId) : false;
 }

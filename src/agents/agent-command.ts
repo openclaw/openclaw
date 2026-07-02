@@ -88,6 +88,7 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
@@ -2177,6 +2178,7 @@ async function agentCommandInternal(
 
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+        const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(opts.bootstrapContextRunKind);
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
         await updateSessionStoreAfterAgentRun({
           cfg,
@@ -2192,12 +2194,10 @@ async function agentCommandInternal(
           result,
           touchInteraction:
             opts.bootstrapContextRunKind !== "cron" &&
-            opts.bootstrapContextRunKind !== "heartbeat" &&
+            !isHeartbeatLifecycleRun &&
             !opts.internalEvents?.length,
           preserveRuntimeModel:
-            fallbackExhausted ||
-            opts.bootstrapContextRunKind === "heartbeat" ||
-            preserveUserFacingSessionModelState,
+            fallbackExhausted || isHeartbeatLifecycleRun || preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
