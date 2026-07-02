@@ -206,6 +206,52 @@ function createMainSessionsSendTool() {
   });
 }
 
+async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
+  const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+  vi.mocked(runSessionsSendA2AFlow).mockClear();
+  const targetSessionKey = "agent:other:discord:group:ops";
+  loadConfigMock.mockReturnValue({
+    session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+    tools: {
+      agentToAgent: { enabled: true },
+      sessions: { visibility: "all" },
+    },
+  });
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const request = opts as { method?: string };
+    if (request.method === "sessions.list") {
+      return {
+        path: "/tmp/sessions.json",
+        sessions: [{ key: targetSessionKey, kind: "group" }],
+      };
+    }
+    if (request.method === "chat.history") {
+      return { messages: [] };
+    }
+    if (request.method === "agent") {
+      return { runId: "run-fire-and-forget", acceptedAt: 123 };
+    }
+    return {};
+  });
+  const tool = createSessionsSendTool({
+    agentSessionKey: requesterSessionKey,
+    agentChannel: "telegram",
+  });
+
+  const result = await tool.execute("call-fire-and-forget", {
+    sessionKey: targetSessionKey,
+    message: "ping",
+    timeoutSeconds: 0,
+  });
+
+  expect(requireDetails(result).status).toBe("accepted");
+  const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+  if (!flowParams) {
+    throw new Error("expected A2A flow");
+  }
+  return flowParams;
+}
+
 function getFirstListedSession(result: SessionsListResult) {
   const details = result.details as
     | { sessions?: Array<{ key?: string; transcriptPath?: string }> }
@@ -1109,158 +1155,31 @@ describe("sessions_send gating", () => {
     expect(flowParams?.baseline).toBeUndefined();
   });
 
-  it("forces maxPingPongTurns to 0 for fire-and-forget sends from an isolated cron requester (#92257)", async () => {
-    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
-    // Canonical isolated-cron run key (agent:<id>:cron:<job>:run:<run>); the
-    // gate fires on isCronRunSessionKey alone, with a normal delivery channel.
-    const requesterSessionKey = "agent:main:cron:job:run:abc";
-    const targetSessionKey = "agent:other:discord:group:ops";
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-    const tool = createSessionsSendTool({
-      agentSessionKey: requesterSessionKey,
-      agentChannel: "telegram",
-    });
+  it.each([
+    {
+      label: "canonical cron run",
+      requesterSessionKey: "agent:main:cron:job:run:abc",
+      expected: 0,
+    },
+    {
+      label: "normal requester",
+      requesterSessionKey: "agent:main:telegram:direct:user",
+      expected: 5,
+    },
+    {
+      label: "non-canonical cron-like requester",
+      requesterSessionKey: "agent:main:slack:cron:job:run:uuid",
+      expected: 5,
+    },
+  ] as const)(
+    "uses the expected ping-pong turns for a $label",
+    async ({ requesterSessionKey, expected }) => {
+      const flowParams = await executeFireAndForgetA2AFrom(requesterSessionKey);
 
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "group" }],
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-cross-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
-    });
-
-    const result = await tool.execute("call-cross-fire-and-forget", {
-      sessionKey: targetSessionKey,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details.status).toBe("accepted");
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    expect(flowParams?.maxPingPongTurns).toBe(0);
-    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
-    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
-    expect(flowParams?.requesterSessionKey).not.toBe(flowParams?.targetSessionKey);
-  });
-
-  it("keeps the configured maxPingPongTurns for fire-and-forget sends from a normal requester (#92257 regression)", async () => {
-    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
-    const requesterSessionKey = "discord:group:req";
-    const targetSessionKey = "agent:other:discord:group:ops";
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-    const tool = createSessionsSendTool({
-      agentSessionKey: requesterSessionKey,
-      agentChannel: "discord",
-    });
-
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "group" }],
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-normal-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
-    });
-
-    const result = await tool.execute("call-normal-fire-and-forget", {
-      sessionKey: targetSessionKey,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details.status).toBe("accepted");
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    // Normal fire-and-forget must preserve the intended A2A ping-pong roundtrip.
-    expect(flowParams?.maxPingPongTurns).toBe(5);
-    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
-    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
-  });
-
-  it("keeps the configured maxPingPongTurns for a non-canonical cron-like requester key (#92257 regression)", async () => {
-    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
-    // Canonical isolated-cron keys are agent:<id>:cron:<job>:run:<run>; this key
-    // only embeds `:cron:` deeper in a normal channel session and must NOT be
-    // treated as an isolated cron run (isCronRunSessionKey rejects it), so its
-    // intended cross-session ping-pong is preserved.
-    const requesterSessionKey = "agent:main:slack:cron:job:run:uuid";
-    const targetSessionKey = "agent:other:discord:group:ops";
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-    const tool = createSessionsSendTool({
-      agentSessionKey: requesterSessionKey,
-      agentChannel: "slack",
-    });
-
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "group" }],
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-cron-like-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
-    });
-
-    const result = await tool.execute("call-cron-like-fire-and-forget", {
-      sessionKey: targetSessionKey,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details.status).toBe("accepted");
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    // A non-canonical cron-like key must preserve the intended A2A ping-pong roundtrip.
-    expect(flowParams?.maxPingPongTurns).toBe(5);
-    expect(flowParams?.requesterSessionKey).toBe(requesterSessionKey);
-    expect(flowParams?.targetSessionKey).toBe(targetSessionKey);
-  });
+      expect(flowParams.maxPingPongTurns).toBe(expected);
+      expect(flowParams.requesterSessionKey).toBe(requesterSessionKey);
+    },
+  );
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
     const tool = createMainSessionsSendTool();

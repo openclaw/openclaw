@@ -1696,6 +1696,7 @@ describe("sessions tools", () => {
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
     const queueMessage = vi.fn(async () => {});
@@ -1714,14 +1715,33 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        const text =
+          params?.sessionKey === durableCronCallerKey
+            ? "existing durable reply"
+            : "existing run reply";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
       if (request.method === "agent") {
         return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "durable-fallback-run", status: "ok" };
       }
       return {};
     });
 
     const tool = createOpenClawTools({
-      agentSessionKey: "agent:re-portal:main",
+      agentSessionKey: requesterKey,
       agentChannel: "telegram",
       config: {
         ...TEST_CONFIG,
@@ -1752,6 +1772,25 @@ describe("sessions tools", () => {
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    await waitForCalls(
+      () =>
+        countMatching(
+          calls,
+          (call) =>
+            call.method === "chat.history" &&
+            (call.params as { sessionKey?: string } | undefined)?.sessionKey ===
+              durableCronCallerKey,
+        ),
+      2,
+    );
+    const firstFallbackHistoryIndex = calls.findIndex(
+      (call) =>
+        call.method === "chat.history" &&
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCronCallerKey,
+    );
+    const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
+    expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {

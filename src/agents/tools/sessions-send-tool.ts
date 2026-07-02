@@ -555,13 +555,11 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
-      // An isolated cron run is the only requester for which the A2A ping-pong
-      // is harmful: feeding the target's reply back as a new turn corrupts the
-      // isolated run (#92257). Detect it with the canonical cron-run classifier,
-      // not a raw `:cron:` substring: a normal requester whose key merely
-      // contains that segment (e.g. agent:main:slack:cron:job:run:uuid) must
-      // keep its intended cross-session ping-pong.
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      const fallbackA2ASessionKey =
+        timeoutSeconds === 0 && isIsolatedCronRequester
+          ? resolveCronRunScopedFallbackSessionKey(displayKey)
+          : undefined;
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
@@ -569,11 +567,7 @@ export function createSessionsSendTool(opts?: {
       // reply look like the baseline and hide it from the caller.
       // Fire-and-forget same-session sends still need this baseline because the
       // A2A follow-up may deliver directly to the source channel. Isolated cron
-      // requesters also need it cross-session: without a baseline fingerprint
-      // any pre-existing assistant text in the target session (e.g. an
-      // unrelated concurrent cron's output) would be misattributed as "the
-      // reply" (#92257). Tolerate read failures on the fire-and-forget path so
-      // a snapshot error never blocks accepting the send.
+      // requesters also need it to avoid attributing a stale target reply.
       const baselineReply =
         timeoutSeconds !== 0
           ? await readLatestAssistantReplySnapshot({
@@ -588,6 +582,16 @@ export function createSessionsSendTool(opts?: {
                 callGateway: gatewayCall,
               }).catch(() => undefined)
             : undefined;
+      // Active-run delivery can fall back to the durable cron parent. Snapshot
+      // that target before dispatch so a fast reply cannot become its baseline.
+      const fallbackBaselineReply =
+        fallbackA2ASessionKey && fallbackA2ASessionKey !== resolvedKey
+          ? await readLatestAssistantReplySnapshot({
+              sessionKey: fallbackA2ASessionKey,
+              limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+              callGateway: gatewayCall,
+            }).catch(() => undefined)
+          : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
@@ -665,21 +669,19 @@ export function createSessionsSendTool(opts?: {
         if (skipA2AFlow) {
           return;
         }
+        const flowBaseline =
+          flowTargetSessionKey === fallbackA2ASessionKey ? fallbackBaselineReply : baselineReply;
         void runSessionsSendA2AFlow({
           targetSessionKey: flowTargetSessionKey,
           displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
-          // An isolated cron requester must not run the ping-pong loop: its
-          // first iteration would inject the target's reply as a new turn into
-          // the isolated cron session, corrupting that run (#92257). Force
-          // turns=0 only for that requester so the A2A flow skips straight to
-          // the announce step; normal cross-session fire-and-forget keeps its
-          // intended ping-pong roundtrip.
+          // Cron runs are isolated jobs; target replies must not become new
+          // requester turns, but the target-side announce still runs.
           maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
-          baseline: baselineReply,
+          baseline: flowBaseline,
           roundOneReply,
           waitRunId,
         });
