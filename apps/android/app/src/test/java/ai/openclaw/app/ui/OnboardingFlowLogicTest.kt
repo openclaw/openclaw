@@ -89,6 +89,34 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
+    val permissionGroups =
+      listOf(
+        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
+
+    for (requiredPermissions in permissionGroups) {
+      val readPermission = requiredPermissions.first()
+      val writePermission = requiredPermissions.last()
+      assertFalse(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(readPermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { false },
+        ),
+      )
+      assertTrue(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(writePermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { permission -> permission == readPermission },
+        ),
+      )
+    }
+  }
+
+  @Test
   fun nearbyGatewayFoundStateIsConnectable() {
     assertEquals(
       NearbyGatewayUiState(subtitle = "Studio Gateway", status = "Found", canConnect = true),
