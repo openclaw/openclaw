@@ -259,7 +259,10 @@ describe("thread-ownership plugin", () => {
 
     it("cancels when thread owned by another agent", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
-        new Response(JSON.stringify({ owner: "other-agent" }), { status: 409 }),
+        new Response(JSON.stringify({ owner: "other-agent" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
       );
 
       const result = await sendSlackThreadMessage();
