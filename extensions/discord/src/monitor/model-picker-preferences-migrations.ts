@@ -50,17 +50,18 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
   }
 }
 
-function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore | null {
+function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
+  const raw = fs.readFileSync(filePath, "utf8");
+  let parsed: unknown;
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return parsed as LegacyThreadBindingsStore;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
-    return null;
+    throw new Error("Corrupted legacy Discord thread bindings store: file is not valid JSON");
   }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("legacy Discord thread bindings store must be an object");
+  }
+  return parsed as LegacyThreadBindingsStore;
 }
 
 function normalizeLegacyPreferenceKey(key: string): string | undefined {
