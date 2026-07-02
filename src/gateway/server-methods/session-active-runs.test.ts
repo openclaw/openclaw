@@ -194,4 +194,86 @@ describe("collectTrackedActiveSessionRunSnapshot", () => {
       }),
     ]);
   });
+
+  it("keeps unknown fallback active runs unscoped by default", () => {
+    const context = contextWithRuns([
+      [
+        "run-main",
+        {
+          sessionId: "session-main",
+          sessionKey: "unknown",
+          agentId: "main",
+        },
+      ],
+      [
+        "run-work",
+        {
+          sessionId: "session-work",
+          sessionKey: "unknown",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "unknown",
+        canonicalKey: "unknown",
+        agentId: "work",
+        defaultAgentId: "main",
+        now: 2_000,
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-main",
+        sessionId: "session-main",
+        agentId: "main",
+      }),
+      expect.objectContaining({
+        runId: "run-work",
+        sessionId: "session-work",
+        agentId: "work",
+      }),
+    ]);
+  });
+
+  it("matches unknown fallback sessions by requested agent id when scoped", () => {
+    const context = contextWithRuns([
+      [
+        "run-main",
+        {
+          sessionId: "session-main",
+          sessionKey: "unknown",
+          agentId: "main",
+        },
+      ],
+      [
+        "run-work",
+        {
+          sessionId: "session-work",
+          sessionKey: "unknown",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "unknown",
+        canonicalKey: "unknown",
+        agentId: "work",
+        defaultAgentId: "main",
+        scopeUnknownByAgent: true,
+        now: 2_000,
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        runId: "run-work",
+        sessionId: "session-work",
+        agentId: "work",
+      }),
+    ]);
+  });
 });

@@ -7,7 +7,7 @@ import {
   type SessionsDiagnoseResult,
   validateSessionsDiagnoseParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions.js";
@@ -21,13 +21,18 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import {
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
   collectTrackedActiveSessionRuns,
   collectTrackedActiveSessionRunSnapshot,
@@ -83,6 +88,10 @@ type DiagnoseTranscriptEvidence = {
   recentEventCount: number;
 };
 
+type RequestedDiagnoseAgentIdResolution =
+  | { ok: true; agentId?: string }
+  | { ok: false; error: ReturnType<typeof errorShape> };
+
 function countDiagnoseSelectors(p: DiagnoseParams): number {
   return [p.key, p.sessionId, p.label].filter((value) => Boolean(value)).length;
 }
@@ -99,6 +108,61 @@ function selectorFromDiagnoseParams(p: DiagnoseParams): SessionsDiagnoseResult["
     ...(p.sessionId ? { sessionId: p.sessionId } : {}),
     ...(p.label ? { label: p.label } : {}),
     ...(p.agentId ? { agentId: p.agentId } : {}),
+  };
+}
+
+function resolveRequestedDiagnoseAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+  explicitAgentId?: string,
+  options?: { allowUnknownAgentId?: boolean },
+): RequestedDiagnoseAgentIdResolution {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const parsed = parseAgentSessionKey(key);
+  const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  const isAgentScopedUnscopedKey =
+    canonicalKey === "global" ||
+    (canonicalKey === "unknown" && options?.allowUnknownAgentId === true);
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+      };
+    }
+    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    if (!isAgentScopedUnscopedKey) {
+      const keyAgentId = parsed?.agentId
+        ? normalizeAgentId(parsed.agentId)
+        : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
+      if (keyAgentId !== agentId) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        };
+      }
+    }
+    return { ok: true, agentId };
+  }
+  if (!parsed?.agentId) {
+    return { ok: true };
+  }
+  const inferredAgentId = normalizeAgentId(parsed.agentId);
+  if (isAgentScopedUnscopedKey && !listAgentIds(cfg).includes(inferredAgentId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),
+    };
+  }
+  return {
+    ok: true,
+    agentId: isAgentScopedUnscopedKey ? inferredAgentId : undefined,
   };
 }
 
@@ -197,7 +261,7 @@ function hasDiagnoseTrackedActiveRun(params: {
     if (active.sessionKey !== params.key) {
       return false;
     }
-    if (params.key !== "global") {
+    if (!isUnscopedSessionKeySentinel(params.key)) {
       return true;
     }
     const requestedAgentId = normalizeAgentId(params.agentId ?? params.defaultAgentId);
@@ -407,6 +471,7 @@ function scoreDiagnoseCandidate(params: {
     canonicalKey: params.row.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId,
+    scopeUnknownByAgent: true,
   });
   const activeRunState = resolveVisibleActiveSessionRunState({
     context: params.context,
@@ -415,6 +480,7 @@ function scoreDiagnoseCandidate(params: {
     sessionId: params.row.sessionId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId,
+    scopeUnknownByAgent: true,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.row.sessionId,
@@ -471,8 +537,8 @@ async function resolveDiagnoseTarget(params: {
     throw new Error("choose only one of key, sessionId, or label for sessions.diagnose");
   }
   const requestedAgentId = p.key
-    ? resolveRequestedGlobalAgentId(cfg, p.key, p.agentId)
-    : resolveRequestedGlobalAgentId(cfg, "global", p.agentId);
+    ? resolveRequestedDiagnoseAgentId(cfg, p.key, p.agentId, { allowUnknownAgentId: true })
+    : resolveRequestedDiagnoseAgentId(cfg, "global", p.agentId);
   if (!requestedAgentId.ok) {
     throw new Error(requestedAgentId.error.message);
   }
@@ -748,6 +814,7 @@ async function buildDiagnoseResult(params: {
     canonicalKey: target.key,
     ...(target.agentId ? { agentId: target.agentId } : {}),
     defaultAgentId,
+    scopeUnknownByAgent: true,
     now,
   });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({

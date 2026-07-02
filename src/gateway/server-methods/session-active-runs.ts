@@ -60,6 +60,7 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
   now?: number;
 }): TrackedActiveSessionRunSnapshot {
   const runs: TrackedActiveSessionRunSnapshot["runs"] = [];
@@ -90,12 +91,14 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
+        { scopeUnknownByAgent: params.scopeUnknownByAgent },
       ) ||
       isTrackedActiveSessionRunForKey(
         projected,
         params.requestedKey,
         params.agentId,
         params.defaultAgentId,
+        { scopeUnknownByAgent: params.scopeUnknownByAgent },
       );
     if (!matches) {
       continue;
@@ -138,11 +141,14 @@ function isTrackedActiveSessionRunForKey(
   key: string,
   agentId?: string,
   defaultAgentId?: string,
+  options?: { scopeUnknownByAgent?: boolean },
 ): boolean {
   if (!active.sessionKey || active.sessionKey !== key) {
     return false;
   }
-  if (key !== "global") {
+  const shouldScopeByAgent =
+    key === "global" || (key === "unknown" && options?.scopeUnknownByAgent === true);
+  if (!shouldScopeByAgent) {
     return true;
   }
   const requestedAgentId = agentId ?? defaultAgentId;
@@ -162,6 +168,7 @@ export function hasTrackedActiveSessionRun(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
   return activeRuns.some(
@@ -171,12 +178,14 @@ export function hasTrackedActiveSessionRun(params: {
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
+        { scopeUnknownByAgent: params.scopeUnknownByAgent },
       ) ||
       isTrackedActiveSessionRunForKey(
         active,
         params.requestedKey,
         params.agentId,
         params.defaultAgentId,
+        { scopeUnknownByAgent: params.scopeUnknownByAgent },
       ),
   );
 }
@@ -188,6 +197,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): { active: boolean; runIds: string[] } {
   const sessionId = params.sessionId?.trim();
   const runIds = collectTrackedActiveSessionRuns(params.context)
@@ -198,12 +208,14 @@ export function resolveVisibleActiveSessionRunState(params: {
           params.canonicalKey,
           params.agentId,
           params.defaultAgentId,
+          { scopeUnknownByAgent: params.scopeUnknownByAgent },
         ) ||
         isTrackedActiveSessionRunForKey(
           active,
           params.requestedKey,
           params.agentId,
           params.defaultAgentId,
+          { scopeUnknownByAgent: params.scopeUnknownByAgent },
         ) ||
         (sessionId !== undefined && active.sessionId === sessionId),
     )
@@ -229,6 +241,7 @@ export function hasVisibleActiveSessionRun(params: {
   sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): boolean {
   return resolveVisibleActiveSessionRunState(params).active;
 }
