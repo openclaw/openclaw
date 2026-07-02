@@ -39,6 +39,10 @@ const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknown) => 18789));
 const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
+const triggerOpenClawRestart = vi.fn<() => { ok: boolean; method: string; detail?: string; tried?: string[] }>(() => ({
+  ok: true,
+  method: "schtasks",
+}));
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
 const probeGateway = vi.fn<
   (opts: {
@@ -101,6 +105,11 @@ vi.mock("../../infra/gateway-processes.js", () => ({
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+}));
+
+vi.mock("../../infra/restart.js", () => ({
+  writeGatewayRestartIntentSync: vi.fn(),
+  triggerOpenClawRestart: () => triggerOpenClawRestart(),
 }));
 
 vi.mock("../../gateway/probe.js", () => ({
@@ -542,6 +551,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
@@ -549,6 +559,25 @@ describe("runDaemonRestart health checks", () => {
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("uses scheduled task restart for unmanaged gateway restart on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    // On Windows, SIGUSR1 is unsupported for cross-process signaling.
+    // triggerOpenClawRestart() uses the scheduled-task restart handoff.
+    expect(triggerOpenClawRestart).toHaveBeenCalledOnce();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
     expect(probeGateway).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
