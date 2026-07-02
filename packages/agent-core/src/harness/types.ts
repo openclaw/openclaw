@@ -260,6 +260,8 @@ export interface ExecutionEnvExecOptions {
   timeout?: number;
   /** Abort signal used to terminate the command. Defaults to no abort signal. */
   abortSignal?: AbortSignal;
+  /** Maximum combined stdout+stderr bytes to capture before truncating output. Defaults to 16 MiB. */
+  maxOutputBytes?: number;
   /** Called with stdout chunks as they are produced. */
   onStdout?: (chunk: string) => void;
   /** Called with stderr chunks as they are produced. */

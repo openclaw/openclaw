@@ -19,6 +19,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   type ExecutionEnv,
+  type ExecutionEnvExecOptions,
   ExecutionError,
   err,
   FileError,
@@ -32,6 +33,20 @@ import { killProcessTree } from "./kill-tree.js";
 
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
+
+function truncateToBytes(str: string, maxBytes: number): string {
+  let bytes = 0;
+  let result = "";
+  for (const char of str) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (bytes + charBytes > maxBytes) {
+      break;
+    }
+    result += char;
+    bytes += charBytes;
+  }
+  return result;
+}
 
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
@@ -284,15 +299,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
   async exec(
     command: string,
-    options?: {
-      cwd?: string;
-      env?: Record<string, string>;
-      timeout?: number;
-      abortSignal?: AbortSignal;
-      maxOutputBytes?: number;
-      onStdout?: (chunk: string) => void;
-      onStderr?: (chunk: string) => void;
-    },
+    options?: ExecutionEnvExecOptions,
   ): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
     if (options?.abortSignal?.aborted) {
       return err(new ExecutionError("aborted", "aborted"));
@@ -311,7 +318,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let stderr = "";
       let totalStdoutBytes = 0;
       let totalStderrBytes = 0;
-      let outputTruncated = false;
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
       let settled = false;
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
@@ -376,17 +384,17 @@ export class NodeExecutionEnv implements ExecutionEnv {
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
-        if (outputTruncated) {
+        if (stdoutTruncated) {
           return;
         }
         const chunkBytes = Buffer.byteLength(chunk, "utf8");
         if (totalStdoutBytes + chunkBytes > maxOutputBytes) {
           const remaining = maxOutputBytes - totalStdoutBytes;
           if (remaining > 0) {
-            stdout += chunk.slice(0, Math.max(0, remaining));
+            stdout += truncateToBytes(chunk, remaining);
           }
           stdout += "\n[output truncated]";
-          outputTruncated = true;
+          stdoutTruncated = true;
           return;
         }
         totalStdoutBytes += chunkBytes;
@@ -400,17 +408,17 @@ export class NodeExecutionEnv implements ExecutionEnv {
         }
       });
       child.stderr?.on("data", (chunk: string) => {
-        if (outputTruncated) {
+        if (stderrTruncated) {
           return;
         }
         const chunkBytes = Buffer.byteLength(chunk, "utf8");
         if (totalStderrBytes + chunkBytes > maxOutputBytes) {
           const remaining = maxOutputBytes - totalStderrBytes;
           if (remaining > 0) {
-            stderr += chunk.slice(0, Math.max(0, remaining));
+            stderr += truncateToBytes(chunk, remaining);
           }
           stderr += "\n[output truncated]";
-          outputTruncated = true;
+          stderrTruncated = true;
           return;
         }
         totalStderrBytes += chunkBytes;
