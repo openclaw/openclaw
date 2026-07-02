@@ -158,6 +158,33 @@ export function lookupInboundMessageMetaForTarget(
   return matched;
 }
 
+function isGroupRemoteJid(remoteJid: string): boolean {
+  return remoteJid.endsWith("@g.us");
+}
+
+// Build the quote metadata for a message the bot itself just sent, so that a
+// later user swipe-reply to that message resolves the quote key with the
+// correct `fromMe`/`participant` instead of the cache-miss fallback (which
+// defaults `fromMe` to false and `participant` to the replying user). The
+// mismatched key makes WhatsApp Desktop silently drop the reply bubble (#91445).
+export function buildOutboundQuotedMeta(params: {
+  remoteJid: string;
+  self: { jid?: string | null; lid?: string | null };
+  body?: string;
+}): QuotedMeta {
+  const trimmedBody = params.body?.trim();
+  // In a group the quoted message's participant is the sender JID (the bot's
+  // own JID here). In a direct chat WhatsApp omits the participant entirely.
+  const participant = isGroupRemoteJid(params.remoteJid)
+    ? (params.self.jid ?? params.self.lid ?? undefined)
+    : undefined;
+  return {
+    fromMe: true,
+    ...(participant ? { participant } : {}),
+    ...(trimmedBody ? { body: trimmedBody } : {}),
+  };
+}
+
 export function buildQuotedMessageOptions(params: {
   messageId?: string | null;
   remoteJid?: string | null;
