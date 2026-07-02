@@ -270,6 +270,7 @@ describe("fetchWithSsrFGuard hardening", () => {
           autoSelectFamilyAttemptTimeout: 300,
         },
         allowH2: false,
+        keepAliveMaxTimeout: 25000,
       });
     }
     await result.release();
@@ -713,6 +714,7 @@ describe("fetchWithSsrFGuard hardening", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
       allowH2: false,
+      keepAliveMaxTimeout: 25000,
       requestTls: {
         servername: "public.example",
       },
