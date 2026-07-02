@@ -4,6 +4,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   interactiveReplyToPresentation,
   normalizeInteractiveReply,
@@ -320,6 +321,33 @@ function buildFeishuPayloadCard(params: {
   });
 }
 
+/**
+ * Check whether any presentation block contains a visible command action
+ * that would be rendered as copyable text in the fallback output.
+ *
+ * Must match the same conditions used by the shared
+ * {@link renderMessagePresentationFallbackText} so that Feishu comment-thread
+ * guidance is only shown when a copyable command is actually rendered.
+ */
+function hasRenderedCommandAction(
+  blocks: readonly MessagePresentationBlock[] | undefined,
+): boolean {
+  return (
+    blocks?.some(
+      (block) =>
+        block.type === "buttons" &&
+        block.buttons.some(
+          (button) =>
+            !button.disabled &&
+            button.action?.type === "command" &&
+            !button.url &&
+            !button.webApp?.url &&
+            !button.web_app?.url,
+        ),
+    ) ?? false
+  );
+}
+
 function renderFeishuPresentationPayload({
   payload,
   presentation,
@@ -336,6 +364,11 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
+  // Preserve a rendered-command marker in channelData so the downstream
+  // comment-target branch in sendPayload can detect that a command was
+  // rendered even after core renderPresentationForDelivery strips the
+  // presentation field before calling sendPayload.
+  const hasCmd = hasRenderedCommandAction(presentation?.blocks);
   return {
     ...payload,
     text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
@@ -344,6 +377,7 @@ function renderFeishuPresentationPayload({
       feishu: {
         ...existingFeishuData,
         card,
+        ...(hasCmd ? { hasRenderedCommandAction: true } : {}),
       },
     },
   };
@@ -505,21 +539,38 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (commentTarget) {
+      const normalizedPresentation =
+        normalizeMessagePresentation(ctx.payload.presentation) ??
+        (() => {
+          const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+          return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+        })();
+      const presentationFallbackText = renderMessagePresentationFallbackText({
+        text: ctx.payload.text,
+        presentation: normalizedPresentation,
+      });
+      // Use isRecord to narrow channelData.feishu before reading the marker,
+      // matching the same pattern used in renderFeishuPresentationPayload.
+      const feishuMarker = isRecord(ctx.payload.channelData?.feishu)
+        ? ctx.payload.channelData.feishu.hasRenderedCommandAction
+        : undefined;
+      const hasCmd =
+        hasRenderedCommandAction(normalizedPresentation?.blocks) ||
+        // When core delivery strips presentation via renderPresentationForDelivery
+        // before calling sendPayload, the blocks check above returns false.  Fall
+        // back to the marker set by renderFeishuPresentationPayload.
+        Boolean(feishuMarker);
+      const text = hasCmd
+        ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
+        : presentationFallbackText;
+
       return await sendTextMediaPayload({
         channel: "feishu",
         ctx: {
           ...ctx,
           payload: {
             ...ctx.payload,
-            text: renderMessagePresentationFallbackText({
-              text: ctx.payload.text,
-              presentation:
-                normalizeMessagePresentation(ctx.payload.presentation) ??
-                (() => {
-                  const interactive = normalizeInteractiveReply(ctx.payload.interactive);
-                  return interactive ? interactiveReplyToPresentation(interactive) : undefined;
-                })(),
-            }),
+            text,
             interactive: undefined,
             presentation: undefined,
             channelData: undefined,

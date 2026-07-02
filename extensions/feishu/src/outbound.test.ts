@@ -843,13 +843,113 @@ describe("feishuOutbound.sendPayload native cards", () => {
       payload: {
         text: "Review this",
         interactive: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "/approve req_1" }] }],
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", action: { type: "command", command: "/approve req_1" } },
+              ],
+            },
+          ],
         },
       },
     });
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Approve");
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
+    expectFeishuResult(result, "reply_msg");
+  });
+
+  it("omits command guidance when all command buttons have URLs overriding the fallback text", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Open URL",
+                  url: "https://example.com/action",
+                  action: { type: "command", command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Open URL: https://example.com/action",
+    );
+    expectFeishuResult(result, "reply_msg");
+  });
+
+  it("omits command guidance for disabled command buttons", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Disabled Approve",
+                  disabled: true,
+                  action: { type: "command", command: "/approve req_1" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(commentThreadParams()?.content).toBe("Review this\n\n- Disabled Approve");
+    expectFeishuResult(result, "reply_msg");
+  });
+
+  it("adds command guidance when presentation is stripped but channelData carries the rendered-command marker", async () => {
+    // Simulates the core delivery path: renderPresentationForDelivery strips
+    // the presentation field, but renderFeishuPresentationPayload sets
+    // hasRenderedCommandAction in channelData.feishu so the comment-target
+    // branch in sendPayload can still detect that a command was rendered.
+    // The payload includes a minimal card in channelData.feishu.card so
+    // buildFeishuPayloadCard does not return undefined and skip the
+    // comment-target handler entirely.
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Review this",
+      accountId: "main",
+      payload: {
+        text: "Review this\n\n- Approve: `/approve req_1`",
+        channelData: {
+          feishu: {
+            card: { body: { elements: [{ tag: "hr" }] } },
+            hasRenderedCommandAction: true,
+          },
+        },
+      },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
     expectFeishuResult(result, "reply_msg");
   });
 });
