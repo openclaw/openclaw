@@ -142,6 +142,29 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("extra structured detail");
   });
 
+  it("falls back to structured text for a media-typed block with no payload instead of vanishing (#98673)", () => {
+    const text = extractToolResultText([{ type: "image" }]);
+
+    expect(text).toContain('"type":"image"');
+  });
+
+  it("keeps other blocks' text when one entry is a payload-less media block", () => {
+    const text = extractToolResultText([
+      { type: "text", text: "actual tool output" },
+      { type: "image_url" },
+    ]);
+
+    expect(text).toBe("actual tool output");
+  });
+
+  it("still excludes a genuinely populated image_url block from replay text", () => {
+    const text = extractToolResultText([
+      { type: "image_url", image_url: { url: "https://example.com/a.png" } },
+    ]);
+
+    expect(text).toBe("");
+  });
+
   it("truncates structured fallback text before provider replay", () => {
     const tail = "tail-marker";
     const text = extractToolResultText([
@@ -181,5 +204,17 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
+  });
+
+  it("does not claim attached media for a payload-less image-typed block (#98673)", () => {
+    expect(describeToolResultMediaPlaceholder([{ type: "image" }])).toBeUndefined();
+  });
+
+  it("does not treat a text block's own mimeType metadata field as attached media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "text", text: "<svg>...</svg>", mimeType: "image/svg+xml" },
+      ]),
+    ).toBeUndefined();
   });
 });

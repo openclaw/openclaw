@@ -45,6 +45,36 @@ function isBinaryMimeType(mimeType: string): boolean {
   return normalized ? !TEXTUAL_MIME_PATTERN.test(normalized) : false;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+// A block can be *labeled* image/audio (record.type in MEDIA_ONLY_TOOL_RESULT_TYPES)
+// without actually carrying a payload -- e.g. a malformed/legacy-shaped block that
+// leaked through from an older session, a replay-reconstructed wire-format block, or
+// upstream normalization that emitted `{ type: "image" }` with no data. Trusting the
+// label alone (as this module used to) silently discards the block's content instead
+// of treating it as text, which is exactly the "not text => image" class of bug fixed
+// for the Anthropic path in #90710 -- unvalidated media-type blocks must never cause
+// real (or potentially recoverable) content to vanish. See #98673/#98728.
+function hasMediaPayload(record: Record<string, unknown>): boolean {
+  if (isNonEmptyString(record.data)) {
+    return true;
+  }
+  const imageUrl = record.image_url;
+  if (isNonEmptyString(imageUrl)) {
+    return true;
+  }
+  if (isRecord(imageUrl) && isNonEmptyString(imageUrl.url)) {
+    return true;
+  }
+  const inputAudio = record.input_audio;
+  if (isRecord(inputAudio) && isNonEmptyString(inputAudio.data)) {
+    return true;
+  }
+  return false;
+}
+
 function describeOmittedValue(value: unknown, label: string): string {
   const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
   return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
@@ -134,17 +164,19 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     const record = block as Record<string, unknown>;
     const type = typeof record.type === "string" ? record.type : undefined;
     const mimeType = readMimeType(record);
+    // A type-only match with no payload isn't real media -- don't advertise media
+    // that was never actually attached (#98673).
+    const labeledImage = type
+      ? IMAGE_TOOL_RESULT_TYPES.has(type) && hasMediaPayload(record)
+      : false;
+    const labeledAudio = type
+      ? AUDIO_TOOL_RESULT_TYPES.has(type) && hasMediaPayload(record)
+      : false;
 
-    if (
-      (type && IMAGE_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("image/")
-    ) {
+    if (labeledImage || (type !== "text" && mimeType?.toLowerCase().startsWith("image/"))) {
       hasImage = true;
     }
-    if (
-      (type && AUDIO_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("audio/")
-    ) {
+    if (labeledAudio || (type !== "text" && mimeType?.toLowerCase().startsWith("audio/"))) {
       hasAudio = true;
     }
   }
@@ -166,7 +198,14 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
     return undefined;
   }
   const record = block as Record<string, unknown>;
-  if (typeof record.type === "string" && MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type)) {
+  if (
+    typeof record.type === "string" &&
+    MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type) &&
+    hasMediaPayload(record)
+  ) {
+    // Only exclude blocks that are genuinely carrying media. A block merely
+    // labeled image/audio with no payload falls through to the structured
+    // stringify path below instead of silently vanishing (#98673/#98728).
     return undefined;
   }
   if (record.type === "text") {
