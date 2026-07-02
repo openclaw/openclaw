@@ -39,3 +39,40 @@ describe("includesSystemEventToken", () => {
     expect(includesSystemEventToken("   ", TOKEN)).toBe(false);
   });
 });
+
+describe("includesSystemEventToken — legacy dreaming tokens", () => {
+  const LEGACY_LIGHT = "__openclaw_memory_core_light_sleep__";
+  const LEGACY_REM = "__openclaw_memory_core_rem_sleep__";
+
+  it("matches legacy light sleep token", () => {
+    expect(includesSystemEventToken(LEGACY_LIGHT, LEGACY_LIGHT)).toBe(true);
+  });
+
+  it("matches legacy REM sleep token", () => {
+    expect(includesSystemEventToken(LEGACY_REM, LEGACY_REM)).toBe(true);
+  });
+
+  it("matches legacy light sleep token in multi-line body", () => {
+    expect(
+      includesSystemEventToken(`some prefix\n${LEGACY_LIGHT}\nsome suffix`, LEGACY_LIGHT),
+    ).toBe(true);
+  });
+
+  it("matches legacy REM sleep token in multi-line body", () => {
+    expect(includesSystemEventToken(`some prefix\n${LEGACY_REM}\nsome suffix`, LEGACY_REM)).toBe(
+      true,
+    );
+  });
+
+  it("matches legacy light sleep token with cron prefix", () => {
+    expect(includesSystemEventToken(`[cron:abc123] ${LEGACY_LIGHT}`, LEGACY_LIGHT)).toBe(true);
+  });
+
+  it("does not match managed dreaming token as legacy", () => {
+    expect(includesSystemEventToken(LEGACY_LIGHT, TOKEN)).toBe(false);
+  });
+
+  it("does not match trivial embedding of legacy token", () => {
+    expect(includesSystemEventToken(`what is ${LEGACY_LIGHT}?`, LEGACY_LIGHT)).toBe(false);
+  });
+});
