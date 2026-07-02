@@ -653,6 +653,37 @@ function resolveModelRequestPolicy(model: Model) {
   });
 }
 
+/** True when the error is an undici keep-alive socket reuse failure. */
+export function isUndiciSocketError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as Record<string, unknown>;
+  if (record.code === "UND_ERR_SOCKET") {
+    return true;
+  }
+  const cause =
+    record.cause && typeof record.cause === "object"
+      ? (record.cause as Record<string, unknown>)
+      : undefined;
+  return cause?.code === "UND_ERR_SOCKET";
+}
+
+function isReplaySafeRequestBody(init: RequestInit | undefined): boolean {
+  const body = init?.body;
+  if (body == null) {
+    return true;
+  }
+  return (
+    typeof body === "string" ||
+    body instanceof URLSearchParams ||
+    body instanceof Blob ||
+    body instanceof FormData ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body)
+  );
+}
+
 export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
@@ -877,12 +908,33 @@ export function buildGuardedModelFetch(
           : guardedFetchOptions,
       );
     } catch (error) {
-      log.warn(
-        `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
-      );
-      localServiceLease?.release();
-      throw error;
+      // Retry once on undici keep-alive socket reuse failure (UND_ERR_SOCKET).
+      // A stale pooled socket can fail on first use; a fresh connection almost
+      // always succeeds. Only retry once to avoid infinite loops (#87407).
+      if (isUndiciSocketError(error) && isReplaySafeRequestBody(baseInit)) {
+        log.warn(
+          `[model-fetch] undici socket error, retrying once provider=${model.provider} ` +
+            `api=${model.api} model=${model.id} elapsedMs=${Date.now() - fetchStartedAt} ` +
+            summarizeError(error),
+        );
+        try {
+          result = await fetchWithSsrFGuard(
+            useEnvProxy
+              ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+              : guardedFetchOptions,
+          );
+        } catch (retryError) {
+          localServiceLease?.release();
+          throw retryError;
+        }
+      } else {
+        log.warn(
+          `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+        );
+        localServiceLease?.release();
+        throw error;
+      }
     }
     let response = result.response;
     emitModelTransportDebug(
