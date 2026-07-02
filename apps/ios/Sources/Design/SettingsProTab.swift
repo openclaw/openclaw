@@ -256,7 +256,9 @@ struct SettingsProTab: View {
             navigateToRoute(.notifications)
             return
         }
-        self.navigationPath = [.notifications]
+        // Push, don't replace: Back from Notifications must return to the
+        // Approvals screen the user came from, not reset to the Settings root.
+        self.navigationPath.append(.notifications)
     }
 
     private func applyInitialRouteIfNeeded() {

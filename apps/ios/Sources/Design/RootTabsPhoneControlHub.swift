@@ -15,7 +15,7 @@ struct RootTabsPhoneControlHub: View {
             List {
                 Section {
                     Button {
-                        self.openPhoneRootDestination(.gateway)
+                        self.openGatewayDetail()
                     } label: {
                         self.gatewayRow
                     }
@@ -118,8 +118,10 @@ struct RootTabsPhoneControlHub: View {
     @ViewBuilder
     private func detail(for destination: RootTabs.SidebarDestination) -> some View {
         switch destination {
-        case .chat, .talk, .agents, .gateway:
+        case .chat, .talk, .agents:
             EmptyView()
+        case .gateway:
+            SettingsProTab(directRoute: .gateway)
         case .overview:
             CommandCenterTab(
                 ownsNavigationStack: false,
@@ -127,27 +129,27 @@ struct RootTabsPhoneControlHub: View {
                 headerTitle: "Overview",
                 showsHeaderMark: false,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openPhoneRootDestination(.gateway) },
+                openSettings: { self.openGatewayDetail() },
                 openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .workboard:
             IPadWorkboardScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openPhoneRootDestination(.chat) },
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 usesNativeNavigationChrome: true,
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerTitle: "Instances",
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .sessions:
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
@@ -156,24 +158,30 @@ struct RootTabsPhoneControlHub: View {
             AgentProTab(
                 directRoute: .dreaming,
                 headerTitle: "Dreaming",
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerTitle: "Usage",
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.openPhoneRootDestination(.gateway) })
+                openSettings: { self.openGatewayDetail() })
         case .docs:
             OpenClawDocsScreen(
                 usesNativeNavigationChrome: true,
-                gatewayAction: { self.openPhoneRootDestination(.gateway) })
+                gatewayAction: { self.openGatewayDetail() })
         case .settings:
             EmptyView()
         }
+    }
+
+    /// Gateway settings open as a pushed detail on this stack so Back returns
+    /// to the hub screen the user came from, not the canonical Settings tab.
+    private func openGatewayDetail() {
+        self.navigationPath.append(.gateway)
     }
 
     private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination) {

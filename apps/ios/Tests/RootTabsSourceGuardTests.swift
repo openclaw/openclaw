@@ -74,7 +74,7 @@ struct RootTabsSourceGuardTests {
             from: "private var phoneTabContent: some View",
             to: "private var sidebarSplitContent: some View")
 
-        let chatRange = try #require(phoneTabContent.range(of: "ChatProTab(openSettings:"))
+        let chatRange = try #require(phoneTabContent.range(of: "ChatProTab("))
         let talkRange = try #require(phoneTabContent.range(of: "TalkProTab("))
         let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
         let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
@@ -300,7 +300,7 @@ struct RootTabsSourceGuardTests {
 
         #expect(source.contains("case .docs:"))
         #expect(source.contains("OpenClawDocsScreen("))
-        #expect(source.contains("gatewayAction: { self.openPhoneRootDestination(.gateway) }"))
+        #expect(source.contains("gatewayAction: { self.openGatewayDetail() }"))
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
         #expect(!source.contains("https://docs.openclaw.ai"))
@@ -350,12 +350,12 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText),"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(!source.contains("destination.subtitle"))
-        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
+        #expect(source.contains("self.openGatewayDetail()"))
+        #expect(!source.contains("self.openPhoneRootDestination(.gateway)"))
         #expect(source.contains("group.destinations.filter { !self.opensRootTab($0) }"))
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(!source.contains("headerLeadingAction: self.phoneDetailBackAction"))
         #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 6)
         #expect(!source.contains("directRoute: .agents"))
         #expect(!source.contains("Image(systemName: \"gearshape\")"))
@@ -374,7 +374,7 @@ struct RootTabsSourceGuardTests {
 
         #expect(source.contains("NavigationStack(path: self.$navigationPath)"))
         #expect(!source.contains("self.openRootDestination(.gateway)"))
-        #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
+        #expect(source.contains("self.navigationPath.append(.gateway)"))
         #expect(clearRange.lowerBound < openRange.lowerBound)
     }
 
@@ -679,8 +679,13 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("onRouteChange: self.handleSettingsRouteChange"))
         #expect(rootSource.contains("navigateToRoute: self.pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
+        #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
         #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
         #expect(settingsTabSource.contains("navigateToRoute(.notifications)"))
+        // Cross-route settings shortcuts push so Back returns to the origin
+        // screen; replacing the path resets Back to the Settings root.
+        #expect(settingsTabSource.contains("self.navigationPath.append(.notifications)"))
+        #expect(!settingsTabSource.contains("self.navigationPath = [.notifications]"))
         #expect(rootSource.contains("private func handleSettingsRouteChange(_ route: SettingsRoute?)"))
         #expect(settingsTabSource.contains("let onRouteChange: ((SettingsRoute?) -> Void)?"))
         #expect(settingsTabSource.contains("self.onRouteChange?(self.navigationPath.last)"))

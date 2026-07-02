@@ -151,19 +151,26 @@ struct RootTabs: View {
 
     private var phoneTabContent: some View {
         TabView(selection: self.$selectedTab) {
-            ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
-                .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
-                .tag(AppTab.chat)
+            PhoneTabSettingsHost { openSettingsRoute in
+                ChatProTab(
+                    ownsNavigationStack: false,
+                    openSettings: { openSettingsRoute(.gateway) })
+            }
+            .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
+            .tag(AppTab.chat)
 
-            TalkProTab(
-                openSettings: { self.selectSidebarDestination(.gateway) },
-                openVoiceSettings: { self.selectSettingsRoute(.voice) })
-                .tabItem {
-                    Label(
-                        "Talk",
-                        systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
-                }
-                .tag(AppTab.talk)
+            PhoneTabSettingsHost { openSettingsRoute in
+                TalkProTab(
+                    ownsNavigationStack: false,
+                    openSettings: { openSettingsRoute(.gateway) },
+                    openVoiceSettings: { openSettingsRoute(.voice) })
+            }
+            .tabItem {
+                Label(
+                    "Talk",
+                    systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
+            }
+            .tag(AppTab.talk)
 
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
@@ -173,10 +180,10 @@ struct RootTabs: View {
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
-            NavigationStack {
+            PhoneTabSettingsHost { openSettingsRoute in
                 AgentProTab(
                     directRoute: .agents,
-                    openSettings: { self.selectSidebarDestination(.gateway) })
+                    openSettings: { openSettingsRoute(.gateway) })
             }
             .tabItem { Label("Agent", systemImage: "person.2.fill") }
             .tag(AppTab.agent)
@@ -972,7 +979,9 @@ extension RootTabs {
     }
 
     private func pushSidebarSettingsRoute(_ route: SettingsRoute) {
-        self.sidebarNavigationPath = [route]
+        // Push, don't replace: Back must return to the settings screen the
+        // user came from (e.g. Approvals -> Notifications -> back -> Approvals).
+        self.sidebarNavigationPath.append(route)
         self.handleSettingsRouteChange(route)
     }
 
@@ -1164,6 +1173,29 @@ extension RootTabs {
             discoveredGatewayCount: self.gatewayController.gateways.count)
         guard shouldPresent else { return }
         self.presentedSheet = .quickSetup
+    }
+}
+
+/// Phone tabs push Settings routes (gateway, voice) onto their own stack so
+/// Back returns to the tab content the user navigated from; only global flows
+/// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
+private struct PhoneTabSettingsHost<Content: View>: View {
+    @State private var settingsPath: [SettingsRoute] = []
+    private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
+
+    init(@ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content) {
+        self.content = content
+    }
+
+    var body: some View {
+        NavigationStack(path: self.$settingsPath) {
+            self.content { route in
+                self.settingsPath.append(route)
+            }
+            .navigationDestination(for: SettingsRoute.self) { route in
+                SettingsProTab(directRoute: route)
+            }
+        }
     }
 }
 
