@@ -18,7 +18,7 @@ This iOS app is super-alpha and internal-use only. The first public App Store re
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 16+
+   - Xcode 26.x
    - `pnpm`
    - `xcodegen`
    - Apple Development signing set up in Xcode
@@ -51,7 +51,7 @@ pnpm ios:open
 
 Prereqs:
 
-- Xcode 16+
+- Xcode 26.x
 - `pnpm`
 - `xcodegen`
 - `fastlane`
@@ -69,6 +69,8 @@ Release behavior:
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
 - `pnpm ios:release:upload` generates App Store screenshots, uploads release notes, and attaches `apps/ios/APP-REVIEW-NOTES.md` as a rendered PDF before archiving and uploading the IPA.
+- Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only release path. If that command fails, stop and fix the failing screenshot, metadata, archive, validation, or upload step before trying again.
+- Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
@@ -116,6 +118,9 @@ Archive without upload:
 ```bash
 pnpm ios:release:archive
 ```
+
+This command is for local archive validation only. It is not a fallback upload
+path after `pnpm ios:release:upload` fails.
 
 Archive and upload to App Store Connect:
 
@@ -173,7 +178,11 @@ pnpm ios:version:pin -- --from-gateway
 pnpm ios:release:upload
 ```
 
-6. Expected behavior:
+6. If `pnpm ios:release:upload` fails, stop at that failure. Do not archive
+   and upload the IPA through another command. Fix the failing release-lane
+   step, then rerun `pnpm ios:release:upload`.
+
+7. Expected behavior:
    - Fastlane reads `apps/ios/version.json`
    - verifies synced iOS versioning artifacts
    - resolves the next App Store Connect build number for that short version
@@ -185,12 +194,12 @@ pnpm ios:release:upload
    - uploads the IPA to App Store Connect for TestFlight/App Review use
    - leaves App Review submission for a maintainer to complete manually
 
-7. Expected outputs after a successful run:
+8. Expected outputs after a successful run:
    - `apps/ios/build/app-store/OpenClaw-<version>.ipa`
    - `apps/ios/build/app-store/OpenClaw-<version>.app.dSYM.zip`
    - Fastlane log line like `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
 
-8. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
+9. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
 
 ## iOS Versioning Workflow
 

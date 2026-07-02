@@ -1,0 +1,121 @@
+name: Native App Locale Refresh
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/android/app/src/main/**
+      - apps/ios/**
+      - apps/macos/Sources/**
+      - apps/macos/Package.swift
+      - apps/shared/OpenClawKit/Sources/**
+      - apps/.i18n/native-source.json
+      - scripts/control-ui-i18n.ts
+      - scripts/native-app-i18n.ts
+      - ui/src/i18n/.i18n/glossary.*.json
+      - .github/workflows/native-app-locale-refresh.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-app-locale-refresh-${{ github.event_name == 'push' && github.ref || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
+
+jobs:
+  refresh:
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        locale:
+          [
+            zh-CN,
+            zh-TW,
+            pt-BR,
+            de,
+            es,
+            ja-JP,
+            ko,
+            fr,
+            hi,
+            ar,
+            it,
+            tr,
+            uk,
+            id,
+            pl,
+            th,
+            vi,
+            nl,
+            fa,
+            ru,
+            sv,
+          ]
+    runs-on: ubuntu-latest
+    name: Refresh native ${{ matrix.locale }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: true
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Ensure translation provider secrets exist
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
+            exit 1
+          fi
+
+      - name: Refresh native locale artifact
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCLAW_CONTROL_UI_I18N_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || 'openai' }}
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-8' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+          LOCALE: ${{ matrix.locale }}
+        run: node --import tsx scripts/native-app-i18n.ts sync --write --locale "${LOCALE}"
+
+      - name: Commit and push locale artifact
+        env:
+          LOCALE: ${{ matrix.locale }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if ! git status --porcelain -- apps/.i18n/native apps/.i18n/native-source.json | grep -q .; then
+            echo "No native locale changes for ${LOCALE}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A apps/.i18n/native apps/.i18n/native-source.json
+          git commit --no-verify -m "chore(i18n): refresh native ${LOCALE} locale"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "${TARGET_BRANCH}"
+            git rebase --autostash "origin/${TARGET_BRANCH}"
+            if git push origin HEAD:"${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} for ${LOCALE} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push ${LOCALE} native locale update after retries."
+          exit 1

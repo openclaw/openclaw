@@ -1,4 +1,4 @@
-/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
+/** Executes detached cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -66,19 +67,19 @@ const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 const MAX_CRON_DELIVERY_TARGET_CONTEXT_CHARS = 1000;
 
-function resolveIsolatedCronPromptCacheKey(params: {
+function resolveDetachedCronPromptCacheKey(params: {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
   provider: string;
   model: string;
 }): string | undefined {
-  if (params.job.sessionTarget !== "isolated") {
+  if (!isDetachedCronSessionTarget(params.job.sessionTarget)) {
     return undefined;
   }
   const material = JSON.stringify({
     version: 1,
-    kind: "isolated-cron",
+    kind: "detached-cron",
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -86,7 +87,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
     model: params.model,
   });
   const digest = createHash("sha256").update(material).digest("hex").slice(0, 32);
-  // Isolated cron rotates transcript/session ids per run; keep cache affinity
+  // Detached cron rotates transcript/session ids per run; keep cache affinity
   // on stable job identity without sending raw local session labels upstream.
   return `openclaw-cron-${digest}`;
 }
@@ -332,7 +333,7 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === "isolated",
+            cleanupCliLiveSessionOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
@@ -370,7 +371,7 @@ export function createCronPromptExecutor(params: {
           return result;
         }
         const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
+        const promptCacheKey = resolveDetachedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
@@ -391,7 +392,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
-          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
+          cleanupBundleMcpOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
           allowGatewaySubagentBinding: true,
           messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,

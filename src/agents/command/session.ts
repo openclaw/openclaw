@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   isRestartContinuationAllowed,
@@ -387,17 +388,20 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const skipImplicitExpiry =
+    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const underlyingFresh = sessionEntry
-    ? evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+    ? skipImplicitExpiry ||
+        evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: sessionAgentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        }).fresh
     : false;
   // Honor the restart-continuation opt-in here too, or an enabled operator's
   // aborted main session still rotates through the agent command path. (#94458)

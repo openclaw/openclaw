@@ -1,10 +1,28 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+}));
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+}));
+
 describe("gateway startup log", () => {
+  beforeEach(() => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -41,6 +59,150 @@ describe("gateway startup log", () => {
 
     await logGatewayStartup({
       cfg: {},
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when a configured channel plugin is blocked from startup", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "global",
+          channels: ["slack"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            botToken: "configured",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn.mock.calls).toEqual([
+      [
+        'configured channel warning: channels.slack: channel is configured, but external plugin "slack" is installed without explicit trust. Add plugins.entries.slack.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+      ],
+    ]);
+  });
+
+  it("warns when a configured channel has no owning plugin", async () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          "missing-chat": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn.mock.calls).toEqual([
+      [
+        "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
+      ],
+    ]);
+  });
+
+  it("sanitizes configured channel ids in startup warnings", async () => {
+    const unsafeChannelId = `slack${String.fromCharCode(0x1b)}[31m`;
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "global",
+          channels: [unsafeChannelId],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          [unsafeChannelId]: {
+            enabled: true,
+            botToken: "configured",
+          },
+        },
+      },
+      bindHost: "127.0.0.1",
+      loadedPluginIds: [],
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn.mock.calls[0]?.[0]).toContain("channels.slack: channel is configured");
+    expect(warn.mock.calls[0]?.[0]).not.toContain(String.fromCharCode(0x1b));
+  });
+
+  it("does not warn when startup activation enables the configured channel owner", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openclaw-modern-chat",
+          origin: "global",
+          channels: ["legacy-chat"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    });
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    await logGatewayStartup({
+      cfg: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+      },
+      activationSourceConfig: {
+        plugins: {
+          entries: {
+            "openclaw-modern-chat": {
+              enabled: true,
+            },
+          },
+        },
+      },
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
       port: 18789,

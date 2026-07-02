@@ -255,6 +255,76 @@ describe("googlechat monitor inbound space classification", () => {
   });
 });
 
+describe("googlechat monitor sender bot status", () => {
+  function botStatusEvent(senderType: "BOT" | "HUMAN", messageId: string): GoogleChatEvent {
+    return {
+      type: "MESSAGE",
+      space: { name: "spaces/DM", type: "DM" },
+      message: {
+        name: `spaces/DM/messages/${messageId}`,
+        text: "hello",
+        sender: { name: "users/sender", displayName: "Sender", type: senderType },
+      },
+    } satisfies GoogleChatEvent;
+  }
+
+  it("forwards bot sender status to the inbound context when allowBots is true", async () => {
+    const { buildContext, core } = createInboundClassificationHarness();
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await testing.processMessageWithPipeline({
+      event: botStatusEvent("BOT", "1"),
+      account: {
+        accountId: "work",
+        config: { allowBots: true },
+        credentialSource: "inline",
+      } as ResolvedGoogleChatAccount,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: expect.objectContaining({ isBot: true }) }),
+    );
+  });
+
+  it("omits bot sender status for human senders", async () => {
+    const { buildContext, core } = createInboundClassificationHarness();
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await testing.processMessageWithPipeline({
+      event: botStatusEvent("HUMAN", "2"),
+      account: {
+        accountId: "work",
+        config: {},
+        credentialSource: "inline",
+      } as ResolvedGoogleChatAccount,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: expect.objectContaining({ isBot: undefined }) }),
+    );
+  });
+});
+
 describe("googlechat monitor direct messages", () => {
   it("creates typing messages by default", async () => {
     const runTurn = vi.fn();

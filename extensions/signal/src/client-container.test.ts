@@ -833,7 +833,7 @@ describe("containerRestRequest edge cases", () => {
 
     await expect(
       containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Signal REST returned malformed JSON");
   });
 
   it("fails closed when the success body exceeds the response size cap", async () => {

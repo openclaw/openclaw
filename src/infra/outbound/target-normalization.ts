@@ -288,4 +288,3 @@ function hashSignature(value: string): string {
   }
   return (hash >>> 0).toString(36);
 }
-export { testing as __testing };
