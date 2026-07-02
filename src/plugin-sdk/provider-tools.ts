@@ -24,28 +24,35 @@ export function findUnsupportedSchemaKeywords(
   /** Schema keywords unsupported by the target provider family. */
   unsupportedKeywords: ReadonlySet<string>,
 ): string[] {
-  if (!schema || typeof schema !== "object") {
-    return [];
+  const arrayEntries = readSchemaArrayEntries(schema);
+  if (arrayEntries === "unreadable") {
+    return [`${path} is unreadable`];
   }
-  if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) =>
+  if (arrayEntries) {
+    return arrayEntries.flatMap(([index, item]) =>
       findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
     );
   }
-  const record = schema as Record<string, unknown>;
+  const entries = readSchemaObjectEntries(schema);
+  if (entries === "unreadable") {
+    return [`${path} is unreadable`];
+  }
+  if (!entries) {
+    return [];
+  }
   const violations: string[] = [];
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+  const properties = readSchemaField(schema, "properties");
+  const propertyEntries = readSchemaObjectEntries(properties);
+  if (propertyEntries === "unreadable") {
+    violations.push(`${path}.properties is unreadable`);
+  } else if (propertyEntries) {
+    for (const [key, value] of propertyEntries) {
       violations.push(
         ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
       );
     }
   }
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of entries) {
     if (key === "properties") {
       continue;
     }
@@ -196,14 +203,66 @@ const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
   "unevaluatedProperties",
 ]);
 
+type SchemaArrayEntries = [number, unknown][] | "unreadable" | undefined;
+type SchemaObjectEntries = [string, unknown][] | "unreadable" | undefined;
+type SchemaObjectKeys = string[] | "unreadable" | undefined;
+
+function readSchemaArrayEntries(value: unknown): SchemaArrayEntries {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    return Array.from({ length: value.length }, (_, index) => [index, value[index]]);
+  } catch {
+    return "unreadable";
+  }
+}
+
+function readSchemaObjectEntries(value: unknown): SchemaObjectEntries {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    return Object.entries(value as Record<string, unknown>);
+  } catch {
+    return "unreadable";
+  }
+}
+
+function readSchemaObjectKeys(value: unknown): SchemaObjectKeys {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    return Object.keys(value as Record<string, unknown>);
+  } catch {
+    return "unreadable";
+  }
+}
+
+function readSchemaField(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    return (value as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+  const entries = readSchemaObjectEntries(schema);
+  if (entries === "unreadable") {
+    return schema;
+  }
+  if (!entries) {
     return schema;
   }
 
   let changed = false;
   const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+  for (const [key, value] of entries) {
     const next = normalizeOpenAIStrictCompatSchemaRecursive(value, {
       promoteEmptyObject: false,
     });
@@ -217,9 +276,13 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   schema: unknown,
   options: NormalizeOpenAIStrictCompatOptions,
 ): unknown {
-  if (Array.isArray(schema)) {
+  const arrayEntries = readSchemaArrayEntries(schema);
+  if (arrayEntries === "unreadable") {
+    return schema;
+  }
+  if (arrayEntries) {
     let changed = false;
-    const normalized = schema.map((entry) => {
+    const normalized = arrayEntries.map(([, entry]) => {
       const next = normalizeOpenAIStrictCompatSchemaRecursive(entry, {
         promoteEmptyObject: false,
       });
@@ -232,10 +295,13 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
     return schema;
   }
 
-  const record = schema as Record<string, unknown>;
+  const entries = readSchemaObjectEntries(schema);
+  if (entries === "unreadable" || !entries) {
+    return schema;
+  }
   let changed = false;
   const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of entries) {
     const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
@@ -278,7 +344,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
     normalized.properties &&
     typeof normalized.properties === "object" &&
     !Array.isArray(normalized.properties) &&
-    Object.keys(normalized.properties as Record<string, unknown>).length === 0;
+    readSchemaObjectKeys(normalized.properties)?.length === 0;
 
   if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
     normalized.required = [];
@@ -308,11 +374,15 @@ export function findOpenAIStrictSchemaViolations(
   /** Strictness controls for the current schema position. */
   options?: { requireObjectRoot?: boolean },
 ): string[] {
-  if (Array.isArray(schema)) {
+  const arrayEntries = readSchemaArrayEntries(schema);
+  if (arrayEntries === "unreadable") {
+    return [`${path} is unreadable`];
+  }
+  if (arrayEntries) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
-    return schema.flatMap((item, index) =>
+    return arrayEntries.flatMap(([index, item]) =>
       findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
@@ -323,34 +393,37 @@ export function findOpenAIStrictSchemaViolations(
     return [];
   }
 
-  const record = schema as Record<string, unknown>;
+  const entries = readSchemaObjectEntries(schema);
+  if (entries === "unreadable" || !entries) {
+    return [`${path} is unreadable`];
+  }
   const violations: string[] = [];
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    if (Array.isArray(record[key])) {
+    if (Array.isArray(readSchemaField(schema, key))) {
       violations.push(`${path}.${key}`);
     }
   }
-  if (Array.isArray(record.type)) {
+  if (Array.isArray(readSchemaField(schema, "type"))) {
     violations.push(`${path}.type`);
   }
 
-  const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
-      : undefined;
+  const type = readSchemaField(schema, "type");
+  const additionalProperties = readSchemaField(schema, "additionalProperties");
+  const requiredValue = readSchemaField(schema, "required");
+  const propertyEntries = readSchemaObjectEntries(readSchemaField(schema, "properties"));
 
-  if (record.type === "object") {
-    if (record.additionalProperties !== false) {
+  if (type === "object") {
+    if (additionalProperties !== false) {
       violations.push(`${path}.additionalProperties`);
     }
-    const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
+    const required = Array.isArray(requiredValue)
+      ? requiredValue.filter((entry): entry is string => typeof entry === "string")
       : undefined;
     if (!required) {
       violations.push(`${path}.required`);
-    } else if (properties) {
+    } else if (propertyEntries !== "unreadable" && propertyEntries) {
       const requiredSet = new Set(required);
-      for (const key of Object.keys(properties)) {
+      for (const [key] of propertyEntries) {
         if (!requiredSet.has(key)) {
           violations.push(`${path}.required.${key}`);
         }
@@ -358,13 +431,15 @@ export function findOpenAIStrictSchemaViolations(
     }
   }
 
-  if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+  if (propertyEntries === "unreadable") {
+    violations.push(`${path}.properties is unreadable`);
+  } else if (propertyEntries) {
+    for (const [key, value] of propertyEntries) {
       violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.properties.${key}`));
     }
   }
 
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of entries) {
     if (key === "properties") {
       continue;
     }
@@ -400,23 +475,28 @@ function isNullSchemaVariant(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return false;
   }
-  const record = schema as Record<string, unknown>;
-  if (record.type === "null") {
+  const type = readSchemaField(schema, "type");
+  if (type === "null") {
     return true;
   }
-  if (Array.isArray(record.type) && record.type.length === 1 && record.type[0] === "null") {
+  if (Array.isArray(type) && type.length === 1 && type[0] === "null") {
     return true;
   }
-  if ("const" in record && record.const === null) {
+  if (readSchemaField(schema, "const") === null) {
     return true;
   }
-  return Array.isArray(record.enum) && record.enum.length === 1 && record.enum[0] === null;
+  const enumValues = readSchemaField(schema, "enum");
+  return Array.isArray(enumValues) && enumValues.length === 1 && enumValues[0] === null;
 }
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) {
+  const arrayEntries = readSchemaArrayEntries(schema);
+  if (arrayEntries === "unreadable") {
+    return schema;
+  }
+  if (arrayEntries) {
     let changed = false;
-    const normalized = schema.map((entry) => {
+    const normalized = arrayEntries.map(([, entry]) => {
       const next = normalizeDeepSeekSchema(entry);
       changed ||= next !== entry;
       return next;
@@ -427,16 +507,17 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     return schema;
   }
 
-  const record = schema as Record<string, unknown>;
-  const unionKey = Array.isArray(record.anyOf)
-    ? "anyOf"
-    : Array.isArray(record.oneOf)
-      ? "oneOf"
-      : undefined;
+  const entries = readSchemaObjectEntries(schema);
+  if (entries === "unreadable" || !entries) {
+    return schema;
+  }
+  const anyOf = readSchemaField(schema, "anyOf");
+  const oneOf = readSchemaField(schema, "oneOf");
+  const unionKey = Array.isArray(anyOf) ? "anyOf" : Array.isArray(oneOf) ? "oneOf" : undefined;
 
   let changed = false;
   const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of entries) {
     if (key === "anyOf" || key === "oneOf") {
       if (key === unionKey) {
         changed = true;
@@ -452,8 +533,11 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     return changed ? normalized : schema;
   }
 
-  const variants = record[unionKey] as unknown[];
-  const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
+  const variantEntries = readSchemaArrayEntries(readSchemaField(schema, unionKey));
+  if (variantEntries === "unreadable" || !variantEntries) {
+    return schema;
+  }
+  const normalizedVariants = variantEntries.map(([, entry]) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
   const hasNullVariant = nonNullVariants.length < normalizedVariants.length;
 
@@ -493,8 +577,7 @@ function isStringConstVariant(entry: unknown): entry is { const: string } {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }
-  const record = entry as Record<string, unknown>;
-  return typeof record.const === "string";
+  return typeof readSchemaField(entry, "const") === "string";
 }
 
 /**

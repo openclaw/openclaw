@@ -12,6 +12,31 @@ import {
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
+  function createUnreadableSchemaMap(label: string): Record<string, unknown> {
+    return new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error(`${label} ownKeys exploded`);
+        },
+        getOwnPropertyDescriptor() {
+          return { configurable: true, enumerable: true };
+        },
+      },
+    );
+  }
+
+  function createUnreadableSchemaArray(label: string): unknown[] {
+    return new Proxy([{}], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error(`${label} entry exploded`);
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  }
+
   function normalizeOpenAIParameters(parameters: unknown): unknown {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = [{ name: "demo", description: "", parameters }] as never;
@@ -396,6 +421,149 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         tools: [permissiveTool],
       }),
     ).toStrictEqual([]);
+  });
+
+  it("does not throw when provider compatibility normalizers see unreadable schema maps", () => {
+    const openAIHooks = buildProviderToolCompatFamilyHooks("openai");
+    const openAIParameters = createUnreadableSchemaMap("openai parameters");
+    const openAITool = { name: "openai_tool", description: "", parameters: openAIParameters };
+
+    expect(() =>
+      openAIHooks.normalizeToolSchemas({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        model: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          id: "gpt-5.4",
+        } as never,
+        tools: [openAITool] as never,
+      }),
+    ).not.toThrow();
+
+    const deepSeekHooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const deepSeekParameters = createUnreadableSchemaMap("deepseek parameters");
+    const deepSeekTool = {
+      name: "deepseek_tool",
+      description: "",
+      parameters: deepSeekParameters,
+    };
+
+    const normalized = deepSeekHooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [deepSeekTool] as never,
+    });
+
+    expect(normalized[0]?.parameters).toBe(deepSeekParameters);
+
+    const unionArray = createUnreadableSchemaArray("deepseek anyOf");
+    const unionParameters = {
+      type: "object",
+      properties: {
+        mode: {
+          anyOf: unionArray,
+        },
+      },
+    };
+
+    const unionNormalized = deepSeekHooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [
+        { name: "deepseek_union_tool", description: "", parameters: unionParameters },
+      ] as never,
+    });
+
+    expect(unionNormalized[0]?.parameters).toBe(unionParameters);
+  });
+
+  it("reports unreadable provider inspection schema maps without throwing", () => {
+    const geminiHooks = buildProviderToolCompatFamilyHooks("gemini");
+    const geminiDiagnostics = geminiHooks.inspectToolSchemas({
+      provider: "gemini",
+      modelId: "gemini-2.5-pro",
+      modelApi: "gemini",
+      model: {
+        provider: "gemini",
+        api: "gemini",
+        id: "gemini-2.5-pro",
+      } as never,
+      tools: [
+        {
+          name: "gemini_tool",
+          description: "",
+          parameters: {
+            type: "object",
+            properties: createUnreadableSchemaMap("gemini properties"),
+          },
+        },
+      ] as never,
+    });
+
+    expect(geminiDiagnostics).toStrictEqual([
+      {
+        toolName: "gemini_tool",
+        toolIndex: 0,
+        violations: ["gemini_tool.parameters.properties is unreadable"],
+      },
+    ]);
+
+    const deepSeekHooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const deepSeekDiagnostics = deepSeekHooks.inspectToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [
+        {
+          name: "deepseek_tool",
+          description: "",
+          parameters: {
+            type: "object",
+            properties: createUnreadableSchemaMap("deepseek properties"),
+          },
+        },
+      ] as never,
+    });
+
+    expect(deepSeekDiagnostics).toStrictEqual([
+      {
+        toolName: "deepseek_tool",
+        toolIndex: 0,
+        violations: ["deepseek_tool.parameters.properties is unreadable"],
+      },
+    ]);
+
+    expect(
+      findOpenAIStrictSchemaViolations(
+        {
+          type: "object",
+          required: ["mode"],
+          additionalProperties: false,
+          properties: createUnreadableSchemaMap("openai strict properties"),
+        },
+        "openai_tool.parameters",
+      ),
+    ).toStrictEqual(["openai_tool.parameters.properties is unreadable"]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
