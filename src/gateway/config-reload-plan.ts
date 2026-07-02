@@ -1,11 +1,13 @@
 // Gateway config reload planner.
 // Maps changed config paths to hot-reload actions, no-ops, or full restarts.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { PluginReloadRegistration } from "../plugins/registry-types.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistry,
   getActivePluginRegistryVersion,
 } from "../plugins/runtime.js";
+import type { OpenClawPluginReloadRegistration } from "../plugins/types.js";
 import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
@@ -145,6 +147,45 @@ let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedActiveRegistryVersion = -1;
 let cachedChannelRegistryVersion = -1;
 
+type PreparedPluginReloadRegistration = {
+  restartPrefixes: string[];
+  hotPrefixes: string[];
+  noopPrefixes: string[];
+};
+
+function readReloadPrefixes(read: () => unknown): string[] {
+  try {
+    const value = read();
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return value.filter(
+      (prefix): prefix is string => typeof prefix === "string" && prefix.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function readPluginReloadRegistration(
+  entry: PluginReloadRegistration,
+): PreparedPluginReloadRegistration | null {
+  let registration: OpenClawPluginReloadRegistration;
+  try {
+    registration = entry.registration;
+  } catch {
+    return null;
+  }
+  if (!registration || typeof registration !== "object") {
+    return null;
+  }
+  return {
+    restartPrefixes: readReloadPrefixes(() => registration.restartPrefixes),
+    hotPrefixes: readReloadPrefixes(() => registration.hotPrefixes),
+    noopPrefixes: readReloadPrefixes(() => registration.noopPrefixes),
+  };
+}
+
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   const activeRegistryVersion = getActivePluginRegistryVersion();
@@ -194,8 +235,12 @@ function listReloadRules(): ReloadRule[] {
       ],
     },
   ]);
-  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (entry.registration.restartPrefixes ?? [])
+  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) => {
+    const registration = readPluginReloadRegistration(entry);
+    if (!registration) {
+      return [];
+    }
+    return registration.restartPrefixes
       .map(
         (prefix): ReloadRule => ({
           prefix,
@@ -203,20 +248,20 @@ function listReloadRules(): ReloadRule[] {
         }),
       )
       .concat(
-        (entry.registration.hotPrefixes ?? []).map(
+        registration.hotPrefixes.map(
           (prefix): ReloadRule => ({
             prefix,
             kind: "hot",
           }),
         ),
-        (entry.registration.noopPrefixes ?? []).map(
+        registration.noopPrefixes.map(
           (prefix): ReloadRule => ({
             prefix,
             kind: "none",
           }),
         ),
-      ),
-  );
+      );
+  });
   const rules = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,

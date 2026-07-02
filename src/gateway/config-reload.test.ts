@@ -10,6 +10,7 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginReloadRegistration } from "../plugins/registry-types.js";
 import {
   pinActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
@@ -203,6 +204,36 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("browser.enabled");
     expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it("keeps healthy plugin reload rules after unreadable reload metadata", () => {
+    const poisonedRegistry = createTestRegistry([
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    ]);
+    poisonedRegistry.reloads = [
+      {
+        pluginId: "broken",
+        pluginName: "Broken",
+        source: "test",
+        get registration() {
+          throw new Error("plugin reload registration getter exploded");
+        },
+      } as PluginReloadRegistration,
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        registration: { restartPrefixes: ["browser"] },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(poisonedRegistry);
+
+    const plan = buildGatewayReloadPlan(["browser.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(resolveConfigReloadMetadata("browser.enabled").kind).toBe("restart");
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
