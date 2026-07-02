@@ -173,10 +173,12 @@ struct RootTabsSourceGuardTests {
         let nodesSource = try String(contentsOf: Self.agentProNodesDestinationSourceURL(), encoding: .utf8)
         let dreamingSource = try String(contentsOf: Self.agentProDreamingDestinationSourceURL(), encoding: .utf8)
 
-        #expect(!source.contains("ToolbarItem"))
         #expect(source
-            .contains("route == .agents || self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible"))
-        #expect(destinationsSource.contains(".toolbar(.hidden, for: .navigationBar)"))
+            .contains("route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible"))
+        #expect(destinationsSource.contains(".navigationTitle(self.headerTitle)"))
+        #expect(destinationsSource.contains(".searchable(text: self.$agentSearchText"))
+        #expect(destinationsSource.contains("ToolbarItemGroup(placement: .topBarTrailing)"))
+        #expect(!destinationsSource.contains(".toolbar(.hidden, for: .navigationBar)"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .instances)"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .dreaming)"))
         #expect(destinationsSource.contains("self.directHeader(\n                        for: .usage"))
@@ -209,6 +211,9 @@ struct RootTabsSourceGuardTests {
     @Test func `professional layout avoids nested pills and card stacks`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let agentSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
+        let agentDestinationsSource = try String(
+            contentsOf: Self.agentProTabDestinationsSourceURL(),
+            encoding: .utf8)
         let talkSource = try String(contentsOf: Self.talkProTabSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
@@ -217,9 +222,9 @@ struct RootTabsSourceGuardTests {
             componentsSource,
             from: "struct OpenClawGatewayCompactPill: View",
             to: "struct ProMetricTile: View")
-        let agentFilters = try Self.extract(
+        let agentFilterMenu = try Self.extract(
             agentSource,
-            from: "var agentFilters: some View",
+            from: "var agentFilterMenu: some View",
             to: "var agentFiltersActive: Bool")
         let agentRow = try Self.extract(
             agentSource,
@@ -237,9 +242,11 @@ struct RootTabsSourceGuardTests {
         #expect(gatewayStatus.contains("HStack(spacing: 6)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
-        #expect(agentFilters.contains("Picker(\"Agent status\""))
-        #expect(agentFilters.contains(".pickerStyle(.segmented)"))
-        #expect(!agentFilters.contains(".openClawGlassButton("))
+        #expect(agentDestinationsSource.contains("List {"))
+        #expect(agentDestinationsSource.contains(".searchable(text: self.$agentSearchText"))
+        #expect(agentFilterMenu.contains("Picker(\"Agent status\""))
+        #expect(!agentFilterMenu.contains(".pickerStyle(.segmented)"))
+        #expect(agentFilterMenu.contains("agent-status-filter-menu"))
         #expect(!agentRow.contains("agentMetric"))
         #expect(!agentRow.contains("chevron.right"))
         #expect(agentRow.contains("Image(systemName: \"checkmark\")"))
@@ -247,10 +254,12 @@ struct RootTabsSourceGuardTests {
         #expect(!talkSource.contains("conversationCard"))
         #expect(!talkSource.contains("voiceModeCard"))
         #expect(!talkSource.contains("statusChip"))
-        #expect(!settingsList.contains("ProSectionHeader(title: \"OpenClaw\""))
-        #expect(settingsList.contains("ProSectionHeader(title: \"Device\""))
-        #expect(settingsList.matches(of: /ProCard\(padding: 0/).count == 2)
-        #expect(settingsRow.contains(".contentShape(Rectangle())"))
+        #expect(settingsList.contains("Section(\"Device\")"))
+        #expect(!settingsList.contains("ProCard("))
+        #expect(settingsRow.contains("NavigationLink(value: route)"))
+        #expect(!settingsRow.contains("chevron.right"))
+        #expect(settingsSource.contains("settings-appearance-menu"))
+        #expect(!settingsSource.contains(".pickerStyle(.segmented)"))
         #expect(!overviewSource.contains("ProCapsule("))
         #expect(overviewSource.contains("value: self.gatewayConnectionText"))
         #expect(overviewSource.contains("switch self.gatewayDisplayState"))
@@ -275,11 +284,15 @@ struct RootTabsSourceGuardTests {
         #expect(componentsSource.contains(".layoutPriority(1)"))
         #expect(componentsSource.contains(".fixedSize(horizontal: true, vertical: false)"))
         #expect(featureChromeSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(featureChromeSource.contains("if !self.usesNativeNavigationChrome"))
+        #expect(!featureChromeSource.contains("if self.headerLeadingAction != nil"))
         #expect(docsSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
         #expect(chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(settingsSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
     }
 
     @Test func `phone hub keeps docs as destination only`() throws {
@@ -287,8 +300,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(source.contains("case .docs:"))
         #expect(source.contains("OpenClawDocsScreen("))
-        #expect(source.contains("headerLeadingAction: self.phoneDetailBackAction"))
         #expect(source.contains("gatewayAction: { self.openPhoneRootDestination(.gateway) }"))
+        #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains("Label(\"Docs\", systemImage: \"book\")"))
         #expect(!source.contains("https://docs.openclaw.ai"))
     }
@@ -321,32 +334,30 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("Gateway not connected. Check Tailscale and retry."))
     }
 
-    @Test func `phone hub keeps content above floating tab bar`() throws {
+    @Test func `phone hub lets the native list respect the floating tab bar`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains(".safeAreaPadding(.bottom, self.bottomScrollInset)"))
-        #expect(!source.contains(".padding(.bottom, self.bottomScrollInset)"))
-        #expect(!source.contains("bottomViewportInset"))
-        #expect(!source.contains("bottomTabBarClearance"))
+        #expect(source.contains("List {"))
+        #expect(source.contains(".listStyle(.insetGrouped)"))
+        #expect(!source.contains("bottomScrollInset"))
+        #expect(!source.contains("safeAreaPadding(.bottom"))
     }
 
-    @Test func `phone hub header stays task first`() throws {
+    @Test func `phone hub stays task first without duplicating root tabs`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("private var headerCard: some View"))
-        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText)\")"))
-        #expect(!source.contains("private var gatewayActionRow: some View"))
+        #expect(source.contains("private var gatewayRow: some View"))
+        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText),"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(!source.contains("destination.subtitle"))
         #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
-        #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
-        #expect(source.contains("accessibilityLabel: \"Back to Control\""))
-        #expect(source.contains("accessibilityIdentifier: \"OpenClawPhoneDetailBackButton\""))
-        #expect(source.contains(".navigationBarBackButtonHidden(true)"))
-        #expect(source.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(source.matches(of: /headerLeadingAction: self\.phoneDetailBackAction/).count == 10)
+        #expect(source.contains("group.destinations.filter { !self.opensRootTab($0) }"))
+        #expect(!source.contains("phoneDetailBackAction"))
+        #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
+        #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
+        #expect(!source.contains("headerLeadingAction: self.phoneDetailBackAction"))
+        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 6)
         #expect(!source.contains("directRoute: .agents"))
-        #expect(!source.contains("ToolbarItem(placement: .topBarTrailing)"))
         #expect(!source.contains("Image(systemName: \"gearshape\")"))
         #expect(!source.contains("self.metric(label:"))
         #expect(!source.contains("private func metric(label:"))

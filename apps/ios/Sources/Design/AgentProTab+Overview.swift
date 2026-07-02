@@ -89,6 +89,41 @@ extension AgentProTab {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    var agentFilterMenu: some View {
+        Menu {
+            Picker("Agent status", selection: self.$agentRosterFilter) {
+                ForEach(AgentRosterFilter.allCases) { filter in
+                    Label(filter.title, systemImage: filter.systemImage)
+                        .tag(filter)
+                }
+            }
+            if self.agentFiltersActive {
+                Divider()
+                Button("Clear Filters", systemImage: "xmark.circle") {
+                    self.agentRosterFilter = .all
+                    self.agentSearchText = ""
+                }
+            }
+        } label: {
+            Label("Filter agents", systemImage: "line.3.horizontal.decrease")
+                .labelStyle(.iconOnly)
+        }
+        .accessibilityIdentifier("agent-status-filter-menu")
+        .accessibilityValue(self.agentRosterFilter.title)
+    }
+
+    @ViewBuilder
+    var gatewayToolbarButton: some View {
+        if let openSettings {
+            Button(action: openSettings) {
+                Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
+            }
+            .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+            .accessibilityLabel(self.gatewayConnected ? "Gateway online" : "Gateway offline")
+            .accessibilityHint("Opens Settings / Gateway")
+        }
+    }
+
     var agentFiltersActive: Bool {
         self.agentRosterFilter != .all
             || !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -252,9 +287,7 @@ extension AgentProTab {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 13)
-            .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -284,7 +317,7 @@ extension AgentProTab {
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.62)
                 .lineLimit(1)
-                .frame(width: 42, height: 42)
+                .frame(width: 36, height: 36)
                 .background(
                     Circle()
                         .fill(self.agentTint(for: agent, state: state).gradient))
@@ -292,7 +325,7 @@ extension AgentProTab {
 
             Circle()
                 .fill(state.color)
-                .frame(width: 9, height: 9)
+                .frame(width: 8, height: 8)
                 .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 2))
         }
     }

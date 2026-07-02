@@ -455,6 +455,20 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("resets SwiftPM state between macOS release build retries", () => {
+    const workflow = readCiWorkflow();
+    const buildStep = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Swift build (release)",
+    );
+
+    expect(buildStep.run).toContain("for attempt in 1 2 3");
+    expect(buildStep.run).toContain('if [[ "$attempt" -eq 3 ]]; then');
+    expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
+    expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
+      buildStep.run.indexOf("swift build failed"),
+    );
+  });
+
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 

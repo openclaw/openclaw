@@ -54,9 +54,9 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Connected services and message routing")).toBe(
-      true,
-    );
+    expect(
+      entries.some((entry) => entry.source === "Choose system, light, or dark appearance"),
+    ).toBe(true);
     expect(
       entries.some(
         (entry) =>

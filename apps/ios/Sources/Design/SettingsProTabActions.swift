@@ -508,20 +508,6 @@ extension SettingsProTab {
         }
     }
 
-    func subtitle(for route: SettingsRoute) -> String {
-        switch route {
-        case .gateway: "Pairing, diagnostics, and Tailscale checks."
-        case .approvals: "Review pending agent actions."
-        case .permissions: "Control device capabilities."
-        case .channels: "Message routing and external clients."
-        case .voice: "Talk mode and wake phrase settings."
-        case .diagnostics: "Run local health checks."
-        case .privacy: "Data and device privacy controls."
-        case .notifications: "Alert permissions and delivery."
-        case .about: "Version and support details."
-        }
-    }
-
     var manualPortBinding: Binding<String> {
         Binding(
             get: { self.manualGatewayPortText },
@@ -745,13 +731,6 @@ extension SettingsProTab {
 
     var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
         self.appModel.pendingExecApprovalPrompt
-    }
-
-    var approvalsDetail: String {
-        if self.notificationsNeedAttention {
-            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
-        }
-        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
     }
 
     var notificationsNeedAttention: Bool {

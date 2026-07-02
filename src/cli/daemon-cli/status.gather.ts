@@ -46,6 +46,10 @@ import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
+import {
+  inspectWindowsGatewayFirewall,
+  type WindowsGatewayFirewallDiagnostic,
+} from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
 import {
@@ -77,6 +81,7 @@ type GatewayStatusSummary = {
   controlUiLinks?: { httpUrl: string; wsUrl: string };
   probeNote?: string;
   version?: string | null;
+  windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
 type PortStatusSummary = {
@@ -599,6 +604,16 @@ export async function gatherDaemonStatus(
     commandProgramArguments: command?.programArguments,
     rpcUrlOverride: opts.rpc.url,
   });
+  const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
+  const windowsFirewall =
+    opts.deep === true && shouldInspectLocalGateway
+      ? await inspectWindowsGatewayFirewall({
+          bind: gateway.bindMode,
+          mode: "quick",
+          port: daemonPort,
+          platform: process.platform,
+        })
+      : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
@@ -731,7 +746,7 @@ export async function gatherDaemonStatus(
   // diagnostics instead.
   // Best-effort: unreadable install records omit this advisory report.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
-  if (daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride) {
+  if (shouldInspectLocalGateway) {
     try {
       const installRecords = await loadInstalledPluginIndexInstallRecords({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
@@ -767,6 +782,7 @@ export async function gatherDaemonStatus(
     },
     gateway: {
       ...gateway,
+      ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {
             version: gatewayVersion,
