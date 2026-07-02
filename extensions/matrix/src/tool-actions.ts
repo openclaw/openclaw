@@ -119,11 +119,12 @@ function assertMatrixTrustedDirectReadTargetAllowed(params: {
   }
   const dmPolicy = params.accountConfig.dm?.policy ?? "pairing";
   if (
-    dmPolicy === "allowlist" &&
-    !resolveMatrixAllowListMatch({
-      allowList: normalizeMatrixAllowList(params.accountConfig.dm?.allowFrom),
-      userId: directUserId,
-    }).allowed
+    (dmPolicy as string) === "disabled" ||
+    (dmPolicy === "allowlist" &&
+      !resolveMatrixAllowListMatch({
+        allowList: normalizeMatrixAllowList(params.accountConfig.dm?.allowFrom),
+        userId: directUserId,
+      }).allowed)
   ) {
     throw new Error("Matrix read target room is not allowed.");
   }

@@ -744,8 +744,9 @@ function assertFeishuTrustedDirectReadTargetAllowed(params: {
 }) {
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
   if (
-    dmPolicy === "allowlist" &&
-    !isFeishuReadDirectAllowlisted({ account: params.account, directId: params.directId })
+    (dmPolicy as string) === "disabled" ||
+    (dmPolicy === "allowlist" &&
+      !isFeishuReadDirectAllowlisted({ account: params.account, directId: params.directId }))
   ) {
     throw new Error("Feishu read target chat is not allowed.");
   }
@@ -753,7 +754,7 @@ function assertFeishuTrustedDirectReadTargetAllowed(params: {
 
 function shouldEnforceFeishuDirectReadTarget(account: ResolvedFeishuAccount): boolean {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  return dmPolicy === "allowlist";
+  return (dmPolicy as string) === "disabled" || dmPolicy === "allowlist";
 }
 
 function assertFeishuProvidedReadTargetAllowed(params: {

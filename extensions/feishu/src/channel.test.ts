@@ -766,6 +766,30 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
   });
 
+  it("blocks trusted direct message reads when Feishu dmPolicy is disabled", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "read",
+        params: { messageId: "om_direct" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "disabled" as never,
+              allowFrom: ["ou_user_1"],
+              groupPolicy: "open",
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("blocks messageId-only reads before fetching in Feishu allowlist mode", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -1543,6 +1567,32 @@ describe("feishuPlugin actions", () => {
     });
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
+  });
+
+  it("blocks trusted direct message reaction reads when Feishu dmPolicy is disabled", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "reactions",
+        params: { messageId: "om_direct" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "disabled" as never,
+              allowFrom: ["ou_user_1"],
+              groupPolicy: "open",
+              actions: { reactions: true },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
   it("blocks Feishu reaction reads from disallowed current chats before fetching", async () => {
