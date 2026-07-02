@@ -121,6 +121,41 @@ type ManualCompactionEvidence = {
   sessionKey: string;
 };
 
+type ScaleMigrationEvidence = {
+  importedSessionKeys: string[];
+  minTranscriptEventsPerSession: number;
+  seededEvents: number;
+  seededSessions: number;
+  startupImportElapsedMs: number;
+};
+
+type DowngradeReupgradeEvidence = {
+  activeJsonlArchived: boolean;
+  doctorImportedEntries: number;
+  doctorImportedTranscriptEvents: number;
+  sessionId: string;
+  sessionKey: string;
+  transcriptEvents: number;
+};
+
+type BusyContentionEvidence = {
+  childExitCode: number | null;
+  childSignal: NodeJS.Signals | null;
+  elapsedMs: number;
+  holdMs: number;
+  sessionId: string;
+  sessionKey: string;
+  transcriptEvents: number;
+};
+
+type SecondStartupAfterResetEvidence = {
+  activeJsonlForSessionExists: boolean;
+  historyContainsPostResetAppend: boolean;
+  sessionId: string;
+  sessionKey: string;
+  transcriptEvents: number;
+};
+
 type RollbackRestoreEvidence = {
   archivePath: string;
   archivedBeforeRestore: boolean;
@@ -155,6 +190,10 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   pluginSdkSessionKey: string;
   resetSessionKey: string;
   rollbackRestore?: RollbackRestoreEvidence;
+  busyContention?: BusyContentionEvidence;
+  downgradeReupgrade?: DowngradeReupgradeEvidence;
+  scaleMigration?: ScaleMigrationEvidence;
+  secondStartupAfterReset?: SecondStartupAfterResetEvidence;
   sharedSessionKeys: string[];
   stateDir: string;
 };
@@ -206,6 +245,19 @@ const FULL_TURN_SESSION_KEY = "agent:main:sqlite-full-turn";
 const MANUAL_COMPACTION_SESSION_KEY = "agent:main:dashboard:sqlite-manual-compact";
 const PLUGIN_SDK_APPEND_TEXT = "sqlite sdk consumer appended by identity";
 const PLUGIN_SDK_SESSION_KEY = "agent:main:dashboard:sqlite-sdk-consumer";
+const DOWNGRADE_REUPGRADE_SESSION_ID = "sqlite-downgrade-reupgrade";
+const DOWNGRADE_REUPGRADE_SESSION_KEY = "agent:main:dashboard:sqlite-downgrade-reupgrade";
+const DOWNGRADE_REUPGRADE_TEXT = "sqlite downgrade wrote file-backed state";
+const SQLITE_BUSY_SESSION_ID = "sqlite-busy-contention";
+const SQLITE_BUSY_SESSION_KEY = "agent:main:dashboard:sqlite-busy-contention";
+const SQLITE_BUSY_TEXT = "sqlite busy writer contention";
+const SECOND_STARTUP_APPEND_TEXT = "sqlite appended after reset and restart";
+const SCALE_SESSION_COUNT = 24;
+const SCALE_EVENTS_PER_SESSION = 4;
+const SCALE_SESSION_KEYS = Array.from(
+  { length: SCALE_SESSION_COUNT },
+  (_, index) => `agent:main:dashboard:sqlite-scale-${String(index + 1).padStart(2, "0")}`,
+);
 const SHARED_SESSION_KEYS = [
   "agent:main:dashboard:sqlite-shared-a",
   "agent:main:dashboard:sqlite-shared-b",
@@ -237,10 +289,14 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
   let gatewayEntrypoint: string[] = [];
+  let busyContention: BusyContentionEvidence | undefined;
+  let downgradeReupgrade: DowngradeReupgradeEvidence | undefined;
   let manualCompaction: ManualCompactionEvidence | undefined;
   let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
   let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
   let rollbackRestore: RollbackRestoreEvidence | undefined;
+  let scaleMigration: ScaleMigrationEvidence | undefined;
+  let secondStartupAfterReset: SecondStartupAfterResetEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -270,8 +326,10 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
+    const startupImportStartedAt = Date.now();
     await inst.startGateway();
     await record("after-startup-import");
+    scaleMigration = requireScaleMigrationProof(context, Date.now() - startupImportStartedAt);
 
     const inspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-doctor-inspect", inspectDoctor);
@@ -306,6 +364,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       requestTimeoutMs: 20_000,
       timeoutMs: 20_000,
     });
+    let restartedClientConnected = true;
     try {
       await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
       await sendGatewayUserMessage(
@@ -386,33 +445,55 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       const idempotentImportDoctor = await runDoctorIdempotenceProof(inst, context);
       await record("after-doctor-import-idempotence", idempotentImportDoctor);
 
+      downgradeReupgrade = await runDowngradeReupgradeProof(inst, context);
+      await record("after-downgrade-reupgrade-import");
+
+      busyContention = await runSqliteBusyContentionProof(context);
+      await record("after-sqlite-busy-contention");
+
       await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
       await record("after-concurrent-multi-client");
 
       const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
       await record("after-sessions-reset");
 
-      await appendProofMessage(
-        context,
-        resetSessionId,
-        context.resetSessionKey,
-        "sqlite appended after reset",
-      );
-      await requireHistoryContains(restartedClient, context.resetSessionKey, "sqlite appended");
-      await waitForSqliteEvents(context.agentDbPath, resetSessionId, 1);
-      await record("after-transcript-append");
-
-      await deleteSession(restartedClient, context.deleteSessionKey);
-      await record("after-sessions-delete");
-
-      await deleteSession(restartedClient, context.sharedSessionKeys[0]);
-      await requireTrackedSession(restartedClient, context.sharedSessionKeys[1]);
-      await record("after-shared-first-delete");
-
-      await deleteSession(restartedClient, context.sharedSessionKeys[1]);
-      await record("after-shared-final-delete");
-    } finally {
       await disconnectGatewayClient(restartedClient);
+      restartedClientConnected = false;
+      await inst.stopGateway();
+      await inst.startGateway();
+      await record("after-second-startup-after-reset");
+
+      const postResetClient = await connectGatewayClient({
+        url: inst.url,
+        token: inst.gatewayToken,
+        clientDisplayName: "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
+        requestTimeoutMs: 20_000,
+        timeoutMs: 20_000,
+      });
+      try {
+        secondStartupAfterReset = await runSecondStartupAfterResetProof(
+          postResetClient,
+          context,
+          resetSessionId,
+        );
+        await record("after-transcript-append");
+
+        await deleteSession(postResetClient, context.deleteSessionKey);
+        await record("after-sessions-delete");
+
+        await deleteSession(postResetClient, context.sharedSessionKeys[0]);
+        await requireTrackedSession(postResetClient, context.sharedSessionKeys[1]);
+        await record("after-shared-first-delete");
+
+        await deleteSession(postResetClient, context.sharedSessionKeys[1]);
+        await record("after-shared-final-delete");
+      } finally {
+        await disconnectGatewayClient(postResetClient);
+      }
+    } finally {
+      if (restartedClientConnected) {
+        await disconnectGatewayClient(restartedClient);
+      }
     }
 
     const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
@@ -447,6 +528,10 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     pluginSdkSessionKey: context.pluginSdkSessionKey,
     resetSessionKey: context.resetSessionKey,
     ...(rollbackRestore ? { rollbackRestore } : {}),
+    ...(busyContention ? { busyContention } : {}),
+    ...(downgradeReupgrade ? { downgradeReupgrade } : {}),
+    ...(scaleMigration ? { scaleMigration } : {}),
+    ...(secondStartupAfterReset ? { secondStartupAfterReset } : {}),
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
   };
@@ -498,8 +583,11 @@ function buildProofContext(stateDir: string): ProofContext {
       FULL_TURN_SESSION_KEY,
       MANUAL_COMPACTION_SESSION_KEY,
       PLUGIN_SDK_SESSION_KEY,
+      DOWNGRADE_REUPGRADE_SESSION_KEY,
+      SQLITE_BUSY_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
       ...OLD_STATE_SESSION_KEYS,
+      ...SCALE_SESSION_KEYS,
     ],
   };
 }
@@ -630,7 +718,7 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(context.legacySessionsDir, { recursive: true });
   await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
-  const entries = {
+  const entries: Record<string, ReturnType<typeof legacyEntry>> = {
     [context.concurrentDeleteSessionKey]: legacyEntry("sqlite-concurrent-delete", now - 8_000),
     [context.concurrentResetSessionKey]: legacyEntry("sqlite-concurrent-reset", now - 9_000),
     [context.deleteSessionKey]: legacyEntry("sqlite-delete-session", now - 1_000),
@@ -649,6 +737,9 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     }),
     "partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
   };
+  for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
+    entries[sessionKey] = legacyEntry(scaleSessionId(index), now - 20_000 - index);
+  }
   await fs.writeFile(context.storePath, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
   await fs.writeFile(
     path.join(context.legacySessionsDir, "sessions.json"),
@@ -700,6 +791,20 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     legacySessionEvent("sqlite-shared-session"),
     { type: "message", id: "sqlite-shared-2", message: { role: "user", content: "shared b" } },
   ]);
+  for (const [index] of SCALE_SESSION_KEYS.entries()) {
+    const sessionId = scaleSessionId(index);
+    await writeTranscript(context.activeSessionsDir, sessionId, [
+      legacySessionEvent(sessionId),
+      ...Array.from({ length: SCALE_EVENTS_PER_SESSION - 1 }, (_, eventIndex) => ({
+        type: "message",
+        id: `${sessionId}-${eventIndex + 1}`,
+        message: {
+          role: eventIndex % 2 === 0 ? "user" : "assistant",
+          content: `sqlite scale ${index + 1} event ${eventIndex + 1}`,
+        },
+      })),
+    ]);
+  }
   await fs.writeFile(
     path.join(context.legacySessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
     `${JSON.stringify({ type: "trajectory", sessionId: context.legacySessionId })}\n`,
@@ -738,6 +843,10 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     sessionKey: "agent:main:partial-direct",
     storePath: context.storePath,
   });
+}
+
+function scaleSessionId(index: number): string {
+  return `sqlite-scale-${String(index + 1).padStart(2, "0")}`;
 }
 
 function legacyEntry(
@@ -1277,6 +1386,211 @@ async function runDoctorIdempotenceProof(
   return doctor;
 }
 
+function requireScaleMigrationProof(
+  context: ProofContext,
+  startupImportElapsedMs: number,
+): ScaleMigrationEvidence {
+  const sqlite = readSqliteEvidence(context.agentDbPath, SCALE_SESSION_KEYS);
+  const importedSessionKeys: string[] = [];
+  for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
+    const row = sqlite.trackedEntries.find((entry) => entry.sessionKey === sessionKey);
+    const sessionId = scaleSessionId(index);
+    if (!row || row.sessionId !== sessionId) {
+      throw new Error(`scale migration did not import ${sessionKey} as ${sessionId}`);
+    }
+    if (row.transcriptEvents < SCALE_EVENTS_PER_SESSION) {
+      throw new Error(
+        `scale migration imported too few events for ${sessionKey}: ${row.transcriptEvents}`,
+      );
+    }
+    importedSessionKeys.push(sessionKey);
+  }
+  return {
+    importedSessionKeys,
+    minTranscriptEventsPerSession: SCALE_EVENTS_PER_SESSION,
+    seededEvents: SCALE_SESSION_COUNT * SCALE_EVENTS_PER_SESSION,
+    seededSessions: SCALE_SESSION_COUNT,
+    startupImportElapsedMs,
+  };
+}
+
+async function runDowngradeReupgradeProof(
+  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  context: ProofContext,
+): Promise<DowngradeReupgradeEvidence> {
+  await fs.mkdir(context.activeSessionsDir, { recursive: true });
+  await fs.writeFile(
+    context.storePath,
+    `${JSON.stringify(
+      {
+        [DOWNGRADE_REUPGRADE_SESSION_KEY]: legacyEntry(DOWNGRADE_REUPGRADE_SESSION_ID, Date.now()),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+  const transcriptPath = path.join(
+    context.activeSessionsDir,
+    `${DOWNGRADE_REUPGRADE_SESSION_ID}.jsonl`,
+  );
+  await writeTranscript(context.activeSessionsDir, DOWNGRADE_REUPGRADE_SESSION_ID, [
+    legacySessionEvent(DOWNGRADE_REUPGRADE_SESSION_ID),
+    {
+      type: "message",
+      id: "sqlite-downgrade-reupgrade-1",
+      message: { role: "user", content: DOWNGRADE_REUPGRADE_TEXT },
+    },
+  ]);
+
+  const doctor = await runDoctor(inst, "import", context.storePath);
+  if (doctor.code !== 0) {
+    throw new Error(`downgrade/re-upgrade import exited non-zero: ${doctor.stderrTail}`);
+  }
+  const totals = doctor.totals ?? {};
+  if (totals.importedEntries !== 1 || totals.importedTranscriptEvents !== 2) {
+    throw new Error(`downgrade/re-upgrade import had unexpected totals: ${JSON.stringify(totals)}`);
+  }
+  await waitForSqliteMessageContains(
+    context.agentDbPath,
+    DOWNGRADE_REUPGRADE_SESSION_ID,
+    "user",
+    DOWNGRADE_REUPGRADE_TEXT,
+  );
+  return {
+    activeJsonlArchived: !fsSync.existsSync(transcriptPath),
+    doctorImportedEntries: Number(totals.importedEntries),
+    doctorImportedTranscriptEvents: Number(totals.importedTranscriptEvents),
+    sessionId: DOWNGRADE_REUPGRADE_SESSION_ID,
+    sessionKey: DOWNGRADE_REUPGRADE_SESSION_KEY,
+    transcriptEvents: countSqliteTranscriptEvents(
+      context.agentDbPath,
+      DOWNGRADE_REUPGRADE_SESSION_ID,
+    ),
+  };
+}
+
+async function runSqliteBusyContentionProof(
+  context: ProofContext,
+): Promise<BusyContentionEvidence> {
+  const holdMs = 500;
+  const readyPath = path.join(context.stateDir, `sqlite-busy-${randomUUID()}.ready`);
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+        import fs from "node:fs";
+        import { DatabaseSync } from "node:sqlite";
+        const db = new DatabaseSync(process.env.OPENCLAW_E2E_BUSY_DB_PATH);
+        db.exec("PRAGMA busy_timeout = 30000; BEGIN IMMEDIATE;");
+        fs.writeFileSync(process.env.OPENCLAW_E2E_BUSY_READY_PATH, "ready");
+        setTimeout(() => {
+          db.exec("COMMIT");
+          db.close();
+        }, Number(process.env.OPENCLAW_E2E_BUSY_HOLD_MS));
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_E2E_BUSY_DB_PATH: context.agentDbPath,
+        OPENCLAW_E2E_BUSY_HOLD_MS: String(holdMs),
+        OPENCLAW_E2E_BUSY_READY_PATH: readyPath,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let childOutput = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    childOutput += String(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    childOutput += String(chunk);
+  });
+
+  await waitForFile(readyPath, 10_000, () => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `SQLite busy child exited before acquiring lock code=${String(
+          child.exitCode,
+        )} signal=${String(child.signalCode)} ${tail(childOutput)}`,
+      );
+    }
+  });
+
+  const startedAt = Date.now();
+  const result = await importSqliteSessionRows({
+    agentId: context.agentId,
+    entry: legacyEntry(SQLITE_BUSY_SESSION_ID, Date.now()),
+    readTranscriptEvents(append) {
+      append(legacySessionEvent(SQLITE_BUSY_SESSION_ID));
+      append({
+        type: "message",
+        id: "sqlite-busy-contention-1",
+        message: { role: "user", content: SQLITE_BUSY_TEXT },
+      });
+    },
+    sessionKey: SQLITE_BUSY_SESSION_KEY,
+    storePath: context.storePath,
+  });
+  const elapsedMs = Date.now() - startedAt;
+  const exit = await waitForChildExit(child, 10_000);
+  if (exit.code !== 0) {
+    throw new Error(
+      `SQLite busy child exited non-zero code=${String(exit.code)} signal=${String(
+        exit.signal,
+      )} ${tail(childOutput)}`,
+    );
+  }
+  if (elapsedMs < Math.floor(holdMs / 2)) {
+    throw new Error(`SQLite busy proof did not wait on the writer lock: elapsed=${elapsedMs}ms`);
+  }
+  await waitForSqliteMessageContains(
+    context.agentDbPath,
+    SQLITE_BUSY_SESSION_ID,
+    "user",
+    SQLITE_BUSY_TEXT,
+  );
+  return {
+    childExitCode: exit.code,
+    childSignal: exit.signal,
+    elapsedMs,
+    holdMs,
+    sessionId: SQLITE_BUSY_SESSION_ID,
+    sessionKey: SQLITE_BUSY_SESSION_KEY,
+    transcriptEvents: result.transcriptEvents,
+  };
+}
+
+async function runSecondStartupAfterResetProof(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  context: ProofContext,
+  resetSessionId: string,
+): Promise<SecondStartupAfterResetEvidence> {
+  await appendProofMessage(
+    context,
+    resetSessionId,
+    context.resetSessionKey,
+    SECOND_STARTUP_APPEND_TEXT,
+  );
+  await waitForHistoryContains(client, context.resetSessionKey, SECOND_STARTUP_APPEND_TEXT);
+  await waitForSqliteEvents(context.agentDbPath, resetSessionId, 1);
+  return {
+    activeJsonlForSessionExists: fsSync.existsSync(
+      path.join(context.activeSessionsDir, `${resetSessionId}.jsonl`),
+    ),
+    historyContainsPostResetAppend: true,
+    sessionId: resetSessionId,
+    sessionKey: context.resetSessionKey,
+    transcriptEvents: countSqliteTranscriptEvents(context.agentDbPath, resetSessionId),
+  };
+}
+
 async function runConcurrentMultiClientLifecycle(
   inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
   context: ProofContext,
@@ -1653,6 +1967,46 @@ async function waitForSqliteMessageContains(
     `timed out waiting for SQLite ${role} transcript message containing ${JSON.stringify(
       expected,
     )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
+  );
+}
+
+async function waitForFile(filePath: string, timeoutMs: number, poll: () => void): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    poll();
+    if (fsSync.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitForChildExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.off("exit", onExit);
+        child.kill("SIGKILL");
+        reject(new Error(`timed out waiting for child process ${child.pid ?? "unknown"} to exit`));
+      }, timeoutMs);
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      };
+      child.once("exit", onExit);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        child.off("exit", onExit);
+        clearTimeout(timer);
+        resolve({ code: child.exitCode, signal: child.signalCode });
+      }
+    },
   );
 }
 

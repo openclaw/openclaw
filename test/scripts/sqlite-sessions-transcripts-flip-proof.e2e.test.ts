@@ -21,8 +21,11 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-plugin-sdk-consumer",
       "after-cleanup-pruning",
       "after-doctor-import-idempotence",
+      "after-downgrade-reupgrade-import",
+      "after-sqlite-busy-contention",
       "after-concurrent-multi-client",
       "after-sessions-reset",
+      "after-second-startup-after-reset",
       "after-transcript-append",
       "after-sessions-delete",
       "after-shared-first-delete",
@@ -105,6 +108,13 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           ),
       ),
     ).toBe(true);
+    expect(report.scaleMigration).toMatchObject({
+      minTranscriptEventsPerSession: 4,
+      seededEvents: 96,
+      seededSessions: 24,
+    });
+    expect(report.scaleMigration?.importedSessionKeys).toHaveLength(24);
+    expect(report.scaleMigration?.startupImportElapsedMs).toBeGreaterThanOrEqual(0);
     const resetCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-sessions-reset",
     );
@@ -191,6 +201,34 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         importedTranscriptEvents: 0,
       }),
     });
+    expect(report.downgradeReupgrade).toMatchObject({
+      activeJsonlArchived: true,
+      doctorImportedEntries: 1,
+      doctorImportedTranscriptEvents: 2,
+      sessionId: "sqlite-downgrade-reupgrade",
+      sessionKey: "agent:main:dashboard:sqlite-downgrade-reupgrade",
+      transcriptEvents: 2,
+    });
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-downgrade-reupgrade-import" &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === "agent:main:dashboard:sqlite-downgrade-reupgrade" &&
+              entry.transcriptEvents === 2,
+          ),
+      ),
+    ).toBe(true);
+    expect(report.busyContention).toMatchObject({
+      childExitCode: 0,
+      childSignal: null,
+      holdMs: 500,
+      sessionId: "sqlite-busy-contention",
+      sessionKey: "agent:main:dashboard:sqlite-busy-contention",
+      transcriptEvents: 2,
+    });
+    expect(report.busyContention?.elapsedMs).toBeGreaterThanOrEqual(250);
     const concurrentCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-concurrent-multi-client",
     );
@@ -209,6 +247,12 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         (entry) => entry.sessionKey === report.concurrentDeleteSessionKey,
       ),
     ).toBe(false);
+    expect(report.secondStartupAfterReset).toMatchObject({
+      activeJsonlForSessionExists: false,
+      historyContainsPostResetAppend: true,
+      sessionKey: report.resetSessionKey,
+    });
+    expect(report.secondStartupAfterReset?.transcriptEvents).toBeGreaterThanOrEqual(1);
     expect(
       report.checkpoints.some(
         (checkpoint) =>
