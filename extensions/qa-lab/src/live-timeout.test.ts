@@ -2,6 +2,24 @@
 import { describe, expect, it } from "vitest";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 
+function withLiveTurnTimeoutEnv<T>(value: string | undefined, run: () => T): T {
+  const previous = process.env.OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS;
+  try {
+    if (value === undefined) {
+      delete process.env.OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS;
+    } else {
+      process.env.OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS = value;
+    }
+    return run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS;
+    } else {
+      process.env.OPENCLAW_QA_LIVE_TURN_TIMEOUT_MS = previous;
+    }
+  }
+}
+
 describe("qa live timeout policy", () => {
   it("keeps mock lanes on the caller fallback", () => {
     expect(
@@ -93,5 +111,80 @@ describe("qa live timeout policy", () => {
         30_000,
       ),
     ).toBe(240_000);
+  });
+
+  it("allows live frontier runs to raise the turn timeout floor with an env override", () => {
+    withLiveTurnTimeoutEnv("420000", () => {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "live-frontier",
+            primaryModel: "google/gemini-3-flash",
+            alternateModel: "google/gemini-3-flash",
+          },
+          30_000,
+        ),
+      ).toBe(420_000);
+    });
+  });
+
+  it("does not let lower env override values shorten mock lane fallbacks", () => {
+    withLiveTurnTimeoutEnv("45000", () => {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "mock-openai",
+            primaryModel: "google/gemini-3-flash",
+            alternateModel: "google/gemini-3-flash",
+          },
+          180_000,
+        ),
+      ).toBe(180_000);
+    });
+  });
+
+  it("does not let lower env override values shorten generic live-frontier fallbacks", () => {
+    withLiveTurnTimeoutEnv("45000", () => {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "live-frontier",
+            primaryModel: "google/gemini-3-flash",
+            alternateModel: "google/gemini-3-flash",
+          },
+          180_000,
+        ),
+      ).toBe(180_000);
+    });
+  });
+
+  it("keeps provider floors when the live turn timeout env override is lower", () => {
+    withLiveTurnTimeoutEnv("45000", () => {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "live-frontier",
+            primaryModel: "openai/gpt-5.5",
+            alternateModel: "openai/gpt-5.5",
+          },
+          30_000,
+        ),
+      ).toBe(360_000);
+    });
+  });
+
+  it("ignores invalid live turn timeout env override values", () => {
+    withLiveTurnTimeoutEnv("1e3", () => {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "live-frontier",
+            primaryModel: "google/gemini-3-flash",
+            alternateModel: "google/gemini-3-flash",
+          },
+          30_000,
+        ),
+      ).toBe(120_000);
+    });
   });
 });
