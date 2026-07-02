@@ -26,10 +26,10 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   hasAbortableSessionRun,
-  markQueuedChatSendsWaitingForReconnect,
   retryReconnectableQueuedChatSends,
 } from "./chat-send.ts";
 import {

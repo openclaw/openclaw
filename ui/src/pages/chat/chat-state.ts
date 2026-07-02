@@ -40,12 +40,12 @@ import {
   type ChatEventPayload,
 } from "./chat-gateway.ts";
 import type { ChatMetadataResult, ChatState } from "./chat-history.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import {
   handleAbortChat,
   handleSendChat,
   recordChatSendServerTiming,
   refreshChat,
-  removeQueuedMessage,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
