@@ -2378,33 +2378,47 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
     const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
+    const syntheticRouteId = "c2c:683F2ADDE4414658153CECAC0F93EDDE";
+    const syntheticProviders = ["heartbeat", "cron-event", "exec-event"] as const;
 
-    await runPreparedReply(
-      baseParams({
-        opts: { isHeartbeat: true },
-        ctx: {
-          Body: heartbeatPrompt,
-          RawBody: heartbeatPrompt,
-          CommandBody: heartbeatPrompt,
-          Provider: "heartbeat",
-          Surface: "heartbeat",
-          ChatType: "direct",
-        },
-        sessionCtx: {
-          Body: heartbeatPrompt,
-          BodyStripped: heartbeatPrompt,
-          Provider: "heartbeat",
-          Surface: "heartbeat",
-          ChatType: "direct",
-        },
-      }),
-    );
+    for (const syntheticProvider of syntheticProviders) {
+      await runPreparedReply(
+        baseParams({
+          opts: { isHeartbeat: true },
+          ctx: {
+            Body: heartbeatPrompt,
+            RawBody: heartbeatPrompt,
+            CommandBody: heartbeatPrompt,
+            Provider: syntheticProvider,
+            Surface: syntheticProvider,
+            ChatType: "direct",
+            OriginatingChannel: "qqbot",
+            OriginatingTo: syntheticRouteId,
+          },
+          sessionCtx: {
+            Body: heartbeatPrompt,
+            BodyStripped: heartbeatPrompt,
+            Provider: syntheticProvider,
+            Surface: syntheticProvider,
+            ChatType: "direct",
+            OriginatingChannel: "qqbot",
+            OriginatingTo: syntheticRouteId,
+          },
+        }),
+      );
 
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain(heartbeatPrompt);
-    expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
-    expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
-    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+      const call = requireLastRunReplyAgentCall();
+      expect(call?.commandBody).toContain(heartbeatPrompt);
+      expect(call?.commandBody).not.toContain("Conversation info (untrusted metadata):");
+      expect(call?.commandBody).not.toContain(syntheticRouteId);
+      expect(call?.followupRun.prompt).toContain(heartbeatPrompt);
+      expect(call?.followupRun.prompt).not.toContain("Conversation info (untrusted metadata):");
+      expect(call?.followupRun.prompt).not.toContain(syntheticRouteId);
+      expect(call?.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
+      expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
+    }
+
+    expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
