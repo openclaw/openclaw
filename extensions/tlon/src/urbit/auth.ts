@@ -1,4 +1,5 @@
 // Tlon plugin module implements auth behavior.
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
@@ -36,8 +37,16 @@ export async function authenticate(
       throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
     }
 
-    // Some Urbit setups require the response body to be read before cookie headers finalize.
-    await response.text().catch(() => {});
+    // 16 MiB body cap. Some Urbit implementations defer set-cookie
+    // header finalize until the body drains; the cap ensures a hostile
+    // /~/login body cannot OOM us before headers parse. Body value
+    // itself is discarded.
+    try {
+      await readProviderTextResponse(response, "Tlon Urbit auth");
+    } catch {
+      // Preserve original semantic: discard read outcome so cookie
+      // parse still runs even on partial-read failures.
+    }
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
       throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
