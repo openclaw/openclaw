@@ -67,7 +67,7 @@ defaults write ai.openclaw.mac openclaw.nixMode -bool true
 ### What changes in Nix mode
 
 - Auto-install and self-mutation flows are disabled
-- `openclaw.json` is treated as immutable. Startup-derived defaults stay runtime-only, and config writers such as setup, onboarding, mutating `openclaw update`, plugin install/update/uninstall/enable, `doctor --fix`, `doctor --generate-gateway-token`, and `openclaw config set` refuse to edit the file.
+- `openclaw.json` is treated as immutable. Startup-derived defaults stay runtime-only, and config writers such as setup, onboarding, mutating `openclaw update`, plugin install/update/uninstall/enable, `doctor --generate-gateway-token`, and `openclaw config set` refuse to edit the file. `doctor --fix`, `doctor --repair`, and `doctor --yes` still run non-config repairs (for example session/legacy state migrations and permission fixes) but fail at the point of any actual `openclaw.json` mutation.
 - Agents should edit the Nix source instead. For nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) and set config under `programs.openclaw.config` or `instances.<name>.config`.
 - Missing dependencies surface Nix-specific remediation messages
 - UI surfaces a read-only Nix mode banner

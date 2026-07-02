@@ -20,10 +20,14 @@ function loadConfigModule(): Promise<ConfigModule> {
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
-  // Nix-mode write guard is now handled at the point of actual config mutation.
-  // Doctor repairs may include operations that don't touch openclaw.json (e.g. session
-  // state repairs, legacy state migrations), so we can't block the entire flow upfront.
-  // The individual repair operations that mutate openclaw.json will check Nix mode.
+  // Nix-mode write guard is handled at the point of actual config mutation for most
+  // doctor repairs, because some repairs (session/legacy state migrations, permission
+  // fixes) do not touch openclaw.json. However, --generate-gateway-token necessarily
+  // prepares a config mutation, so it stays fail-fast in Nix mode.
+  if (options.generateGatewayToken === true) {
+    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
+    assertConfigWriteAllowedInCurrentMode({ operation: "doctor --generate-gateway-token" });
+  }
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const { printWizardHeader } = await import("../commands/onboard-helpers.js");

@@ -93,14 +93,14 @@ describe("doctor command", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("allows doctor gateway token generation in Nix before config writes", async () => {
+  it("refuses doctor gateway token generation in Nix before config writes", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
       await expect(
         doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_NIX_MODE;
