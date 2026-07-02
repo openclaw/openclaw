@@ -589,4 +589,14 @@ describe("exec approvals CLI", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects non-regular file paths", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approvals-nonreg-"));
+    try {
+      // Directories are not regular files; readFileWithBound must reject them.
+      await expect(testing.readFileWithBound(tmpDir, 100)).rejects.toThrow("not a regular file");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

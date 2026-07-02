@@ -77,11 +77,21 @@ async function readFileWithBound(
   filePath: string,
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
-  const stat = await fs.stat(filePath);
-  if (stat.size > maxBytes) {
-    throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+  // Open the file handle first, then check via fd to prevent TOCTOU races
+  // and ensure we only read from regular files (not /dev/zero, FIFOs, etc.).
+  const fd = await fs.open(filePath, "r");
+  try {
+    const stat = await fd.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Exec approvals file is not a regular file: ${filePath}`);
+    }
+    if (stat.size > maxBytes) {
+      throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+    }
+    return await fd.readFile("utf8");
+  } finally {
+    await fd.close();
   }
-  return await fs.readFile(filePath, "utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
