@@ -426,7 +426,7 @@ describe("handleDiscordMessagingAction", () => {
     expect(result.details).not.toHaveProperty("nextBefore");
   });
 
-  it("rejects Discord thread lists for non-allowlisted target channels", async () => {
+  it("rejects archived Discord thread lists for non-allowlisted target channels", async () => {
     const cfg = discordAllowlistCfg({
       "111": {
         channels: {
@@ -438,7 +438,7 @@ describe("handleDiscordMessagingAction", () => {
     await expect(
       handleMessagingAction(
         "threadList",
-        { guildId: "111", channelId: "333" },
+        { guildId: "111", channelId: "333", includeArchived: true },
         enableAllActions,
         cfg,
       ),
@@ -446,7 +446,7 @@ describe("handleDiscordMessagingAction", () => {
     expect(listThreadsDiscord).not.toHaveBeenCalled();
   });
 
-  it("requires a guild-wide Discord thread-list target when channels are allowlisted", async () => {
+  it("requires guild-wide authorization for active Discord thread lists", async () => {
     const cfg = discordAllowlistCfg({
       "111": {
         channels: {
@@ -456,9 +456,14 @@ describe("handleDiscordMessagingAction", () => {
     });
 
     await expect(
-      handleMessagingAction("threadList", { guildId: "111" }, enableAllActions, cfg),
+      handleMessagingAction(
+        "threadList",
+        { guildId: "111", channelId: "222" },
+        enableAllActions,
+        cfg,
+      ),
     ).rejects.toThrow(
-      "Discord thread lists require channelId or a wildcard channel allowlist so each read target can be authorized.",
+      "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
     );
     expect(listThreadsDiscord).not.toHaveBeenCalled();
   });

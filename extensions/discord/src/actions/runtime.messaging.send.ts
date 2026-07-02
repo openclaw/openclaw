@@ -365,13 +365,13 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
-      if (channelId) {
+      if (channelId && includeArchived === true) {
         await ctx.assertReadTargetAllowed({ guildId, channelId });
       } else {
         await ctx.assertGuildReadTargetAllowed({
           guildId,
           channelTargetRequiredMessage:
-            "Discord thread lists require channelId or a wildcard channel allowlist so each read target can be authorized.",
+            "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
         });
       }
       const threads = await discordMessagingActionRuntime.listThreadsDiscord(
