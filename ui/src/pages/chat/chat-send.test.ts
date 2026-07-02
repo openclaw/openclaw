@@ -55,8 +55,8 @@ let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQ
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./chat-send.ts").retryReconnectableQueuedChatSends;
-let recordChatSendServerTiming: typeof import("./chat-send.ts").recordChatSendServerTiming;
-let recordFirstAssistantChatTiming: typeof import("./chat-send.ts").recordFirstAssistantChatTiming;
+let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./chat-send-timing.ts").recordFirstAssistantChatTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -64,9 +64,9 @@ async function loadChatHelpers(): Promise<void> {
     steerQueuedChatMessage,
     navigateChatInputHistory,
     retryReconnectableQueuedChatSends,
-    recordChatSendServerTiming,
-    recordFirstAssistantChatTiming,
   } = await import("./chat-send.ts"));
+  ({ recordChatSendServerTiming, recordFirstAssistantChatTiming } =
+    await import("./chat-send-timing.ts"));
   ({ refreshChat } = await import("./chat-state.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({ clearPendingQueueItemsForRun, removeQueuedMessage, markQueuedChatSendsWaitingForReconnect } =

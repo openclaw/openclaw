@@ -31,17 +31,19 @@ import {
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
+import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
-  retryReconnectableQueuedChatSends,
-} from "./chat-send.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+  switchChatFastMode,
+  switchChatModel,
+  switchChatThinkingLevel,
+} from "./chat-session.ts";
 import {
   canCreateChatSession,
   ChatStateController,
   createPageState,
   dismissChatError,
-  dismissRealtimeTalkError,
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
@@ -147,6 +149,7 @@ export class ChatPage extends LitElement {
       historyLoad,
       sessionsRefresh,
       previousSessionsResult,
+      () => flushChatQueueForEvent(state),
     );
     void subscriptionSync;
     void historyLoad;

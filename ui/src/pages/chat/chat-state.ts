@@ -43,14 +43,23 @@ import {
 import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import {
-  flushChatQueueAfterIdleSessionReconciliation,
+  attachChatRealtimeActions,
+  createInitialChatRealtimeState,
+  resetChatRealtimeConversation,
+  type ChatRealtimeState,
+} from "./chat-realtime.ts";
+import { recordChatSendServerTiming } from "./chat-send-timing.ts";
+import {
+  flushChatQueueForEvent,
   handleSendChat,
-  recordChatSendServerTiming,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
 } from "./chat-send.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import {
+  flushChatQueueAfterIdleSessionReconciliation,
+  refreshCurrentChatSessionList,
+} from "./chat-session.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
@@ -67,17 +76,6 @@ import {
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
 import {
-  createRealtimeTalkConversationState,
-  updateRealtimeTalkConversation,
-  type RealtimeTalkConversationEntry,
-  type RealtimeTalkConversationState,
-} from "./realtime-talk-conversation.ts";
-import {
-  RealtimeTalkSession,
-  type RealtimeTalkLaunchOptions,
-  type RealtimeTalkStatus,
-} from "./realtime-talk.ts";
-import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -93,6 +91,7 @@ type ChatPageElement = {
 
 export type ChatPageHost = ChatHost &
   ChatState &
+  ChatRealtimeState &
   SessionWorkspaceHost & {
     sessions: SessionCapability;
     settings: UiSettings;
@@ -159,16 +158,6 @@ export type ChatPageHost = ChatHost &
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     updateComplete: Promise<unknown>;
-    realtimeTalkActive: boolean;
-    realtimeTalkStatus: RealtimeTalkStatus;
-    realtimeTalkDetail: string | null;
-    realtimeTalkTranscript: string | null;
-    realtimeTalkConversation: RealtimeTalkConversationEntry[];
-    realtimeTalkOptionsOpen: boolean;
-    realtimeTalkCatalogProviders: ChatProps["realtimeTalkCatalogProviders"];
-    realtimeTalkOptions: NonNullable<ChatProps["realtimeTalkOptions"]>;
-    realtimeTalkSession: RealtimeTalkSession | null;
-    realtimeTalkConversationState: RealtimeTalkConversationState;
     requestUpdate: () => void;
     onModelChanged: () => Promise<void> | undefined;
     resetToolStream: () => void;
@@ -178,10 +167,6 @@ export type ChatPageHost = ChatHost &
       open: boolean,
       options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
     ) => void;
-    updateRealtimeTalkOptions: (
-      next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
-    ) => void;
-    resetRealtimeTalkConversation: () => void;
     loadAssistantIdentity: () => Promise<void>;
     applySettings: (next: UiSettings) => void;
     handleChatScroll: (event: Event) => void;
@@ -195,8 +180,6 @@ export type ChatPageHost = ChatHost &
     handleOpenSidebar: (content: Parameters<SessionWorkspaceHost["handleOpenSidebar"]>[0]) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
-    toggleRealtimeTalk: () => Promise<void>;
-    fetchRealtimeTalkCatalog: () => Promise<void>;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
   };
 
@@ -246,19 +229,6 @@ export function dismissChatError(state: ChatPageHost) {
   state.lastError = null;
   state.lastErrorCode = null;
   state.chatError = null;
-}
-
-export function dismissRealtimeTalkError(state: ChatPageHost) {
-  if (state.realtimeTalkStatus !== "error") {
-    return;
-  }
-  state.realtimeTalkSession?.stop();
-  state.realtimeTalkSession = null;
-  state.realtimeTalkActive = false;
-  state.realtimeTalkStatus = "idle";
-  state.realtimeTalkDetail = null;
-  state.realtimeTalkTranscript = null;
-  state.resetRealtimeTalkConversation();
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
@@ -333,7 +303,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   state.realtimeTalkTranscript = null;
-  state.resetRealtimeTalkConversation();
+  resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -582,6 +552,7 @@ export async function refreshChat(
     historyRefresh,
     sessionsRefresh,
     previousSessionsResult,
+    () => flushChatQueueForEvent(host),
   );
   const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
     requestUpdate,
@@ -768,25 +739,7 @@ export function createPageState(
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
     activityEntries: [],
-    realtimeTalkActive: false,
-    realtimeTalkStatus: "idle" as RealtimeTalkStatus,
-    realtimeTalkDetail: null,
-    realtimeTalkTranscript: null,
-    realtimeTalkConversation: [],
-    realtimeTalkOptionsOpen: false,
-    realtimeTalkCatalogProviders: null,
-    realtimeTalkOptions: {
-      provider: "",
-      model: "",
-      voice: "",
-      transport: "",
-      vadThreshold: "",
-      silenceDurationMs: "",
-      prefixPaddingMs: "",
-      reasoningEffort: "",
-    },
-    realtimeTalkSession: null,
-    realtimeTalkConversationState: createRealtimeTalkConversationState(),
+    ...createInitialChatRealtimeState(),
     requestUpdate,
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,
@@ -834,90 +787,7 @@ export function createPageState(
       }
     });
   };
-  state.resetRealtimeTalkConversation = () => {
-    state.realtimeTalkConversationState = createRealtimeTalkConversationState();
-    state.realtimeTalkConversation = [];
-  };
-  state.updateRealtimeTalkOptions = (next) => {
-    state.realtimeTalkOptions = { ...state.realtimeTalkOptions, ...next };
-    requestUpdate();
-  };
-  state.fetchRealtimeTalkCatalog = async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
-    const result = await state.client.request<{
-      realtime?: { providers?: ChatProps["realtimeTalkCatalogProviders"] };
-    }>("talk.catalog", {});
-    state.realtimeTalkCatalogProviders = result.realtime?.providers ?? [];
-    requestUpdate();
-  };
-  state.toggleRealtimeTalk = async () => {
-    if (state.realtimeTalkSession) {
-      state.realtimeTalkSession.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkStatus = "idle";
-      state.realtimeTalkDetail = null;
-      state.resetRealtimeTalkConversation();
-      requestUpdate();
-      return;
-    }
-    if (!state.client || !state.connected) {
-      state.lastError = "Gateway not connected";
-      state.chatError = state.lastError;
-      requestUpdate();
-      return;
-    }
-    const options = state.realtimeTalkOptions;
-    const launchOptions: RealtimeTalkLaunchOptions = {
-      provider: options.provider.trim() || undefined,
-      model: options.model.trim() || undefined,
-      voice: options.voice.trim() || undefined,
-      transport: (options.transport.trim() || undefined) as RealtimeTalkLaunchOptions["transport"],
-      vadThreshold: Number(options.vadThreshold) || undefined,
-      silenceDurationMs: Number(options.silenceDurationMs) || undefined,
-      prefixPaddingMs: Number(options.prefixPaddingMs) || undefined,
-      reasoningEffort: options.reasoningEffort.trim() || undefined,
-    };
-    state.realtimeTalkActive = true;
-    state.realtimeTalkStatus = "connecting";
-    state.realtimeTalkDetail = null;
-    state.resetRealtimeTalkConversation();
-    const session = new RealtimeTalkSession(
-      state.client,
-      state.sessionKey,
-      {
-        onStatus: (status, detail) => {
-          state.realtimeTalkStatus = status;
-          state.realtimeTalkDetail = detail ?? null;
-          state.realtimeTalkActive = status !== "idle";
-          requestUpdate();
-        },
-        onTranscript: (entry) => {
-          state.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
-          state.realtimeTalkConversationState = updateRealtimeTalkConversation(
-            state.realtimeTalkConversationState,
-            entry,
-          );
-          state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
-          requestUpdate();
-        },
-      },
-      launchOptions,
-    );
-    state.realtimeTalkSession = session;
-    try {
-      await session.start();
-    } catch (error) {
-      session.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkStatus = "error";
-      state.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
-      requestUpdate();
-    }
-  };
+  attachChatRealtimeActions(state);
   state.loadAssistantIdentity = async () => {
     await loadPageAssistantIdentity(state);
   };

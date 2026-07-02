@@ -34,11 +34,14 @@ import {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiSelectedGlobalSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
+  resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
@@ -96,7 +99,9 @@ function shouldApplyChatHistoryResult(
   if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
     return false;
   }
-  return !isSelectedGlobalEventSessionKey(sessionKey) || resolveSelectedAgentId(state) === agentId;
+  return (
+    !isUiSelectedGlobalSessionKey(sessionKey) || resolveUiSelectedSessionAgentId(state) === agentId
+  );
 }
 
 export function isSilentReplyStream(text: string): boolean {
@@ -471,72 +476,20 @@ function setChatError(state: ChatState, error: string | null) {
   state.chatError = error;
 }
 
-export function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  return normalized === "global";
-}
-
-export function isSelectedGlobalEventSessionKey(sessionKey: string | undefined | null): boolean {
-  if (isGlobalSessionKey(sessionKey)) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
-}
-
-function resolveSelectedAgentId(state: ChatState): string | undefined {
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const assistantAgentId =
-    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
-      ? state.assistantAgentId
-      : undefined;
-  const defaultAgentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : undefined;
-  const helloDefaultAgentId =
-    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-    snapshot.sessionDefaults.defaultAgentId.trim()
-      ? snapshot.sessionDefaults.defaultAgentId
-      : undefined;
-  const selectedAgentId = assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId;
-  return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
-}
-
-export function resolveDefaultAgentId(state: ChatState): string | undefined {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  const agentId =
-    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
-      ? state.agentsList.defaultId
-      : typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
-          snapshot.sessionDefaults.defaultAgentId.trim()
-        ? snapshot.sessionDefaults.defaultAgentId
-        : undefined;
-  return agentId ? normalizeAgentId(agentId) : undefined;
-}
-
 function chatScopedEventAgentScopeMatches(
   state: ChatState,
   sessionKey: string,
   agentId?: string | null,
 ): boolean {
-  if (!isSelectedGlobalEventSessionKey(state.sessionKey) || !isGlobalSessionKey(sessionKey)) {
+  if (!isUiSelectedGlobalSessionKey(state.sessionKey) || !isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
   const payloadAgentId =
     typeof agentId === "string" && agentId.trim() ? normalizeAgentId(agentId) : undefined;
-  const selectedAgentId = resolveSelectedAgentId(state);
+  const selectedAgentId = resolveUiSelectedSessionAgentId(state);
   return payloadAgentId
     ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
-    : selectedAgentId === undefined || selectedAgentId === resolveDefaultAgentId(state);
+    : selectedAgentId === undefined || selectedAgentId === resolveUiDefaultAgentId(state);
 }
 
 export function chatScopedEventSessionMatches(
@@ -548,8 +501,8 @@ export function chatScopedEventSessionMatches(
     return chatScopedEventAgentScopeMatches(state, sessionKey, agentId);
   }
   return (
-    isGlobalSessionKey(sessionKey) &&
-    isSelectedGlobalEventSessionKey(state.sessionKey) &&
+    isUiGlobalSessionKey(sessionKey) &&
+    isUiSelectedGlobalSessionKey(state.sessionKey) &&
     chatScopedEventAgentScopeMatches(state, sessionKey, agentId)
   );
 }
@@ -828,8 +781,8 @@ export async function loadChatHistory(
     return undefined;
   }
   const sessionKey = state.sessionKey;
-  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
-    ? resolveSelectedAgentId(state)
+  const requestAgentId = isUiSelectedGlobalSessionKey(sessionKey)
+    ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
   const method =

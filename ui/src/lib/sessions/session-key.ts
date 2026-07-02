@@ -160,6 +160,27 @@ export function isUiGlobalSessionKey(sessionKey: string | undefined | null): boo
   return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
 }
 
+export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  if (isUiGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest) === DEFAULT_MAIN_KEY;
+}
+
+export function resolveUiSelectedSessionAgentId(
+  host: Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello"> & {
+    sessionKey?: string | null;
+  },
+  sessionKey: string | undefined | null = host.sessionKey,
+): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return resolveUiKnownSelectedGlobalAgentId(host);
+}
+
 export function uiSessionRowMatchesSelectedChat(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   rowKey: string | undefined | null,

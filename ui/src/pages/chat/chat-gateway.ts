@@ -2,19 +2,18 @@ import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-disp
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { parseChatSideResult } from "../../lib/chat/side-result.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
-import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
+import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   chatScopedEventSessionMatches,
-  isGlobalSessionKey,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
   materializeVisibleAssistantStreamMessages,
-  resolveDefaultAgentId,
   shouldHideAssistantChatMessage,
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
+import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
 import {
@@ -43,6 +42,13 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
 
 function isTerminalChatState(value: unknown): boolean {
   return value === "final" || value === "aborted" || value === "error";
+}
+
+function isEventForDifferentActiveRun(
+  payload: ChatEventPayload | undefined,
+  activeRunId: string | null,
+): boolean {
+  return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
 function resolveDeltaChatStreamText(
@@ -160,8 +166,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-        const cacheAgentId = isGlobalSessionKey(payload.sessionKey)
-          ? (payload.agentId ?? resolveDefaultAgentId(state) ?? DEFAULT_AGENT_ID)
+        const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
+          ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
         appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
       }
@@ -282,7 +288,15 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     state.chatSideResultTerminalRuns.delete(payload.runId);
     return null;
   }
-  return handleChatEvent(state, payload);
+  const activeRunIdBeforeEvent = state.chatRunId;
+  const result = handleChatEvent(state, payload);
+  if (
+    isTerminalChatState(result) &&
+    !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
+  ) {
+    clearPendingQueueItemsForRun(state, payload?.runId);
+  }
+  return result;
 }
 
 export function handleChatSideResultGatewayEvent(state: ChatState, payload: unknown): boolean {
