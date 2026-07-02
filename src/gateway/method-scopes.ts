@@ -1,6 +1,10 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import type {
+  PluginRegistry,
+  PluginSessionActionRegistryRegistration,
+} from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
@@ -9,6 +13,7 @@ import {
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-descriptors.js";
+import type { GatewayMethodDescriptor } from "./methods/descriptor.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -40,6 +45,92 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readRegistryArray(
+  registry: PluginRegistry | null | undefined,
+  read: (registry: PluginRegistry) => unknown,
+): readonly unknown[] {
+  if (!registry) {
+    return [];
+  }
+  const value = readField(() => read(registry));
+  return value.ok && Array.isArray(value.value) ? value.value : [];
+}
+
+function readArrayLength(value: readonly unknown[]): number | null {
+  const length = readField(() => value.length);
+  return length.ok && Number.isInteger(length.value) && length.value >= 0 ? length.value : null;
+}
+
+function findPluginGatewayMethodDescriptor(
+  registry: PluginRegistry | null | undefined,
+  method: string,
+): GatewayMethodDescriptor | undefined {
+  const descriptors = readRegistryArray(registry, (value) => value.gatewayMethodDescriptors);
+  const length = readArrayLength(descriptors);
+  if (length === null) {
+    return undefined;
+  }
+  let index = 0;
+  while (index < length) {
+    const descriptor = readField(() => descriptors[index] as GatewayMethodDescriptor);
+    const name: ReadResult<string> = descriptor.ok
+      ? readField(() => descriptor.value.name)
+      : { ok: false };
+    if (name.ok && name.value === method) {
+      return descriptor.value;
+    }
+    index += 1;
+  }
+  return undefined;
+}
+
+function findPluginSessionActionRegistration(params: {
+  actionId: string;
+  pluginId: string;
+  registry: PluginRegistry | null | undefined;
+}): PluginSessionActionRegistryRegistration | undefined {
+  const registrations = readRegistryArray(params.registry, (value) => value.sessionActions);
+  const length = readArrayLength(registrations);
+  if (length === null) {
+    return undefined;
+  }
+  let index = 0;
+  while (index < length) {
+    const registration = readField(
+      () => registrations[index] as PluginSessionActionRegistryRegistration,
+    );
+    const pluginId: ReadResult<string> = registration.ok
+      ? readField(() => registration.value.pluginId)
+      : { ok: false };
+    const action: ReadResult<PluginSessionActionRegistryRegistration["action"]> = registration.ok
+      ? readField(() => registration.value.action)
+      : { ok: false };
+    const actionId: ReadResult<string> = action.ok
+      ? readField(() => action.value.id)
+      : { ok: false };
+    if (
+      pluginId.ok &&
+      pluginId.value === params.pluginId &&
+      actionId.ok &&
+      actionId.value === params.actionId
+    ) {
+      return registration.value;
+    }
+    index += 1;
+  }
+  return undefined;
+}
+
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Core descriptors are authoritative, then reserved namespace policy, then active plugin
   // descriptors. Node/dynamic sentinels are intentionally excluded from operator scopes.
@@ -51,8 +142,9 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
-    (descriptor) => descriptor.name === method,
+  const pluginDescriptor = findPluginGatewayMethodDescriptor(
+    getPluginRegistryState()?.activeRegistry,
+    method,
   );
   const pluginScope = pluginDescriptor?.scope;
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
@@ -87,9 +179,11 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
-    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-  );
+  const registration = findPluginSessionActionRegistration({
+    actionId,
+    pluginId,
+    registry: getPluginRegistryState()?.activeRegistry,
+  });
   if (!registration) {
     return undefined;
   }
