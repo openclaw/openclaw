@@ -13,4 +13,19 @@ describe("sniffMimeFromBase64", () => {
 
     await expect(sniffMimeFromBase64(onePixelPng)).resolves.toBe("image/png");
   });
+
+  it("sniffs large base64 payloads from their prefix", async () => {
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const png = Buffer.concat([Buffer.from(onePixelPng, "base64"), Buffer.alloc(1_900_000)]);
+
+    await expect(sniffMimeFromBase64(png.toString("base64"))).resolves.toBe("image/png");
+  });
+
+  it("rejects malformed data after a valid MIME prefix", async () => {
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+    await expect(sniffMimeFromBase64(onePixelPng + "!")).resolves.toBeUndefined();
+  });
 });
