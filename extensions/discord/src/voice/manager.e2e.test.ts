@@ -464,7 +464,12 @@ describe("DiscordVoiceManager", () => {
   ) =>
     new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
-      cfg: cfgOverride,
+      cfg: {
+        ...cfgOverride,
+        agents: cfgOverride.agents ?? {
+          list: [{ id: "main", default: true }, { id: "agent-1" }],
+        },
+      },
       discordConfig,
       accountId: "default",
       runtime: createRuntime(),
@@ -5699,7 +5704,9 @@ describe("DiscordVoiceManager", () => {
       wavPath: "/tmp/test.wav",
       userId: "u-owner",
       durationSeconds: 1.2,
-      cfg: {},
+      cfg: {
+        agents: { list: [{ id: "main", default: true }, { id: "agent-1" }] },
+      },
       discordConfig,
       ownerAllowFrom: ["discord:u-owner"],
       runtime: createRuntime(),
