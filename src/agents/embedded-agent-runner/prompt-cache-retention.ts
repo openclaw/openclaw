@@ -50,6 +50,12 @@ export function resolveCacheRetention(
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }
+  // Anthropic API docs accept "standard" as a cache retention synonym for
+  // "short". Normalize it only within the Anthropic family gate so Google and
+  // prompt-cache-key providers are unaffected.
+  if (newVal === "standard" && family) {
+    return "short";
+  }
 
   const legacy = extraParams?.cacheControlTtl;
   if (legacy === "5m" && (family || googleEligible)) {

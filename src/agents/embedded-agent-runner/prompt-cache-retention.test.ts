@@ -121,6 +121,56 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("normalizes standard cacheRetention to short for Anthropic family providers", () => {
+    // Anthropic direct API accepts "standard" as a cache retention mode.
+    // normalize it to "short" so it survives the family gate.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "anthropic",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+    // For non-Anthropic-direct families (e.g. Bedrock), "standard" also maps
+    // to "short" instead of falling through to undefined.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "bedrock-converse-stream",
+        "us.anthropic.claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("does not normalize standard cacheRetention for Google providers", () => {
+    // "standard" is an Anthropic-specific alias; Google Gemini providers
+    // should not receive the normalization.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "google",
+        "google-generative-ai",
+        "gemini-3.1-pro-preview",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not normalize standard cacheRetention for prompt-cache-key providers", () => {
+    // "standard" is an Anthropic-specific alias; openai-completions
+    // providers with supportsPromptCacheKey should not receive it.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+        true,
+      ),
+    ).toBeUndefined();
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({
