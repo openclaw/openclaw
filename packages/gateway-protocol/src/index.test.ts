@@ -11,6 +11,7 @@ import {
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
+  validateMessageActionParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -132,6 +133,21 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts direct user identity in message action tool context", () => {
+    expect(
+      validateMessageActionParams({
+        channel: "matrix",
+        action: "read",
+        params: { roomId: "!dm:example.org" },
+        toolContext: {
+          currentChannelId: "room:!dm:example.org",
+          currentDirectUserId: "@alice:example.org",
+        },
+        idempotencyKey: "message-action-direct-user",
+      }),
+    ).toBe(true);
   });
 
   it("validates chat sends that suppress command interpretation", () => {

@@ -74,6 +74,7 @@ export const MessageActionToolContextSchema = Type.Object(
     currentMessagingTarget: Type.Optional(Type.String()),
     currentGraphChannelId: Type.Optional(Type.String()),
     currentChannelProvider: Type.Optional(Type.String()),
+    currentDirectUserId: Type.Optional(Type.String()),
     currentThreadTs: Type.Optional(Type.String()),
     currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     replyToMode: Type.Optional(

@@ -473,6 +473,8 @@ export type ChannelThreadingToolContext = {
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
+  /** Direct-message peer id for channels whose current DM room id is not the peer identity. */
+  currentDirectUserId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
