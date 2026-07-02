@@ -89,6 +89,37 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: media://inbound/doc---abc123.pdf (application/pdf)]");
   });
 
+  it("keeps the stable URI for text-like inbound documents (generic media:// resolver decodes them)", () => {
+    for (const mediaType of [
+      "text/plain",
+      "text/csv",
+      "application/json",
+      "application/ld+json",
+      "application/xml",
+    ]) {
+      const inboundPath = path.join(getMediaDir(), "inbound", "doc---abc123.txt");
+      const note = buildInboundMediaNote({
+        MediaPath: inboundPath,
+        MediaType: mediaType,
+        MediaUrl: inboundPath,
+      });
+      expect(note).toBe(`[media attached: media://inbound/doc---abc123.txt (${mediaType})]`);
+      expect(note).not.toContain(inboundPath);
+    }
+  });
+
+  it("renders office documents (xlsx) as a readable absolute path (no binary-aware consumer)", () => {
+    const inboundPath = path.join(getMediaDir(), "inbound", "workbook---abc123.xlsx");
+    const mediaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: mediaType,
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe(`[media attached: ${inboundPath} (${mediaType})]`);
+    expect(note).not.toContain("media://inbound/");
+  });
+
   it("keeps the stable URI for inbound images (native injection + workspace-only safety)", () => {
     const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
     const note = buildInboundMediaNote({

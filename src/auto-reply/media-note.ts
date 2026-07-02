@@ -10,10 +10,11 @@ function stripDarwinPrivatePrefix(value: string): string {
 
 /**
  * MIME types (or prefixes) whose inbound attachments the runtime either inlines
- * (image -> vision, audio -> transcript) or resolves through a dedicated
- * claim-check tool that understands `media://inbound/<id>` (e.g. the PDF tool,
- * native image injection). For these, the stable `media://inbound/` URI is the
- * correct prompt-visible reference and the raw host path is intentionally hidden.
+ * (image -> vision, audio -> transcript) or resolves through a consumer that
+ * understands `media://inbound/<id>` — a dedicated claim-check tool (PDF tool,
+ * native image injection) or the generic media resolver, which decodes
+ * text-like payloads as text. For these, the stable `media://inbound/` URI is
+ * the correct prompt-visible reference and the raw host path stays hidden.
  */
 function inboundTypeHasManagedConsumer(type: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(type);
@@ -25,7 +26,15 @@ function inboundTypeHasManagedConsumer(type: string | undefined): boolean {
     normalized.startsWith("image/") ||
     normalized.startsWith("audio/") ||
     normalized.startsWith("video/") ||
-    normalized === "application/pdf"
+    normalized === "application/pdf" ||
+    // Text-like documents decode fine through the generic media:// resolver,
+    // so they keep the URI form; only binary types with no binary-aware
+    // consumer (zip, octet-stream, office docs, ...) fall through to a path.
+    normalized.startsWith("text/") ||
+    normalized === "application/json" ||
+    normalized === "application/xml" ||
+    normalized.endsWith("+json") ||
+    normalized.endsWith("+xml")
   );
 }
 
