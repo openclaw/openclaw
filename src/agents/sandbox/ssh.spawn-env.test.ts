@@ -8,7 +8,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
-import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
+
+const SSH_SANDBOX_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 const { spawnMock, spawnCommandMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -129,7 +130,7 @@ describe("ssh subprocess env sanitization", () => {
     const baseEnv = options.baseEnv;
     expect(baseEnv.OPENAI_API_KEY).toBeUndefined();
     expect(baseEnv.LANG).toBe("en_US.UTF-8");
-    expect(options.maxBuffer).toBe(SANDBOX_COMMAND_MAX_BUFFER_BYTES);
+    expect(options.maxBuffer).toBe(SSH_SANDBOX_MAX_OUTPUT_BYTES);
   });
 
   it("rejects transport failures even when ssh exits zero", async () => {
