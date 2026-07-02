@@ -16,7 +16,6 @@ import {
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   describeToolResultMediaPlaceholder,
-  extractToolResultImageBlocks,
   extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
@@ -83,6 +82,37 @@ type GoogleGenerateContentRequest = {
   tools?: Array<Record<string, unknown>>;
   toolConfig?: Record<string, unknown>;
 };
+
+type GoogleToolResultImageBlock = {
+  type: "image";
+  mimeType: string;
+  data: string;
+};
+
+function normalizeGoogleToolResultBlocks(blocks: unknown): readonly unknown[] {
+  if (Array.isArray(blocks)) {
+    return blocks;
+  }
+  if (blocks === null || blocks === undefined) {
+    return [];
+  }
+  return [blocks];
+}
+
+function isGoogleToolResultImageBlock(block: unknown): block is GoogleToolResultImageBlock {
+  return (
+    block !== null &&
+    typeof block === "object" &&
+    !Array.isArray(block) &&
+    (block as Record<string, unknown>).type === "image" &&
+    typeof (block as Record<string, unknown>).mimeType === "string" &&
+    typeof (block as Record<string, unknown>).data === "string"
+  );
+}
+
+function extractGoogleToolResultImageBlocks(blocks: unknown): GoogleToolResultImageBlock[] {
+  return normalizeGoogleToolResultBlocks(blocks).filter(isGoogleToolResultImageBlock);
+}
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
@@ -652,7 +682,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? extractToolResultImageBlocks(msg.content)
+        ? extractGoogleToolResultImageBlocks(msg.content)
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
