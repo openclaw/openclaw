@@ -5,6 +5,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -20,6 +21,13 @@ import {
 } from "./conversation-route.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+import {
+  TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+  TELEGRAM_POLL_REGISTRY_NAMESPACE,
+  recordTelegramPollRegistryEntry,
+  setTelegramPollRegistryStoreForTest,
+  type TelegramPollRegistryEntry,
+} from "./poll-registry.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 const {
@@ -1773,6 +1781,458 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(String(firstEditMessageTextArg(2))).toContain('Could not resolve model "shared-model".');
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
+  });
+
+  it("routes poll_answer events into the originating session", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-1",
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-1",
+          option_ids: [1],
+          user: {
+            id: 9,
+            first_name: "Ada",
+            last_name: "Lovelace",
+            username: "ada",
+          },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+        'Telegram poll vote: "Ready?" \u2014 Ada Lovelace (@ada) voted: No',
+        expect.objectContaining({
+          contextKey: "telegram:poll_answer:poll-1:9:1",
+          sessionKey: expect.stringContaining("telegram:group:-1001234567890:topic:99"),
+        }),
+      );
+      expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("routes poll_answer events through configured topic agents", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-topic-agent",
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      question: "Escalate?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-1001234567890": {
+                requireMention: false,
+                topics: {
+                  "99": { agentId: "forum-agent", requireMention: false },
+                },
+              },
+            },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-topic-agent",
+          option_ids: [0],
+          user: {
+            id: 9,
+            first_name: "Ada",
+            username: "ada",
+          },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+        'Telegram poll vote: "Escalate?" \u2014 Ada (@ada) voted: Yes',
+        expect.objectContaining({
+          contextKey: "telegram:poll_answer:poll-topic-agent:9:0",
+          sessionKey: expect.stringContaining(
+            "agent:forum-agent:telegram:group:-1001234567890:topic:99",
+          ),
+        }),
+      );
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("ignores poll_answer events with no registry entry", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "missing-poll",
+          option_ids: [0],
+          user: { id: 9, first_name: "Ada" },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks poll_answer events from unauthorized direct senders", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-2",
+      chatId: "1234",
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["12345"],
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-2",
+          option_ids: [1],
+          user: { id: 9, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("routes authorized direct poll_answer events into the DM session", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockClear();
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-dm",
+      chatId: "9876",
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["9876"],
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-dm",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      // A positive chatId routes through the configured direct-message session; DMs are
+      // never forums, so getChat stays untouched.
+      expect(getChatSpy).not.toHaveBeenCalled();
+      expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+        'Telegram poll vote: "Ready?" \u2014 Ada (@ada) voted: Yes',
+        expect.objectContaining({
+          contextKey: "telegram:poll_answer:poll-dm:9876:0",
+          sessionKey: "agent:main:main",
+        }),
+      );
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("blocks authorized direct poll_answer events when requireTopic=true but no topic is known", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockClear();
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-dm-topic",
+      chatId: "9876",
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      // Same authorized allowlist as the routing test above; only requireTopic differs, so the block
+      // is attributable to the topic gate rather than sender authorization.
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["9876"],
+            direct: { "9876": { requireTopic: true } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-dm-topic",
+          option_ids: [0],
+          user: { id: 9876, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      // poll_answer carries no thread id, so a requireTopic=true DM has no known topic and must be dropped.
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("ignores poll_answer events from bot voters without any chat I/O", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-bot",
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-bot",
+          option_ids: [1],
+          user: { id: 9, first_name: "Bot", is_bot: true },
+        },
+      });
+
+      // The bot-voter drop must short-circuit before resolveTelegramForumFlag's getChat call.
+      expect(getChatSpy).not.toHaveBeenCalled();
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("ignores poll_answer retractions with empty option_ids", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    getChatSpy.mockClear();
+    getChatSpy.mockResolvedValue({ id: -1001234567890, type: "supergroup", is_forum: true });
+
+    const pollStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+      namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+      maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+    });
+    await pollStore.clear();
+    setTelegramPollRegistryStoreForTest(pollStore);
+    await recordTelegramPollRegistryEntry({
+      pollId: "poll-retract",
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      question: "Ready?",
+      options: ["Yes", "No"],
+    });
+
+    try {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler({
+        pollAnswer: {
+          poll_id: "poll-retract",
+          option_ids: [],
+          user: { id: 9, first_name: "Ada", username: "ada" },
+        },
+      });
+
+      // A retraction carries no vote to route; drop it before any chat I/O.
+      expect(getChatSpy).not.toHaveBeenCalled();
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
+  });
+
+  it("does not crash or enqueue when the poll registry lookup fails", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    // Stub store whose lookup throws: findTelegramPollRegistryEntry must swallow the error,
+    // log, and return null so the handler treats it like a missing entry.
+    const failingLookup = vi.fn(async () => {
+      throw new Error("registry db unavailable");
+    });
+    const failingStore = {
+      lookup: failingLookup,
+    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>;
+    setTelegramPollRegistryStoreForTest(failingStore);
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("poll_answer") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await expect(
+        handler({
+          pollAnswer: {
+            poll_id: "poll-err",
+            option_ids: [0],
+            user: { id: 9, first_name: "Ada" },
+          },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(failingLookup).toHaveBeenCalledTimes(1);
+      expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    } finally {
+      setTelegramPollRegistryStoreForTest(undefined);
+      resetPluginStateStoreForTests();
+    }
   });
 
   it("includes sender identity in group envelope headers", async () => {
