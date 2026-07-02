@@ -4,10 +4,14 @@ import { resolveGroupName, clearGroupNameCache } from "./bot.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const mockGetChatInfo = vi.hoisted(() => vi.fn());
+const mockClearClientCache = vi.hoisted(() => vi.fn());
 const mockCreateFeishuClient = vi.hoisted(() => vi.fn());
 
 vi.mock("./chat.js", () => ({ getChatInfo: mockGetChatInfo }));
-vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
+vi.mock("./client.js", () => ({
+  clearClientCache: mockClearClientCache,
+  createFeishuClient: mockCreateFeishuClient,
+}));
 
 function makeAccount(id = "test-account"): ResolvedFeishuAccount {
   return {
@@ -49,6 +53,7 @@ describe("resolveGroupName", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockClearClientCache.mockReset();
     mockGetChatInfo.mockReset();
     mockCreateFeishuClient.mockReset();
     mockCreateFeishuClient.mockReturnValue({});

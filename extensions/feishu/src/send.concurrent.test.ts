@@ -11,19 +11,24 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 
 const {
   mockClientCreate,
+  mockClearClientCache,
   mockCreateFeishuClient,
   mockResolveFeishuAccount,
   mockConvertMarkdownTables,
   mockResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
   mockClientCreate: vi.fn(),
+  mockClearClientCache: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
   mockResolveFeishuAccount: vi.fn(),
   mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
 
-vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
+vi.mock("./client.js", () => ({
+  clearClientCache: mockClearClientCache,
+  createFeishuClient: mockCreateFeishuClient,
+}));
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
   resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
