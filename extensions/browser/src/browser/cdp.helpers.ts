@@ -5,6 +5,7 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -19,6 +20,8 @@ import {
   withNoProxyForCdpUrl,
 } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+
+export const CDP_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
@@ -316,7 +319,13 @@ export async function fetchJson<T>(
 ): Promise<T> {
   const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
   try {
-    return (await response.json()) as T;
+    const body = await readResponseWithLimit(response, CDP_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `CDP JSON response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    return JSON.parse(body.toString("utf8")) as T;
   } finally {
     await release();
   }

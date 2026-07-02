@@ -4,6 +4,7 @@
  * Probes /json/version and WebSocket health, redacts sensitive endpoint data,
  * and formats status output for browser doctor/status flows.
  */
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -12,6 +13,7 @@ import { CHROME_REACHABILITY_TIMEOUT_MS, CHROME_WS_READY_TIMEOUT_MS } from "./cd
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
+  CDP_JSON_RESPONSE_MAX_BYTES,
   fetchCdpChecked,
   isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
@@ -110,7 +112,13 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      const body = await readResponseWithLimit(response, CDP_JSON_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `CDP /json/version response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      });
+      const data = JSON.parse(body.toString("utf8")) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }

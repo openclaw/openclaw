@@ -467,19 +467,24 @@ describe("browser chrome helpers", () => {
   it("reports reachability based on /json/version", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
     );
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
 
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        json: async () => ({}),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("{}", { status: 400, headers: { "content-type": "application/json" } }),
+        ),
     );
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
 
@@ -490,10 +495,14 @@ describe("browser chrome helpers", () => {
   it("diagnoses /json/version responses that omit the websocket URL", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ Browser: "Chrome/Mock" }),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/Mock" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
     );
 
     const diagnostic = expectFailedChromeCdpDiagnostic(
@@ -506,10 +515,12 @@ describe("browser chrome helpers", () => {
   it("allows loopback CDP probes while still blocking non-loopback private targets in strict SSRF mode", async () => {
     const fetchSpy = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
       .mockRejectedValue(new Error("should not be called"));
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -794,10 +805,11 @@ describe("browser chrome helpers", () => {
     // connections (Browserless/Browserbase-style provider).
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}), // empty — no webSocketDebuggerUrl
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        ),
     );
     // A real WS server accepts the handshake.
     const wss = new WebSocketServer({
@@ -821,10 +833,11 @@ describe("browser chrome helpers", () => {
   it("falls back to a direct WS readiness check when /json/version has no debugger URL", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        ),
     );
     const wss = new WebSocketServer({
       port: 0,
@@ -861,10 +874,11 @@ describe("browser chrome helpers", () => {
     // webSocketDebuggerUrl is absent — the original URL is returned as-is.
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        ),
     );
     await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
       "ws://127.0.0.1:12345",
@@ -887,10 +901,14 @@ describe("browser chrome helpers", () => {
   it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
     );
     const proc = makeChromeTestProc();
     await stopChromeWithProc(proc, 1);
@@ -915,10 +933,14 @@ describe("browser chrome helpers", () => {
   it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
     );
     const proc = makeChromeTestProc();
     const release = vi.fn();
