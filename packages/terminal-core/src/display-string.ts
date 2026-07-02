@@ -77,6 +77,10 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
 function replaceHomePath(input: string, display: { home: string; prefix: string }): string {
   let output = "";
   let cursor = 0;
+  const isBeforeBoundary = (value: string | undefined) =>
+    value === undefined || value === "/" || value === "\\" || /[\s("'`:=\[{,]/u.test(value);
+  const isAfterBoundary = (value: string | undefined) =>
+    value === undefined || value === "/" || value === "\\";
 
   while (cursor < input.length) {
     const index = input.indexOf(display.home, cursor);
@@ -84,8 +88,9 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
       return `${output}${input.slice(cursor)}`;
     }
 
+    const before = input[index - 1];
     const after = input[index + display.home.length];
-    if (after === undefined || after === "/" || after === "\\") {
+    if (isBeforeBoundary(before) && isAfterBoundary(after)) {
       output += `${input.slice(cursor, index)}${display.prefix}`;
     } else {
       output += input.slice(cursor, index + display.home.length);

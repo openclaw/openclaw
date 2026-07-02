@@ -1,6 +1,6 @@
-import { note as clackNote } from "@clack/prompts";
 // Terminal Core tests cover table behavior.
 import path from "node:path";
+import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
@@ -192,14 +192,22 @@ describe("renderTable", () => {
         { Path: `${home}/project` },
         { Path: `${home}\\project` },
         { Path: `${home}2/project` },
+        { Path: `prefix${home}/project` },
+        { Path: `Workspace: ${home}/project` },
+        { Path: `path=${home}/project` },
       ],
     });
 
+    const embedded = `prefix${home}/project`;
     expect(out).toContain("~\n");
     expect(out).toContain("~/project");
     expect(out).toContain("~\\project");
     expect(out).toContain(`${home}2/project`);
+    expect(out).toContain(embedded);
+    expect(out).toContain("Workspace: ~/project");
+    expect(out).toContain("path=~/project");
     expect(out).not.toContain("~2/project");
+    expect(out).not.toContain("prefix~/project");
   });
 
   it("keeps OPENCLAW_HOME as the display prefix for exact and child paths", () => {
