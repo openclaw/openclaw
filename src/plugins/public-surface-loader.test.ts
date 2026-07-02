@@ -9,6 +9,7 @@ import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-loader-"));
@@ -36,6 +37,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+  }
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
 });
 
@@ -310,6 +316,139 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "api.js",
       }).marker,
     ).toBe("demo");
+  });
+
+  it("falls back to installed plugin package artifacts when bundled resolution misses", async () => {
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { modulePath },
+      }),
+    }));
+
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
+    const stateDir = path.join(tempRoot, "state");
+    const projectRoot = path.join(stateDir, "npm", "projects", "openclaw-demo-abc123");
+    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "demo");
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw-demo-abc123",
+        dependencies: { "@openclaw/demo": "2026.6.11" },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        version: "2026.6.11",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "demo" }),
+      "utf8",
+    );
+    const installedArtifactPath = path.join(packageDir, "dist", "gateway-auth-api.js");
+    fs.writeFileSync(installedArtifactPath, 'export const marker = "installed";\n', "utf8");
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=installed-plugin-artifacts");
+
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+        dirName: "demo",
+        artifactBasename: "gateway-auth-api.js",
+      }).modulePath,
+    ).toBe(fs.realpathSync(installedArtifactPath));
+
+    // Artifacts missing from both bundled and installed roots still fail with
+    // the sentinel message optional-artifact consumers rely on.
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync({
+        dirName: "demo",
+        artifactBasename: "message-tool-api.js",
+      }),
+    ).toThrow("Unable to resolve bundled plugin public surface demo/message-tool-api.js");
+  });
+
+  it("prefers bundled artifacts over installed plugin packages", async () => {
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { modulePath },
+      }),
+    }));
+
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    const bundledArtifactPath = path.join(bundledPluginsDir, "demo", "gateway-auth-api.js");
+    fs.mkdirSync(path.dirname(bundledArtifactPath), { recursive: true });
+    fs.writeFileSync(bundledArtifactPath, 'export const marker = "bundled";\n', "utf8");
+    const stateDir = path.join(tempRoot, "state");
+    const packageDir = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "openclaw-demo-abc123",
+      "node_modules",
+      "@openclaw",
+      "demo",
+    );
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "npm", "projects", "openclaw-demo-abc123", "package.json"),
+      JSON.stringify({
+        name: "openclaw-demo-abc123",
+        dependencies: { "@openclaw/demo": "2026.6.11" },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        version: "2026.6.11",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "demo" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "dist", "gateway-auth-api.js"),
+      'export const marker = "installed";\n',
+      "utf8",
+    );
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=bundled-over-installed-artifacts");
+
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+        dirName: "demo",
+        artifactBasename: "gateway-auth-api.js",
+      }).modulePath,
+    ).toBe(fs.realpathSync(bundledArtifactPath));
   });
 
   it("rejects public artifacts that change after boundary validation", async () => {
