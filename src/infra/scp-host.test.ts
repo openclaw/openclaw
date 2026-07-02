@@ -34,6 +34,7 @@ describe("scp remote host", () => {
     "bot@fe80::1",
     "bot@[fe80::1%en0]",
     "bot name@gateway-host",
+    "bot@host\u0085name",
   ])("rejects unsafe host tokens: %j", (value) => {
     expect(normalizeScpRemoteHost(value)).toBeUndefined();
     expect(isSafeScpRemoteHost(value)).toBe(false);
@@ -68,6 +69,7 @@ describe("scp remote path", () => {
       '/Users/demo/Library/Messages/Attachments/ab/cd/bad"path.jpg',
       "/Users/demo/Library/Messages/Attachments/ab/cd/bad'path.jpg",
       "/Users/demo/Library/Messages/Attachments/ab/cd/bad\\path.jpg",
+      "/Users/demo/Library/Messages/Attachments/ab/cd/bad\u0085path.jpg",
     ].map((entry) =>
       typeof entry === "object" && entry !== null && "value" in entry
         ? entry
