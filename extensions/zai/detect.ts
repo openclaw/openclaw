@@ -92,6 +92,9 @@ async function probeZaiChatCompletions(params: {
         headers: {
           authorization: `Bearer ${params.apiKey}`,
           "content-type": "application/json",
+          "user-agent": process.env.OPENCLAW_VERSION?.trim()
+            ? `openclaw/${process.env.OPENCLAW_VERSION.trim()}`
+            : "openclaw",
         },
         body: JSON.stringify({
           model: params.modelId,

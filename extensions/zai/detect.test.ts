@@ -92,6 +92,35 @@ describe("detectZaiEndpoint", () => {
     vi.restoreAllMocks();
   });
 
+  it("sends openclaw user-agent on probe requests", async () => {
+    const version = "2026.6.30-test";
+    const prev = process.env.OPENCLAW_VERSION;
+    process.env.OPENCLAW_VERSION = version;
+    try {
+      const headers: Record<string, string> = {};
+      const fetchFn = (async (_url: string, init?: RequestInit) => {
+        Object.assign(headers, (init?.headers as Record<string, string>) ?? {});
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+
+      await detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        fetchFn,
+      });
+
+      expect(headers["user-agent"]).toBe(`openclaw/${version}`);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_VERSION;
+      } else {
+        process.env.OPENCLAW_VERSION = prev;
+      }
+    }
+  });
+
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {
     const scenarios: Array<{
       endpoint?: "global" | "cn" | "coding-global" | "coding-cn";
