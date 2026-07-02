@@ -14,6 +14,20 @@ import { hasCustomIdentity, isSlackCustomizeScopeError, sendMessageSlack } from 
 import type { SlackSendIdentity } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
+type SlackWebApiError = Error & {
+  data?: {
+    error?: unknown;
+  };
+};
+
+function isSlackEditIdentityArgumentError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = (err as SlackWebApiError).data?.error;
+  return code === "invalid_arguments" || code === "invalid_arg_name";
+}
+
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
@@ -316,12 +330,15 @@ export async function editSlackMessage(
     };
     await client.chat.update(updatePayload);
   } catch (err) {
-    // Mirror the send path: if the workspace lacks chat:write.customize, retry the
-    // edit without custom identity so the message still updates with the bot identity.
-    if (!hasCustomIdentity(identity) || !isSlackCustomizeScopeError(err)) {
+    // Mirror the send path: if custom authorship is unavailable or rejected, retry
+    // without identity so the message still updates with the bot identity.
+    if (
+      !hasCustomIdentity(identity) ||
+      (!isSlackCustomizeScopeError(err) && !isSlackEditIdentityArgumentError(err))
+    ) {
       throw err;
     }
-    logVerbose("slack edit: missing chat:write.customize, retrying without custom identity");
+    logVerbose("slack edit: custom identity unavailable, retrying without custom identity");
     await client.chat.update(basePayload);
   }
 }

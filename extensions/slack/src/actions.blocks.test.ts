@@ -107,6 +107,33 @@ describe("editSlackMessage blocks", () => {
     expect(update.mock.calls[1]?.[0]).not.toHaveProperty("username");
   });
 
+  it("retries the edit without identity when Slack rejects identity arguments", async () => {
+    const argumentError = Object.assign(new Error("invalid_arg_name"), {
+      data: { error: "invalid_arg_name" },
+    });
+    const update = vi
+      .fn<(payload: Record<string, unknown>) => Promise<{ ok: boolean }>>()
+      .mockRejectedValueOnce(argumentError)
+      .mockResolvedValueOnce({ ok: true });
+    const client = { chat: { update } } as unknown as ReturnType<typeof createSlackEditTestClient>;
+
+    await editSlackMessage("C123", "171234.567", "updated", {
+      token: "xoxb-test",
+      client,
+      identity: { username: "OpenClaw Agent", iconEmoji: ":lobster:" },
+    });
+
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        icon_emoji: ":lobster:",
+        username: "OpenClaw Agent",
+      }),
+    );
+    expect(update.mock.calls[1]?.[0]).not.toHaveProperty("icon_emoji");
+    expect(update.mock.calls[1]?.[0]).not.toHaveProperty("username");
+  });
+
   it("uses image block text as edit fallback", async () => {
     const client = createSlackEditTestClient();
 
