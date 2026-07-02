@@ -1516,7 +1516,7 @@ function createSystemMessageContent(
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
   if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
     const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
   }
   return sections.length > 0 ? sections.join("\n\n") : undefined;
