@@ -5,6 +5,7 @@ import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
+  readProviderJsonResponse,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
@@ -189,7 +190,10 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = (await resp.json()) as { owner?: string };
+            const body = await readProviderJsonResponse<{ owner?: string }>(
+              resp,
+              "thread-ownership",
+            );
             api.logger.info?.(
               `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
             );
