@@ -173,9 +173,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");
     expect(payload.text).toContain("Deny: /approve plugin:approval-123 deny");
-    expect(payload.text).toContain(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    expect(payload.text).toContain("Allow Always is unavailable.");
     expect(
       payload.text?.trim().endsWith("Reply with: /approve plugin:approval-123 allow-once|deny"),
     ).toBe(true);
@@ -185,6 +183,24 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       approvalKind: "plugin",
       allowedDecisions: ["allow-once", "deny"],
     });
+  });
+
+  it("renders reason-specific exec reaction prompts when allow-always is one-shot", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "no-reusable-pattern",
+        },
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.",
+    );
   });
 
   it("keeps plugin command actions visible for custom prompt views", () => {

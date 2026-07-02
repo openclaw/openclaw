@@ -368,6 +368,21 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("renders reason-specific copy when allow-always is one-shot only", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one",
+      allowAlwaysUnavailableReason: "no-reusable-pattern",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "bash -lc 'echo hi 2>&1'",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.",
+    );
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

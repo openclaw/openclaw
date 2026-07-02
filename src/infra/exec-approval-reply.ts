@@ -18,6 +18,8 @@ import {
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
 import {
+  formatExecApprovalAllowAlwaysUnavailableReason,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   type ExecHost,
@@ -51,6 +53,9 @@ export type ExecApprovalPendingReplyParams = {
   approvalSlug: string;
   approvalCommandId?: string;
   ask?: string | null;
+  allowAlwaysUnavailableReason?:
+    | import("./exec-approvals.js").ExecApprovalAllowAlwaysUnavailableReason
+    | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   command: string;
@@ -377,7 +382,10 @@ export function buildExecApprovalPendingReplyPayload(
   }
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      formatExecApprovalAllowAlwaysUnavailableReason(
+        params.allowAlwaysUnavailableReason ??
+          resolveExecApprovalAllowAlwaysUnavailableReason({ ask: params.ask ?? null }),
+      ),
     );
   }
   const info: string[] = [];

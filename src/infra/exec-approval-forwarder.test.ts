@@ -645,6 +645,27 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Allow Always is unavailable");
   });
 
+  it("renders one-shot allow-always copy in forwarded fallback text", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "no-reusable-pattern",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain(
+      "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.",
+    );
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",

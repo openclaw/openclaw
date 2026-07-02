@@ -3,6 +3,7 @@ import type { InteractiveReplyButton } from "../interactive/payload.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type {
+  ExecApprovalAllowAlwaysUnavailableReason,
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
@@ -40,6 +41,7 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   approvalKind: "exec";
   ask?: string | null;
   agentId?: string | null;
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandText: string;

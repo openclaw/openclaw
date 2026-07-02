@@ -27,6 +27,7 @@ let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSec
 let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
 let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").normalizeExecApprovalUnavailableDecisions;
 let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
+let resolveExecApprovalAllowAlwaysUnavailableReason: typeof import("./exec-approvals.js").resolveExecApprovalAllowAlwaysUnavailableReason;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
@@ -55,6 +56,8 @@ async function loadActualExecApprovalModules(): Promise<void> {
   normalizeExecApprovalUnavailableDecisions =
     execApprovals.normalizeExecApprovalUnavailableDecisions;
   resolveExecApprovalUnavailableDecisions = execApprovals.resolveExecApprovalUnavailableDecisions;
+  resolveExecApprovalAllowAlwaysUnavailableReason =
+    execApprovals.resolveExecApprovalAllowAlwaysUnavailableReason;
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
@@ -263,6 +266,18 @@ describe("exec approvals policy helpers", () => {
         allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
       }),
     ).toEqual(["allow-always"]);
+  });
+
+  it("derives reason-specific allow-always unavailability", () => {
+    expect(resolveExecApprovalAllowAlwaysUnavailableReason({ ask: "always" })).toBe(
+      "approval-policy-always",
+    );
+    expect(
+      resolveExecApprovalAllowAlwaysUnavailableReason({
+        ask: "on-miss",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      }),
+    ).toBe("no-reusable-pattern");
   });
 
   it.each([

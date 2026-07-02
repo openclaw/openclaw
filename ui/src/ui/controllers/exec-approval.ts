@@ -14,6 +14,7 @@ export type ExecApprovalRequestPayload = {
     startIndex: number;
     endIndex: number;
   }[];
+  allowAlwaysUnavailableReason?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -134,6 +135,10 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
+      allowAlwaysUnavailableReason:
+        typeof request.allowAlwaysUnavailableReason === "string"
+          ? request.allowAlwaysUnavailableReason
+          : null,
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
     },
     createdAtMs,

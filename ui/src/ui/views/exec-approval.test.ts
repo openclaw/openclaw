@@ -158,6 +158,20 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("renders reason-specific allow-always warning text", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "deny"];
+    request.request.allowAlwaysUnavailableReason = "no-reusable-pattern";
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Allow Always is unavailable because OpenClaw could not derive a safe reusable approval pattern for this command.",
+    );
+  });
+
   it("falls back to ask when exec approval decisions are omitted", async () => {
     const request = createExecRequest();
     request.request.ask = "always";
