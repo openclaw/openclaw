@@ -24,6 +24,7 @@ import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bund
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
