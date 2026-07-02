@@ -32,6 +32,12 @@ export type RuntimeLlmAuthority = {
   allowAgentIdOverride?: boolean;
   allowModelOverride?: boolean;
   allowedModels?: readonly string[];
+  /**
+   * Whether the operator explicitly configured an `allowedModels` list,
+   * even if it normalizes to empty. When true and `allowedModels` is empty,
+   * the runtime must fail closed rather than allowing any model override.
+   */
+  hasAllowedModelsConfig?: boolean;
   allowComplete?: boolean;
   denyReason?: string;
 };
@@ -309,7 +315,8 @@ function resolveAuthorityModelPolicy(
   return buildPolicyFromEntry({
     allowAgentIdOverride: authority.allowAgentIdOverride,
     allowModelOverride: authority.allowModelOverride,
-    hasAllowedModelsConfig: authority.allowedModels !== undefined,
+    hasAllowedModelsConfig:
+      authority.hasAllowedModelsConfig === true || authority.allowedModels !== undefined,
     allowedModels: authority.allowedModels,
   });
 }
