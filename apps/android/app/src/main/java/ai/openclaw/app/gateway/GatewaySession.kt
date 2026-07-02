@@ -388,6 +388,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
