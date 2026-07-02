@@ -50,11 +50,10 @@ export function resolveCacheRetention(
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }
-  // Anthropic direct API accepts "standard" as a cache retention mode; normalize
-  // it to "short" so the value survives the family gate instead of falling
-  // through to undefined. Fixes Bedrock Claude models where the family is not
-  // "anthropic-direct" and the explicit setting was silently discarded.
-  if (newVal === "standard") {
+  // Anthropic API docs accept "standard" as a cache retention synonym for
+  // "short". Normalize it only within the Anthropic family gate so Google and
+  // prompt-cache-key providers are unaffected.
+  if (newVal === "standard" && family) {
     return "short";
   }
 

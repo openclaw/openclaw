@@ -144,6 +144,33 @@ describe("prompt cache retention", () => {
     ).toBe("short");
   });
 
+  it("does not normalize standard cacheRetention for Google providers", () => {
+    // "standard" is an Anthropic-specific alias; Google Gemini providers
+    // should not receive the normalization.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "google",
+        "google-generative-ai",
+        "gemini-3.1-pro-preview",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not normalize standard cacheRetention for prompt-cache-key providers", () => {
+    // "standard" is an Anthropic-specific alias; openai-completions
+    // providers with supportsPromptCacheKey should not receive it.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+        true,
+      ),
+    ).toBeUndefined();
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({
