@@ -227,6 +227,25 @@ export async function handleSlackMessageAction(params: {
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
   }
 
+  if (action === "set-suggested-prompts") {
+    const channelId = resolveChannelId();
+    const threadTs =
+      readStringParam(actionParams, "threadTs") ??
+      readStringParam(actionParams, "threadId") ??
+      readStringParam(actionParams, "replyTo", { required: true });
+    return await invoke(
+      {
+        action: "setSuggestedPrompts",
+        channelId,
+        threadTs,
+        title: readStringParam(actionParams, "title"),
+        prompts: actionParams.prompts,
+        accountId,
+      },
+      cfg,
+    );
+  }
+
   if (action === "download-file") {
     const fileIdParam = readStringParam(actionParams, "fileId");
     const messageIdParam =

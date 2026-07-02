@@ -59,6 +59,36 @@ function createSlackTopLevelActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackSuggestedPromptsActionSchema(): Record<string, TSchema> {
+  return {
+    threadTs: Type.Optional(
+      Type.String({
+        description:
+          'Slack assistant thread timestamp. Required for action="set-suggested-prompts"; threadId or replyTo are accepted aliases.',
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        description:
+          'Optional Slack title shown above the suggested prompt list for action="set-suggested-prompts".',
+      }),
+    ),
+    prompts: Type.Optional(
+      Type.Array(
+        Type.Object({
+          title: Type.String(),
+          message: Type.String(),
+        }),
+        {
+          maxItems: 4,
+          description:
+            'Up to four Slack assistant suggested prompts for action="set-suggested-prompts". Each prompt needs title and message.',
+        },
+      ),
+    ),
+  };
+}
+
 export function describeSlackMessageTool({
   cfg,
   accountId,
@@ -90,6 +120,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackTopLevelActionSchema(),
       actions: ["upload-file"],
+    });
+  }
+  if (actions.includes("set-suggested-prompts")) {
+    schema.push({
+      properties: createSlackSuggestedPromptsActionSchema(),
+      actions: ["set-suggested-prompts"],
     });
   }
   const messageIdActions: ChannelMessageActionName[] = [];

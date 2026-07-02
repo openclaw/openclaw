@@ -18,6 +18,10 @@ const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const setSlackAssistantSuggestedPrompts = vi.fn(async (..._args: unknown[]) => ({
+  ok: true,
+  prompts: [{ title: "Review", message: "Review the current plan." }],
+}));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
 describe("handleSlackAction", () => {
@@ -216,6 +220,7 @@ describe("handleSlackAction", () => {
       removeOwnSlackReactions,
       removeSlackReaction,
       sendSlackMessage,
+      setSlackAssistantSuggestedPrompts,
       unpinSlackMessage,
     });
   });
@@ -1227,5 +1232,50 @@ describe("handleSlackAction", () => {
       handleSlackAction({ action: "emojiList", limit: 2.5 }, slackConfig()),
     ).rejects.toThrow("limit must be a positive integer.");
     expect(listSlackEmojis).not.toHaveBeenCalled();
+  });
+
+  it("sets Slack assistant suggested prompts", async () => {
+    const cfg = slackConfig();
+    const result = await handleSlackAction(
+      {
+        action: "setSuggestedPrompts",
+        channelId: "C123",
+        threadTs: "1777423717.666499",
+        title: "Next",
+        prompts: [{ title: "Review", message: "Review the current plan." }],
+      },
+      cfg,
+    );
+
+    expect(setSlackAssistantSuggestedPrompts).toHaveBeenCalledWith(
+      "C123",
+      "1777423717.666499",
+      {
+        title: "Next",
+        prompts: [{ title: "Review", message: "Review the current plan." }],
+      },
+      {
+        cfg,
+      },
+    );
+    expect(requireDetails(result)).toEqual({
+      ok: true,
+      prompts: [{ title: "Review", message: "Review the current plan." }],
+    });
+  });
+
+  it("respects assistant prompt action gating", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "setSuggestedPrompts",
+          channelId: "C123",
+          threadTs: "1777423717.666499",
+          prompts: [{ title: "Review", message: "Review the current plan." }],
+        },
+        slackConfig({ actions: { assistantPrompts: false } }),
+      ),
+    ).rejects.toThrow("Slack assistant prompts are disabled.");
+    expect(setSlackAssistantSuggestedPrompts).not.toHaveBeenCalled();
   });
 });

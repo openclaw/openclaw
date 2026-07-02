@@ -52,6 +52,9 @@ export function listSlackMessageActions(
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
+  if (isActionEnabled("assistantPrompts")) {
+    actions.add("set-suggested-prompts");
+  }
   return Array.from(actions);
 }
 

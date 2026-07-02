@@ -61,6 +61,7 @@ describe("Slack message tools", () => {
       "list-pins",
       "member-info",
       "emoji-list",
+      "set-suggested-prompts",
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
@@ -115,7 +116,23 @@ describe("Slack message tools", () => {
       "list-pins",
       "member-info",
       "emoji-list",
+      "set-suggested-prompts",
     ]);
+  });
+
+  it("honors assistant prompt action gates", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          actions: {
+            assistantPrompts: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).not.toContain("set-suggested-prompts");
   });
 
   it("honors the selected Slack account during discovery", () => {
@@ -129,6 +146,7 @@ describe("Slack message tools", () => {
             pins: false,
             memberInfo: false,
             emojiList: false,
+            assistantPrompts: false,
           },
           accounts: {
             default: {
@@ -139,6 +157,7 @@ describe("Slack message tools", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                assistantPrompts: false,
               },
             },
             work: {
@@ -149,6 +168,7 @@ describe("Slack message tools", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                assistantPrompts: false,
               },
             },
           },
@@ -248,6 +268,22 @@ describe("Slack message tools", () => {
     expect(property.description).toContain("threadId: null");
   });
 
+  it("describes Slack suggested prompt action params", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+    });
+    const { schema } = requireSchemaProperty(discovery, "prompts");
+
+    expect(schema.actions).toEqual(["set-suggested-prompts"]);
+    expect(Object.keys(schema.properties).toSorted()).toEqual(["prompts", "threadTs", "title"]);
+  });
+
   it("omits Slack file and message id schemas when those actions are disabled", () => {
     const discovery = describeSlackMessageTool({
       cfg: {
@@ -260,6 +296,7 @@ describe("Slack message tools", () => {
               pins: false,
               memberInfo: false,
               emojiList: false,
+              assistantPrompts: false,
             },
           },
         },

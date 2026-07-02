@@ -109,6 +109,56 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts assistant suggested prompt config", () => {
+    expectSlackConfigValid({
+      assistantPrompts: {
+        title: "What next?",
+        prompts: [
+          { title: "Status", message: "What's the current status?" },
+          { title: "Diff", message: "Show me the diff." },
+        ],
+      },
+      accounts: {
+        ops: {
+          assistantPrompts: false,
+        },
+      },
+    });
+  });
+
+  it("rejects invalid assistant suggested prompt config", () => {
+    expectSlackConfigIssue(
+      {
+        assistantPrompts: {
+          prompts: [],
+        },
+      },
+      "assistantPrompts.prompts",
+    );
+    expectSlackConfigIssue(
+      {
+        assistantPrompts: {
+          prompts: [
+            { title: "One", message: "1" },
+            { title: "Two", message: "2" },
+            { title: "Three", message: "3" },
+            { title: "Four", message: "4" },
+            { title: "Five", message: "5" },
+          ],
+        },
+      },
+      "assistantPrompts.prompts",
+    );
+    expectSlackConfigIssue(
+      {
+        assistantPrompts: {
+          prompts: [{ title: "Missing message" }],
+        },
+      },
+      "assistantPrompts",
+    );
+  });
+
   it("accepts Socket Mode ping/pong transport tuning", () => {
     expectSlackConfigValid({
       mode: "socket",

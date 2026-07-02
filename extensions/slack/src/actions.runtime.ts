@@ -13,5 +13,6 @@ export {
   removeOwnSlackReactions,
   removeSlackReaction,
   sendSlackMessage,
+  setSlackAssistantSuggestedPrompts,
   unpinSlackMessage,
 } from "./actions.js";

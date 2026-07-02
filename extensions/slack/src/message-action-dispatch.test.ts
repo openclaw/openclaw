@@ -254,6 +254,36 @@ describe("handleSlackMessageAction", () => {
     expectNoForwardedToolContext(invoke);
   });
 
+  it("maps suggested prompt updates to the Slack action runtime", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "set-suggested-prompts",
+        cfg,
+        params: {
+          to: "C123",
+          threadId: "1777423717.666499",
+          title: "Next",
+          prompts: [{ title: "Review", message: "Review the current plan." }],
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toEqual({
+      action: "setSuggestedPrompts",
+      channelId: "C123",
+      threadTs: "1777423717.666499",
+      title: "Next",
+      prompts: [{ title: "Review", message: "Review the current plan." }],
+      accountId: undefined,
+    });
+    expectForwardedCfg(invoke, cfg);
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();

@@ -5,6 +5,10 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
+import {
+  normalizeSlackAssistantSuggestedPrompts,
+  type SlackAssistantSuggestedPrompt,
+} from "./assistant-prompts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
@@ -390,6 +394,29 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+export async function setSlackAssistantSuggestedPrompts(
+  channelId: string,
+  threadTs: string,
+  params: {
+    title?: string;
+    prompts: unknown;
+  },
+  opts: SlackActionClientOpts = {},
+): Promise<{ ok: true; prompts: SlackAssistantSuggestedPrompt[] }> {
+  const prompts = normalizeSlackAssistantSuggestedPrompts(params.prompts);
+  if (prompts.length === 0) {
+    throw new Error("Slack suggested prompts require at least one prompt with title and message.");
+  }
+  const client = await getClient(opts, "write");
+  await client.assistant.threads.setSuggestedPrompts({
+    channel_id: channelId,
+    thread_ts: threadTs,
+    ...(params.title?.trim() ? { title: params.title.trim() } : {}),
+    prompts,
+  });
+  return { ok: true, prompts };
 }
 
 type SlackFileInfoSummary = {

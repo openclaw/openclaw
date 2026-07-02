@@ -21,6 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SlackAssistantSuggestedPrompt } from "../assistant-prompts.js";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -31,11 +32,6 @@ import { resolveSessionKey } from "./config.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-
-export type SlackAssistantSuggestedPrompt = {
-  title: string;
-  message: string;
-};
 
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;

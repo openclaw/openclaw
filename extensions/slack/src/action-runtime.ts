@@ -30,6 +30,7 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const assistantPromptActions = new Set(["setSuggestedPrompts"]);
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -72,6 +73,7 @@ export const slackActionRuntime = {
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
+  setSlackAssistantSuggestedPrompts: createLazySlackAction("setSlackAssistantSuggestedPrompts"),
   unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
 };
 
@@ -576,6 +578,24 @@ export async function handleSlackAction(
       }
     }
     return jsonResult({ ok: true, emojis: result });
+  }
+
+  if (assistantPromptActions.has(action)) {
+    if (!isActionEnabled("assistantPrompts")) {
+      throw new Error("Slack assistant prompts are disabled.");
+    }
+    const channelId = resolveChannelId();
+    const threadTs = readStringParam(params, "threadTs", { required: true });
+    const result = await slackActionRuntime.setSlackAssistantSuggestedPrompts(
+      channelId,
+      threadTs,
+      {
+        title: readStringParam(params, "title"),
+        prompts: params.prompts,
+      },
+      writeOpts,
+    );
+    return jsonResult(result);
   }
 
   throw new Error(`Unknown action: ${action}`);

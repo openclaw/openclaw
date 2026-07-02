@@ -101,7 +101,22 @@ export type SlackActionConfig = {
   memberInfo?: boolean;
   channelInfo?: boolean;
   emojiList?: boolean;
+  assistantPrompts?: boolean;
 };
+
+export type SlackAssistantPromptConfig = {
+  title: string;
+  message: string;
+};
+
+export type SlackAssistantPromptsConfig =
+  | false
+  | {
+      /** Optional Slack title shown above the suggested prompt list. */
+      title?: string;
+      /** Up to four Slack assistant suggested prompts. */
+      prompts: SlackAssistantPromptConfig[];
+    };
 
 export type SlackSlashCommandConfig = {
   /** Enable handling for the configured slash command (default: false). */
@@ -229,6 +244,8 @@ export type SlackAccountConfig = {
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
+  /** Static Slack assistant thread suggested prompts. Set false to suppress defaults. */
+  assistantPrompts?: SlackAssistantPromptsConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
    * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.

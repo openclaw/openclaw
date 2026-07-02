@@ -39,6 +39,7 @@ export type {
   ResolvedTtsPersona,
   SignalReactionNotificationMode,
   SlackAccountConfig,
+  SlackAssistantPromptsConfig,
   SlackChannelConfig,
   SlackReactionNotificationMode,
   SlackSlashCommandConfig,

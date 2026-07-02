@@ -59,6 +59,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "set-profile",
   "download-file",
   "upload-file",
+  "set-suggested-prompts",
 ] as const;
 
 /**

@@ -2,12 +2,10 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSlackAccount } from "../../accounts.js";
+import { resolveSlackAssistantPromptsConfig } from "../../assistant-prompts.js";
 import { buildSlackAssistantThreadMetadata } from "../context.js";
-import type {
-  SlackMonitorContext,
-  SlackAssistantSuggestedPrompt,
-  SlackAssistantThreadContext,
-} from "../context.js";
+import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
   user_id?: string;
@@ -48,12 +46,6 @@ type SlackAssistantEventRegistrar = {
     handler: SlackAssistantEventHandler<SlackAssistantThreadContextChangedEvent>,
   ): void;
 };
-
-const DEFAULT_ASSISTANT_PROMPTS: SlackAssistantSuggestedPrompt[] = [
-  { title: "What can you do?", message: "What can you help me with?" },
-  { title: "Summarize this channel", message: "Summarize the recent activity in this channel." },
-  { title: "Draft a reply", message: "Help me draft a reply." },
-];
 
 function normalizeAssistantThread(
   event: SlackAssistantThreadStartedEvent | SlackAssistantThreadContextChangedEvent,
@@ -163,12 +155,16 @@ export function registerSlackAssistantEvents(params: {
         return;
       }
       ctx.saveSlackAssistantThreadContext(assistantThread);
-      await ctx.setSlackAssistantSuggestedPrompts({
-        channelId: assistantThread.assistantChannelId,
-        threadTs: assistantThread.threadTs,
-        title: "Try asking",
-        prompts: DEFAULT_ASSISTANT_PROMPTS,
-      });
+      const assistantPrompts = resolveSlackAssistantPromptsConfig(
+        resolveSlackAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.assistantPrompts,
+      );
+      if (assistantPrompts) {
+        await ctx.setSlackAssistantSuggestedPrompts({
+          channelId: assistantThread.assistantChannelId,
+          threadTs: assistantThread.threadTs,
+          ...assistantPrompts,
+        });
+      }
     } catch (err) {
       ctx.runtime.error?.(
         danger(`slack assistant_thread_started handler failed: ${formatErrorMessage(err)}`),

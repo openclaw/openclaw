@@ -75,6 +75,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "set-presence": "none",
     "download-file": "none",
     "upload-file": "to",
+    "set-suggested-prompts": "to",
   };
 
 type ActionTargetAliasSpec = {

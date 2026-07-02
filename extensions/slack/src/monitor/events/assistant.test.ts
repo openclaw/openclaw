@@ -11,6 +11,7 @@ function createHarness(overrides?: {
   existingContext?: ReturnType<SlackMonitorContext["getSlackAssistantThreadContext"]>;
   replies?: ReturnType<typeof vi.fn>;
   update?: ReturnType<typeof vi.fn>;
+  slackConfig?: Record<string, unknown>;
 }) {
   const handlers: Record<string, Handler> = {};
   const getSlackAssistantThreadContext = vi.fn(() => overrides?.existingContext);
@@ -29,6 +30,15 @@ function createHarness(overrides?: {
         handlers[name] = handler;
       },
     } as unknown as App,
+    cfg: {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          ...overrides?.slackConfig,
+        },
+      },
+    },
+    accountId: "default",
     runtime: { error: vi.fn() },
     botToken: "xoxb-test",
     botUserId: "B1",
@@ -116,6 +126,47 @@ describe("registerSlackAssistantEvents", () => {
         { title: "Draft a reply", message: "Help me draft a reply." },
       ],
     });
+  });
+
+  it("sets configured assistant thread prompts", async () => {
+    const harness = createHarness({
+      slackConfig: {
+        assistantPrompts: {
+          title: "Next steps",
+          prompts: [
+            { title: "Ship it", message: "Prepare the release summary." },
+            { title: "Review risk", message: "List the remaining merge risks." },
+          ],
+        },
+      },
+    });
+
+    await harness.handlers.assistant_thread_started?.({
+      event: makeThreadEvent("assistant_thread_started"),
+      body: {},
+    });
+
+    expect(harness.setSlackAssistantSuggestedPrompts).toHaveBeenCalledWith({
+      channelId: "D123",
+      threadTs: "1729999327.187299",
+      title: "Next steps",
+      prompts: [
+        { title: "Ship it", message: "Prepare the release summary." },
+        { title: "Review risk", message: "List the remaining merge risks." },
+      ],
+    });
+  });
+
+  it("allows configured assistant thread prompts to be disabled", async () => {
+    const harness = createHarness({ slackConfig: { assistantPrompts: false } });
+
+    await harness.handlers.assistant_thread_started?.({
+      event: makeThreadEvent("assistant_thread_started"),
+      body: {},
+    });
+
+    expect(harness.saveSlackAssistantThreadContext).toHaveBeenCalledTimes(1);
+    expect(harness.setSlackAssistantSuggestedPrompts).not.toHaveBeenCalled();
   });
 
   it("updates assistant thread context without resetting prompts", async () => {

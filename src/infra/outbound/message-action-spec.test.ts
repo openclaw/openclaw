@@ -12,6 +12,7 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
 describe("actionRequiresTarget", () => {
   it.each([
     ["send", true],
+    ["set-suggested-prompts", true],
     ["channel-info", true],
     ["broadcast", false],
     ["search", false],
@@ -23,6 +24,11 @@ describe("actionRequiresTarget", () => {
 describe("actionHasTarget", () => {
   it.each([
     { action: "send", params: { to: "  channel:C1  " }, expected: true },
+    {
+      action: "set-suggested-prompts",
+      params: { to: "  C123  ", threadTs: "1777423717.666499" },
+      expected: true,
+    },
     { action: "channel-info", params: { channelId: "  C123  " }, expected: true },
     { action: "send", params: { to: "   ", channelId: "" }, expected: false },
     {

@@ -922,15 +922,36 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group            | Default |
+| ---------------- | ------- |
+| messages         | enabled |
+| reactions        | enabled |
+| pins             | enabled |
+| memberInfo       | enabled |
+| emojiList        | enabled |
+| assistantPrompts | enabled |
 
-Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, `emoji-list`, and `set-suggested-prompts`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types. `set-suggested-prompts` calls Slack's assistant suggested prompt API for an assistant thread and accepts `channelId` or `to`, `threadTs` or `threadId`/`replyTo`, optional `title`, and up to four `{ title, message }` prompts.
+
+Slack assistant threads get built-in suggested prompts when a thread starts. Override them with `channels.slack.assistantPrompts`:
+
+```json
+{
+  "channels": {
+    "slack": {
+      "assistantPrompts": {
+        "title": "What can I help with?",
+        "prompts": [
+          { "title": "Check status", "message": "What's the current status?" },
+          { "title": "Show diff", "message": "Show me the latest diff." }
+        ]
+      }
+    }
+  }
+}
+```
+
+Set `channels.slack.assistantPrompts` to `false` to suppress the built-in suggestions.
 
 ## Access control and routing
 
@@ -1462,7 +1483,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
-- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `assistantPrompts`, `userToken`, `userTokenReadOnly`
 
 </Accordion>
 

@@ -964,6 +964,23 @@ export const SlackRelaySchema = z
   })
   .strict();
 
+const SlackAssistantPromptSchema = z
+  .object({
+    title: z.string().min(1),
+    message: z.string().min(1),
+  })
+  .strict();
+
+const SlackAssistantPromptsSchema = z.union([
+  z.literal(false),
+  z
+    .object({
+      title: z.string().optional(),
+      prompts: z.array(SlackAssistantPromptSchema).min(1).max(4),
+    })
+    .strict(),
+]);
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -1021,9 +1038,11 @@ export const SlackAccountSchema = z
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
         emojiList: z.boolean().optional(),
+        assistantPrompts: z.boolean().optional(),
       })
       .strict()
       .optional(),
+    assistantPrompts: SlackAssistantPromptsSchema.optional(),
     slashCommand: z
       .object({
         enabled: z.boolean().optional(),

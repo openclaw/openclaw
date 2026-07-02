@@ -917,6 +917,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.message.actions.allow":
     "Global message action allowlist for the message tool. Use only when the whole runtime should expose and accept a reduced action set; prefer per-agent allowlists for public or sandboxed agents.",
+  "channels.slack.assistantPrompts":
+    "Static Slack assistant suggested prompts shown when a Slack assistant thread starts. Set false to suppress the built-in defaults, or provide a title plus up to four {title,message} prompts.",
+  "channels.slack.actions.assistantPrompts":
+    "Expose the Slack-only message action for updating assistant suggested prompts dynamically. Disable when agents should not change Slack assistant prompt suggestions.",
   "tools.web.search.enabled":
     "Enable managed web_search and optional Codex-native search for eligible models.",
   "tools.web.search.provider":
