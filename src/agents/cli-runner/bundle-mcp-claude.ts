@@ -63,7 +63,7 @@ export function injectClaudeMcpConfigArgs(
     }
     if (arg === "--mcp-config") {
       // Variadic: skip all following non-flag values.
-      while (i + 1 < args.length && !(args?.[i + 1] ?? "").startsWith("-")) {
+      while (i + 1 < (args?.length ?? 0) && !(args?.[i + 1] ?? "").startsWith("-")) {
         i += 1;
       }
       continue;
