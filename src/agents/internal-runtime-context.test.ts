@@ -9,6 +9,7 @@ import {
   hasInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
   stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
 
@@ -84,6 +85,22 @@ describe("internal runtime context codec", () => {
         `Inline token ${INTERNAL_RUNTIME_CONTEXT_BEGIN} should not count as a block marker.`,
       ),
     ).toBe(false);
+  });
+
+  it("strips the runtime-only placeholder user prompt from visible text", () => {
+    expect(stripInternalRuntimeContext(OPENCLAW_RUNTIME_EVENT_USER_PROMPT)).toBe("");
+  });
+
+  it("strips the runtime-only placeholder when embedded in multi-line text", () => {
+    const input = [
+      "Compaction summary context line",
+      OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
+      "More visible text",
+    ].join("\n");
+    const result = stripInternalRuntimeContext(input);
+    expect(result).not.toContain(OPENCLAW_RUNTIME_EVENT_USER_PROMPT);
+    expect(result).toContain("Compaction summary context line");
+    expect(result).toContain("More visible text");
   });
 
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {

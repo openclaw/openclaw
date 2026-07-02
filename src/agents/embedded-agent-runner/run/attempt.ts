@@ -4329,9 +4329,7 @@ export async function runEmbeddedAttempt(
               setActiveSessionSystemPrompt(runtimeSystemPrompt);
             }
           }
-          const runtimeContextForHook = promptSubmission.runtimeOnly
-            ? undefined
-            : promptSubmission.runtimeContext?.trim();
+          const runtimeContextForHook = promptSubmission.runtimeContext?.trim();
           const runtimeContextMessageForCurrentTurn =
             buildRuntimeContextCustomMessage(runtimeContextForHook);
           const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -4882,31 +4880,25 @@ export async function runEmbeddedAttempt(
             };
             const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
             try {
-              if (promptSubmission.runtimeOnly) {
-                await promptActiveSession(promptForSession, {
-                  preflightResult: armModelPromptTransform,
-                });
-              } else {
-                const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-                  session: activeSession,
-                  message: runtimeContextMessageForCurrentTurn,
-                });
-                try {
-                  // Only pass images option if there are actually images to pass
-                  // This avoids potential issues with models that don't expect the images parameter
-                  if (imageResult.images.length > 0) {
-                    await promptActiveSession(promptForSession, {
-                      images: imageResult.images,
-                      preflightResult: armModelPromptTransform,
-                    });
-                  } else {
-                    await promptActiveSession(promptForSession, {
-                      preflightResult: armModelPromptTransform,
-                    });
-                  }
-                } finally {
-                  cleanupRuntimeContextMessage();
+              const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
+                session: activeSession,
+                message: runtimeContextMessageForCurrentTurn,
+              });
+              try {
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await promptActiveSession(promptForSession, {
+                    images: imageResult.images,
+                    preflightResult: armModelPromptTransform,
+                  });
+                } else {
+                  await promptActiveSession(promptForSession, {
+                    preflightResult: armModelPromptTransform,
+                  });
                 }
+              } finally {
+                cleanupRuntimeContextMessage();
               }
               if (leasedSteering) {
                 ackPendingAgentSteeringItems({

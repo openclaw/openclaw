@@ -634,6 +634,10 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
 
+  it("strips the runtime-only user prompt placeholder when it appears standalone", () => {
+    expect(sanitizeUserFacingText("Continue the OpenClaw runtime event.")).toBe("");
+  });
+
   it("does not strip ordinary text that merely mentions internal marker strings", () => {
     const input = [
       "The literal header `OpenClaw runtime context (internal):` appears in this note.",

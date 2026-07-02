@@ -21,6 +21,8 @@ export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+/** User prompt placeholder for runtime-only turns that carry no user-authored text. */
+export const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
@@ -216,6 +218,28 @@ function stripRuntimeContextPromptPreface(text: string): string {
     : text;
 }
 
+/**
+ * Removes the runtime-only placeholder used to drive the agent loop when no
+ * user-authored text is present. It is internal scaffolding, not user input.
+ */
+function stripRuntimeEventUserPromptPlaceholder(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === OPENCLAW_RUNTIME_EVENT_USER_PROMPT) {
+    return "";
+  }
+  // Also handle the case where the placeholder appears as a line in a
+  // multi-line block (e.g. after compaction appends context).
+  if (trimmed.includes(OPENCLAW_RUNTIME_EVENT_USER_PROMPT)) {
+    return trimmed
+      .split("\n")
+      .filter((line) => line.trim() !== OPENCLAW_RUNTIME_EVENT_USER_PROMPT)
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return text;
+}
+
 /** Remove protected and legacy runtime-context blocks from text. */
 export function stripInternalRuntimeContext(text: string): string {
   if (!text) {
@@ -226,9 +250,9 @@ export function stripInternalRuntimeContext(text: string): string {
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
-  return stripRuntimeContextPromptPreface(
-    stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
-  );
+  const withoutLegacy = stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
+  const withoutPreface = stripRuntimeContextPromptPreface(withoutLegacy);
+  return stripRuntimeEventUserPromptPlaceholder(withoutPreface);
 }
 
 /** Extract protected runtime-context blocks while returning remaining visible text. */
