@@ -101,8 +101,7 @@ required scopes:
 
 - Commandless request: `operator.pairing`
 - Non-exec node commands: `operator.pairing` + `operator.write`
-- `system.run`, `system.run.prepare`, `system.which`, `system.execApprovals.get`,
-  or `system.execApprovals.set`:
+- `system.run`, `system.run.prepare`, or `system.which`:
   `operator.pairing` + `operator.admin`
 
 Node pairing establishes identity and trust. It does not replace the node's

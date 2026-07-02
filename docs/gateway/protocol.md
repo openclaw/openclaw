@@ -260,8 +260,7 @@ base method scope:
 
 - commandless requests: `operator.pairing`
 - requests with non-exec node commands: `operator.pairing` + `operator.write`
-- requests that include `system.run`, `system.run.prepare`, `system.which`,
-  `system.execApprovals.get`, or `system.execApprovals.set`:
+- requests that include `system.run`, `system.run.prepare`, or `system.which`:
   `operator.pairing` + `operator.admin`
 
 ### Caps/commands/permissions (node)
