@@ -60,6 +60,7 @@ import {
 } from "./model-auth-markers.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -1040,7 +1041,7 @@ export async function resolveApiKeyForProvider(params: {
         profileId,
         preferredProfile,
       });
-    const configuredProfileType = store.profiles[profileId]?.type;
+const configuredProfileType = store.profiles[profileId]?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
         provider,
@@ -1049,13 +1050,31 @@ export async function resolveApiKeyForProvider(params: {
         mode: profileTypeToAuthMode(configuredProfileType),
       });
     }
-    const resolved = await resolveApiKeyForProfile({
-      cfg,
-      store,
-      profileId,
-      agentDir,
-      forceRefresh: params.forceRefresh,
-    });
+    const resolveWithProfileId = async (profileRef: string) =>
+      resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: profileRef,
+        agentDir,
+        forceRefresh: params.forceRefresh,
+      });
+    let resolved = await resolveWithProfileId(profileId);
+    if (!resolved) {
+      const delimiter = profileId.indexOf(":");
+      if (delimiter > 0) {
+        const profileProvider = profileId.slice(0, delimiter);
+        const profileSuffix = profileId.slice(delimiter + 1);
+        const aliasedProvider = resolveProviderIdForAuth(profileProvider, {
+          config: cfg,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        });
+        const aliasedProfileId = `${aliasedProvider}:${profileSuffix}`;
+        if (aliasedProfileId !== profileId) {
+          resolved = await resolveWithProfileId(aliasedProfileId);
+        }
+      }
+    }
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }

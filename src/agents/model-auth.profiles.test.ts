@@ -354,6 +354,85 @@ it("uses configured aws-sdk profile order without stored credentials", async () 
   expect(resolved.apiKey).toBeUndefined();
 });
 
+it("resolves legacy modelstudio profile ids through qwen auth aliases (#84081)", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "modelstudio",
+    profileId: "modelstudio:default",
+    store: {
+      version: 1,
+      profiles: {
+        "qwen:default": {
+          type: "api_key",
+          provider: "qwen",
+          key: "qwen-key",
+        },
+      },
+    },
+    cfg: {
+      models: {
+        providers: {
+          qwen: {
+            api: "openai-completions",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+          modelstudio: {
+            api: "openai-completions",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+        },
+      },
+    },
+  });
+
+  expect(resolved.apiKey).toBe("qwen-key");
+  expect(resolved.profileId).toBe("qwen:default");
+  expect(resolved.source).toBe("profile:qwen:default");
+});
+
+it("prefers explicit modelstudio profile credentials over alias fallback", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "modelstudio",
+    profileId: "modelstudio:default",
+    store: {
+      version: 1,
+      profiles: {
+        "modelstudio:default": {
+          type: "api_key",
+          provider: "modelstudio",
+          key: "modelstudio-key",
+        },
+        "qwen:default": {
+          type: "api_key",
+          provider: "qwen",
+          key: "qwen-key",
+        },
+      },
+    },
+    cfg: {
+      models: {
+        providers: {
+          qwen: {
+            api: "openai-completions",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+          modelstudio: {
+            api: "openai-completions",
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            models: [],
+          },
+        },
+      },
+    },
+  });
+
+  expect(resolved.apiKey).toBe("modelstudio-key");
+  expect(resolved.profileId).toBe("modelstudio:default");
+  expect(resolved.source).toBe("profile:modelstudio:default");
+});
+
 function buildDemoLocalStore(keys: string[]) {
   return {
     version: 1 as const,
