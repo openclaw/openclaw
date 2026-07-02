@@ -10,7 +10,7 @@ import {
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
@@ -83,7 +83,7 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
-  collectDiskSpaceHealthFindings: vi.fn(() => []),
+  collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
