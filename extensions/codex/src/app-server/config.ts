@@ -184,6 +184,7 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  turnAssistantCompletionIdleTimeoutMs?: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
@@ -224,6 +225,7 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
     postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -258,6 +260,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
+  "turnAssistantCompletionIdleTimeoutMs",
   "postToolRawAssistantCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
@@ -407,6 +410,7 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -685,6 +689,14 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
+    ...(config.turnAssistantCompletionIdleTimeoutMs !== undefined
+      ? {
+          turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+            config.turnAssistantCompletionIdleTimeoutMs,
+            60_000,
+          ),
+        }
+      : {}),
     ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
       ? {
           postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
