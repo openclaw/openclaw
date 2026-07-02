@@ -348,6 +348,58 @@ describe("crabline transport", () => {
     });
   });
 
+  it("normalizes native Signal JSON-RPC sends into outbound state", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("signal"),
+        state: createQaBusState(),
+      });
+
+      try {
+        const delivery = transport.buildAgentDelivery({ target: "dm:alice" });
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          endpoints: { rpcUrl: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: manifest.endpoints.rpcUrl,
+          init: {
+            body: JSON.stringify({
+              id: "qa-signal-send",
+              jsonrpc: "2.0",
+              method: "send",
+              params: {
+                message: "assistant via fake signal",
+                recipient: [delivery.to],
+              },
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-signal-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: "alice", kind: "direct" },
+            textIncludes: "assistant via fake signal",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: "alice", kind: "direct" },
+          text: "assistant via fake signal",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("binds Mattermost config and normalizes transport targets", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
