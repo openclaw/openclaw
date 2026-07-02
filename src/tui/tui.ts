@@ -36,6 +36,7 @@ import {
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { startHerdrStateSidecar } from "./herdr-state-sidecar.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -528,6 +529,12 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 }
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  const herdrStateSidecar = startHerdrStateSidecar({
+    logger: {
+      debug: () => undefined,
+      warn: () => undefined,
+    },
+  });
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
@@ -1647,6 +1654,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
+      herdrStateSidecar?.stop();
       cleanupTerminalLossHandler?.();
       cleanupTerminalLossHandler = null;
       process.removeListener("SIGINT", sigintHandler);
