@@ -69,7 +69,6 @@ beforeEach(() => {
       operation: "status",
       active: true,
       messageCount: 3,
-      lastRotatedAt: null,
     })),
   } as unknown as ContextEngine;
 });

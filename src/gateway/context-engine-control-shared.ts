@@ -212,10 +212,6 @@ function sanitizeControlResult(
         Number.isFinite(Number(record.messageCount)) && Number(record.messageCount) > 0
           ? Math.floor(Number(record.messageCount))
           : 0,
-      lastRotatedAt:
-        typeof record.lastRotatedAt === "string" && record.lastRotatedAt.trim()
-          ? record.lastRotatedAt.trim()
-          : null,
     };
   }
   if (operation === "doctor") {

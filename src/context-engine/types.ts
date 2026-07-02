@@ -59,7 +59,6 @@ export type ContextEngineControlStatusResult = {
   operation: "status";
   active: boolean;
   messageCount: number;
-  lastRotatedAt: string | null;
 };
 
 export type ContextEngineControlDoctorResult = {

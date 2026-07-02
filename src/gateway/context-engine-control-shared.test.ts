@@ -32,7 +32,6 @@ function installEngine(overrides: Partial<ContextEngine> = {}) {
         operation: "status",
         active: true,
         messageCount: 12,
-        lastRotatedAt: null,
         rawDebug: "/tmp/secret",
       };
     }
@@ -111,7 +110,6 @@ describe("context engine control dispatcher", () => {
         operation: "status",
         active: true,
         messageCount: 12,
-        lastRotatedAt: null,
       },
     });
     expect(control).toHaveBeenCalledWith({
