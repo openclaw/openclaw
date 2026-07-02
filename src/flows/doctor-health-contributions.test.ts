@@ -2079,6 +2079,75 @@ describe("doctor health contributions", () => {
       );
     });
 
+    it("previews config writes during doctor dry-run without persisting", async () => {
+      const ctx = buildWriteConfigCtx({});
+      ctx.options = { dryRun: true };
+      ctx.configResult.preservedLegacyRootKeys = ["defaultModel"];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        [
+          "Would write Doctor config changes to /tmp/fake-openclaw.json.",
+          "- reason: doctor config repair requested a write; doctor config changed during health checks",
+          "- changed top-level keys: gateway",
+          "- backup: standard config backup may be written",
+          "- write options: allowConfigSizeDrop=true, skipPluginValidation=false",
+          "- preserved legacy root keys: defaultModel",
+        ].join("\n"),
+      );
+      expect(ctx.repairEffects).toEqual([
+        {
+          kind: "config",
+          action: "would-write-config",
+          target: "/tmp/fake-openclaw.json",
+          dryRunSafe: true,
+        },
+      ]);
+    });
+
+    it("previews update write options during doctor dry-run", async () => {
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      });
+      ctx.options = { dryRun: true };
+      ctx.configResult.sourceLastTouchedVersion = "2026.5.16-beta.4";
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "- write options: allowConfigSizeDrop=true, skipPluginValidation=true",
+        ),
+      );
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "- update backup: /tmp/fake-openclaw.json.pre-update may be referenced",
+        ),
+      );
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("- lastTouchedVersion: preserved from source config during update"),
+      );
+    });
+
+    it("keeps legacy update handoff skips during doctor dry-run", async () => {
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      });
+      ctx.options = { dryRun: true };
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        "Skipping doctor config write during legacy update handoff.",
+      );
+      expect(ctx.repairEffects).toBeUndefined();
+    });
+
     it("skips plugin schema validation for final validation during update doctor runs", async () => {
       const contribution = requireDoctorContribution("doctor:final-config-validation");
 
