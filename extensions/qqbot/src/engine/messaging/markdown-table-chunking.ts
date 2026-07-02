@@ -82,7 +82,9 @@ class QQBotMarkdownChunkingState {
     }
     this.flushText(chunks, chunkLimit);
     this.flushTable(chunks, chunkLimit);
-    this.flushPendingParagraphBlock(chunks, chunkLimit);
+    if (!this.hasPendingAdjacentStructure()) {
+      this.flushPendingParagraphBlock(chunks, chunkLimit);
+    }
     return chunks;
   }
 
@@ -108,6 +110,10 @@ class QQBotMarkdownChunkingState {
       return;
     }
     pushBaseChunks(chunks, text, limit, this.baseChunker);
+  }
+
+  private hasPendingAdjacentStructure(): boolean {
+    return Boolean(this.pendingHeaderLine || this.activeFence || this.pendingFenceLineFragment);
   }
 
   private consumeLine(
@@ -355,6 +361,10 @@ class QQBotMarkdownChunkingState {
   private flushPendingHeaderAsText(): void {
     if (!this.pendingHeaderLine) {
       return;
+    }
+    if (this.pendingParagraphBlock !== null) {
+      this.pushTextLine(this.pendingParagraphBlock);
+      this.pendingParagraphBlock = null;
     }
     this.pushTextLine(this.pendingHeaderLine);
     this.pendingHeaderLine = null;
@@ -637,8 +647,8 @@ function pushFenceLineChunks(params: {
   let currentLines: string[] = [];
   let mergedPending = false;
   const render = (lines: string[]) => [openLine, ...lines, closeLine].join("\n");
-  const flushCurrent = (): void => {
-    if (currentLines.length === 0) {
+  const flushCurrent = (options: { allowEmpty?: boolean } = {}): void => {
+    if (currentLines.length === 0 && !options.allowEmpty) {
       return;
     }
     let chunk = render(currentLines);
@@ -653,7 +663,7 @@ function pushFenceLineChunks(params: {
       }
       mergedPending = true;
     }
-    chunks.push(chunk);
+    pushBaseChunks(chunks, chunk, limit, baseChunker);
     currentLines = [];
   };
 
@@ -673,7 +683,7 @@ function pushFenceLineChunks(params: {
   }
 
   if (currentLines.length > 0 || bodyLines.length === 0) {
-    flushCurrent();
+    flushCurrent({ allowEmpty: bodyLines.length === 0 });
   }
 }
 

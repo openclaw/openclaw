@@ -336,6 +336,48 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
   });
 
+  it("preserves an empty fenced block", () => {
+    const text = ["Intro", "```ts", "```"].join("\n");
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
+  });
+
+  it("keeps pending prose available for a table completed by a later stream block", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "| A | B |"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText(["|---|---|", "| 1 | 2 |"].join("\n"), 5000)).toEqual([
+      ["Intro", "| A | B |", "|---|---|", "| 1 | 2 |"].join("\n"),
+    ]);
+  });
+
+  it("keeps prose before a rejected streamed table header", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "| maybe | header |"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText("plain continuation", 5000)).toEqual([
+      ["Intro", "| maybe | header |", "plain continuation"].join("\n"),
+    ]);
+  });
+
+  it("keeps pending prose available for a fenced block completed by a later stream block", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "```ts"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText(["const a = 1;", "```"].join("\n"), 5000)).toEqual([
+      ["Intro", "```ts", "const a = 1;", "```"].join("\n"),
+    ]);
+  });
+
+  it("keeps oversized empty fenced blocks under the QQ markdown byte safety limit", () => {
+    const text = [`\`\`\`${"x".repeat(4000)}`, "```"].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
+  });
+
   it("emits a paragraph with no trailing table or fence inside chunkText itself", () => {
     // A paragraph that does not border a table or fence must not wait for a
     // future structural block; it is emitted as its own chunk before chunkText
