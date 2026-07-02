@@ -140,7 +140,7 @@ describe("resolveMattermostReplyToMode", () => {
     expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
   });
 
-  it("keeps direct messages off even when replyToMode is enabled", () => {
+  it("keeps direct messages off by default even when replyToMode is enabled", () => {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -151,6 +151,22 @@ describe("resolveMattermostReplyToMode", () => {
 
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "direct")).toBe("off");
+  });
+
+  it("threads direct messages when dmReplyToMode is set (opt-in, #93203)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "off",
+          dmReplyToMode: "first",
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "direct")).toBe("first");
+    // dmReplyToMode governs DMs only; channel/group still follow replyToMode.
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
 
   it("defaults to off when replyToMode is unset", () => {

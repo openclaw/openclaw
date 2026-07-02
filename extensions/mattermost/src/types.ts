@@ -69,9 +69,17 @@ export type MattermostAccountConfig = {
    * - "off" (default): only thread-reply when incoming message is already a thread reply
    * - "first": reply in a thread under the triggering message
    * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
-   * Direct messages always behave as "off".
+   * Direct messages are governed by `dmReplyToMode`.
    */
   replyToMode?: MattermostReplyToMode;
+  /**
+   * Controls whether direct-message replies start their own thread (opt-in).
+   * Same enum as `replyToMode`. Default `"off"` preserves the historical
+   * flat-DM contract (one ever-growing DM session). Set to `"first"`/`"all"` to
+   * let a DM @mention start an independent threaded session (token isolation),
+   * the way groups/channels can. New DM threads start as fresh sessions.
+   */
+  dmReplyToMode?: MattermostReplyToMode;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */

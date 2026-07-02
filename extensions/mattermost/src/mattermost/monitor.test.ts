@@ -228,17 +228,21 @@ describe("resolveMattermostReplyRootId", () => {
     expect(resolveMattermostReplyRootId({ kind: "channel" })).toBeUndefined();
   });
 
-  it("keeps direct-message replies top-level even when a payload reply target exists", () => {
+  it("threads direct-message replies once a DM thread root exists (dmReplyToMode on, #93203)", () => {
+    // A direct chat only carries a threadRootId when dmReplyToMode enabled DM
+    // threading; in that case the reply threads under the DM thread root.
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
         threadRootId: "dm-root-456",
         replyToId: "dm-post-123",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
   });
 
-  it("keeps direct-message replies top-level when only the payload reply target exists", () => {
+  it("keeps flat direct-message replies top-level when there is no DM thread root", () => {
+    // dmReplyToMode "off" never produces a threadRootId for a DM, so a bare
+    // replyToId must NOT thread the reply (preserves the flat-DM contract).
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
@@ -786,17 +790,29 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("post-123");
   });
 
-  it("keeps direct messages non-threaded", () => {
+  it("starts a direct-message thread under the post when dmReplyToMode is all (#93203)", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
       }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages flat when dmReplyToMode is off", () => {
+    // replyToMode here reflects dmReplyToMode for direct chats (#93203).
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "dm-root-456",
+      }),
     ).toBeUndefined();
   });
 
-  it("suppresses existing direct-message thread roots", () => {
+  it("uses an existing direct-message thread root when dmReplyToMode is on (#93203)", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -804,7 +820,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
         replyToMode: "all",
         threadRootId: "dm-root-456",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
+  });
+
+  it("starts a new direct-message thread under the post when dmReplyToMode is on (#93203)", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
   });
 });
 
@@ -822,6 +848,19 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
     });
+  });
+
+  it("keeps DM threads as fresh independent sessions when dmReplyToMode is on (#93203)", () => {
+    const ctx = resolveMattermostThreadSessionContext({
+      baseSessionKey: "agent:main:mattermost:direct:user-1",
+      kind: "direct",
+      postId: "post-123",
+      replyToMode: "first",
+    });
+    expect(ctx.effectiveReplyToId).toBe("post-123");
+    expect(ctx.sessionKey).toBe("agent:main:mattermost:direct:user-1:thread:post-123");
+    // No parent-session inheritance: each DM topic is its own session.
+    expect(ctx.parentSessionKey).toBeUndefined();
   });
 
   it("keeps existing thread roots for threaded follow-ups", () => {
@@ -871,13 +910,13 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps direct-message sessions linear", () => {
+  it("keeps direct-message sessions linear when dmReplyToMode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:user-1",
         kind: "direct",
         postId: "post-123",
-        replyToMode: "all",
+        replyToMode: "off",
         threadRootId: "dm-root-456",
       }),
     ).toEqual({
