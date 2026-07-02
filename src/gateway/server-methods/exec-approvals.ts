@@ -133,8 +133,7 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
       // commands to decide which remediation to show — declaredCommands holds
       // what the node actually supports, while commands is the resolved set
       // after allowlist/denyCommands filtering.
-      const isPolicyDenial =
-        allowed.reason === "command not allowlisted" &&
+      const isDeclared =
         Array.isArray(nodeSession.declaredCommands) &&
         nodeSession.declaredCommands.includes(params.command);
       const errorDetails = {
@@ -142,28 +141,21 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
         requestedCommand: params.command,
         reason: allowed.reason,
       };
-      if (isPolicyDenial) {
-        // Admin-scoped exec-approvals node RPCs: allow based on raw declared
-        // capability when the effective command surface omits the command due
-        // to pairing allowlist or runtime command policy filtering.  Only
-        // explicit denyCommands can block this admin RPC.
-        const isDenied = (cfg.gateway?.nodes?.denyCommands ?? []).some(
-          (cmd: string) => cmd.trim() === params.command,
+      if (allowed.reason === "command not allowlisted" && isDeclared) {
+        // The node declared the capability but the effective command surface
+        // does not include it — the operator explicitly denied it via
+        // gateway.nodes.denyCommands, or the command is gated behind pairing
+        // approval.  Return a clear "does not allow" error rather than
+        // falling through to nodeRegistry.invoke.
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Node ${nodeId} does not allow ${params.command}: blocked by node command policy.`,
+            { details: errorDetails },
+          ),
         );
-        if (isDenied) {
-          params.respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`,
-              { details: errorDetails },
-            ),
-          );
-          return;
-        }
-        // Falls through to nodeRegistry.invoke — the node declared the
-        // capability and the operator did not explicitly deny it.
       } else {
         params.respond(
           false,
@@ -175,8 +167,8 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
             { details: errorDetails },
           ),
         );
-        return;
       }
+      return;
     }
   }
   await respondUnavailableOnThrow(params.respond, async () => {

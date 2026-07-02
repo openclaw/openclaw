@@ -10,7 +10,14 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
-  it("requires operator.write for non-exec commands", () => {
+  it("requires operator.admin for exec-approvals commands", () => {
+    expect(resolveNodePairApprovalScopes(["system.execApprovals.get"])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+  });
+
+  it("requires operator.write for non-admin commands", () => {
     expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual([
       "operator.pairing",
       "operator.write",

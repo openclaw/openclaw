@@ -16,6 +16,7 @@ import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import type { GatewayClient } from "../client.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import {
   connectOk,
@@ -23,6 +24,7 @@ import {
   rpcReq,
   startServerWithClient,
 } from "../test-helpers.js";
+import { acknowledgeNodeInvokeRequestForTest } from "../test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -109,6 +111,7 @@ describe("exec-approvals node preflight (real gateway)", () => {
     // Connect the pre-paired node that DOES advertise exec-approvals commands.
     // Because it is already paired, reconcileNodePairingOnConnect will find the
     // paired entry and set effectiveCommands to include exec-approvals.
+    let capableNodeClient: InstanceType<typeof GatewayClient> | undefined;
     capableNode = await connectGatewayClient({
       url: `ws://127.0.0.1:${gateway.port}`,
       token: "secret",
@@ -129,13 +132,23 @@ describe("exec-approvals node preflight (real gateway)", () => {
       ],
       deviceIdentity: capableIdent,
       timeoutMessage: "timeout waiting for capable-node to connect",
+      onEvent: (evt) => {
+        if (capableNodeClient) {
+          acknowledgeNodeInvokeRequestForTest({
+            client: capableNodeClient,
+            event: evt,
+            onInvoke: () => {},
+          });
+        }
+      },
     });
+    capableNodeClient = capableNode;
 
     // Connect a node that declares exec-approvals commands WITHOUT
     // pre-pairing.  reconcileNodePairingOnConnect returns effectiveCommands:[]
-    // (first-connect pending pairing), but declaredCommands still carries the
-    // exec-approvals capability.  The admin-scoped preflight gate should allow
-    // based on raw declared capability rather than the empty effective surface.
+    // (first-connect pending pairing).  The preflight gate should reject
+    // exec-approvals RPCs because the effective command surface is empty —
+    // raw declared capability is not sufficient to bypass pairing approval.
     naiveCapableNode = await connectGatewayClient({
       url: `ws://127.0.0.1:${gateway.port}`,
       token: "secret",
@@ -236,11 +249,11 @@ describe("exec-approvals node preflight (real gateway)", () => {
 
   // ---- naive-capable-node scenario (no pre-pairing) ----
 
-  test("naive first-connect node succeeds on exec.approvals.node.get when it declared capability", async () => {
+  test("naive first-connect node is rejected on exec.approvals.node.get when not yet paired", async () => {
     // The node connected without pre-pairing, so effectiveCommands are empty
-    // (pending pairing).  The admin-scoped preflight gate allows based on raw
-    // declaredCommands — the node declared system.execApprovals.get during
-    // connect, and no explicit denyCommands blocks it.
+    // (pending pairing).  The preflight gate rejects exec-approvals RPCs
+    // because the effective command surface is empty — raw declaredCommands
+    // alone is not sufficient to bypass pairing approval.
     const res = await rpcReq<{ hash?: string; file?: unknown }>(
       gateway.ws,
       "exec.approvals.node.get",
@@ -249,10 +262,10 @@ describe("exec-approvals node preflight (real gateway)", () => {
 
     console.log(JSON.stringify(res, null, 2));
 
-    // The preflight gate must allow the admin RPC based on the node's declared
-    // capability rather than its (empty) effective command surface.
-    expect(res.ok).toBe(true);
-    expect(res.payload).toBeDefined();
+    expect(res.ok).toBe(false);
+    expect(res.error).toBeDefined();
+    expect(res.error!.code).toBe("INVALID_REQUEST");
+    expect(res.error!.message).toContain("does not allow");
   });
 
   // ---- unknown-node scenarios ----
