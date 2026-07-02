@@ -11291,7 +11291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 209,
+      "line": 210,
       "path": "apps/ios/Sources/Voice/TalkModeGatewayConfig.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -11299,7 +11299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 211,
+      "line": 212,
       "path": "apps/ios/Sources/Voice/TalkModeGatewayConfig.swift",
       "source": "ElevenLabs",
       "surface": "apple",
@@ -11307,7 +11307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 213,
+      "line": 214,
       "path": "apps/ios/Sources/Voice/TalkModeGatewayConfig.swift",
       "source": "Realtime-2 (OpenAI)",
       "surface": "apple",
@@ -11315,55 +11315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 825,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Listening",
-      "surface": "apple",
-      "id": "native.apple.794c5c98f3a4238d"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 825,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Speech error: \\(msg)",
-      "surface": "apple",
-      "id": "native.apple.0b35fc3b0b221098"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 1026,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Aborted",
-      "surface": "apple",
-      "id": "native.apple.96c7457cafa7dd47"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 1026,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Chat error",
-      "surface": "apple",
-      "id": "native.apple.7c027ae095940485"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 2853,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Native",
-      "surface": "apple",
-      "id": "native.apple.c48dc51b49089432"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 2853,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Native WebRTC",
-      "surface": "apple",
-      "id": "native.apple.b0eb8a8cad908166"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 3172,
+      "line": 284,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -11371,11 +11323,59 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3172,
+      "line": 284,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
       "id": "native.apple.5839cdb826c12c71"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 957,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Listening",
+      "surface": "apple",
+      "id": "native.apple.794c5c98f3a4238d"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 957,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Speech error: \\(msg)",
+      "surface": "apple",
+      "id": "native.apple.0b35fc3b0b221098"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1158,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Aborted",
+      "surface": "apple",
+      "id": "native.apple.96c7457cafa7dd47"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1158,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Chat error",
+      "surface": "apple",
+      "id": "native.apple.7c027ae095940485"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 2988,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Native",
+      "surface": "apple",
+      "id": "native.apple.c48dc51b49089432"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 2988,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Native WebRTC",
+      "surface": "apple",
+      "id": "native.apple.b0eb8a8cad908166"
     },
     {
       "kind": "ui-call",
@@ -11475,7 +11475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 479,
+      "line": 508,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Asking OpenClaw",
       "surface": "apple",
@@ -11483,7 +11483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 479,
+      "line": 508,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Updating OpenClaw",
       "surface": "apple",

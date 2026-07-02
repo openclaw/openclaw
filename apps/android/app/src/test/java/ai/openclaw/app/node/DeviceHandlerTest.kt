@@ -2,7 +2,6 @@ package ai.openclaw.app.node
 
 import android.Manifest
 import android.app.Application
-import android.content.Context
 import android.content.pm.ApplicationInfo
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -278,31 +277,28 @@ class DeviceHandlerTest {
   }
 
   @Test
-  fun handleDevicePermissions_requiresContactsReadAndWritePermissions() {
+  fun handleDevicePermissions_requiresReadAndWritePermissionPairs() {
     val app = appContext()
-    shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS)
-    shadowOf(app).denyPermissions(Manifest.permission.WRITE_CONTACTS)
+    val handler = DeviceHandler(app)
+    val permissionPairs =
+      listOf(
+        Triple("contacts", Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        Triple("calendar", Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
 
-    val readOnly = DeviceHandler(app).handleDevicePermissions(null)
-    assertEquals("denied", permissionStatus(readOnly.payloadJson, "contacts"))
+    for ((key, readPermission, writePermission) in permissionPairs) {
+      shadowOf(app).denyPermissions(readPermission, writePermission)
 
-    shadowOf(app).grantPermissions(Manifest.permission.WRITE_CONTACTS)
-    val readWrite = DeviceHandler(app).handleDevicePermissions(null)
-    assertEquals("granted", permissionStatus(readWrite.payloadJson, "contacts"))
-  }
+      shadowOf(app).grantPermissions(readPermission)
+      assertEquals("$key read-only", "denied", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
 
-  @Test
-  fun handleDevicePermissions_requiresCalendarReadAndWritePermissions() {
-    val app = appContext()
-    shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
-    shadowOf(app).denyPermissions(Manifest.permission.WRITE_CALENDAR)
+      shadowOf(app).denyPermissions(readPermission)
+      shadowOf(app).grantPermissions(writePermission)
+      assertEquals("$key write-only", "denied", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
 
-    val readOnly = DeviceHandler(app).handleDevicePermissions(null)
-    assertEquals("denied", permissionStatus(readOnly.payloadJson, "calendar"))
-
-    shadowOf(app).grantPermissions(Manifest.permission.WRITE_CALENDAR)
-    val readWrite = DeviceHandler(app).handleDevicePermissions(null)
-    assertEquals("granted", permissionStatus(readWrite.payloadJson, "calendar"))
+      shadowOf(app).grantPermissions(readPermission)
+      assertEquals("$key read-write", "granted", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
+    }
   }
 
   @Test
