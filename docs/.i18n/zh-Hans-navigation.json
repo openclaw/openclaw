@@ -302,7 +302,8 @@
             "zh-CN/platforms/ios",
             "zh-CN/platforms/digitalocean",
             "zh-CN/platforms/oracle",
-            "zh-CN/platforms/raspberry-pi"
+            "zh-CN/platforms/raspberry-pi",
+            "zh-CN/platforms/jetson"
           ]
         },
         {

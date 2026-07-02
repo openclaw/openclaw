@@ -364,6 +364,10 @@
     "target": "NVIDIA API key"
   },
   {
+    "source": "NVIDIA Jetson",
+    "target": "NVIDIA Jetson"
+  },
+  {
     "source": "Provider directory",
     "target": "提供商目录"
   },
