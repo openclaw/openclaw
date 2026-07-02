@@ -453,16 +453,24 @@ test("sessions.diagnose scopes unknown fallback active runs to the requested age
   );
 
   expect(result.ok).toBe(true);
-  expect(result.payload.outcome).toBe("diagnosed");
-  expect(result.payload.session).toMatchObject({
+  const payload = result.payload;
+  if (!payload) {
+    throw new Error("expected diagnose payload");
+  }
+  const gatewayRun = payload.live.gatewayRun;
+  if (!gatewayRun) {
+    throw new Error("expected gateway run diagnosis");
+  }
+  expect(payload.outcome).toBe("diagnosed");
+  expect(payload.session).toMatchObject({
     key: "unknown",
     sessionId: "sess-work-unknown",
     agentId: "work",
     hasActiveRun: false,
   });
-  expect(result.payload.live.gatewayRun.hasActiveRun).toBe(false);
-  expect(result.payload.live.gatewayRun.runs).toEqual([]);
-  expect(result.payload.nextChecks).toEqual([
+  expect(gatewayRun.hasActiveRun).toBe(false);
+  expect(gatewayRun.runs).toEqual([]);
+  expect(payload.nextChecks).toEqual([
     "openclaw sessions --agent work tail --session-key unknown",
     "openclaw sessions --agent work export-trajectory --session-key unknown",
     "openclaw health --verbose",
