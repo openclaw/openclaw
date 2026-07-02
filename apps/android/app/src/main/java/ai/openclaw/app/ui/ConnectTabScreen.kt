@@ -67,9 +67,10 @@ private enum class ConnectInputMode {
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val statusText = gatewayConnectionDisplay.statusText
+  val gatewayConnectionProblem = gatewayConnectionDisplay.problem
+  val isConnected = gatewayConnectionDisplay.isConnected
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
