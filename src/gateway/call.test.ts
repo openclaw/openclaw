@@ -923,7 +923,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
-  it("uses local backend auth-none without a device identity when required", async () => {
+  it("satisfies local backend shared auth with auth-none without a device identity", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
     });
@@ -940,6 +940,32 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
     expect(lastClientOptions?.token).toBeUndefined();
     expect(lastClientOptions?.password).toBeUndefined();
+    // auth mode "none" keeps the device-less self-pairing bypass; device identity
+    // is intentionally omitted so the server-side shouldSkipLocalBackendSelfPairing
+    // can preserve requested scopes without requiring paired-device checks.
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("omits device identity for auth-none without requireLocalBackendSharedAuth", async () => {
+    // Auth-none must omit device identity even when the caller does not
+    // set requireLocalBackendSharedAuth, so the server-side
+    // shouldSkipLocalBackendSelfPairing preserves requested scopes.
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({
+      method: "node.list",
+      scopes: ["operator.read", "operator.pairing"],
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    // Auth-none omits device identity even without requireLocalBackendSharedAuth.
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
