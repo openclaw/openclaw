@@ -211,8 +211,13 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
+type PersistCronStoreOptions = {
+  stateOnly?: boolean;
+  requireQuarantineFlush?: boolean;
+};
+
 /** Persists the in-memory cron store, flushing pending quarantine records first. */
-export async function persist(state: CronServiceState, opts?: { stateOnly?: boolean }) {
+export async function persist(state: CronServiceState, opts?: PersistCronStoreOptions) {
   if (!state.store) {
     return;
   }
@@ -220,13 +225,16 @@ export async function persist(state: CronServiceState, opts?: { stateOnly?: bool
   if (state.pendingQuarantineConfigJobs.length > 0) {
     const quarantinePath = await flushPendingQuarantine(state, state.deps.nowMs());
     if (!quarantinePath) {
-      return;
+      if (opts?.requireQuarantineFlush === true) {
+        throw new Error("cron: failed to persist pending quarantine records");
+      }
+      if (opts?.stateOnly !== true) {
+        return;
+      }
     }
-    flushedPendingQuarantine = true;
+    flushedPendingQuarantine = Boolean(quarantinePath);
   }
-  await saveCronJobsStore(
-    state.deps.storePath,
-    state.store,
-    flushedPendingQuarantine ? undefined : opts,
-  );
+  const saveStateOnly = opts?.stateOnly === true && !flushedPendingQuarantine;
+  const saveOpts = saveStateOnly ? { stateOnly: true } : undefined;
+  await saveCronJobsStore(state.deps.storePath, state.store, saveOpts);
 }

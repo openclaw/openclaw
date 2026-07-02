@@ -15,6 +15,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import {
+  assertValidCronAnnounceDelivery,
+  assertValidCronCreateDelivery,
+} from "../../cron/delivery-channel-validation.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
@@ -28,30 +32,22 @@ import type {
   CronListPageResult,
 } from "../../cron/service/list-page-types.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
-import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
-import {
-  resolveTargetPrefixedChannel,
-  validateTargetProviderPrefix,
-} from "../../infra/outbound/channel-target-prefix.js";
-import {
-  DEFAULT_AGENT_ID,
-  isSubagentSessionKey,
-  normalizeAgentId,
-} from "../../routing/session-key.js";
+import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
-import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
-
-type CronCallerScope = {
-  kind: "agentTool";
-  agentId: string;
-};
+  applyCronCreateCallerScopeDefault,
+  cronCreateMatchesCallerScope,
+  cronJobMatchesCallerScope,
+  cronPatchSessionRefsMatchCaller,
+  readCronCallerScope,
+  type CronCallerScope,
+} from "./cron-caller-scope.js";
+import { isCronInvalidRequestError } from "./cron-error-classification.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
@@ -84,119 +80,6 @@ function compactCronListJob(job: CronJob) {
     scheduleKind: job.schedule.kind,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
   };
-}
-
-function readCronCallerScope(
-  client: GatewayClient | null | undefined,
-): CronCallerScope | undefined {
-  const identity = client?.internal?.agentRuntimeIdentity;
-  if (!identity?.agentId) {
-    return undefined;
-  }
-  return { kind: "agentTool", agentId: normalizeAgentId(identity.agentId) };
-}
-
-function resolveCronJobEffectiveAgentId(job: CronJob, defaultAgentId?: string): string {
-  return normalizeAgentId(job.agentId ?? defaultAgentId ?? DEFAULT_AGENT_ID);
-}
-
-function parseAgentIdFromSessionRef(value: string | undefined | null): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return parseAgentSessionKey(trimmed)?.agentId;
-}
-
-function parseAgentIdFromCronSessionTarget(value: string | undefined | null): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed?.startsWith("session:")) {
-    return undefined;
-  }
-  return parseAgentIdFromSessionRef(trimmed.slice("session:".length));
-}
-
-function cronJobSessionRefsMatchCaller(job: CronJob, callerScope: CronCallerScope): boolean {
-  const sessionAgentId = parseAgentIdFromSessionRef(job.sessionKey);
-  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
-    return false;
-  }
-  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(job.sessionTarget);
-  return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
-}
-
-function cronJobMatchesCallerScope(params: {
-  job: CronJob;
-  callerScope: CronCallerScope | undefined;
-  defaultAgentId?: string;
-}): boolean {
-  if (!params.callerScope) {
-    return true;
-  }
-  if (
-    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId) !== params.callerScope.agentId
-  ) {
-    return false;
-  }
-  return cronJobSessionRefsMatchCaller(params.job, params.callerScope);
-}
-
-function cronCreateMatchesCallerScope(params: {
-  job: CronJobCreate;
-  callerScope: CronCallerScope | undefined;
-  defaultAgentId?: string;
-}): boolean {
-  if (!params.callerScope) {
-    return true;
-  }
-  const effectiveAgentId = normalizeAgentId(
-    params.job.agentId ?? params.defaultAgentId ?? DEFAULT_AGENT_ID,
-  );
-  if (effectiveAgentId !== params.callerScope.agentId) {
-    return false;
-  }
-  const sessionAgentId = parseAgentIdFromSessionRef(params.job.sessionKey);
-  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== params.callerScope.agentId) {
-    return false;
-  }
-  const sessionTargetAgentId = parseAgentIdFromCronSessionTarget(params.job.sessionTarget);
-  return (
-    !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === params.callerScope.agentId
-  );
-}
-
-function applyCronCreateCallerScopeDefault(
-  job: CronJobCreate,
-  callerScope: CronCallerScope | undefined,
-): CronJobCreate {
-  if (!callerScope || "agentId" in job) {
-    return job;
-  }
-  return {
-    ...job,
-    agentId: callerScope.agentId,
-  };
-}
-
-function cronPatchSessionRefsMatchCaller(
-  patch: CronJobPatch,
-  callerScope: CronCallerScope | undefined,
-): boolean {
-  if (!callerScope) {
-    return true;
-  }
-  const sessionAgentId =
-    "sessionKey" in patch && typeof patch.sessionKey === "string"
-      ? parseAgentIdFromSessionRef(patch.sessionKey)
-      : undefined;
-  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
-    return false;
-  }
-  const sessionTargetAgentId =
-    "sessionTarget" in patch && typeof patch.sessionTarget === "string"
-      ? parseAgentIdFromCronSessionTarget(patch.sessionTarget)
-      : undefined;
-  return !sessionTargetAgentId || normalizeAgentId(sessionTargetAgentId) === callerScope.agentId;
 }
 
 async function listCronPageForCallerScope({
@@ -249,147 +132,6 @@ async function listCronPageForCallerScope({
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
   };
-}
-
-async function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): Promise<string[]> {
-  return await listConfiguredMessageChannels(cfg);
-}
-
-function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return false;
-  }
-  return Object.entries(channels).some(([channelId, entry]) => {
-    if (channelId === "defaults" || channelId === "modelByChannel") {
-      return false;
-    }
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return false;
-    }
-    return Object.keys(entry).length > 0;
-  });
-}
-
-async function assertConfiguredAnnounceChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
-}) {
-  // `last` defers channel selection to runtime session context; every concrete
-  // announce channel must be one the gateway can actually deliver through.
-  if (params.channel === "last") {
-    return;
-  }
-
-  const configuredChannels = (await listConfiguredAnnounceChannelIds(params.cfg)).toSorted();
-  const normalizedChannel = normalizeMessageChannel(params.channel);
-  if (!normalizedChannel) {
-    if (configuredChannels.length <= 1) {
-      return;
-    }
-    throw new Error(
-      `${params.field} is required when multiple channels are configured: ${configuredChannels.join(", ")}`,
-    );
-  }
-
-  if (configuredChannels.length === 0) {
-    if (!hasExplicitChannelConfigEntry(params.cfg)) {
-      if (!isDeliverableMessageChannel(normalizedChannel)) {
-        throw new Error(`${params.field} is not a known channel: ${normalizedChannel}`);
-      }
-      return;
-    }
-    throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
-  }
-
-  if (configuredChannels.includes(normalizedChannel)) {
-    return;
-  }
-
-  throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
-}
-
-function resolveAnnounceValidationChannel(params: {
-  channel?: string;
-  to?: string;
-}): string | undefined {
-  // A target like `telegram:...` is enough to validate the announce channel
-  // even when the explicit channel field is omitted.
-  if (params.channel && params.channel !== "last") {
-    return params.channel;
-  }
-  return resolveTargetPrefixedChannel(params.to) ?? params.channel;
-}
-
-function assertCompatibleAnnounceTarget(params: {
-  channel?: string;
-  to?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel";
-}) {
-  if (!params.channel || params.channel === "last") {
-    return;
-  }
-  const error = validateTargetProviderPrefix({
-    channel: params.channel,
-    to: params.to,
-  });
-  if (error) {
-    throw new Error(`${params.field}: ${error.message}`);
-  }
-}
-
-async function assertValidCronAnnounceDelivery(params: {
-  cfg: OpenClawConfig;
-  delivery?: CronDelivery;
-}) {
-  if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
-    assertCompatibleAnnounceTarget({
-      channel: params.delivery.channel,
-      to: params.delivery.to,
-      field: "delivery.channel",
-    });
-    await assertConfiguredAnnounceChannel({
-      cfg: params.cfg,
-      channel: resolveAnnounceValidationChannel({
-        channel: params.delivery.channel,
-        to: params.delivery.to,
-      }),
-      field: "delivery.channel",
-    });
-  }
-
-  const failureDestination = params.delivery?.failureDestination;
-  if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
-    if (
-      failureDestination.channel === undefined &&
-      failureDestination.to === undefined &&
-      failureDestination.accountId === undefined &&
-      failureDestination.mode === undefined
-    ) {
-      return;
-    }
-    assertCompatibleAnnounceTarget({
-      channel: failureDestination.channel,
-      to: failureDestination.to,
-      field: "delivery.failureDestination.channel",
-    });
-    await assertConfiguredAnnounceChannel({
-      cfg: params.cfg,
-      channel: resolveAnnounceValidationChannel({
-        channel: failureDestination.channel,
-        to: failureDestination.to,
-      }),
-      field: "delivery.failureDestination.channel",
-    });
-  }
-}
-
-async function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
-  await assertValidCronAnnounceDelivery({
-    cfg,
-    delivery: jobCreate.delivery,
-  });
 }
 
 async function assertValidCronUpdatePatch(params: {
@@ -449,26 +191,6 @@ function cronRunLogPageFilters(params: CronRunsRequestParams) {
     query: params.query,
     sortDir: params.sortDir,
   };
-}
-
-function isCronInvalidRequestError(err: unknown): boolean {
-  const message = formatErrorMessage(err);
-  return (
-    message.startsWith("unknown cron job id:") ||
-    message.includes("cron job is missing sessionTarget") ||
-    message.includes("invalid cron sessionTarget session id") ||
-    message.includes('main cron jobs require payload.kind="systemEvent"') ||
-    message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
-    message.includes("has no upcoming run time and would never fire") ||
-    message.includes('sessionTarget "main" is only valid for the default agent') ||
-    message.includes('cron.update payload.kind="systemEvent" requires text') ||
-    message.includes('cron.update payload.kind="agentTurn" requires message') ||
-    message.includes("cron webhook delivery requires") ||
-    message.includes("cron completion destination webhook requires") ||
-    message.includes("cron failure destination webhook requires") ||
-    message.includes("cron channel delivery config is only supported") ||
-    message.includes("cron delivery.failureDestination is only supported")
-  );
 }
 
 /** Gateway request handlers for cron jobs and cron run-log access. */

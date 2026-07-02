@@ -8,9 +8,9 @@ read_when:
 title: "Automation"
 ---
 
-OpenClaw runs work in the background through tasks, scheduled jobs, inferred
-commitments, event hooks, and standing instructions. This page helps you choose
-the right mechanism and understand how they fit together.
+OpenClaw runs work in the background through routines, tasks, scheduled jobs,
+inferred commitments, event hooks, and standing instructions. This page helps
+you choose the right mechanism and understand how they fit together.
 
 ## Quick decision guide
 
@@ -22,6 +22,7 @@ flowchart TD
     START --> Q4{React to lifecycle events?}
     START --> Q5{Give the agent persistent instructions?}
     START --> Q6{Remember a natural follow-up?}
+    START --> Q7{Productize a recurring team operation?}
 
     Q1 -->|Yes| Q1a{Exact timing or flexible?}
     Q1a -->|Exact| CRON["Scheduled Tasks (Cron)"]
@@ -32,23 +33,25 @@ flowchart TD
     Q4 -->|Yes| HOOKS[Hooks]
     Q5 -->|Yes| SO[Standing Orders]
     Q6 -->|Yes| COMMITMENTS[Inferred Commitments]
+    Q7 -->|Yes| ROUTINES[Routines]
 ```
 
-| Use case                                | Recommended            | Why                                              |
-| --------------------------------------- | ---------------------- | ------------------------------------------------ |
-| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
-| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
-| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
-| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
-| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
-| Check in after a mentioned interview    | Inferred Commitments   | Memory-like follow-up, no exact reminder request |
-| Gentle care check-in after user context | Inferred Commitments   | Scoped to the same agent and channel             |
-| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
-| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
-| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
-| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
-| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+| Use case                                | Recommended            | Why                                                        |
+| --------------------------------------- | ---------------------- | ---------------------------------------------------------- |
+| Productize a daily team operating loop  | Routines               | Named ownership, delivery, status, and idempotent creation |
+| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                           |
+| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)                      |
+| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model                   |
+| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware                   |
+| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness                         |
+| Check in after a mentioned interview    | Inferred Commitments   | Memory-like follow-up, no exact reminder request           |
+| Gentle care check-in after user context | Inferred Commitments   | Scoped to the same agent and channel                       |
+| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work                      |
+| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit`           |
+| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking               |
+| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events                    |
+| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls                  |
+| Always check compliance before replying | Standing Orders        | Injected into every session automatically                  |
 
 ### Scheduled Tasks (Cron) vs Heartbeat
 
@@ -63,6 +66,16 @@ flowchart TD
 Use Scheduled Tasks (Cron) when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
 
 ## Core concepts
+
+### Routines
+
+Routines are durable, named operating loops for repeatable team operations.
+The initial trigger is `schedule`, which delegates execution to the canonical
+cron scheduler instead of creating a second scheduler. Use routines when the
+work needs stable ownership, delivery target, status visibility, and idempotent
+create/delete operations above raw cron jobs.
+
+See [Routines](/automation/routines).
 
 ### Scheduled tasks (cron)
 
@@ -115,6 +128,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## How they work together
 
+- **Routines** productize repeatable team operations with ownership, delivery, and status while delegating schedule execution to cron.
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
 - **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
 - **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
@@ -124,6 +138,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## Related
 
+- [Routines](/automation/routines) — durable named operating loops for repeatable team operations
 - [Scheduled Tasks](/automation/cron-jobs) — precise scheduling and one-shot reminders
 - [Inferred Commitments](/concepts/commitments) — memory-like follow-up check-ins
 - [Background Tasks](/automation/tasks) — task ledger for all detached work

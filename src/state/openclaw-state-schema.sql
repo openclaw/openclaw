@@ -950,6 +950,13 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS routine_records (
+  routine_id TEXT NOT NULL,
+  backing_cron_store_key TEXT NOT NULL,
+  routine_json TEXT NOT NULL,
+  PRIMARY KEY (backing_cron_store_key, routine_id)
+);
+
 CREATE TABLE IF NOT EXISTS command_log_entries (
   id TEXT NOT NULL PRIMARY KEY,
   timestamp_ms INTEGER NOT NULL,

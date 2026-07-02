@@ -162,6 +162,10 @@ const loadRestartHandlers = lazyHandlerModule(
   () => import("./server-methods/restart.js"),
   (module) => module.restartHandlers,
 );
+const loadRoutinesHandlers = lazyHandlerModule(
+  () => import("./server-methods/routines.js"),
+  (module) => module.routinesHandlers,
+);
 const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
@@ -328,6 +332,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.runs",
     ],
     loadHandlers: loadCronHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "routines.list",
+      "routines.get",
+      "routines.create",
+      "routines.enable",
+      "routines.disable",
+      "routines.delete",
+    ],
+    loadHandlers: loadRoutinesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

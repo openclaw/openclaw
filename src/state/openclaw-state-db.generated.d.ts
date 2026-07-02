@@ -737,6 +737,12 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface RoutineRecords {
+  backing_cron_store_key: string;
+  routine_id: string;
+  routine_json: string;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1004,6 +1010,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  routine_records: RoutineRecords;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   skill_uploads: SkillUploads;

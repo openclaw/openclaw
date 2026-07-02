@@ -182,6 +182,30 @@ import {
   CronStatusParamsSchema,
   type CronUpdateParams,
   CronUpdateParamsSchema,
+  type RoutineRecord,
+  RoutineRecordSchema,
+  type RoutineView,
+  RoutineViewSchema,
+  type RoutinesCreateParams,
+  RoutinesCreateParamsSchema,
+  type RoutinesCreateResult,
+  RoutinesCreateResultSchema,
+  type RoutinesDeleteParams,
+  RoutinesDeleteParamsSchema,
+  type RoutinesDeleteResult,
+  RoutinesDeleteResultSchema,
+  type RoutinesGetParams,
+  RoutinesGetParamsSchema,
+  type RoutinesGetResult,
+  RoutinesGetResultSchema,
+  type RoutinesListParams,
+  RoutinesListParamsSchema,
+  type RoutinesListResult,
+  RoutinesListResultSchema,
+  type RoutinesSetEnabledParams,
+  RoutinesSetEnabledParamsSchema,
+  type RoutinesSetEnabledResult,
+  RoutinesSetEnabledResultSchema,
   type DevicePairApproveParams,
   DevicePairApproveParamsSchema,
   type DevicePairListParams,
@@ -848,6 +872,17 @@ export const validateCronUpdateParams = lazyCompile<CronUpdateParams>(CronUpdate
 export const validateCronRemoveParams = lazyCompile<CronRemoveParams>(CronRemoveParamsSchema);
 export const validateCronRunParams = lazyCompile<CronRunParams>(CronRunParamsSchema);
 export const validateCronRunsParams = lazyCompile<CronRunsParams>(CronRunsParamsSchema);
+export const validateRoutinesListParams = lazyCompile<RoutinesListParams>(RoutinesListParamsSchema);
+export const validateRoutinesGetParams = lazyCompile<RoutinesGetParams>(RoutinesGetParamsSchema);
+export const validateRoutinesCreateParams = lazyCompile<RoutinesCreateParams>(
+  RoutinesCreateParamsSchema,
+);
+export const validateRoutinesSetEnabledParams = lazyCompile<RoutinesSetEnabledParams>(
+  RoutinesSetEnabledParamsSchema,
+);
+export const validateRoutinesDeleteParams = lazyCompile<RoutinesDeleteParams>(
+  RoutinesDeleteParamsSchema,
+);
 export const validateDevicePairListParams = lazyCompile<DevicePairListParams>(
   DevicePairListParamsSchema,
 );
@@ -1186,6 +1221,18 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  RoutineRecordSchema,
+  RoutineViewSchema,
+  RoutinesListParamsSchema,
+  RoutinesListResultSchema,
+  RoutinesGetParamsSchema,
+  RoutinesGetResultSchema,
+  RoutinesCreateParamsSchema,
+  RoutinesCreateResultSchema,
+  RoutinesSetEnabledParamsSchema,
+  RoutinesSetEnabledResultSchema,
+  RoutinesDeleteParamsSchema,
+  RoutinesDeleteResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   ExecApprovalsGetParamsSchema,
@@ -1402,6 +1449,18 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  RoutineRecord,
+  RoutineView,
+  RoutinesListParams,
+  RoutinesListResult,
+  RoutinesGetParams,
+  RoutinesGetResult,
+  RoutinesCreateParams,
+  RoutinesCreateResult,
+  RoutinesSetEnabledParams,
+  RoutinesSetEnabledResult,
+  RoutinesDeleteParams,
+  RoutinesDeleteResult,
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,

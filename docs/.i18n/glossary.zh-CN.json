@@ -596,6 +596,30 @@
     "target": "定时任务"
   },
   {
+    "source": "Scheduled Tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "Background Tasks",
+    "target": "后台任务"
+  },
+  {
+    "source": "Routines",
+    "target": "例行任务"
+  },
+  {
+    "source": "Routines CLI",
+    "target": "例行任务 CLI"
+  },
+  {
+    "source": "Cron CLI",
+    "target": "Cron CLI"
+  },
+  {
+    "source": "Tasks CLI",
+    "target": "任务 CLI"
+  },
+  {
     "source": "Configuration reference",
     "target": "配置参考"
   },

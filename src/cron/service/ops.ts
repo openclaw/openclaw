@@ -1,5 +1,8 @@
 /** Public cron service operations for lifecycle, CRUD, listing, and manual runs. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -210,6 +213,32 @@ async function ensureLoadedForRead(state: CronServiceState) {
   const changed = recomputeNextRunsForMaintenance(state);
   if (changed) {
     await persist(state);
+  }
+}
+
+async function persistOrReloadOnFailure(
+  state: CronServiceState,
+  opts?: Parameters<typeof persist>[1],
+) {
+  try {
+    await persist(state, { ...opts, requireQuarantineFlush: true });
+  } catch (error) {
+    state.store = null;
+    state.storeLoadedAtMs = null;
+    try {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    } catch (reloadError) {
+      state.store = null;
+      state.storeLoadedAtMs = null;
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          error: reloadError instanceof Error ? reloadError.message : String(reloadError),
+        },
+        "cron: failed to reload durable store after persistence failure",
+      );
+    }
+    throw error;
   }
 }
 
@@ -478,12 +507,21 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
-    const job = createJob(state, input);
+    const normalizedId = normalizeOptionalString(input.id);
+    if (input.id !== undefined && normalizedId === undefined) {
+      throw new Error("cron job id must not be blank");
+    }
+    if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
+      throw new Error(`cron job already exists: ${normalizedId}`);
+    }
+    const normalizedInput =
+      normalizedId === undefined ? input : { ...input, id: normalizedId };
+    const job = createJob(state, normalizedInput);
     state.store?.jobs.push(job);
 
     recomputeNextRunsForMaintenance(state);
 
-    await persist(state);
+    await persistOrReloadOnFailure(state);
     armTimer(state);
 
     state.deps.log.info(
@@ -581,7 +619,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
-    await persist(state);
+    await persistOrReloadOnFailure(state);
     armTimer(state);
     emit(state, {
       jobId: id,
@@ -608,7 +646,7 @@ export async function remove(state: CronServiceState, id: string) {
 
     recomputeNextRunsForMaintenance(state);
 
-    await persist(state);
+    await persistOrReloadOnFailure(state);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });

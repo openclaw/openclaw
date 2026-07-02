@@ -6419,6 +6419,310 @@ public struct CronRunLogEntry: Codable, Sendable {
     }
 }
 
+public struct RoutineRecord: Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let enabled: Bool
+    public let owner: [String: AnyCodable]
+    public let target: [String: AnyCodable]
+    public let trigger: [String: AnyCodable]
+    public let action: AnyCodable
+    public let createdatms: Int
+    public let updatedatms: Int
+
+    public init(
+        id: String,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        owner: [String: AnyCodable],
+        target: [String: AnyCodable],
+        trigger: [String: AnyCodable],
+        action: AnyCodable,
+        createdatms: Int,
+        updatedatms: Int)
+    {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.owner = owner
+        self.target = target
+        self.trigger = trigger
+        self.action = action
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case enabled
+        case owner
+        case target
+        case trigger
+        case action
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct RoutineView: Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let enabled: Bool
+    public let owner: [String: AnyCodable]
+    public let target: [String: AnyCodable]
+    public let trigger: [String: AnyCodable]
+    public let action: AnyCodable
+    public let createdatms: Int
+    public let updatedatms: Int
+    public let status: [String: AnyCodable]
+
+    public init(
+        id: String,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        owner: [String: AnyCodable],
+        target: [String: AnyCodable],
+        trigger: [String: AnyCodable],
+        action: AnyCodable,
+        createdatms: Int,
+        updatedatms: Int,
+        status: [String: AnyCodable])
+    {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.owner = owner
+        self.target = target
+        self.trigger = trigger
+        self.action = action
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case enabled
+        case owner
+        case target
+        case trigger
+        case action
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+        case status
+    }
+}
+
+public struct RoutinesListParams: Codable, Sendable {
+    public let includedisabled: Bool?
+    public let agentid: String?
+    public let query: String?
+    public let limit: Int?
+    public let offset: Int?
+
+    public init(
+        includedisabled: Bool?,
+        agentid: String? = nil,
+        query: String?,
+        limit: Int?,
+        offset: Int?)
+    {
+        self.includedisabled = includedisabled
+        self.agentid = agentid
+        self.query = query
+        self.limit = limit
+        self.offset = offset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case includedisabled = "includeDisabled"
+        case agentid = "agentId"
+        case query
+        case limit
+        case offset
+    }
+}
+
+public struct RoutinesListResult: Codable, Sendable {
+    public let routines: [RoutineView]
+
+    public init(
+        routines: [RoutineView])
+    {
+        self.routines = routines
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case routines
+    }
+}
+
+public struct RoutinesGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct RoutinesGetResult: Codable, Sendable {
+    public let routine: AnyCodable
+
+    public init(
+        routine: AnyCodable)
+    {
+        self.routine = routine
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case routine
+    }
+}
+
+public struct RoutinesCreateParams: Codable, Sendable {
+    public let id: String?
+    public let name: String
+    public let description: String?
+    public let enabled: Bool?
+    public let owner: [String: AnyCodable]?
+    public let target: [String: AnyCodable]?
+    public let trigger: [String: AnyCodable]
+    public let action: AnyCodable
+
+    public init(
+        id: String?,
+        name: String,
+        description: String?,
+        enabled: Bool?,
+        owner: [String: AnyCodable]?,
+        target: [String: AnyCodable]?,
+        trigger: [String: AnyCodable],
+        action: AnyCodable)
+    {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.owner = owner
+        self.target = target
+        self.trigger = trigger
+        self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case enabled
+        case owner
+        case target
+        case trigger
+        case action
+    }
+}
+
+public struct RoutinesCreateResult: Codable, Sendable {
+    public let routine: RoutineView
+    public let created: Bool
+    public let idempotent: Bool
+
+    public init(
+        routine: RoutineView,
+        created: Bool,
+        idempotent: Bool)
+    {
+        self.routine = routine
+        self.created = created
+        self.idempotent = idempotent
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case routine
+        case created
+        case idempotent
+    }
+}
+
+public struct RoutinesSetEnabledParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct RoutinesSetEnabledResult: Codable, Sendable {
+    public let routine: RoutineView
+    public let changed: Bool
+
+    public init(
+        routine: RoutineView,
+        changed: Bool)
+    {
+        self.routine = routine
+        self.changed = changed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case routine
+        case changed
+    }
+}
+
+public struct RoutinesDeleteParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct RoutinesDeleteResult: Codable, Sendable {
+    public let id: String
+    public let deleted: Bool
+
+    public init(
+        id: String,
+        deleted: Bool)
+    {
+        self.id = id
+        self.deleted = deleted
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case deleted
+    }
+}
+
 public struct LogsTailParams: Codable, Sendable {
     public let cursor: Int?
     public let limit: Int?
