@@ -35,13 +35,8 @@ import {
 } from "./matrix/actions.js";
 import { withResolvedActionClient } from "./matrix/actions/client.js";
 import type { MatrixActionClientOpts } from "./matrix/actions/types.js";
-import {
-  normalizeMatrixAllowList,
-  resolveMatrixAllowListMatch,
-} from "./matrix/monitor/allowlist.js";
 import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import { reactMatrixMessage, resolveMatrixRoomId } from "./matrix/send.js";
-import { normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
   createActionGate,
@@ -96,38 +91,6 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
     return readStringParam(params, "to") ?? "";
   }
   return readStringParam(params, "to", { required: true });
-}
-
-function isTrustedCurrentMatrixDirectRoom(params: {
-  roomId?: string | null;
-  toolContext?: MatrixToolActionContext;
-}): boolean {
-  const roomId = normalizeMatrixMessagingTarget(params.roomId ?? "");
-  const currentRoomId = normalizeMatrixMessagingTarget(params.toolContext?.currentChannelId ?? "");
-  return Boolean(
-    roomId && currentRoomId && roomId === currentRoomId && params.toolContext?.currentDirectUserId,
-  );
-}
-
-function assertMatrixTrustedDirectReadTargetAllowed(params: {
-  accountConfig: ReturnType<typeof resolveMatrixAccountConfig>;
-  toolContext?: MatrixToolActionContext;
-}) {
-  const directUserId = params.toolContext?.currentDirectUserId;
-  if (!directUserId) {
-    throw new Error("Matrix read target room is not allowed.");
-  }
-  const dmPolicy = params.accountConfig.dm?.policy ?? "pairing";
-  if (
-    (dmPolicy as string) === "disabled" ||
-    (dmPolicy === "allowlist" &&
-      !resolveMatrixAllowListMatch({
-        allowList: normalizeMatrixAllowList(params.accountConfig.dm?.allowFrom),
-        userId: directUserId,
-      }).allowed)
-  ) {
-    throw new Error("Matrix read target room is not allowed.");
-  }
 }
 
 function resolveMatrixReadGroupPolicy(params: {
@@ -205,13 +168,6 @@ async function assertMatrixReadTargetAllowed(params: {
   toolContext?: MatrixToolActionContext;
 }) {
   const roomId = params.roomId?.trim();
-  if (isTrustedCurrentMatrixDirectRoom({ roomId, toolContext: params.toolContext })) {
-    assertMatrixTrustedDirectReadTargetAllowed({
-      accountConfig: params.accountConfig,
-      toolContext: params.toolContext,
-    });
-    return;
-  }
   const groupPolicy = resolveMatrixReadGroupPolicy(params);
   const roomConfig = roomId
     ? await resolveMatrixReadRoomConfig({

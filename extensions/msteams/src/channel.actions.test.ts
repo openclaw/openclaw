@@ -674,7 +674,7 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
-  it("allows implicit trusted current-DM read targets", async () => {
+  it("allows implicit current-DM read targets inside Teams allowFrom", async () => {
     await expectSuccessfulAction({
       mockFn: getMessageMSTeamsMock,
       mockResult: readMessage,
@@ -683,6 +683,7 @@ describe("msteamsPlugin message actions", () => {
         channels: {
           msteams: {
             dmPolicy: "pairing",
+            allowFrom: ["user:cached-aad"],
           },
         },
       },

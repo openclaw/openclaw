@@ -701,7 +701,7 @@ describe("feishuPlugin actions", () => {
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "read",
-      params: { messageId: "om_allowed" },
+      params: { messageId: "om_allowed", to: "chat:oc_group_1" },
       cfg: {
         channels: {
           feishu: {
@@ -726,44 +726,31 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
   });
 
-  it("reads trusted direct messages allowed by Feishu dmPolicy", async () => {
-    getMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "om_direct",
-      chatId: "oc_direct_1",
-      chatType: "p2p",
-      content: "direct",
-      contentType: "text",
-    });
-
-    const result = await feishuPlugin.actions?.handleAction?.({
-      action: "read",
-      params: { messageId: "om_direct" },
-      cfg: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "cli_main",
-            appSecret: "secret_main",
-            dmPolicy: "allowlist",
-            allowFrom: ["ou_user_1"],
-            groupPolicy: "allowlist",
-            groups: {
-              oc_group_1: {},
+  it("blocks trusted-context direct message reads under Feishu dmPolicy allowlist", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "read",
+        params: { messageId: "om_direct" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "allowlist",
+              allowFrom: ["ou_user_1"],
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      accountId: undefined,
-      toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
-    } as never);
-
-    expect(getMessageFeishuMock).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({ channels: expect.any(Object) }),
-      messageId: "om_direct",
-      accountId: undefined,
-    });
-    const details = resultDetails(result);
-    expect(details.ok).toBe(true);
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
+    expect(getMessageFeishuMock).not.toHaveBeenCalled();
   });
 
   it("blocks trusted direct message reads when Feishu dmPolicy is disabled", async () => {
@@ -837,7 +824,15 @@ describe("feishuPlugin actions", () => {
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("blocks caller-supplied allowed Feishu read targets before fetching messages", async () => {
+  it("blocks fetched Feishu messages outside the caller-supplied allowed target", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_blocked",
+      chatId: "oc_group_2",
+      chatType: "group",
+      content: "blocked",
+      contentType: "text",
+    });
+
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action: "read",
@@ -858,7 +853,11 @@ describe("feishuPlugin actions", () => {
         accountId: undefined,
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
-    expect(getMessageFeishuMock).not.toHaveBeenCalled();
+    expect(getMessageFeishuMock).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ channels: expect.any(Object) }),
+      messageId: "om_blocked",
+      accountId: undefined,
+    });
   });
 
   it("blocks trusted-context Feishu reads from disallowed current chats before fetching", async () => {
@@ -1546,11 +1545,11 @@ describe("feishuPlugin actions", () => {
     expect(details.removed).toBe(2);
   });
 
-  it("blocks caller-supplied allowed Feishu reaction targets before fetching messages", async () => {
+  it("blocks forged current-context Feishu reaction targets before listing reactions", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
         action: "reactions",
-        params: { messageId: "om_blocked", to: "chat:oc_group_1" },
+        params: { messageId: "om_blocked" },
         cfg: {
           channels: {
             feishu: {
@@ -1565,45 +1564,39 @@ describe("feishuPlugin actions", () => {
           },
         } as OpenClawConfig,
         accountId: undefined,
+        toolContext: { currentChannelId: "chat:oc_group_1", currentMessageId: "om_blocked" },
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("lists trusted direct message reactions allowed by Feishu dmPolicy", async () => {
-    listReactionsFeishuMock.mockResolvedValueOnce([{ reactionId: "r1", operatorType: "user" }]);
-
-    const result = await feishuPlugin.actions?.handleAction?.({
-      action: "reactions",
-      params: { messageId: "om_direct" },
-      cfg: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "cli_main",
-            appSecret: "secret_main",
-            dmPolicy: "allowlist",
-            allowFrom: ["ou_user_1"],
-            groupPolicy: "allowlist",
-            groups: {
-              oc_group_1: {},
+  it("blocks trusted-context direct message reactions under Feishu dmPolicy allowlist", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "reactions",
+        params: { messageId: "om_direct" },
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              dmPolicy: "allowlist",
+              allowFrom: ["ou_user_1"],
+              groupPolicy: "allowlist",
+              groups: {
+                oc_group_1: {},
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      accountId: undefined,
-      toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
-    } as never);
-
+        } as OpenClawConfig,
+        accountId: undefined,
+        toolContext: { currentChannelId: "user:ou_user_1", currentMessageId: "om_direct" },
+      } as never),
+    ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
-    expect(listReactionsFeishuMock).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({ channels: expect.any(Object) }),
-      messageId: "om_direct",
-      accountId: undefined,
-    });
-    const details = resultDetails(result);
-    expect(details.ok).toBe(true);
+    expect(listReactionsFeishuMock).not.toHaveBeenCalled();
   });
 
   it("blocks trusted direct message reaction reads when Feishu dmPolicy is disabled", async () => {
@@ -1792,7 +1785,6 @@ describe("feishuPlugin actions", () => {
           messageId: "om_blocked",
           emoji: "THUMBSUP",
           remove: true,
-          to: "chat:oc_group_1",
         },
         cfg: {
           channels: {
@@ -1808,6 +1800,7 @@ describe("feishuPlugin actions", () => {
           },
         } as OpenClawConfig,
         accountId: undefined,
+        toolContext: { currentChannelId: "chat:oc_group_1", currentMessageId: "om_blocked" },
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
@@ -1822,7 +1815,6 @@ describe("feishuPlugin actions", () => {
         params: {
           messageId: "om_blocked",
           clearAll: true,
-          to: "chat:oc_group_1",
         },
         cfg: {
           channels: {
@@ -1838,6 +1830,7 @@ describe("feishuPlugin actions", () => {
           },
         } as OpenClawConfig,
         accountId: undefined,
+        toolContext: { currentChannelId: "chat:oc_group_1", currentMessageId: "om_blocked" },
       } as never),
     ).rejects.toThrow("Feishu read target chat is not allowed.");
     expect(getMessageFeishuMock).not.toHaveBeenCalled();

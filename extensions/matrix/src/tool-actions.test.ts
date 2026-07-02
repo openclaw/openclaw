@@ -329,7 +329,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
   });
 
-  it("allows trusted current Matrix DM reads under default group allowlist", async () => {
+  it("blocks forged trusted current Matrix DM reads under default group allowlist", async () => {
     const cfg = {
       channels: {
         matrix: {
@@ -339,27 +339,23 @@ describe("handleMatrixAction pollVote", () => {
       },
     } as CoreConfig;
 
-    await handleMatrixAction(
-      {
-        action: "readMessages",
-        roomId: "!dm:example",
-      },
-      cfg,
-      {
-        toolContext: {
-          currentChannelId: "room:!dm:example",
-          currentDirectUserId: "@alice:example.org",
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
         },
-      },
-    );
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
 
-    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
-      cfg,
-      limit: undefined,
-      before: undefined,
-      after: undefined,
-      threadId: undefined,
-    });
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
   });
 
   it("blocks trusted current Matrix DM reads outside dm.allowFrom", async () => {

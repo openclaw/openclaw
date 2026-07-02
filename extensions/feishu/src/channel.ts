@@ -626,7 +626,7 @@ function resolveFeishuMessageReadChatTarget(ctx: {
   params: Record<string, unknown>;
   toolContext?: { currentChannelId?: string; currentMessageId?: string | number } | null;
   messageId: string;
-}): { requestedTarget?: FeishuReadTarget; requestedChatTrusted: boolean } {
+}): { requestedTarget?: FeishuReadTarget } {
   const explicit = readFirstString(ctx.params, [
     "chatId",
     "chat_id",
@@ -638,18 +638,9 @@ function resolveFeishuMessageReadChatTarget(ctx: {
   if (explicit) {
     return {
       requestedTarget: resolveFeishuReadTarget(explicit),
-      requestedChatTrusted: false,
     };
   }
-  const target = resolveFeishuReadTarget(ctx.toolContext?.currentChannelId);
-  const currentMessageId =
-    typeof ctx.toolContext?.currentMessageId === "number"
-      ? String(ctx.toolContext.currentMessageId)
-      : ctx.toolContext?.currentMessageId?.trim();
-  return {
-    requestedTarget: target,
-    requestedChatTrusted: target !== undefined && currentMessageId === ctx.messageId.trim(),
-  };
+  return {};
 }
 
 function shouldEnforceFeishuReadTarget(params: {
@@ -774,7 +765,6 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   requestedTarget?: FeishuReadTarget;
-  requestedChatTrusted?: boolean;
 }) {
   const trustedDirectId =
     params.requestedTarget?.kind === "direct" ? params.requestedTarget.id : undefined;
@@ -783,9 +773,8 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
   }
   if (params.requestedTarget?.kind === "direct") {
     if (
-      (shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account }) ||
-        shouldEnforceFeishuDirectReadTarget(params.account)) &&
-      !params.requestedChatTrusted
+      shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account }) ||
+      shouldEnforceFeishuDirectReadTarget(params.account)
     ) {
       throw new Error("Feishu read target chat is not allowed.");
     }
@@ -806,7 +795,33 @@ function assertFeishuMessageIdReadTargetAllowed(params: {
   if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
     return;
   }
-  if (!params.requestedChatTrusted) {
+  if (!params.requestedTarget) {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
+}
+
+function assertFeishuFetchedMessageReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  requestedTarget?: FeishuReadTarget;
+  message: unknown;
+}) {
+  if (!shouldVerifyFeishuMessageReadTarget({ cfg: params.cfg, account: params.account })) {
+    return;
+  }
+  const target = params.requestedTarget;
+  if (!target || target.kind !== "group") {
+    throw new Error("Feishu read target chat is not allowed.");
+  }
+  const messageRecord =
+    params.message && typeof params.message === "object"
+      ? (params.message as Record<string, unknown>)
+      : {};
+  const actualChatId = readFirstString(messageRecord, ["chatId", "chat_id"]);
+  if (
+    !actualChatId ||
+    normalizeFeishuAllowEntry(actualChatId) !== normalizeFeishuAllowEntry(target.id)
+  ) {
     throw new Error("Feishu read target chat is not allowed.");
   }
 }
@@ -1058,10 +1073,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu read requires messageId.");
             }
             const { getMessageFeishu } = await loadFeishuChannelRuntime();
+            const readTarget = resolveFeishuMessageReadChatTarget({ ...ctx, messageId });
             assertFeishuMessageIdReadTargetAllowed({
               cfg: ctx.cfg,
               account,
-              ...resolveFeishuMessageReadChatTarget({ ...ctx, messageId }),
+              ...readTarget,
             });
             const message = await getMessageFeishu({
               cfg: ctx.cfg,
@@ -1082,6 +1098,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 details: { error: `Feishu read failed or message not found: ${messageId}` },
               };
             }
+            assertFeishuFetchedMessageReadTargetAllowed({
+              cfg: ctx.cfg,
+              account,
+              requestedTarget: readTarget.requestedTarget,
+              message,
+            });
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
           }
 
