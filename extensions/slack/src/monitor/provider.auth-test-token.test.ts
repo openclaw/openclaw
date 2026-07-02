@@ -1,5 +1,5 @@
 // Slack tests cover auth.test token handling during provider boot.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSlackClient,
   resetSlackTestState,
@@ -27,5 +27,30 @@ describe("auth.test boot call", () => {
     if (firstArg != null) {
       expect(firstArg).not.toHaveProperty("token");
     }
+  });
+
+  it("warns when auth.test returns a user id without bot_id", async () => {
+    const runtimeLog = vi.fn();
+    const client = getSlackClient();
+    client.auth.test.mockResolvedValueOnce({
+      user_id: "UUSER",
+      user: "human-installer",
+      team_id: "T1",
+      team: "OpenClaw",
+    });
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      botToken: "xoxp-user-token",
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+    await stopSlackMonitor(monitor);
+
+    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("without bot_id"));
+    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("xoxp-"));
+    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("xoxb-"));
   });
 });
