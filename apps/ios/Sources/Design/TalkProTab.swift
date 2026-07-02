@@ -643,15 +643,6 @@ struct TalkProState: Equatable {
         }
     }
 
-    var prefersPermissionCopy: Bool {
-        switch self.permissionState {
-        case .missingScope, .requestingUpgrade, .upgradeRequested, .requestFailed:
-            true
-        default:
-            false
-        }
-    }
-
     func waveformMode(micLevel: Double) -> TalkProWaveformMode {
         if self.isDemoMode { return .still }
         if !self.gatewayConnected { return .still }

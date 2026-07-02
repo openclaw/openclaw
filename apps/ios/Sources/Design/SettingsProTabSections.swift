@@ -28,10 +28,6 @@ extension SettingsProTab {
         .accessibilityIdentifier("settings-accent-color-picker")
     }
 
-    private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
-    }
-
     var appearanceMenu: some View {
         Menu {
             Picker("Appearance", selection: self.$appearancePreferenceRaw) {
@@ -993,17 +989,6 @@ extension SettingsProTab {
                 })
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func settingsToggle(
-        _ title: String,
-        isOn: Binding<Bool>,
-        onChange: ((Bool) -> Void)? = nil) -> some View
-    {
-        Toggle(title, isOn: isOn)
-            .onChange(of: isOn.wrappedValue) { _, enabled in
-                onChange?(enabled)
-            }
     }
 
     func settingsButtonToggle(

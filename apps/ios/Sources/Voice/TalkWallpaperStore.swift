@@ -56,11 +56,6 @@ enum TalkWallpaperStore {
         return url
     }
 
-    static func clearCustomImage() {
-        let url = self.customImageURL()
-        try? FileManager.default.removeItem(at: url)
-    }
-
     static func usesImageWallpaper(defaults: UserDefaults = .standard) -> Bool {
         switch self.selection(defaults: defaults) {
         case .ocean, .custom:

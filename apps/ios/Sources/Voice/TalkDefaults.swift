@@ -26,7 +26,6 @@ enum TalkDefaults {
     static let wallpaperOceanResourceName = "ocean"
     static let wallpaperOceanResourceExtension = "jpg"
     static let wallpaperOceanResourceSubdirectory = "TalkWallpapers"
-    static let defaultWallpaperColorHex = "#f8f8f7"
 
     static func speakerphoneEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: self.speakerphoneEnabledKey) != nil else {

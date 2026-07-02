@@ -234,10 +234,6 @@ enum OpenClawBrand {
         AppAccentColorPreference.current.foregroundUIColor
     }
 
-    static var uiAccentHot: UIColor {
-        AppAccentColorPreference.current.hotUIColor
-    }
-
     static var uiAccentHotForeground: UIColor {
         AppAccentColorPreference.current.hotForegroundUIColor
     }
