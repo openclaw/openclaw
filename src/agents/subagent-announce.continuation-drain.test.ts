@@ -1064,6 +1064,47 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails (#1144)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-fail": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 10_000,
+        outputTokens: 20_000,
+      },
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // The child chain-cost persist throws, so the run-cost fallback lives only in
+    // memory for this drain and cannot survive a restart.
+    updateSessionStoreMock.mockRejectedValue(new Error("session store write failed"));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-fail",
+      childRunId: "run-bracket-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    // Fail closed: a durable delayed delegate would recover from the stale child
+    // entry and under-enforce the cost cap, so the hop is spawned immediately via
+    // the in-process path (correct live folded cost basis) and NOT enqueued
+    // durably where restart recovery could re-drive it on stale cost.
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
   // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
   // already propagates model) must forward an explicit continue_delegate model
   // override to the grandchild spawn so a tool-delegated hop honors the requested

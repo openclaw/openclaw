@@ -1336,49 +1336,73 @@ export async function runSubagentAnnounceFlow(params: {
             };
 
             if (chainDelayMs && chainDelayMs > 0) {
-              const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
-              // #1144: route the delayed bracket delegate through the durable
-              // pending-delegate store — the SAME queue and chain-state owner as
-              // the tool-dispatched delayed path — instead of a volatile
-              // setTimeout that a gateway restart before `clampedDelay` elapses
-              // would drop. Enqueue under the CHILD session that emitted the
-              // continuation so the later drain derives hop/cost from the child's
-              // chain state (enqueuing under the requester would reset the hop to
-              // the requester's chain count and bypass maxChainLength /
-              // costCapTokens). The child-queue drain arms the shared hedge timer
-              // for the unmatured entry; restart recovery re-drives it if the
-              // process dies first.
-              //
-              // Enqueue `chainTask` RAW: it is the clean parsed delegate body —
-              // stripContinuationSignal already removed the `+Ns` delay (kept
-              // separately in delayMs) and it carries no chain-hop wrapper. The
-              // shared delegate dispatcher applies the `[continuation:chain-hop:N]`
-              // wrapper at dispatch time (see delegate-dispatch.ts spawn task),
-              // exactly like the normal continue_delegate queue contract. Do NOT
-              // pre-wrap it the way the immediate `doChainSpawn` payload does, or
-              // the dispatcher would double-wrap the hop marker.
-              enqueuePendingDelegate(params.childSessionKey, {
-                task: chainTask,
-                delayMs: clampedDelay,
-                ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
-                ...(chainSignal.targetSessionKey
-                  ? { targetSessionKey: chainSignal.targetSessionKey }
-                  : {}),
-                ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
-                  ? { targetSessionKeys: chainSignal.targetSessionKeys }
-                  : {}),
-                ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
-                ...(chainSignal.model ? { model: chainSignal.model } : {}),
-              });
-              void drainChildContinuationQueue({
-                childSessionKey: params.childSessionKey,
-                requesterOrigin: targetRequesterOrigin,
-                additionalChainTokens: childChainTokensToFold,
-              }).catch((err: unknown) => {
+              if (childChainTokensToFold > 0) {
+                // #1144: the child chain-cost persist failed, so the durable
+                // child entry is stale and the run-cost fallback
+                // (childChainTokensToFold) lives ONLY in this process. A durable
+                // delayed delegate that survived a restart would have recovery
+                // rebuild chain state from the stale entry and under-enforce the
+                // cost cap. Fail closed: spawn the hop NOW via the in-process path
+                // (the enqueue-time chain guard above already enforced the cap on
+                // the live folded basis) instead of persisting a delegate that
+                // could outlive the in-memory fallback. Dropping the +Ns delay is
+                // an acceptable degradation for this rare persist-failure corner —
+                // the continuation still fires, and with a correct cost basis.
                 defaultRuntime.log(
-                  `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
+                  `[subagent-chain-hop] Child chain-cost persist failed for ${params.childSessionKey}; spawning the delayed bracket delegate immediately (no durable delay) to avoid stale-cost restart recovery`,
                 );
-              });
+                doChainSpawn().catch((err: unknown) => {
+                  defaultRuntime.log(
+                    `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
+                  );
+                });
+              } else {
+                const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
+                // #1144: route the delayed bracket delegate through the durable
+                // pending-delegate store — the SAME queue and chain-state owner as
+                // the tool-dispatched delayed path — instead of a volatile
+                // setTimeout that a gateway restart before `clampedDelay` elapses
+                // would drop. Enqueue under the CHILD session that emitted the
+                // continuation so the later drain derives hop/cost from the child's
+                // chain state (enqueuing under the requester would reset the hop to
+                // the requester's chain count and bypass maxChainLength /
+                // costCapTokens). The child-queue drain arms the shared hedge timer
+                // for the unmatured entry; restart recovery re-drives it if the
+                // process dies first — safe here because the child's post-run cost
+                // was durably persisted (childChainTokensToFold === 0), so recovery
+                // reads the correct basis.
+                //
+                // Enqueue `chainTask` RAW: it is the clean parsed delegate body —
+                // stripContinuationSignal already removed the `+Ns` delay (kept
+                // separately in delayMs) and it carries no chain-hop wrapper. The
+                // shared delegate dispatcher applies the `[continuation:chain-hop:N]`
+                // wrapper at dispatch time (see delegate-dispatch.ts spawn task),
+                // exactly like the normal continue_delegate queue contract. Do NOT
+                // pre-wrap it the way the immediate `doChainSpawn` payload does, or
+                // the dispatcher would double-wrap the hop marker.
+                enqueuePendingDelegate(params.childSessionKey, {
+                  task: chainTask,
+                  delayMs: clampedDelay,
+                  ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
+                  ...(chainSignal.targetSessionKey
+                    ? { targetSessionKey: chainSignal.targetSessionKey }
+                    : {}),
+                  ...(chainSignal.targetSessionKeys && chainSignal.targetSessionKeys.length > 0
+                    ? { targetSessionKeys: chainSignal.targetSessionKeys }
+                    : {}),
+                  ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
+                  ...(chainSignal.model ? { model: chainSignal.model } : {}),
+                });
+                void drainChildContinuationQueue({
+                  childSessionKey: params.childSessionKey,
+                  requesterOrigin: targetRequesterOrigin,
+                  additionalChainTokens: childChainTokensToFold,
+                }).catch((err: unknown) => {
+                  defaultRuntime.log(
+                    `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
+                  );
+                });
+              }
             } else {
               // Fire-and-forget — don't block the announce flow
               doChainSpawn().catch((err: unknown) => {
