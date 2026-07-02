@@ -183,3 +183,32 @@ describe("getToolPath exit-status handling", () => {
     expect(getToolPath("fd")).toBe("fd");
   });
 });
+
+describe("ensureTool GitHub release response bounding", () => {
+  it("rejects oversized GitHub release API responses and returns undefined", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+    spawnSyncMock.mockReturnValue({
+      error: new Error("not found"),
+      status: 1,
+      stderr: Buffer.alloc(0),
+      stdout: Buffer.alloc(0),
+    });
+
+    const { ensureTool } = await import("./tools-manager.js");
+    const result = await ensureTool("fd");
+    expect(result).toBeUndefined();
+  });
+});
