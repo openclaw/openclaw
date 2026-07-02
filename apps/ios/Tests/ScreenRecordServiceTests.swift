@@ -18,10 +18,16 @@ private final class ScreenRecordServiceProbe: @unchecked Sendable {
         self.stopCount += 1
         self.lock.unlock()
     }
+
+    func counts() -> (start: Int, stop: Int) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return (self.startCount, self.stopCount)
+    }
 }
 
 @Suite(.serialized) struct ScreenRecordServiceTests {
-    @Test func clampDefaultsAndBounds() {
+    @Test func `clamp defaults and bounds`() {
         #expect(ScreenRecordService._test_clampDurationMs(nil) == 10000)
         #expect(ScreenRecordService._test_clampDurationMs(0) == 250)
         #expect(ScreenRecordService._test_clampDurationMs(60001) == 60000)
@@ -32,7 +38,7 @@ private final class ScreenRecordServiceProbe: @unchecked Sendable {
         #expect(ScreenRecordService._test_clampFps(.infinity) == 10)
     }
 
-    @Test @MainActor func recordRejectsInvalidScreenIndex() async {
+    @Test @MainActor func `record rejects invalid screen index`() async {
         let recorder = ScreenRecordService()
         do {
             _ = try await recorder.record(
@@ -49,28 +55,36 @@ private final class ScreenRecordServiceProbe: @unchecked Sendable {
         }
     }
 
-    @Test func recordStopsCaptureWhenSleepIsCancelled() async {
+    @Test func `record stops capture when sleep is cancelled`() async {
         let probe = ScreenRecordServiceProbe()
+        let started = AsyncStream<Void>.makeStream()
         let recorder = ScreenRecordService(
             startReplayKitCaptureAction: { _, _, completion in
                 probe.recordStart()
+                started.continuation.yield()
+                started.continuation.finish()
                 completion(nil)
             },
             stopReplayKitCaptureAction: { completion in
                 probe.recordStop()
                 completion(nil)
-            },
-            sleepNanoseconds: { _ in
-                throw CancellationError()
             })
 
-        do {
-            _ = try await recorder.record(
+        let recordingTask = Task {
+            try await recorder.record(
                 screenIndex: nil,
-                durationMs: 250,
+                durationMs: 60000,
                 fps: 5,
                 includeAudio: false,
                 outPath: nil)
+        }
+        for await _ in started.stream {
+            break
+        }
+        recordingTask.cancel()
+
+        do {
+            _ = try await recordingTask.value
             Issue.record("Expected cancellation to throw")
         } catch is CancellationError {
             // Expected; cleanup should stop ReplayKit before preserving cancellation.
@@ -78,7 +92,8 @@ private final class ScreenRecordServiceProbe: @unchecked Sendable {
             Issue.record("Unexpected error type: \(error)")
         }
 
-        #expect(probe.startCount == 1)
-        #expect(probe.stopCount == 1)
+        let counts = probe.counts()
+        #expect(counts.start == 1)
+        #expect(counts.stop == 1)
     }
 }

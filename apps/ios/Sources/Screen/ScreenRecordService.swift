@@ -33,7 +33,6 @@ final class ScreenRecordService: @unchecked Sendable {
         @escaping CaptureCompletion)
         -> Void
     private let stopReplayKitCaptureAction: @Sendable (@escaping CaptureCompletion) -> Void
-    private let sleepNanoseconds: @Sendable (UInt64) async throws -> Void
 
     init(
         startReplayKitCaptureAction: @escaping @Sendable (
@@ -52,14 +51,10 @@ final class ScreenRecordService: @unchecked Sendable {
             Task { @MainActor in
                 stopReplayKitCapture(completion)
             }
-        },
-        sleepNanoseconds: @escaping @Sendable (UInt64) async throws -> Void = { nanoseconds in
-            try await Task.sleep(nanoseconds: nanoseconds)
         })
     {
         self.startReplayKitCaptureAction = startReplayKitCaptureAction
         self.stopReplayKitCaptureAction = stopReplayKitCaptureAction
-        self.sleepNanoseconds = sleepNanoseconds
     }
 
     enum ScreenRecordError: LocalizedError {
@@ -97,19 +92,15 @@ final class ScreenRecordService: @unchecked Sendable {
         let recordQueue = DispatchQueue(label: "ai.openclawfoundation.app.screenrecord")
 
         try await self.startCapture(state: state, config: config, recordQueue: recordQueue)
-        var captureActive = true
         do {
-            try await self.sleepNanoseconds(UInt64(config.durationMs) * 1_000_000)
-            try await self.stopCapture()
-            captureActive = false
-            try self.finalizeCapture(state: state)
-            try await self.finishWriting(state: state)
+            try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
         } catch {
-            if captureActive {
-                try? await self.stopCapture()
-            }
+            try? await self.stopCapture()
             throw error
         }
+        try await self.stopCapture()
+        try self.finalizeCapture(state: state)
+        try await self.finishWriting(state: state)
 
         return config.outURL.path
     }
