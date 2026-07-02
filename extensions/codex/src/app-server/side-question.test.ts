@@ -1871,6 +1871,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(120_000);
   });
 
+  it("uses per-call timeoutSeconds for side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "sessions_send",
+        arguments: { timeoutSeconds: 12 },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(12_000);
+  });
+
   it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
     const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
       call: {

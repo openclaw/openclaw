@@ -10,7 +10,10 @@ import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   isJsonObject,
@@ -439,11 +442,13 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   );
 }
 
-function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
+export function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readPositiveFiniteTimeoutMs(value.timeoutMs);
+  return (
+    readPositiveFiniteTimeoutMs(value.timeoutMs) ?? readTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readConfiguredDynamicToolTimeoutMs(
@@ -475,12 +480,11 @@ function readConfiguredDynamicToolTimeoutMs(
   return undefined;
 }
 
-function readTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readPositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
+export function readTimeoutSecondsAsMs(value: unknown): number | undefined {
+  return finiteSecondsToTimerSafeMilliseconds(value, { floorSeconds: true });
 }
 
-function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
+export function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
