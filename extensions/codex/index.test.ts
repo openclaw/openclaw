@@ -32,12 +32,13 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers the codex provider and agent harness", () => {
+  it("registers the codex provider, agent harness, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
     const registerMigrationProvider = vi.fn();
     const registerProvider = vi.fn();
+    const registerWebSearchProvider = vi.fn();
     const on = vi.fn();
     const onConversationBindingResolved = vi.fn();
 
@@ -54,6 +55,7 @@ describe("codex plugin", () => {
         registerMediaUnderstandingProvider,
         registerMigrationProvider,
         registerProvider,
+        registerWebSearchProvider,
         on,
         onConversationBindingResolved,
       }),
@@ -82,6 +84,13 @@ describe("codex plugin", () => {
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.5" });
     expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
     expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
+    const webSearchRegistration = mockCallArg(registerWebSearchProvider) as
+      | Record<string, unknown>
+      | undefined;
+    expect(webSearchRegistration?.id).toBe("codex");
+    expect(webSearchRegistration?.label).toBe("Codex Hosted Search");
+    expect(webSearchRegistration?.requiresCredential).toBe(false);
+    expect(typeof webSearchRegistration?.createTool).toBe("function");
     const commandRegistration = mockCallArg(registerCommand) as Record<string, unknown> | undefined;
     expect(commandRegistration?.name).toBe("codex");
     expect(commandRegistration?.description).toBe(

@@ -235,11 +235,6 @@ export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
 }
 
-/** Return whether a ref is explicitly prioritized for the small-model live lane. */
-export function isPrioritizedSmallLiveModelRef(ref: ModelRef): boolean {
-  return isSmallLiveModelRef(ref);
-}
-
 /** List high-signal priority refs in priority order. */
 export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
   return listPrioritizedLiveModelRefs(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);

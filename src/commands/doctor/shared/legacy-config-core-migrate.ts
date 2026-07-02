@@ -10,6 +10,40 @@ import {
   normalizeLegacyOpenAICodexModelsAddMetadata,
 } from "./legacy-config-core-normalizers.js";
 
+function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+  const agents = cfg.agents?.list;
+  if (!Array.isArray(agents)) {
+    return cfg;
+  }
+
+  let repaired = 0;
+  const nextAgents = agents.map((agent) => {
+    if (agent && typeof agent === "object" && (agent as Record<string, unknown>).workspace === null) {
+      repaired += 1;
+      const { workspace: _workspace, ...rest } = agent as Record<string, unknown>;
+      return rest;
+    }
+    return agent;
+  });
+
+  if (repaired === 0) {
+    return cfg;
+  }
+
+  changes.push(
+    `Removed null workspace value${repaired === 1 ? "" : "s"} from agents.list entr${
+      repaired === 1 ? "y" : "ies"
+    }.`,
+  );
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: nextAgents as typeof agents,
+    },
+  };
+}
+
 function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const agents = cfg.agents?.list;
   const bindings = cfg.bindings;
@@ -71,6 +105,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   }
   next = normalizeLegacyCommandsConfig(next, changes);
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
+  next = repairNullAgentWorkspaces(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
   return { config: next, changes };

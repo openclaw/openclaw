@@ -10,7 +10,6 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
-  sanitizeThinkingForRecovery,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
@@ -406,50 +405,7 @@ describe("stripInvalidThinkingSignatures", () => {
   });
 });
 
-describe("sanitizeThinkingForRecovery", () => {
-  it("drops the latest assistant message when the thinking block is unsigned", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "partial" }],
-      },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toEqual([messages[0]]);
-    expect(result.prefill).toBe(false);
-  });
-
-  it("preserves later turns when dropping an incomplete assistant message", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "partial" }],
-      },
-      { role: "user", content: "follow up" },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toEqual([messages[0], messages[2]]);
-    expect(result.prefill).toBe(false);
-  });
-
-  it("marks signed thinking without text as a prefill recovery case", () => {
-    const messages = castAgentMessages([
-      { role: "user", content: "hello" },
-      {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "complete", thinkingSignature: "sig" }],
-      },
-    ]);
-
-    const result = sanitizeThinkingForRecovery(messages);
-    expect(result.messages).toBe(messages);
-    expect(result.prefill).toBe(true);
-  });
-
+describe("assessLastAssistantMessage", () => {
   it("marks signed thinking with an empty text block as incomplete text", () => {
     const message = castAgentMessage({
       role: "assistant",
@@ -491,6 +447,8 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   const anthropicThinkingError = new Error(
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
   );
+  const genericizedProviderError =
+    "LLM request failed: provider rejected the request schema or tool payload.";
   const terminalThinkingSignatureError =
     "ValidationException: invalid signature on thinking block in message history";
 
@@ -757,6 +715,69 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(callCount).toBe(2);
   });
 
+  it.each([
+    {
+      name: "failover rawError",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          rawError: terminalThinkingSignatureError,
+        }),
+    },
+    {
+      name: "Anthropic SDK error body",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          error: { error: { message: terminalThinkingSignatureError } },
+        }),
+    },
+    {
+      name: "direct errorMessage",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          errorMessage: terminalThinkingSignatureError,
+        }),
+    },
+    {
+      name: "ProviderHttpError errorBody",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          errorBody: JSON.stringify({
+            error: {
+              message: terminalThinkingSignatureError,
+              type: "invalid_request_error",
+            },
+          }),
+        }),
+    },
+    {
+      name: "cyclic cause graph",
+      createError: () => {
+        const root = new Error(genericizedProviderError) as Error & { cause?: unknown };
+        const nested = { cause: root, message: terminalThinkingSignatureError };
+        root.cause = nested;
+        return root;
+      },
+    },
+  ])(
+    "retries genericized request errors carrying provider detail in $name",
+    async ({ createError }) => {
+      const providerError = createError();
+      let callCount = 0;
+      const wrapped = wrapAnthropicStreamWithRecovery(
+        (() => {
+          callCount += 1;
+          return Promise.reject(providerError);
+        }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+        { id: "test-session" },
+      );
+
+      await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
+        providerError,
+      );
+      expect(callCount).toBe(2);
+    },
+  );
+
   it("retries pre-content terminal stream-error events with omitted-reasoning text", async () => {
     let callCount = 0;
     const contexts: Array<{ messages?: AgentMessage[] }> = [];
@@ -818,7 +839,11 @@ describe("wrapAnthropicStreamWithRecovery", () => {
 
   it("does not retry non-thinking terminal stream-error events", async () => {
     let callCount = 0;
-    const errorMessage = createTestStreamErrorMessage("rate limit exceeded");
+    const errorMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: terminalThinkingSignatureError }],
+      stopReason: "error",
+      errorMessage: "rate limit exceeded",
+    });
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
         callCount += 1;
@@ -995,6 +1020,64 @@ describe("wrapAnthropicStreamWithRecovery", () => {
 
     await expect(response.result()).resolves.toEqual(finalMessage);
     expect(events).toHaveLength(2);
+  });
+
+  it("recovers an error event from a Promise-resolved stream without changing Promise timing", async () => {
+    const recovered = vi.fn();
+    let callCount = 0;
+    let resolveFirstStream!: (stream: ReturnType<typeof createAssistantMessageEventStream>) => void;
+    const firstStreamPromise = new Promise<ReturnType<typeof createAssistantMessageEventStream>>(
+      (resolve) => {
+        resolveFirstStream = resolve;
+      },
+    );
+    const finalMessage = createTestAssistantMessage({
+      content: [{ type: "text", text: "recovered answer" }],
+      stopReason: "stop",
+    });
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        const attempt = ++callCount;
+        if (attempt === 1) {
+          return firstStreamPromise;
+        }
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session", onRecoveredAnthropicThinking: recovered },
+    );
+
+    const responsePromise = wrapped({} as never, { messages: [] } as never, {} as never);
+    expect(responsePromise).toBeInstanceOf(Promise);
+    let resolved = false;
+    void Promise.resolve(responsePromise).then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    const firstStream = createAssistantMessageEventStream();
+    resolveFirstStream(firstStream);
+    const response = await responsePromise;
+    queueMicrotask(() => {
+      firstStream.push({
+        type: "error",
+        reason: "error",
+        error: createTestStreamErrorMessage(terminalThinkingSignatureError),
+      });
+      firstStream.end();
+    });
+    for await (const event of response) {
+      void event;
+    }
+
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
   });
 });
 

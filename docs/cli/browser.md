@@ -174,7 +174,22 @@ Notes:
   or `--element`.
 - `existing-session` / `user` profiles support page screenshots and `--ref`
   screenshots from snapshot output, but not CSS `--element` screenshots.
-- `--labels` overlays current snapshot refs on the screenshot.
+- `--labels` overlays current snapshot refs on the screenshot. On
+  Playwright-backed profiles, it works with `--full-page` (full-page label
+  overlay), `--ref` (element-clip label overlay by ARIA ref), and `--element`
+  (element-clip label overlay by CSS selector); in element-clip modes, labels
+  are projected relative to the element. The response also includes an
+  `annotations` array with each ref's bounding box. Each item has `ref`,
+  `number`, `role`, optional `name`, and `box: {x, y, width, height}`;
+  coordinates are in the captured image's space (viewport / fullpage /
+  element-relative). The field is omitted when empty.
+  `existing-session` profiles render a chrome-mcp overlay on page screenshots
+  but do not use the Playwright projection helper and do not include
+  `annotations`; CSS `--element` screenshots are unsupported there. Without
+  Playwright or chrome-mcp, labeled screenshots are not available. Prior
+  releases ignored `--full-page`, `--ref`, and `--element` on labeled
+  Playwright screenshots and always returned a viewport capture; labeled
+  screenshots now honor those scopes.
 - `snapshot --urls` appends discovered link destinations to AI snapshots so
   agents can choose direct navigation targets instead of guessing from link
   text alone.
@@ -300,7 +315,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
+- `wait --load networkidle` is not supported on existing-session profiles (works on managed and raw/remote CDP)
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`

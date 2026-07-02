@@ -1,6 +1,7 @@
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
@@ -180,47 +181,51 @@ export function stripSessionsYieldArtifacts(activeSession: {
 
   const sessionManager = activeSession.sessionManager as
     | {
-        fileEntries?: Array<{
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          message?: { role?: string; stopReason?: string };
-          customType?: string;
-        }>;
-        byId?: Map<string, { id: string }>;
-        leafId?: string | null;
-        rewriteFile?: () => void;
+        removeTrailingEntries?: (
+          predicate: (entry: {
+            type?: string;
+            message?: {
+              role?: string;
+              stopReason?: string;
+              provider?: string;
+              model?: string;
+            };
+            customType?: string;
+          }) => boolean,
+          options?: {
+            preserveTrailing?: (entry: {
+              type?: string;
+              message?: {
+                role?: string;
+                provider?: string;
+                model?: string;
+              };
+            }) => boolean;
+          },
+        ) => number;
       }
     | undefined;
-  const fileEntries = sessionManager?.fileEntries;
-  const byId = sessionManager?.byId;
-  if (!fileEntries || !byId) {
+  if (typeof sessionManager?.removeTrailingEntries !== "function") {
     return;
   }
 
-  let changed = false;
-  while (fileEntries.length > 1) {
-    const last = fileEntries.at(-1);
-    if (!last || last.type === "session") {
-      break;
-    }
-    const isYieldAbortAssistant =
-      last.type === "message" &&
-      last.message?.role === "assistant" &&
-      last.message?.stopReason === "aborted";
-    const isYieldInterruptMessage =
-      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
-      break;
-    }
-    fileEntries.pop();
-    if (last.id) {
-      byId.delete(last.id);
-    }
-    sessionManager.leafId = last.parentId ?? null;
-    changed = true;
-  }
-  if (changed) {
-    sessionManager.rewriteFile?.();
-  }
+  sessionManager.removeTrailingEntries(
+    (entry) => {
+      const isYieldAbortAssistant =
+        entry.type === "message" &&
+        entry.message?.role === "assistant" &&
+        entry.message?.stopReason === "aborted";
+      const isYieldInterruptMessage =
+        entry.type === "custom_message" &&
+        entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+      return isYieldAbortAssistant || isYieldInterruptMessage;
+    },
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
 }

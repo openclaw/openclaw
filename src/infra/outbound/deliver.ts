@@ -868,6 +868,23 @@ function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
   );
 }
 
+function pushIdentifiedDeliveryResult(
+  results: OutboundDeliveryResult[],
+  delivery: OutboundDeliveryResult,
+): boolean {
+  if (!hasDeliveryResultIdentity(delivery)) {
+    return false;
+  }
+  results.push(delivery);
+  return true;
+}
+
+function filterIdentifiedDeliveryResults(
+  results: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  return results.filter((result) => hasDeliveryResultIdentity(result));
+}
+
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
   if (pin === true) {
@@ -1326,9 +1343,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   };
   const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
+  let platformSendStarted = false;
 
   try {
-    let platformSendStarted = false;
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
       ...(queueId
@@ -1390,11 +1407,29 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-          log.warn(
-            `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-          );
-        });
+        const sendEvidence =
+          platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
+        if (sendEvidence) {
+          await markQueuedPlatformOutcomeUnknown({
+            queueId,
+            queuePolicy,
+          }).catch((markErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
+            );
+            return failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
+          });
+        } else {
+          await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+            );
+          });
+        }
       }
     }
     throw err;
@@ -1424,7 +1459,7 @@ async function deliverOutboundPayloadsCore(
           agentId: params.session?.agentId ?? params.mirror?.agentId,
           mediaSources,
           mediaAccess: params.mediaAccess,
-          sessionKey: params.session?.key,
+          sessionKey: params.session?.policyKey ?? params.session?.key,
           messageProvider: params.session?.key ? undefined : channel,
           accountId: params.session?.requesterAccountId ?? accountId,
           requesterSenderId: params.session?.requesterSenderId,
@@ -1511,7 +1546,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
-      results.push(await sendHandler.sendText(unit.text, unit.overrides));
+      pushIdentifiedDeliveryResult(results, await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1765,10 +1800,12 @@ async function deliverOutboundPayloadsCore(
         const beforeCount = results.length;
         if (deliveryHandler.sendFormattedText) {
           results.push(
-            ...(await deliveryHandler.sendFormattedText(
-              payloadSummary.text,
-              applySendReplyToConsumption(sendOverrides),
-            )),
+            ...filterIdentifiedDeliveryResults(
+              await deliveryHandler.sendFormattedText(
+                payloadSummary.text,
+                applySendReplyToConsumption(sendOverrides),
+              ),
+            ),
           );
         } else {
           await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
@@ -1789,7 +1826,7 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = results.at(-1)?.messageId;
+        const messageId = deliveredResults.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1806,7 +1843,7 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: deliveredResults.length > 0,
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1846,7 +1883,7 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = results.at(-1)?.messageId;
+        const messageId = deliveredResults.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1863,7 +1900,7 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: deliveredResults.length > 0,
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1891,9 +1928,10 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
-        results.push(delivery);
-        firstMessageId ??= delivery.messageId;
-        lastMessageId = delivery.messageId;
+        if (pushIdentifiedDeliveryResult(results, delivery)) {
+          firstMessageId ??= delivery.messageId;
+          lastMessageId = delivery.messageId;
+        }
       }
       await maybePinDeliveredMessage({
         handler: deliveryHandler,
@@ -1926,7 +1964,7 @@ async function deliverOutboundPayloadsCore(
       }
       completeDeliveryDiagnostics(results.length - beforeCount);
       emitMessageSent({
-        success: true,
+        success: results.length > beforeCount,
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });

@@ -61,6 +61,10 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+  function isUnsupportedXaiMultiAgentModel(provider?: string, id?: string): boolean {
+    return provider === "xai" && id?.trim().toLowerCase() === "grok-4.20-multi-agent-0309";
+  }
+
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -79,6 +83,9 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return true;
+      }
       return (
         (provider === "qwen" || provider === "modelstudio") &&
         id?.trim().toLowerCase() === "qwen3.6-plus" &&
@@ -92,7 +99,7 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
-      return false;
+      return isUnsupportedXaiMultiAgentModel(provider, id);
     },
     buildSuppressedBuiltInModelError: ({
       provider,
@@ -114,7 +121,10 @@ vi.mock("../model-suppression.js", () => {
         (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+      }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.";
       }
       return undefined;
     },
@@ -159,12 +169,8 @@ import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynam
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import {
-  buildInlineProviderModels,
-  resolveModel,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -686,6 +692,100 @@ describe("resolveModel", () => {
     expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0.95, output: 4, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+
+    const result = await resolveModelAsync(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    );
+  });
+
+  it("prefers user openclaw.json config over the Fireworks manifest for the same id", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+      provider: "fireworks",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          fireworks: {
+            api: "openai-completions",
+            baseUrl: "https://api.fireworks.ai/inference/v1",
+            models: [
+              {
+                ...makeModel("accounts/fireworks/models/kimi-k2p6"),
+                name: "Kimi K2.6 (user override)",
+                contextWindow: 300_000,
+                maxTokens: 300_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "fireworks",
+      "accounts/fireworks/models/kimi-k2p6",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p6",
+      contextWindow: 300_000,
+      maxTokens: 300_000,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+        cfg,
+      }),
+    );
   });
 
   it("keeps provider dynamic metadata for runtime-preferred models", async () => {
@@ -2732,6 +2832,29 @@ describe("resolveModel", () => {
     );
   });
 
+  it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai/gpt-5.3-codex. Found agents.defaults.models["openai/gpt-5.3-codex"] bound to the "codex" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["openai"].models[] — registering it there will not make it usable. Confirm "gpt-5.3-codex" is still offered by the "codex" runtime and switch agents.defaults.model.primary to a currently available model (run `openclaw models list --provider openai` to list them). See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
   it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
     const cfg = {
       models: {
@@ -2919,6 +3042,52 @@ describe("resolveModel", () => {
       id: "openrouter/healer-alpha",
       reasoning: false,
       input: ["text"],
+    });
+  });
+
+  it("uses provider-normalized model ids for OpenRouter transport", () => {
+    const modelId = "openrouter/anthropic/claude-sonnet-4.6";
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId,
+      templateModel: {
+        ...makeModel(modelId),
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+    });
+    const baseRuntimeHooks = createRuntimeHooks();
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      (params: { context: { model: { id: string } } }) => ({
+        ...params.context.model,
+        id: params.context.model.id.slice("openrouter/".length),
+      }),
+    );
+
+    const result = resolveModel("openrouter", modelId, "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+    });
+
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        context: expect.objectContaining({
+          modelId,
+          model: expect.objectContaining({ id: modelId }),
+        }),
+      }),
+    );
+    expectRecordFields(result.model, {
+      provider: "openrouter",
+      id: "anthropic/claude-sonnet-4.6",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
     });
   });
 
@@ -3307,7 +3476,28 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
+  it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xai", "grok-4.20-multi-agent-0309", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.",
     );
   });
 
@@ -3326,7 +3516,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 
@@ -3736,7 +3926,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 

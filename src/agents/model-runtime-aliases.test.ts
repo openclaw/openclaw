@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing as cliBackendsTesting } from "./cli-backends.js";
-import { createModelPickerVisibleProviderPredicate } from "./model-picker-visibility.js";
+import {
+  createModelPickerVisibleProviderPredicate,
+  isRetiredModelPickerProvider,
+} from "./model-picker-visibility.js";
 import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
@@ -131,6 +134,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
   it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
@@ -168,6 +191,20 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
+  });
+
+  it("recognizes retired picker providers without loading CLI backend metadata", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => {
+        throw new Error("retired provider checks should not load setup metadata");
+      },
+      resolveRuntimeCliBackends: () => {
+        throw new Error("retired provider checks should not load runtime metadata");
+      },
+    });
+
+    expect(isRetiredModelPickerProvider("CODEX-CLI")).toBe(true);
+    expect(isRetiredModelPickerProvider("anthropic")).toBe(false);
   });
 });
 

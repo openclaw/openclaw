@@ -99,6 +99,7 @@ export async function startQaLiveLaneGateway(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
+  mockAuthAgentIds?: readonly string[];
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
   const mock = await startQaProviderServer(params.providerMode);
@@ -117,6 +118,7 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
+      mockAuthAgentIds: params.mockAuthAgentIds,
       mutateConfig: (cfg) =>
         prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });
@@ -128,7 +130,18 @@ export async function startQaLiveLaneGateway(params: {
       },
     };
   } catch (error) {
-    await mock?.stop().catch(() => {});
+    if (mock) {
+      try {
+        await mock.stop();
+      } catch (cleanupError) {
+        const errors: string[] = [];
+        appendLiveLaneIssue(errors, "gateway startup failed", error);
+        appendLiveLaneIssue(errors, "mock provider stop failed", cleanupError);
+        throw new Error(`failed to start QA live lane gateway:\n${errors.join("\n")}`, {
+          cause: cleanupError,
+        });
+      }
+    }
     throw error;
   }
 }

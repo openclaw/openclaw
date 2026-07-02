@@ -21,6 +21,7 @@ import {
   formatNarrativeDate,
   formatBackfillDiaryDate,
   generateAndAppendDreamNarrative,
+  readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
   runDetachedDreamNarrative,
   type NarrativePhaseData,
@@ -34,6 +35,19 @@ const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+const originalNarrativeStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setNarrativeTestEnv(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreNarrativeTestEnv(): void {
+  if (originalNarrativeStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalNarrativeStateDir);
+  }
+}
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -88,6 +102,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  restoreNarrativeTestEnv();
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
   resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
@@ -132,6 +147,19 @@ describe("buildNarrativePrompt", () => {
     const prompt = buildNarrativePrompt({ phase: "light", snippets });
     expect(prompt).toContain("snippet-11");
     expect(prompt).not.toContain("snippet-12");
+  });
+
+  it("includes current sweep and recent diary context", () => {
+    const prompt = buildNarrativePrompt({
+      phase: "light",
+      snippets: ["Later workspace routing notes surfaced."],
+      currentDate: "April 6, 2026, 9:00 AM UTC",
+      recentDiaryEntries: ["The first meeting memory already filled the page."],
+    });
+    expect(prompt).toContain("Diary continuity context");
+    expect(prompt).toContain("Current sweep: April 6, 2026, 9:00 AM UTC");
+    expect(prompt).toContain("The first meeting memory already filled the page.");
+    expect(prompt).toContain("do not replay the same first-day framing");
   });
 });
 
@@ -386,6 +414,77 @@ describe("appendNarrativeEntry", () => {
     expect(firstIdx).toBeGreaterThan(start);
     expect(secondIdx).toBeGreaterThan(firstIdx);
     expect(secondIdx).toBeLessThan(end);
+  });
+
+  it("reads recent diary entries without timestamps or markers", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "The first meeting memory already filled the page.",
+      nowMs: Date.parse("2026-04-04T03:00:00Z"),
+      timezone: "UTC",
+    });
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "A later routing note flickered in the margins.",
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 1 })).resolves.toEqual([
+      "A later routing note flickered in the margins.",
+    ]);
+  });
+
+  it("skips symlinked DREAMS.md when building recent diary context", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const targetPath = path.join(workspaceDir, "target-dreams.md");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    const symlinkTargetDiary = "Symlink target diary text must not enter the prompt.";
+    await fs.writeFile(
+      targetPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 5, 2026, 3:00 AM UTC*",
+        "",
+        symlinkTargetDiary,
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.symlink(targetPath, dreamsPath);
+
+    const entries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 3 });
+    expect(entries).toEqual([]);
+    const prompt = buildNarrativePrompt({
+      phase: "light",
+      snippets: ["A fresh routing memory arrived."],
+      recentDiaryEntries: entries,
+    });
+    expect(prompt).not.toContain(symlinkTargetDiary);
+  });
+
+  it("skips non-file DREAMS.md when reading recent diary context", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await fs.mkdir(path.join(workspaceDir, "DREAMS.md"));
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
+  });
+
+  it("treats unreadable DREAMS.md as empty recent diary context", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "unreadable", "utf-8");
+    vi.spyOn(fs, "access").mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
   });
 
   it("prepends diary before existing managed blocks", async () => {
@@ -1107,6 +1206,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const orphanPath = path.join(sessionsDir, "orphan.jsonl");
     const livePath = path.join(sessionsDir, "still-live.jsonl");
+    const normalTranscriptPath = path.join(sessionsDir, "normal-user-session.jsonl");
     const updatedAt = Date.now();
     await sessionStoreRuntimeModule.saveSessionStore(
       storePath,
@@ -1123,25 +1223,25 @@ describe("generateAndAppendDreamNarrative", () => {
           sessionId: "still-missing-non-dreaming",
           updatedAt,
         },
+        "agent:main:dreaming-narrative-corrupt-normal": {
+          sessionId: "normal-user-session",
+          updatedAt,
+        },
       },
       { skipMaintenance: true },
     );
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
     await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
+    await fs.writeFile(normalTranscriptPath, '{"runId":"ordinary-user-session"}\n', "utf-8");
     const oldDate = new Date(Date.now() - 600_000);
     await fs.utimes(orphanPath, oldDate, oldDate);
     await fs.utimes(livePath, oldDate, oldDate);
+    await fs.utimes(normalTranscriptPath, oldDate, oldDate);
 
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
-    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
-      _store: string | undefined,
-      { agentId }: { agentId: string },
-    ) => {
-      expect(agentId).toBe("main");
-      return storePath;
-    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+    setNarrativeTestEnv(stateDir);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
@@ -1158,11 +1258,13 @@ describe("generateAndAppendDreamNarrative", () => {
       skipCache: true,
     }) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
+    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
     expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
+    expect(sessionFiles).toContain("normal-user-session.jsonl");
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });
 
@@ -1208,13 +1310,7 @@ describe("generateAndAppendDreamNarrative", () => {
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
-    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
-      _store: string | undefined,
-      { agentId }: { agentId: string },
-    ) => {
-      expect(agentId).toBe("main");
-      return storePath;
-    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+    setNarrativeTestEnv(stateDir);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");

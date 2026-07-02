@@ -498,7 +498,7 @@ function parseValidateConfigFromRawOrRespond(
     : restored.result;
   const validationCandidate = stripBundledProviderRuntimeDefaults({
     candidate: projectedValidationCandidate,
-    sourceConfig: snapshot.parsed,
+    sourceConfig: snapshot.sourceConfig,
   });
   const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
   if (!sourceValidated.ok) {
@@ -594,7 +594,7 @@ async function respondWithConfigRestartWrite(params: {
   uiHints: ConfigRedactionHints;
 }): Promise<void> {
   clearConfigSchemaResponseCache();
-  const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
+  const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
     mode: params.mode,
@@ -612,7 +612,7 @@ async function respondWithConfigRestartWrite(params: {
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
-        path: sentinelPath,
+        persisted: sentinelPersisted,
         payload,
       },
     },
@@ -859,7 +859,27 @@ export const configHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
+    const validationCandidate = stripBundledProviderRuntimeDefaults({
+      candidate: restoredMerge.result,
+      sourceConfig: snapshot.sourceConfig,
+    });
+    const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+    if (!sourceValidated.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          summarizeConfigValidationIssues(sourceValidated.issues),
+          {
+            details: { issues: sourceValidated.issues },
+          },
+        ),
+      );
+      return;
+    }
+    const writeConfig = validationCandidate as OpenClawConfig;
+    const validated = validateConfigObjectWithPlugins(validationCandidate);
     if (!validated.ok) {
       respond(
         false,
@@ -908,7 +928,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
-      nextConfig: validated.config,
+      nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
     });

@@ -9,7 +9,11 @@ import {
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
+import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -134,6 +138,7 @@ function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCal
 
 function normalizeProviderDoneMessage(
   message: unknown,
+  reason: unknown,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
 ): PlainTextToolCallMessageNormalization {
@@ -144,6 +149,11 @@ function normalizeProviderDoneMessage(
   });
   if (scrubbedMessage) {
     return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  // Token-limit and error terminals can leave complete-looking tool syntax.
+  // Only normal completion or explicit tool use may promote it into an executable call.
+  if (reason !== "stop" && reason !== "toolUse") {
+    return undefined;
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
@@ -180,8 +190,8 @@ function wrapPlainTextToolCallStream(
             return events;
           },
           matcher,
-          normalizeDoneMessage: ({ message }) =>
-            normalizeProviderDoneMessage(message, toolNames, matcher),
+          normalizeDoneMessage: ({ message, reason }) =>
+            normalizeProviderDoneMessage(message, reason, toolNames, matcher),
           stopAfterDone: true,
         },
       );
@@ -277,6 +287,44 @@ export function createPayloadPatchStreamWrapper(
   };
 }
 
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (!("reasoning_effort" in payload)) {
+        return;
+      }
+      const disabled = resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: resolveOpenAIReasoningEffortMap({
+          provider: typeof model.provider === "string" ? model.provider : null,
+          id: typeof model.id === "string" ? model.id : null,
+          compat: model.compat,
+        }),
+      });
+      if (disabled) {
+        payload.reasoning_effort = disabled;
+      } else {
+        delete payload.reasoning_effort;
+      }
+    });
+  };
+}
+
 function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
   const thinking = payload.thinking;
   if (!thinking || typeof thinking !== "object") {
@@ -368,6 +416,56 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   }
   const normalized = raw.trim().toLowerCase();
   return normalized !== "off" && normalized !== "none";
+}
+
+/** Applies the shared reasoning payload policy used by OpenAI-compatible proxy providers. */
+export function normalizeOpenAICompatibleReasoningPayload(
+  payload: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
+): void {
+  delete payload.reasoning_effort;
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payload.reasoning;
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoning = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoning) && !("effort" in reasoning)) {
+      reasoning.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payload.reasoning = {
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
+/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
+export function setQwenChatTemplateThinking(
+  payload: Record<string, unknown>,
+  enabled: boolean,
+): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */

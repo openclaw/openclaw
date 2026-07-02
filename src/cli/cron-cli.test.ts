@@ -68,6 +68,7 @@ type CronUpdatePatch = {
       input?: string;
       message?: string;
       model?: string;
+      fallbacks?: string[] | null;
       thinking?: string;
       lightContext?: boolean;
       timeoutSeconds?: number;
@@ -97,6 +98,7 @@ type CronAddParams = {
     input?: string;
     message?: string;
     model?: string;
+    fallbacks?: string[];
     thinking?: string;
     lightContext?: boolean;
     timeoutSeconds?: number;
@@ -307,6 +309,7 @@ describe("cron cli", () => {
 
     expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
     expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
+    expect(editCommand?.helpInformation()).toMatch(/offset-less uses\s+--tz/);
   });
 
   it.each([
@@ -652,6 +655,29 @@ describe("cron cli", () => {
 
       expectRuntimeErrorContaining("Invalid --timeout-seconds (must be a positive integer).");
       expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+    },
+  );
+
+  describe.each(["--no-output-timeout-seconds", "--output-max-bytes"])(
+    "cron add %s validation",
+    (flag) => {
+      it.each(["", "0", "-1", "1.5", "1000ms"])("rejects invalid value %j", async (value) => {
+        await expectCronCommandExit([
+          "cron",
+          "add",
+          "--name",
+          "Invalid command limit",
+          "--every",
+          "10m",
+          "--command",
+          "echo ok",
+          flag,
+          value,
+        ]);
+
+        expectRuntimeErrorContaining(`Invalid ${flag} (must be a positive integer).`);
+        expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+      });
     },
   );
 
@@ -1043,6 +1069,23 @@ describe("cron cli", () => {
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
+  it("sets fallback models on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Fallbacks",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--fallbacks",
+      "openrouter/gpt-4.1-mini openai/gpt-5",
+    ]);
+
+    expect(params?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -1071,6 +1114,27 @@ describe("cron cli", () => {
     ]);
 
     expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
+  it("sets fallback models on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--fallbacks",
+      "openrouter/gpt-4.1-mini,openai/gpt-5",
+    ]);
+
+    expect(patch?.patch?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
+  });
+
+  it("sets strict empty fallbacks on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--fallbacks", ""]);
+
+    expect(patch?.patch?.payload?.fallbacks).toEqual([]);
+  });
+
+  it("clears fallback models on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--clear-fallbacks"]);
+
+    expect(patch?.patch?.payload?.fallbacks).toBeNull();
   });
 
   it("sets and clears agent id on cron edit", async () => {

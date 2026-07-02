@@ -134,6 +134,24 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("fails live reports with non-integer token usage evidence", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "fractional-live-usage",
+          makeCell("openclaw", { inputTokens: 100.5, outputTokens: 0, totalTokens: 100.5 }),
+          makeCell("codex", { inputTokens: 101, outputTokens: 0, totalTokens: 101 }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
+      "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
+    ]);
+  });
+
   it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
     const report = buildTokenEfficiencyReport({
       generatedAt: "2026-05-10T00:00:00.000Z",

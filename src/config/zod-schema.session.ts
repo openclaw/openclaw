@@ -153,11 +153,17 @@ export const SessionSchema = z
   .strict()
   .optional();
 
+const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
+
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    responseUsage: z
+      .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])
+      .optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,

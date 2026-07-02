@@ -41,6 +41,7 @@ export type AgentRuntimeFailoverReason =
   | "billing"
   | "server_error"
   | "timeout"
+  | "context_overflow"
   | "model_not_found"
   | "session_expired"
   | "empty_response"
@@ -251,6 +252,8 @@ export type AgentRuntimeReplyPayload = {
   };
   isError?: boolean;
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
   isReasoningSnapshot?: boolean;
   isCompactionNotice?: boolean;
   isFallbackNotice?: boolean;
@@ -299,6 +302,7 @@ export type AgentRuntimeTranscriptPolicy = {
   sanitizeMode: "full" | "images-only";
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: AgentRuntimeToolCallIdMode;
+  duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;

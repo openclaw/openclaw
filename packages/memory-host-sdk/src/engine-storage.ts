@@ -36,10 +36,21 @@ export type {
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
+  MemorySessionSyncTarget,
   MemorySource,
+  MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "./host/types.js";
-export { ensureMemoryIndexSchema } from "./host/memory-schema.js";
+export {
+  ensureMemoryIndexSchema,
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_INDEX_STATE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+} from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
   closeMemorySqliteWalMaintenance,

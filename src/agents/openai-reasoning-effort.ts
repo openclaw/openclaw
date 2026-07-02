@@ -9,13 +9,21 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
-export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
 export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
 
 type OpenAIReasoningModel = {
   provider?: unknown;
   id?: unknown;
+  name?: unknown;
   api?: unknown;
   baseUrl?: unknown;
   compat?: unknown;
@@ -24,6 +32,7 @@ type OpenAIReasoningModel = {
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const GPT_51_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
 const GPT_52_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"] as const;
+const GPT_56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const GPT_CODEX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const GPT_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 const GPT_5_PRO_REASONING_EFFORTS = ["high"] as const;
@@ -39,6 +48,13 @@ function normalizeModelId(id: string | null | undefined): string {
 export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
+/** Return whether a model is the GPT-5.5 family. */
+export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  const name = normalizeModelId(typeof model.name === "string" ? model.name : undefined);
+  return /^gpt-5\.5(?:-|$)/u.test(id) || /^gpt-5\.5(?:\s|\(|-|$)/u.test(name);
 }
 
 /** Normalize user-facing reasoning effort names to API effort names. */
@@ -77,6 +93,9 @@ export function resolveOpenAISupportedReasoningEfforts(
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  if (/^gpt-5\.6(?:-|$)/u.test(id)) {
+    return GPT_56_REASONING_EFFORTS;
+  }
   if (id === "gpt-5.1-codex-mini") {
     return GPT_51_CODEX_MINI_REASONING_EFFORTS;
   }
@@ -138,6 +157,9 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   }
   if (requested === "xhigh" && supported.includes("high")) {
     return "high";
+  }
+  if (requested === "max" && supported.includes("xhigh")) {
+    return "xhigh";
   }
   return supported.find((effort) => effort !== "none");
 }

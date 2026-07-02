@@ -141,7 +141,7 @@ docker_e2e_docker_cmd() {
   local timeout_value="${DOCKER_COMMAND_TIMEOUT:-600s}"
   if [ "${1:-}" = "run" ]; then
     shift
-    docker_e2e_docker_run_resource_args "$@"
+    docker_e2e_docker_run_resource_args "$@" || return $?
     if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
       docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
     else
@@ -156,7 +156,7 @@ docker_e2e_docker_run_cmd() {
   local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
   if [ "${1:-}" = "run" ]; then
     shift
-    docker_e2e_docker_run_resource_args "$@"
+    docker_e2e_docker_run_resource_args "$@" || return $?
     if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
       docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
     else
@@ -229,6 +229,15 @@ docker_e2e_run_arg_present() {
   return 1
 }
 
+docker_e2e_resolve_pids_limit() {
+  local pids_limit="$1"
+  if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
+    echo "invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: $pids_limit" >&2
+    return 2
+  fi
+  printf '%s\n' "$((10#$pids_limit))"
+}
+
 docker_e2e_docker_run_resource_args() {
   DOCKER_E2E_RUN_RESOURCE_ARGS=()
   if docker_e2e_resource_limits_disabled; then
@@ -247,6 +256,7 @@ docker_e2e_docker_run_resource_args() {
     DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
   fi
   if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+    pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
     DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
   fi
 }

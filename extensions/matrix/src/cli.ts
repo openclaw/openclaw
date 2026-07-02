@@ -232,7 +232,11 @@ function configureCliLogMode(verbose: boolean): void {
   setMatrixSdkConsoleLogging(verbose);
 }
 
-function parseOptionalInt(value: string | undefined, fieldName: string): number | undefined {
+function parseOptionalInt(
+  value: string | undefined,
+  fieldName: string,
+  opts: { min?: number } = {},
+): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
@@ -243,6 +247,13 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   const parsed = parseStrictInteger(trimmed);
   if (parsed === undefined) {
     throw new Error(`${fieldName} must be an integer`);
+  }
+  if (opts.min !== undefined && parsed < opts.min) {
+    throw new Error(
+      opts.min === 1
+        ? `${fieldName} must be a positive integer`
+        : `${fieldName} must be a non-negative integer`,
+    );
   }
   return parsed;
 }
@@ -289,6 +300,9 @@ async function addMatrixAccount(params: {
   useEnv?: boolean;
   enableEncryption?: boolean;
 }): Promise<MatrixCliAccountAddResult> {
+  const initialSyncLimit = parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit", {
+    min: 0,
+  });
   const runtime = getMatrixRuntime();
   const cfg = runtime.config.current() as CoreConfig;
   if (!matrixSetupAdapter.applyAccountConfig) {
@@ -305,7 +319,7 @@ async function addMatrixAccount(params: {
     accessToken: params.accessToken,
     password: params.password,
     deviceName: params.deviceName,
-    initialSyncLimit: parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit"),
+    initialSyncLimit,
     useEnv: params.useEnv === true,
   };
   const accountId =
@@ -1159,15 +1173,18 @@ async function runMatrixCliVerificationSummaryCommand(params: {
 async function runMatrixCliSelfVerificationCommand(
   options: MatrixCliSelfVerificationCommandOptions,
 ): Promise<void> {
-  const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+  let resolvedAccountId: string | undefined;
   await runMatrixCliCommand({
     verbose: options.verbose === true,
     json: false,
-    run: async () =>
-      await runMatrixSelfVerification({
+    run: async () => {
+      const timeoutMs = parseOptionalInt(options.timeoutMs, "--timeout-ms", { min: 1 });
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+      resolvedAccountId = accountId;
+      return await runMatrixSelfVerification({
         accountId,
         cfg,
-        timeoutMs: parseOptionalInt(options.timeoutMs, "--timeout-ms"),
+        timeoutMs,
         onRequested: (summary) => {
           printAccountLabel(accountId);
           printMatrixVerificationSummary(summary);
@@ -1184,7 +1201,8 @@ async function runMatrixCliSelfVerificationCommand(
           console.log("Compare this SAS with the other Matrix client.");
         },
         confirmSas: async () => await promptMatrixVerificationSasMatch(),
-      }),
+      });
+    },
     onText: (summary, verbose) => {
       printMatrixVerificationSummary(summary);
       console.log(`Device verified by owner: ${summary.deviceOwnerVerified ? "yes" : "no"}`);
@@ -1196,6 +1214,7 @@ async function runMatrixCliSelfVerificationCommand(
       console.log("Self-verification complete.");
     },
     onTextError: () => {
+      const accountId = resolvedAccountId ?? options.account;
       printGuidance([
         `Run ${formatMatrixCliCommand("verify self", accountId)} again and accept the request in another verified Matrix client for this account.`,
         `Then run ${formatMatrixCliCommand("verify status --verbose", accountId)} to confirm Cross-signing verified: yes and Signed by owner: yes.`,
@@ -1628,7 +1647,10 @@ export function registerMatrixCli(params: { program: Command }): void {
     .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
-    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
@@ -2102,7 +2124,10 @@ export function registerMatrixCli(params: { program: Command }): void {
       "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
     )
     .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
-    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(

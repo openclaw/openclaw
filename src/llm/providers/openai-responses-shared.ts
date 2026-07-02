@@ -14,12 +14,25 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "../../agents/openai-reasoning-effort.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  type FirstStreamEventInternalOptions,
+  withFirstStreamEventTimeout,
+} from "../../agents/stream-first-event-timeout.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
+import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
+  resolveResponsesMessageSnapshotCollapse,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -42,12 +55,20 @@ import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
 // Utilities
 // =============================================================================
+
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
+}
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
@@ -65,6 +86,10 @@ type ResponsesOutputItemDoneEvent = Extract<
   ResponseStreamEvent,
   { type: "response.output_item.done" }
 >;
+type ResponsesInputTokensDetails = {
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+};
 type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
   part: AzureResponsesTextContentPart;
 };
@@ -158,7 +183,7 @@ export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
-export { convertResponsesTools };
+export { convertResponsesToolPayload, convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
 
 type ResponsesRequestOptions = {
@@ -186,9 +211,26 @@ type ResponsesStreamClient = {
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
->;
+> &
+  FirstStreamEventInternalOptions;
 
-export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
+  FirstStreamEventInternalOptions;
+
+export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+function isResponsesReasoningEffort(
+  effort: string | undefined,
+): effort is ResponsesReasoningEffort {
+  return (
+    effort === "minimal" ||
+    effort === "low" ||
+    effort === "medium" ||
+    effort === "high" ||
+    effort === "xhigh" ||
+    effort === "max"
+  );
+}
 export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
@@ -253,7 +295,12 @@ export function convertResponsesMessages<TApi extends Api>(
     messages.push({
       type: "message",
       role,
-      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
+      content: [
+        {
+          type: "input_text",
+          text: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     });
   }
 
@@ -365,12 +412,11 @@ export function convertResponsesMessages<TApi extends Api>(
       }
       messages.push(...output);
     } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
+      const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
-      const hasText = textResult.length > 0;
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
+      const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
 
       let output: string | ResponseFunctionCallOutputItemList;
@@ -380,7 +426,12 @@ export function convertResponsesMessages<TApi extends Api>(
         if (hasText) {
           contentParts.push({
             type: "input_text",
-            text: sanitizeSurrogates(textResult),
+            text: sanitizedTextResult,
+          });
+        } else if (mediaPlaceholder === "(see attached media)") {
+          contentParts.push({
+            type: "input_text",
+            text: mediaPlaceholder,
           });
         }
 
@@ -396,7 +447,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
         output = contentParts;
       } else {
-        output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+        output = sanitizeToolResultText(textResult, mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT);
       }
 
       messages.push({
@@ -446,7 +497,18 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  return clampedReasoning === "max" ? "xhigh" : clampedReasoning;
+  if (clampedReasoning === "max") {
+    return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
+  }
+  if (
+    clampedReasoning === "minimal" &&
+    model.provider === "openai" &&
+    supportsOpenAIReasoningEffort(model, "max")
+  ) {
+    const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
+    return isResponsesReasoningEffort(effort) ? effort : undefined;
+  }
+  return clampedReasoning;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
@@ -464,8 +526,11 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.temperature = options.temperature;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    params.tools = convertResponsesTools(context.tools, { model });
+  if (context.tools) {
+    const converted = convertResponsesToolPayload(context.tools, { model });
+    if (converted.tools.length > 0) {
+      params.tools = converted.tools;
+    }
   }
 
   if (!model.reasoning) {
@@ -515,11 +580,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   options?: ResponsesLifecycleStreamOptions;
   createClient: () => ResponsesStreamClient;
   buildParams: () => ResponseCreateParamsStreaming;
-  processStreamOptions?: OpenAIResponsesStreamOptions;
+  processStreamOptions?: OpenAIResponsesProcessStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
   const { stream, model, output, options } = params;
 
+  let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
@@ -528,8 +594,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       requestParams = nextParams as ResponseCreateParamsStreaming;
     }
 
+    firstEventAbort = createFirstStreamEventAbortController(options?.signal);
     const { data: openaiStream, response } = await client.responses
-      .create(requestParams, buildResponsesRequestOptions(options))
+      .create(requestParams, {
+        ...buildResponsesRequestOptions(options),
+        signal: firstEventAbort.signal,
+      })
       .withResponse();
     await options?.onResponse?.(
       { status: response.status, headers: headersToRecord(response.headers) },
@@ -537,7 +607,23 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     );
     stream.push({ type: "start", partial: output });
 
-    await processResponsesStream(openaiStream, output, stream, model, params.processStreamOptions);
+    const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
+    const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
+    const processStreamOptions =
+      params.processStreamOptions ||
+      firstEventTimeoutMs !== undefined ||
+      onFirstEventTimeout !== undefined
+        ? {
+            ...params.processStreamOptions,
+            firstEventTimeoutMs:
+              params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+            abortFirstEventStream:
+              params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
+            onFirstEventTimeout:
+              params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
+          }
+        : undefined;
+    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
 
     if (options?.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -555,6 +641,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     output.errorMessage = params.formatError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
+  } finally {
+    firstEventAbort?.dispose();
   }
 }
 
@@ -567,7 +655,7 @@ export async function processResponsesStream<TApi extends Api>(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<TApi>,
-  options?: OpenAIResponsesStreamOptions,
+  options?: OpenAIResponsesProcessStreamOptions,
 ): Promise<void> {
   let currentItem:
     | ResponseReasoningItem
@@ -576,14 +664,58 @@ export async function processResponsesStream<TApi extends Api>(
     | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
+  let lastTextBlock: {
+    block: TextContent;
+    index: number;
+    phase: TextSignatureV1["phase"] | undefined;
+  } | null = null;
+  // While a message item may still be a cumulative snapshot of lastTextBlock,
+  // its public block is deferred so a collapsed item never leaves an
+  // unbalanced text_start behind (#91959). null = no deferral in progress.
+  let pendingMessageText: string | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
+  const appendPendingMessageDelta = (delta: string) => {
+    pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
+    const priorText = lastTextBlock?.block.text ?? "";
+    if (priorText.startsWith(pendingMessageText) || pendingMessageText.startsWith(priorText)) {
+      return;
+    }
+    // Diverged from the prior text: this is a distinct message, so open its
+    // block now and replay the withheld text as one delta.
+    currentBlock = { type: "text", text: pendingMessageText };
+    blocks.push(currentBlock);
+    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: pendingMessageText,
+      partial: output,
+    });
+    pendingMessageText = null;
+  };
 
-  for await (const event of openaiStream) {
+  const guardedStream = withFirstStreamEventTimeout(openaiStream, {
+    provider: model.provider,
+    api: model.api,
+    model: model.id,
+    timeoutMs: options?.firstEventTimeoutMs ?? 0,
+    stage: "responses",
+    abort: options?.abortFirstEventStream,
+    onTimeout: options?.onFirstEventTimeout,
+    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  });
+  for await (const event of guardedStream) {
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
       const item = event.item;
+      if (item.type !== "message") {
+        // Snapshot collapse only applies to back-to-back message items; any
+        // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -591,9 +723,14 @@ export async function processResponsesStream<TApi extends Api>(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        currentBlock = { type: "text", text: "" };
-        output.content.push(currentBlock);
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        if (lastTextBlock) {
+          currentBlock = null;
+          pendingMessageText = "";
+        } else {
+          currentBlock = { type: "text", text: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        }
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -663,54 +800,66 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     } else if (event.type === "response.output_text.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+      if (currentItem?.type === "message") {
         if (!currentItem.content || currentItem.content.length === 0) {
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
         if (isResponsesTextContentPartType(lastPart?.type)) {
-          currentBlock.text += event.delta;
           lastPart.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: event.delta,
-            partial: output,
-          });
+          if (pendingMessageText !== null) {
+            appendPendingMessageDelta(event.delta);
+          } else if (currentBlock?.type === "text") {
+            currentBlock.text += event.delta;
+            stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: event.delta,
+              partial: output,
+            });
+          }
         }
       }
     } else if (isAzureResponsesTextDeltaEvent(event)) {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+      if (currentItem?.type === "message") {
         currentItem.content = currentItem.content || [];
         let lastPart = currentItem.content[currentItem.content.length - 1];
         if (lastPart?.type !== "text") {
           lastPart = { type: "text", text: "" };
           currentItem.content.push(lastPart);
         }
-        currentBlock.text += event.delta;
         lastPart.text += event.delta;
-        stream.push({
-          type: "text_delta",
-          contentIndex: blockIndex(),
-          delta: event.delta,
-          partial: output,
-        });
-      }
-    } else if (event.type === "response.refusal.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
-        if (!currentItem.content || currentItem.content.length === 0) {
-          continue;
-        }
-        const lastPart = currentItem.content[currentItem.content.length - 1];
-        if (lastPart?.type === "refusal") {
+        if (pendingMessageText !== null) {
+          appendPendingMessageDelta(event.delta);
+        } else if (currentBlock?.type === "text") {
           currentBlock.text += event.delta;
-          lastPart.refusal += event.delta;
           stream.push({
             type: "text_delta",
             contentIndex: blockIndex(),
             delta: event.delta,
             partial: output,
           });
+        }
+      }
+    } else if (event.type === "response.refusal.delta") {
+      if (currentItem?.type === "message") {
+        if (!currentItem.content || currentItem.content.length === 0) {
+          continue;
+        }
+        const lastPart = currentItem.content[currentItem.content.length - 1];
+        if (lastPart?.type === "refusal") {
+          lastPart.refusal += event.delta;
+          if (pendingMessageText !== null) {
+            appendPendingMessageDelta(event.delta);
+          } else if (currentBlock?.type === "text") {
+            currentBlock.text += event.delta;
+            stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: event.delta,
+              partial: output,
+            });
+          }
         }
       }
     } else if (event.type === "response.function_call_arguments.delta") {
@@ -751,6 +900,10 @@ export async function processResponsesStream<TApi extends Api>(
       }
     } else if (event.type === "response.output_item.done") {
       const item = event.item;
+      if (item.type !== "message") {
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
 
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
@@ -764,18 +917,58 @@ export async function processResponsesStream<TApi extends Api>(
           partial: output,
         });
         currentBlock = null;
-      } else if (item.type === "message" && currentBlock?.type === "text") {
+      } else if (
+        item.type === "message" &&
+        (currentBlock?.type === "text" || pendingMessageText !== null)
+      ) {
         // Support both OpenAI "output_text" and Azure "text" content types
-        currentBlock.text = item.content
+        const finalText = item.content
           .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-        stream.push({
-          type: "text_end",
-          contentIndex: blockIndex(),
-          content: currentBlock.text,
-          partial: output,
-        });
+        const phase = item.phase ?? undefined;
+        const collapse =
+          pendingMessageText !== null
+            ? resolveResponsesMessageSnapshotCollapse({
+                prior: lastTextBlock && {
+                  text: lastTextBlock.block.text,
+                  phase: lastTextBlock.phase,
+                },
+                nextText: finalText,
+                nextPhase: phase,
+              })
+            : ({ kind: "keep" } as const);
+        pendingMessageText = null;
+        if (collapse.kind === "extend" && lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The deferred block was never
+          // started publicly, and the newest item's signature is kept so
+          // replay carries the item that produced this content (#91959).
+          lastTextBlock.block.text = collapse.text;
+          lastTextBlock.block.textSignature = encodeTextSignatureV1(item.id, phase);
+          stream.push({
+            type: "text_end",
+            contentIndex: lastTextBlock.index,
+            content: collapse.text,
+            partial: output,
+          });
+        } else {
+          if (currentBlock?.type !== "text") {
+            // Deferred distinct message: open its block now, balanced with the
+            // text_end below.
+            currentBlock = { type: "text", text: "" };
+            blocks.push(currentBlock);
+            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+          }
+          currentBlock.text = finalText;
+          currentBlock.textSignature = encodeTextSignatureV1(item.id, phase);
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          stream.push({
+            type: "text_end",
+            contentIndex: blockIndex(),
+            content: currentBlock.text,
+            partial: output,
+          });
+        }
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =
@@ -813,13 +1006,18 @@ export async function processResponsesStream<TApi extends Api>(
         output.responseId = response.id;
       }
       if (response?.usage) {
-        const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+        const inputTokenDetails = response.usage.input_tokens_details as
+          | ResponsesInputTokensDetails
+          | null
+          | undefined;
+        const cachedTokens = inputTokenDetails?.cached_tokens || 0;
+        const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
         output.usage = {
-          // OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
-          input: (response.usage.input_tokens || 0) - cachedTokens,
+          // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
+          input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
           output: response.usage.output_tokens || 0,
           cacheRead: cachedTokens,
-          cacheWrite: 0,
+          cacheWrite: cacheWriteTokens,
           totalTokens: response.usage.total_tokens || 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };

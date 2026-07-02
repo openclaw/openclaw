@@ -1,0 +1,178 @@
+// Codex tests cover mirrored session-history branch selection.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import { afterEach, describe, expect, it } from "vitest";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function writeSession(records: unknown[]): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+  tempDirs.push(dir);
+  const sessionFile = path.join(dir, "session.jsonl");
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: "codex-session",
+    timestamp: "2026-06-15T00:00:00.000Z",
+    cwd: dir,
+  };
+  await fs.writeFile(
+    sessionFile,
+    [header, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+  return sessionFile;
+}
+
+function messageEntry(params: {
+  id: string;
+  parentId: string | null;
+  role: "user" | "assistant";
+  content: string;
+}) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: "2026-06-15T00:00:00.000Z",
+    message: {
+      role: params.role,
+      content: params.content,
+      timestamp: 1,
+    },
+  };
+}
+
+function mirroredTarget(sessionFile: string) {
+  return {
+    sessionFile,
+    sessionId: "codex-session",
+    sessionKey: "codex-session",
+  };
+}
+
+describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("replays only the branch selected by a leaf control", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
+      messageEntry({
+        id: "active",
+        parentId: "root",
+        role: "assistant",
+        content: "active answer",
+      }),
+      messageEntry({
+        id: "inactive",
+        parentId: "root",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "active",
+      },
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
+      { role: "user", content: "root prompt" },
+      { role: "assistant", content: "active answer" },
+    ]);
+  });
+
+  it("honors explicit navigation to an empty branch", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "old", parentId: null, role: "user", content: "old prompt" }),
+      {
+        type: "leaf",
+        id: "empty-leaf",
+        parentId: "old",
+        targetId: null,
+        appendParentId: "old",
+      },
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
+  });
+
+  it("keeps visible history when continuation rows use a disjoint append cursor", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "visible", parentId: null, role: "user", content: "visible prompt" }),
+      messageEntry({
+        id: "inactive",
+        parentId: "visible",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "metadata",
+        id: "append-metadata",
+        parentId: "inactive",
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "visible",
+        appendParentId: "append-metadata",
+      },
+      messageEntry({
+        id: "continued",
+        parentId: "append-metadata",
+        role: "assistant",
+        content: "continued answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
+      { role: "user", content: "visible prompt" },
+      { role: "assistant", content: "continued answer" },
+    ]);
+  });
+
+  it("keeps visible history when a continuation references the leaf marker", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "visible", parentId: null, role: "user", content: "visible prompt" }),
+      messageEntry({
+        id: "inactive",
+        parentId: "visible",
+        role: "assistant",
+        content: "inactive answer",
+      }),
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive",
+        targetId: "visible",
+      },
+      messageEntry({
+        id: "continued",
+        parentId: "active-leaf",
+        role: "assistant",
+        content: "continued answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
+      { role: "user", content: "visible prompt" },
+      { role: "assistant", content: "continued answer" },
+    ]);
+  });
+});

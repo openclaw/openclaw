@@ -335,6 +335,8 @@ the config fields that accept SecretRefs.
     - `BWS_ACCESS_TOKEN` available to the Gateway service.
     - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
       binary path.
+    - `BWS_SERVER_URL` must be set in the environment when using a self-hosted
+      Bitwarden instance.
 
     ```json5
     {
@@ -343,7 +345,7 @@ the config fields that accept SecretRefs.
           bws: {
             source: "exec",
             command: "/usr/local/bin/openclaw-bws-resolver.mjs",
-            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            passEnv: ["BWS_ACCESS_TOKEN", "BWS_SERVER_URL", "PATH", "BWS_BIN"],
             jsonOnly: true,
           },
         },

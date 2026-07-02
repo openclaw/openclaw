@@ -134,7 +134,7 @@ describe("buildSlackProgressDraftBlocks", () => {
       ],
     });
 
-    expectLegacyLineBlock(blocks?.[1], "• *Exec*", "command finished · completed");
+    expectLegacyLineBlock(blocks?.[1], "• *Exec*", "command finished");
     expectLegacyLineBlock(blocks?.[2], "• *Exec*", "command failed · exit 1");
   });
 
@@ -243,7 +243,7 @@ describe("native Slack progress stream chunks", () => {
       }),
     ).toEqual([
       planUpdate("Shelling..."),
-      taskUpdate("exec_1", "Exec — command finished · completed", "complete"),
+      taskUpdate("exec_1", "Exec — command finished", "complete"),
       taskUpdate("exec_2", "Exec — command failed · exit 1", "error"),
     ]);
   });
@@ -372,7 +372,6 @@ describe("native Slack progress stream chunks", () => {
           kind: "command-output",
           icon: "🛠️",
           label: "Bash",
-          detail: "completed",
           status: "completed",
           text: "🛠️ completed",
           toolName: "bash",

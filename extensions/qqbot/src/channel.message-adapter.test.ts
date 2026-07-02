@@ -114,4 +114,54 @@ describe("qqbot message adapter", () => {
     expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
   });
+
+  it("rejects media sends when QQBot reports an outbound error", async () => {
+    sendMediaMock.mockResolvedValue({ error: "QQ API returned 400 Bad Request" });
+
+    await expect(
+      qqbotPlugin.message?.send?.media?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "image",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    ).rejects.toThrow("QQ API returned 400 Bad Request");
+  });
+
+  it("rejects text sends when QQBot reports an outbound error", async () => {
+    sendTextMock.mockResolvedValue({ error: "QQ API returned 400 Bad Request" });
+
+    await expect(
+      qqbotPlugin.message?.send?.text?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "hello",
+      }),
+    ).rejects.toThrow("QQ API returned 400 Bad Request");
+  });
+
+  it("rejects media sends without a QQ platform message id", async () => {
+    sendMediaMock.mockResolvedValue({});
+
+    await expect(
+      qqbotPlugin.message?.send?.media?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "image",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    ).rejects.toThrow("QQBot message adapter send did not return a platform message id");
+  });
+
+  it("rejects text sends without a QQ platform message id", async () => {
+    sendTextMock.mockResolvedValue({});
+
+    await expect(
+      qqbotPlugin.message?.send?.text?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "hello",
+      }),
+    ).rejects.toThrow("QQBot message adapter send did not return a platform message id");
+  });
 });

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   deriveSessionTotalTokensMock,
   loadRunCronIsolatedAgentTurn,
@@ -43,7 +41,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.inputTokens).toBe(75000);
@@ -92,7 +90,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.totalTokens).toBe(77000);
@@ -134,7 +132,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       },
     });
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
     expect(cronSession.sessionEntry.totalTokens).toBe(77000);

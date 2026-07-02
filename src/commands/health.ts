@@ -60,12 +60,7 @@ import type {
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
-export type {
-  AgentHealthSummary,
-  ChannelAccountHealthSummary,
-  ChannelHealthSummary,
-  HealthSummary,
-} from "./health.types.js";
+export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -86,6 +81,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
   if (!isGatewayHealthAuthUnavailableError(params.error)) {
@@ -95,6 +91,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
     url: details.url,
@@ -280,12 +277,14 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string) => {
-  const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath, { clone: false });
-  const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
+const buildSessionSummary = async (storePath: string, agentId?: string) => {
+  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
+  const sessions = listSessionEntries({
+    ...(agentId ? { agentId } : {}),
+    storePath,
+  })
+    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+    .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
@@ -471,8 +470,10 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
-    sessionCache.set(storePath, sessions);
+    const sessionCacheKey = `${storePath}\0${entry.id}`;
+    const sessions =
+      sessionCache.get(sessionCacheKey) ?? (await buildSessionSummary(storePath, entry.id));
+    sessionCache.set(sessionCacheKey, sessions);
     agents.push({
       agentId: entry.id,
       name: entry.name,
@@ -487,7 +488,10 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
+    (await buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      defaultAgentId,
+    ));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -687,6 +691,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
@@ -708,6 +713,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          localPortOverride: opts.localPortOverride,
         }),
     );
   } catch (error) {
@@ -719,6 +725,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
     ) {
@@ -746,7 +753,10 @@ export async function healthCommand(
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
     const rich = isRich();
     if (opts.verbose) {
-      const details = buildGatewayConnectionDetails({ config: cfg });
+      const details = buildGatewayConnectionDetails({
+        config: cfg,
+        localPortOverride: opts.localPortOverride,
+      });
       logGatewayConnectionDetails({
         runtime,
         info,
@@ -767,7 +777,7 @@ export async function healthCommand(
                 name: entry.name,
                 isDefault: entry.id === localAgents.defaultAgentId,
                 heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-                sessions: await buildSessionSummary(storePath),
+                sessions: await buildSessionSummary(storePath, entry.id),
               } satisfies AgentHealthSummary;
             }),
           );

@@ -2,6 +2,7 @@
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
 import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
+import { toErrorObject } from "../infra/errors.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
 type NodePtyRuntimeModule = typeof nodePty & {
@@ -34,7 +35,7 @@ export function waitFor<T>(params: {
       try {
         result = params.read();
       } catch (error) {
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       if (result !== null) {
@@ -175,18 +176,4 @@ export function startPty(
   };
   opts.activeRuns?.push(run);
   return run;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

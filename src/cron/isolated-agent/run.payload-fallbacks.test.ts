@@ -1,10 +1,7 @@
 // Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
@@ -44,8 +41,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     const dispatchMessage = "SERIALIZATION_PROBE should not be wrapped";
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        job: makeIsolatedAgentTurnJob({
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message:
@@ -92,8 +89,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     }
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        job: makeIsolatedAgentTurnJob({ payload }),
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({ payload }),
       }),
     );
 
@@ -127,7 +124,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         cfg: {
           agents: {
             defaults: {
@@ -160,7 +157,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         cfg: {
           agents: {
             defaults: {

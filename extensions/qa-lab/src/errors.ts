@@ -1,6 +1,8 @@
 // Qa Lab plugin module defines shared suite errors.
 export type QaSuiteArtifactErrorCode =
+  | "evidence_missing"
   | "report_missing"
+  | "summary_missing"
   | "summary_read_failed"
   | "summary_parse_failed"
   | "summary_failure_count_missing"
@@ -31,4 +33,18 @@ export class QaSuiteInfraError extends Error {
     this.name = "QaSuiteInfraError";
     this.code = code;
   }
+}
+
+export function toQaErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

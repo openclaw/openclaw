@@ -29,6 +29,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
@@ -152,7 +153,7 @@ async function setRuntimeApiKeyForCompletion(params: {
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
@@ -346,7 +347,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 }): Promise<AssistantMessage> {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);
+  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
   return await completeSimple(completionModel, params.context, {
     ...options,
     ...(reasoning ? { reasoning } : {}),
@@ -356,6 +357,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 
 function normalizeSimpleCompletionReasoning(
   reasoning: SimpleCompletionModelOptions["reasoning"],
+  model: Model,
 ): SimpleCompletionThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
@@ -364,7 +366,9 @@ function normalizeSimpleCompletionReasoning(
     case "adaptive":
       return "medium";
     case "max":
-      return "xhigh";
+      return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
+        ? "max"
+        : "xhigh";
     default:
       return reasoning;
   }

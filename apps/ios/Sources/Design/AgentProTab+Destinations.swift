@@ -22,23 +22,35 @@ extension AgentProTab {
     }
 
     var agentsDestination: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.rosterHeader
-                    self.agentFilters
-                    self.agentsSection
+        List {
+            Section {
+                if self.filteredAgents.isEmpty {
+                    self.emptyAgentsRow
+                } else {
+                    ForEach(self.filteredAgents, id: \.id) { agent in
+                        self.agentRow(agent)
+                    }
                 }
-                .padding(.vertical, 18)
             }
-            .refreshable {
-                await self.refreshOverview(force: true)
-            }
-            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Agents")
-        .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
+        .navigationTitle(self.headerTitle)
+        .navigationBarTitleDisplayMode(.large)
+        .searchable(text: self.$agentSearchText, prompt: "Search agents")
+        .refreshable {
+            await self.refreshOverview(force: true)
+        }
+        .toolbar {
+            if let headerLeadingAction {
+                ToolbarItem(placement: .topBarLeading) {
+                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                }
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                self.agentFilterMenu
+                self.gatewayToolbarButton
+            }
+        }
     }
 
     var skillsDestination: some View {

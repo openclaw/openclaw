@@ -16,8 +16,10 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -84,21 +86,27 @@ export function buildClaudeOwnerKey(input: {
 /** Resolves the serialization key for a CLI backend run. */
 export function resolveCliRunQueueKey(params: {
   backendId: string;
+  liveSession?: CliBackendConfig["liveSession"];
   serialize?: boolean;
   runId: string;
   workspaceDir: string;
   cliSessionId?: string;
   ownerKey?: string;
 }): string {
-  if (params.serialize === false) {
+  const requiresLiveSessionSerialization =
+    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+  if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
   if (isClaudeCliProvider(params.backendId)) {
+    const ownerKey = params.ownerKey?.trim();
+    if (requiresLiveSessionSerialization && ownerKey) {
+      return `${params.backendId}:owner:${ownerKey}`;
+    }
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
     }
-    const ownerKey = params.ownerKey?.trim();
     if (ownerKey) {
       return `${params.backendId}:owner:${ownerKey}`;
     }
@@ -118,7 +126,11 @@ export function buildCliAgentSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  runtimeChannel?: string;
+  runtimeChatType?: ChatType;
+  runtimeCapabilities?: string[];
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -128,6 +140,8 @@ export function buildCliAgentSystemPrompt(params: {
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
 }) {
   const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
@@ -141,13 +155,18 @@ export function buildCliAgentSystemPrompt(params: {
     workspaceDir: runtimeWorkspaceDir,
     cwd: runtimeWorkspaceDir,
     runtime: {
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       host: "openclaw",
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: params.modelDisplay,
       defaultModel: defaultModelLabel,
       shell: detectRuntimeShell(),
+      channel: params.runtimeChannel,
+      chatType: params.runtimeChatType,
+      capabilities: params.runtimeCapabilities,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -157,6 +176,7 @@ export function buildCliAgentSystemPrompt(params: {
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
@@ -177,9 +197,6 @@ export function buildCliAgentSystemPrompt(params: {
     contextFiles: params.contextFiles,
   });
 }
-
-/** Alternate export name for the CLI system prompt builder. */
-export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
 /** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {

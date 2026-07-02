@@ -16,6 +16,28 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   };
 });
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
     makeProxyFetchMock.mockReset();
@@ -206,6 +228,41 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(error.statusCode).toBe(503);
     expect(error.message).toBe("upstream unavailable");
     expect(error.rawBody).toEqual({ message: "upstream unavailable" });
+    globalFetchMock.mockRestore();
+  });
+
+  it("bounds webhook error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(tracked.response);
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const thrown = await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(DiscordError);
+    const error = thrown as DiscordError;
+    expect(error.message).toContain("upstream unavailable");
+    expect(JSON.stringify(error.rawBody)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
 });

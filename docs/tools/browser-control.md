@@ -13,7 +13,12 @@ CLI, and scripting patterns (snapshots, refs, waits, debug flows).
 
 ## Control API (optional)
 
-For local integrations only, the Gateway exposes a small loopback HTTP API:
+For local integrations only, the Gateway exposes a small loopback HTTP API.
+This standalone server is opt-in — set the environment variable
+`OPENCLAW_EAGER_BROWSER_CONTROL_SERVER=1` in the gateway service environment
+and restart the gateway before the HTTP endpoints become available. Without
+this variable the browser control runtime still works through the CLI and
+agent tools, but nothing listens on the loopback control port.
 
 - Status/start/stop: `GET /`, `POST /start`, `POST /stop`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
@@ -258,7 +263,14 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
-- `--labels` adds a viewport-only screenshot with overlayed ref labels and prints the saved path.
+- With Playwright, `--labels` adds a screenshot with overlayed ref labels
+  (prints `MEDIA:<path>`) plus an `annotations` array with each ref's bounding
+  box. On `screenshot`, Playwright-backed labels work with `--full-page`,
+  `--ref`, and `--element`; on `snapshot`, the accompanying screenshot remains
+  viewport-only. Existing-session/chrome-mcp profiles render overlay labels on
+  page screenshots but do not return `annotations` or use the Playwright
+  full-page/ref/element projection helper. Without Playwright or chrome-mcp,
+  labeled screenshots are not available.
 - `--urls` appends discovered link destinations to AI snapshots.
 
 ## Snapshots and refs
@@ -274,7 +286,9 @@ OpenClaw supports two "snapshot" styles:
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
-  - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
+  - Add `--labels` to include a screenshot with overlayed `e12` labels. On
+    Playwright-backed profiles this also returns per-ref bounding-box metadata
+    (`annotations[]`).
   - Add `--urls` when link text is ambiguous and the agent needs concrete
     navigation targets.
 
@@ -308,6 +322,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - Supported on managed `openclaw` and raw/remote CDP profiles. The `user` and `existing-session` profiles reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:

@@ -3,13 +3,14 @@
  */
 import {
   extractInternalRuntimeContext,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
-export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
@@ -33,27 +34,17 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
-/** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
-export function buildCurrentInboundPromptContextPrefix(
-  context: CurrentInboundPromptContext | undefined,
-  options?: { preferResumableText?: boolean },
-): string {
-  const text =
-    options?.preferResumableText === true
-      ? (context?.resumableText ?? context?.text)
-      : context?.text;
-  return text?.trim() ?? "";
-}
-
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
   preferResumableText?: boolean;
 }): string {
-  const prefix = buildCurrentInboundPromptContextPrefix(params.context, {
-    preferResumableText: params.preferResumableText,
-  });
+  const contextText =
+    params.preferResumableText === true
+      ? (params.context?.resumableText ?? params.context?.text)
+      : params.context?.text;
+  const prefix = contextText?.trim() ?? "";
   if (!prefix) {
     return params.prompt;
   }
@@ -132,7 +123,10 @@ export function resolveRuntimeContextPromptParts(params: {
             : {}),
           runtimeContext,
           runtimeOnly: true,
-          runtimeSystemContext: buildRuntimeEventSystemContext(runtimeContext),
+          runtimeSystemContext: buildRuntimeContextMessageContent({
+            runtimeContext,
+            kind: "runtime-event",
+          }),
         }
       : {
           prompt: "",
@@ -153,24 +147,19 @@ function buildRuntimeContextMessageContent(params: {
   runtimeContext: string;
   kind: "next-turn" | "runtime-event";
 }): string {
+  // Wrap the runtime context body in delimited internal-context markers so
+  // stripInternalRuntimeContext can fully remove the block when it leaks
+  // into user-visible surfaces (e.g. Feishu streaming cards, #92589).
   return [
     params.kind === "runtime-event"
       ? OPENCLAW_RUNTIME_EVENT_HEADER
       : OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
     OPENCLAW_RUNTIME_CONTEXT_NOTICE,
     "",
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     params.runtimeContext,
+    INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n");
-}
-
-/** Builds the hidden next-turn system context payload for model conversion. */
-export function buildRuntimeContextSystemContext(runtimeContext: string): string {
-  return buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" });
-}
-
-/** Builds the hidden runtime-event system context payload for empty runtime-only turns. */
-export function buildRuntimeEventSystemContext(runtimeContext: string): string {
-  return buildRuntimeContextMessageContent({ runtimeContext, kind: "runtime-event" });
 }
 
 /** Creates a non-displayed custom transcript message for runtime context, if any exists. */
@@ -184,7 +173,10 @@ export function buildRuntimeContextCustomMessage(
   return {
     role: "custom",
     customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-    content: buildRuntimeContextSystemContext(trimmedRuntimeContext),
+    content: buildRuntimeContextMessageContent({
+      runtimeContext: trimmedRuntimeContext,
+      kind: "next-turn",
+    }),
     display: false,
     details: { source: "openclaw-runtime-context" },
     timestamp: Date.now(),

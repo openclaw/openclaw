@@ -79,11 +79,28 @@ function normalizeCommandArgv(value: unknown): string[] | undefined {
   return [...value];
 }
 
+function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
+  return (
+    "model" in payload ||
+    "fallbacks" in payload ||
+    "thinking" in payload ||
+    "timeoutSeconds" in payload ||
+    "toolsAllow" in payload ||
+    typeof payload.lightContext === "boolean" ||
+    typeof payload.allowUnsafeExternalContent === "boolean"
+  );
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
-  const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  const kind =
+    rawKind === "at" || rawKind === "every" || rawKind === "cron" || rawKind === "on-exit"
+      ? rawKind
+      : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const commandRaw = normalizeOptionalString(schedule.command) ?? "";
+  const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
   const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atString = normalizeOptionalString(schedule.at) ?? "";
@@ -112,6 +129,16 @@ function coerceSchedule(schedule: UnknownRecord) {
   if (anchorMs !== undefined && anchorMs >= 0) {
     next.anchorMs = Math.floor(anchorMs);
   }
+  if (commandRaw) {
+    next.command = commandRaw;
+  } else if ("command" in next) {
+    delete next.command;
+  }
+  if (cwdRaw) {
+    next.cwd = cwdRaw;
+  } else if ("cwd" in next) {
+    delete next.cwd;
+  }
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   if (staggerMs !== undefined) {
     next.staggerMs = staggerMs;
@@ -136,6 +163,20 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
+    delete next.command;
+    delete next.cwd;
+  } else if (next.kind === "on-exit") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  }
+
+  if (next.kind !== "on-exit") {
+    delete next.command;
+    delete next.cwd;
   }
 
   return next;
@@ -182,11 +223,17 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("thinking" in next) {
-    const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-    if (thinking !== undefined) {
-      next.thinking = thinking;
+    // Preserve an explicit null so patches can clear a stored thinking override,
+    // matching the model/fallbacks/toolsAllow clear paths.
+    if (next.thinking === null) {
+      next.thinking = null;
     } else {
-      delete next.thinking;
+      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
+      if (thinking !== undefined) {
+        next.thinking = thinking;
+      } else {
+        delete next.thinking;
+      }
     }
   }
   if ("timeoutSeconds" in next) {
@@ -198,7 +245,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {
@@ -264,6 +311,10 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if (!("kind" in next) && typeof next.text === "string" && hasAgentTurnOnlyPayloadHint(next)) {
+    next.kind = "agentTurn";
+    next.message = next.text;
   }
   if (next.kind === "systemEvent") {
     delete next.message;

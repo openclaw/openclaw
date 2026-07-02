@@ -31,22 +31,12 @@ struct CommandPanel<Content: View>: View {
 }
 
 struct CommandControlBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        Color(uiColor: self.colorScheme == .dark ? .systemBackground : .systemGroupedBackground)
-            .overlay(alignment: .top) {
-                if self.colorScheme == .light {
-                    Color.white.opacity(0.20)
-                        .frame(height: 140)
-                }
-            }
-            .ignoresSafeArea()
+        OpenClawProBackground()
     }
 }
 
 struct CommandSessionRow: View {
-    @Environment(\.colorScheme) private var colorScheme
     let item: CommandCenterTab.WorkItem
 
     var body: some View {
@@ -88,16 +78,9 @@ struct CommandSessionRow: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background {
-            RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                .fill(self.rowFill)
-                .overlay {
-                    RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                        .strokeBorder(self.rowBorder, lineWidth: 1)
-                }
-        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 
     private var progressLabel: String {
@@ -109,41 +92,16 @@ struct CommandSessionRow: View {
         }
         return "\(Int((progress * 100).rounded()))%"
     }
-
-    private var rowFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.035) : Color(uiColor: .systemBackground)
-    }
-
-    private var rowBorder: Color {
-        Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.24 : 0.22)
-    }
 }
 
 struct CommandViewMoreRow: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        Text("View More")
+        Label("View More", systemImage: "chevron.right")
             .font(.subheadline.weight(.bold))
             .foregroundStyle(OpenClawBrand.accent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background {
-                RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                    .fill(self.rowFill)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                            .strokeBorder(self.rowBorder, lineWidth: 1)
-                    }
-            }
-    }
-
-    private var rowFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.035) : Color(uiColor: .systemBackground)
-    }
-
-    private var rowBorder: Color {
-        Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.24 : 0.22)
+            .contentShape(Rectangle())
     }
 }
 
@@ -173,45 +131,7 @@ struct CommandEmptyStateRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .background {
-            RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                .fill(Color(uiColor: .systemBackground))
-                .overlay {
-                    RoundedRectangle(cornerRadius: OpenClawProMetric.controlRadius, style: .continuous)
-                        .strokeBorder(Color(uiColor: .separator).opacity(0.22), lineWidth: 1)
-                }
-        }
-    }
-}
-
-struct CommandTaskRow: View {
-    let item: CommandCenterTab.WorkItem
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            Text(self.item.title)
-                .font(.footnote.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.80)
-                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
-            Text(self.item.detail)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .frame(width: 64, alignment: .leading)
-            if let progress = self.item.progress {
-                ProProgressBar(progress: progress, color: self.item.color)
-                    .frame(width: 56)
-            }
-            Text(self.item.state)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(self.item.progress == nil ? self.item.color : .secondary)
-                .lineLimit(1)
-                .frame(width: self.item.progress == nil ? 58 : 34, alignment: .trailing)
-        }
-        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
     }
 }

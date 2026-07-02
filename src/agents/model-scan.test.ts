@@ -103,6 +103,67 @@ describe("scanOpenRouterModels", () => {
     expect(result?.createdAtMs).toBeNull();
   });
 
+  it("cancels catalog error response bodies", async () => {
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchImpl = withFetchPreconnect(async () => response);
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(/HTTP 503/);
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an oversized catalog success body and cancels the stream", async () => {
+    // The success body is provider-controlled and runtime-fetched. A faulty or
+    // hostile provider can stream an effectively unbounded JSON document; the
+    // read must stop at the byte cap, cancel the upstream stream, and surface a
+    // clear overflow error instead of buffering the whole payload into memory.
+    const cancel = vi.fn(async () => undefined);
+    let pullCount = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x20); // 64 KiB of spaces
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              // Valid JSON array prefix so the body would parse if ever read in full.
+              controller.enqueue(new TextEncoder().encode('{"data":['));
+            },
+            pull(controller) {
+              pullCount += 1;
+              controller.enqueue(chunk);
+            },
+            cancel,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
+      /OpenRouter \/models response too large/,
+    );
+
+    // The reader stopped early instead of draining an unbounded stream, and
+    // cancelled the upstream body once the byte cap was crossed.
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pullCount).toBeGreaterThan(0);
+    expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
+  });
+
+  it("rejects a malformed catalog success body", async () => {
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response("not json at all", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
+      /OpenRouter \/models response is malformed JSON/,
+    );
+  });
+
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {

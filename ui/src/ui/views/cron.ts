@@ -629,7 +629,7 @@ export function renderCron(props: CronProps) {
             : nothing}
         </section>
 
-        <section class="card">
+        <section class="card" data-run-history>
           <div
             class="row"
             style="justify-content: space-between; align-items: flex-start; gap: 12px;"
@@ -925,7 +925,11 @@ export function renderCron(props: CronProps) {
                       ? html`
                           <label class="field cron-span-2">
                             ${renderFieldLabel(t("cron.form.payloadKind"))}
-                            <input id="cron-payload-kind" .value=${"Command"} readonly />
+                            <input
+                              id="cron-payload-kind"
+                              .value=${t("cron.form.command")}
+                              readonly
+                            />
                           </label>
                         `
                       : html`
@@ -981,7 +985,7 @@ export function renderCron(props: CronProps) {
                   <label class="field cron-span-2">
                     ${renderFieldLabel(
                       payloadLocked
-                        ? "Command"
+                        ? t("cron.form.command")
                         : props.form.payloadKind === "systemEvent"
                           ? t("cron.form.mainTimelineMessage")
                           : t("cron.form.assistantTaskPrompt"),
@@ -1687,6 +1691,15 @@ function renderJob(job: CronJob, props: CronProps) {
             @click=${(event: Event) => {
               event.stopPropagation();
               props.onLoadRuns(job.id);
+              requestAnimationFrame(() => {
+                const runHistory = document.querySelector("[data-run-history]");
+                if (
+                  runHistory instanceof HTMLElement &&
+                  typeof runHistory.scrollIntoView === "function"
+                ) {
+                  runHistory.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              });
             }}
           >
             ${t("cron.jobList.history")}

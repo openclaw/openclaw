@@ -1,5 +1,5 @@
 // Embedded run registry tests cover active run handles, queueing, abort/drain,
-// abandonment tracking, diagnostics, snapshots, and live model-switch state.
+// abandonment tracking, diagnostics, and snapshots.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +22,6 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedRunAbandonment,
-  consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
@@ -32,7 +31,6 @@ import {
   markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
-  requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -49,6 +47,11 @@ function createRunHandle(
     abort?: () => void;
     isCompacting?: boolean;
     isStreaming?: boolean;
+    isStopped?: () => boolean;
+    queueMessage?: (
+      text: string,
+      options?: Parameters<RunHandle["queueMessage"]>[1],
+    ) => Promise<void>;
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
@@ -56,8 +59,9 @@ function createRunHandle(
   // behavior; individual tests supply queue/abort behavior when needed.
   const abort = overrides.abort ?? (() => {});
   return {
-    queueMessage: async () => {},
+    queueMessage: overrides.queueMessage ?? (async () => {}),
     isStreaming: () => overrides.isStreaming ?? true,
+    ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
     isCompacting: () => overrides.isCompacting ?? false,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
@@ -118,6 +122,14 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes restart ownership to every aborted run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-restart", createRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
+    expect(abort).toHaveBeenCalledWith("restart");
   });
 
   it("resolves active embedded runs by canonical session file", async () => {
@@ -223,6 +235,68 @@ describe("embedded-agent runner run registry", () => {
     );
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("queues into active non-streaming handles that expose live stopped state", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-active-non-streaming",
+      createRunHandle({
+        isStreaming: false,
+        isStopped: () => false,
+        queueMessage,
+      }),
+    );
+
+    expect(
+      queueEmbeddedAgentMessageWithOutcome("session-active-non-streaming", "continue").queued,
+    ).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("does not queue into stopped handles", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-stopped",
+      createRunHandle({
+        isStreaming: true,
+        isStopped: () => true,
+        queueMessage,
+      }),
+    );
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-stopped", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-stopped",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when stopped state checks throw", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-bad-state",
+      createRunHandle({
+        isStopped: () => {
+          throw new Error("bad stopped state");
+        },
+        queueMessage,
+      }),
+    );
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-bad-state", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-bad-state",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("returns a structured no-active-run queue failure", () => {
@@ -581,35 +655,5 @@ describe("embedded-agent runner run registry", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
-  });
-
-  it("stores and consumes pending live model switch requests", () => {
-    expect(
-      requestEmbeddedRunModelSwitch("session-switch", {
-        provider: "openai",
-        model: "gpt-5.4",
-      }),
-    ).toBe(true);
-
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toEqual({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toBeUndefined();
-  });
-
-  it("drops pending live model switch requests when the run clears", () => {
-    const handle = createRunHandle();
-    setActiveEmbeddedRun("session-clear-switch", handle);
-    requestEmbeddedRunModelSwitch("session-clear-switch", {
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    clearActiveEmbeddedRun("session-clear-switch", handle);
-
-    expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
   });
 });

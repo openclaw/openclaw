@@ -655,7 +655,7 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
-  it("uses session list terminal state to clear stale local run tracking", async () => {
+  it("keeps local run tracking while the session list reports an active terminal snapshot", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn(async (method: string) => {
@@ -710,18 +710,17 @@ describe("loadSessions", () => {
 
       await loadSessions(state);
 
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatStream).toBeNull();
-      expect(state.chatStreamStartedAt).toBeNull();
-      expect(state.compactionStatus).toBeNull();
-      expect(state.compactionClearTimer).toBeNull();
-      expect(state.fallbackStatus).toBeNull();
-      expect(state.fallbackClearTimer).toBeNull();
-      expect(state.chatRunStatus).toMatchObject({
-        phase: "done",
-        runId: "run-1",
-        sessionKey: "main",
+      expect(state.chatRunId).toBe("run-1");
+      expect(state.chatStream).toBe("Visible answer");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.compactionStatus).toMatchObject({ phase: "active", runId: "run-1" });
+      expect(state.compactionClearTimer).not.toBeNull();
+      expect(state.fallbackStatus).toMatchObject({
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
       });
+      expect(state.fallbackClearTimer).not.toBeNull();
+      expect(state.chatRunStatus).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -1226,6 +1225,45 @@ describe("loadSessions", () => {
 });
 
 describe("applySessionsChangedEvent", () => {
+  it("replaces stale effective fast metadata from session change events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            effectiveFastMode: "auto",
+            effectiveFastModeSource: "config",
+            fastAutoOnSeconds: 30,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      ts: 2,
+      fastMode: false,
+      effectiveFastMode: false,
+      effectiveFastModeSource: "session",
+      fastAutoOnSeconds: 30,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      fastMode: false,
+      effectiveFastMode: false,
+      effectiveFastModeSource: "session",
+      fastAutoOnSeconds: 30,
+    });
+  });
+
   it("removes deleted sessions instead of keeping archived rows visible", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -1571,6 +1609,49 @@ describe("applySessionsChangedEvent", () => {
       hasActiveRun: false,
       status: "done",
       endedAt: 2,
+    });
+  });
+
+  it("keeps the local run active when a transcript snapshot reports plugin finalization pending", () => {
+    const state = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:main:main",
+      chatRunId: "run-before-finalize",
+    } as SessionsState & { sessionKey: string; chatRunId: string | null };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      session: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: true,
+      },
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-before-finalize");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      status: "done",
+      hasActiveRun: true,
     });
   });
 

@@ -24,6 +24,7 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         cacheKeyData: {
           provider: "ollama",
           model: client.model,
+          outputDimensionality: client.outputDimensionality,
         },
       },
     };

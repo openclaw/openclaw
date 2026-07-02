@@ -65,7 +65,7 @@ extension SettingsProTab {
                     title: "Notifications",
                     detail: "Approval and event alert channel",
                     value: self.notificationStatusText,
-                    color: self.notificationStatusText == "Allowed" ? OpenClawBrand.ok : .secondary)
+                    color: self.notificationStatus.color)
                 Divider().padding(.leading, 60)
                 self.diagnosticCheckRow(
                     icon: "rectangle.on.rectangle",
@@ -139,15 +139,6 @@ extension SettingsProTab {
         await self.gatewayController.connectLastKnown()
     }
 
-    func refreshGateway() async {
-        guard !self.isRefreshingGateway else { return }
-        self.isRefreshingGateway = true
-        defer { self.isRefreshingGateway = false }
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
-    }
-
     @MainActor
     func runDiagnostics() async {
         guard !self.isRefreshingGateway else { return }
@@ -161,12 +152,13 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
+        self.registerForRemoteNotificationsIfEnrollmentReady()
 
         let issueCount = SettingsDiagnostics.issueCount(
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationStatusText: self.notificationStatusText)
+            notificationsAllowed: self.notificationStatus == .allowed)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -196,11 +188,11 @@ extension SettingsProTab {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
     }
@@ -294,11 +286,11 @@ extension SettingsProTab {
 
     func connectAfterScannedGatewayLink() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         await self.connectManual()
     }
 
@@ -327,19 +319,15 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int, useTLS: Bool) async -> Bool {
+    func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
-        self.setupStatusText = "Checking gateway reachability..."
-        let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
-        if !ok {
-            self.setupStatusText = "Can't reach gateway at \(trimmed):\(port). Check Tailscale or LAN."
-        }
-        return ok
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
+        return true
     }
 
     func resetOnboarding() {
@@ -367,9 +355,11 @@ extension SettingsProTab {
         }
     }
 
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            resetTitle: "Reset onboarding")
     }
 
     func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -381,6 +371,10 @@ extension SettingsProTab {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         await self.retryGatewayConnectionFromProblem()
     }
 
@@ -426,45 +420,55 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     func handleNotificationAction() {
-        if self.notificationStatusText == "Allowed" || self.notificationStatusText == "Not Allowed" {
-            self.openSystemSettings()
+        if self.notificationStatus.shouldOpenNotificationSettings {
+            self.openNotificationSettings()
             return
         }
+        guard self.notificationStatus == .notSet else { return }
 
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            self.showNotificationRelayDisclosure = true
+            return
+        }
+        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    func requestNotificationAuthorizationFromSettings() {
+        guard !self.isRequestingNotificationAuthorization else { return }
+        PushEnrollmentConsent.markDisclosureAccepted()
+        self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
                 .alert,
                 .badge,
                 .sound,
             ])) ?? false
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
-                self.notificationStatusText = granted ? "Allowed" : "Not Allowed"
-                self.notificationActionText = granted ? "Open System Settings" : "Open System Settings"
+                self.isRequestingNotificationAuthorization = false
+                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
+                guard granted else { return }
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     @MainActor
+    func registerForRemoteNotificationsIfEnrollmentReady() {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationStatus.allowsNotifications else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    @MainActor
     func applyNotificationStatus(_ status: UNAuthorizationStatus) {
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            self.notificationStatusText = "Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .denied:
-            self.notificationStatusText = "Not Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .notDetermined:
-            self.notificationStatusText = "Not Set"
-            self.notificationActionText = "Request Access"
-        @unknown default:
-            self.notificationStatusText = "Unknown"
-            self.notificationActionText = "Open System Settings"
-        }
+        self.notificationStatus = SettingsNotificationStatus(status)
     }
 
     func persistGatewayToken(_ value: String) {
@@ -485,8 +489,8 @@ extension SettingsProTab {
             instanceId: instanceId)
     }
 
-    func openSystemSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+    func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
 
@@ -501,20 +505,6 @@ extension SettingsProTab {
         case .privacy: "Privacy"
         case .notifications: "Notifications"
         case .about: "About"
-        }
-    }
-
-    func subtitle(for route: SettingsRoute) -> String {
-        switch route {
-        case .gateway: "Pairing, diagnostics, and Tailscale checks."
-        case .approvals: "Review pending agent actions."
-        case .permissions: "Control device capabilities."
-        case .channels: "Message routing and external clients."
-        case .voice: "Talk mode and wake phrase settings."
-        case .diagnostics: "Run local health checks."
-        case .privacy: "Data and device privacy controls."
-        case .notifications: "Alert permissions and delivery."
-        case .about: "Version and support details."
         }
     }
 
@@ -553,6 +543,12 @@ extension SettingsProTab {
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if self.isTransientSetupStatus(trimmedSetup),
+           !gatewayStatus.isEmpty,
+           gatewayStatus != "Offline"
+        {
+            return gatewayStatus
+        }
         if !trimmedSetup.isEmpty { return trimmedSetup }
         if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
@@ -577,6 +573,11 @@ extension SettingsProTab {
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Check Tailscale, then connect again."
         }
+        if lower.contains("tls fingerprint verification timed out")
+            || lower.contains("no tls endpoint detected")
+        {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if lower.contains("timed out") {
             return "Connection timed out. Make sure Tailscale is connected, then try again."
         }
@@ -584,6 +585,13 @@ extension SettingsProTab {
             return "Connected, but some controls are restricted for nodes. This is expected."
         }
         return nil
+    }
+
+    func isTransientSetupStatus(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "setup code applied. connecting..."
+            || lower.hasPrefix("qr loaded. connecting to ")
+            || lower == "checking gateway reachability..."
     }
 
     var shouldShowRealtimeVoicePicker: Bool {
@@ -684,6 +692,9 @@ extension SettingsProTab {
         if self.appModel.isAppleReviewDemoModeEnabled {
             return "Live gateway requests are disabled in demo mode."
         }
+        if self.notificationsNeedAttention {
+            return "Foreground approvals still appear while OpenClaw is connected."
+        }
         return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
     }
 
@@ -722,8 +733,13 @@ extension SettingsProTab {
         self.appModel.pendingExecApprovalPrompt
     }
 
-    var approvalsDetail: String {
-        self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+    var notificationsNeedAttention: Bool {
+        switch self.notificationStatus {
+        case .allowed, .checking:
+            false
+        case .notAllowed, .notSet, .unknown:
+            true
+        }
     }
 
     var approvalItems: [SettingsApprovalItem] {
@@ -785,5 +801,45 @@ extension SettingsProTab {
         case .whileUsing: "While Using"
         case .always: "Always"
         }
+    }
+
+    var notificationStatusText: String {
+        self.notificationStatus.text
+    }
+
+    var notificationActionText: String {
+        self.notificationStatus.actionTitle
+    }
+
+    var notificationStatusDetail: String {
+        switch self.notificationStatus {
+        case .checking:
+            "Checking iOS notification permission."
+        case .allowed:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .notAllowed:
+            "Notifications have been denied. Enable them in iOS Settings."
+        case .notSet:
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
+        }
+    }
+
+    var notificationRelayDetail: String {
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
+            return """
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
+            delivery data.
+            """
+        }
+        return "This build is not configured to use OpenClaw's hosted push relay."
+    }
+
+    var notificationRelayDisclosureMessage: String {
+        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }

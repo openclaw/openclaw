@@ -1,5 +1,6 @@
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
+  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -12,7 +13,10 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "../../../agents/openai-completions-string-content.js";
-import { resolveOpenAIReasoningEffortForModel } from "../../../agents/openai-reasoning-effort.js";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "../../../agents/openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -36,6 +40,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+type DynamicFastMode = boolean | (() => boolean | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
 };
@@ -123,15 +128,37 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
   );
 }
 
+function readPayloadToolField(record: Record<string, unknown>, field: string): unknown {
+  try {
+    return record[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 function readPayloadToolName(tool: unknown): string | undefined {
   if (!tool || typeof tool !== "object") {
     return undefined;
   }
-  const record = tool as { name?: unknown; function?: { name?: unknown } };
-  if (typeof record.name === "string") {
-    return record.name;
+  const record = tool as Record<string, unknown>;
+  const name = readPayloadToolField(record, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  return typeof record.function?.name === "string" ? record.function.name : undefined;
+  const fn = readPayloadToolField(record, "function");
+  if (!fn || typeof fn !== "object") {
+    return undefined;
+  }
+  const fnName = readPayloadToolField(fn as Record<string, unknown>, "name");
+  return typeof fnName === "string" ? fnName : undefined;
 }
 
 function isCodeModePayloadToolName(name: string | undefined): boolean {
@@ -154,7 +181,7 @@ function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, un
   const record = tool as Record<string, unknown>;
   const filteredGroups: Record<string, unknown> = {};
   for (const key of ["functionDeclarations", "function_declarations"] as const) {
-    const filtered = filterCodeModeToolDeclarations(record[key]);
+    const filtered = filterCodeModeToolDeclarations(readPayloadToolField(record, key));
     if (filtered === undefined) {
       continue;
     }
@@ -181,6 +208,12 @@ function filterCodeModePayloadTools(payload: unknown): void {
     const grouped = filterCodeModeGroupedToolDeclarations(tool);
     return grouped ? [grouped] : [];
   });
+}
+
+function filterCodeModePayloadHookResult(payload: unknown, nextPayload: unknown): unknown {
+  const finalPayload = nextPayload === undefined ? payload : nextPayload;
+  filterCodeModePayloadTools(finalPayload);
+  return nextPayload === undefined ? undefined : finalPayload;
 }
 
 function hasCodeModeVisibleTools(context: { tools?: unknown }): boolean {
@@ -262,7 +295,20 @@ function resolveOpenAIThinkingPayloadEffort(params: {
   payloadObj: Record<string, unknown>;
   thinkingLevel: ThinkLevel;
 }) {
-  const mapped = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const provider = normalizeOptionalLowercaseString(params.model.provider);
+  const defaultEffort = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  const usesNativeMax = provider === "openai" && supportsOpenAIReasoningEffort(params.model, "max");
+  // Native max-capable models have family-specific lower bounds. Compatible
+  // providers keep literal minimal and max/xhigh until their owners opt in.
+  const needsModelAwareEffort =
+    provider === "openai" &&
+    (params.thinkingLevel === "max" || (params.thinkingLevel === "minimal" && usesNativeMax));
+  const mapped = needsModelAwareEffort
+    ? (resolveOpenAIReasoningEffortForModel({
+        model: params.model,
+        effort: params.thinkingLevel,
+      }) ?? defaultEffort)
+    : defaultEffort;
   if (mapped !== "minimal" || !hasResponsesWebSearchTool(params.payloadObj.tools)) {
     return mapped;
   }
@@ -324,8 +370,18 @@ export function resolveOpenAIServiceTier(
 }
 
 function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
+  if (typeof value === "function") {
+    return normalizeOpenAIFastMode((value as () => unknown)());
+  }
   if (typeof value === "boolean") {
     return value;
+  }
+  const fastMode = normalizeFastMode(value);
+  if (fastMode === "auto") {
+    return undefined;
+  }
+  if (typeof fastMode === "boolean") {
+    return fastMode;
   }
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
@@ -358,7 +414,12 @@ export function resolveOpenAIFastMode(
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
-  if (raw !== undefined && normalized === undefined) {
+  if (
+    raw !== undefined &&
+    normalized === undefined &&
+    typeof raw !== "function" &&
+    normalizeFastMode(raw) !== "auto"
+  ) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
   }
@@ -398,10 +459,10 @@ export function createOpenAIResponsesContextManagementWrapper(
     }
 
     const originalOnPayload = options?.onPayload;
+    const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
-      policy.explicitStore === undefined
-        ? (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds
-        : policy.explicitStore;
+      effectiveStore ??
+      (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds;
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
@@ -534,10 +595,14 @@ export function createOpenAIThinkingLevelWrapper(
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createOpenAIFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: DynamicFastMode = true,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
+      normalizeOpenAIFastMode(enabled) !== true ||
       (model.api !== "openai-responses" &&
         model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||
@@ -653,12 +718,12 @@ export function createCodexNativeWebSearchWrapper(
         onPayload: (payload) => {
           filterCodeModePayloadTools(payload);
           const nextPayload = originalOnPayload?.(payload, model);
-          if (nextPayload !== undefined) {
-            filterCodeModePayloadTools(nextPayload);
-            return nextPayload;
+          if (isPromiseLike(nextPayload)) {
+            return Promise.resolve(nextPayload).then((resolvedPayload) =>
+              filterCodeModePayloadHookResult(payload, resolvedPayload),
+            );
           }
-          filterCodeModePayloadTools(payload);
-          return undefined;
+          return filterCodeModePayloadHookResult(payload, nextPayload);
         },
       };
       return underlying(model, context, codeModeOptions);

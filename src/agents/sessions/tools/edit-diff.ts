@@ -35,7 +35,7 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
  */
-export function normalizeForFuzzyMatch(text: string): string {
+function normalizeForFuzzyMatch(text: string): string {
   return (
     text
       .normalize("NFKC")
@@ -58,7 +58,7 @@ export function normalizeForFuzzyMatch(text: string): string {
   );
 }
 
-export interface FuzzyMatchResult {
+interface FuzzyMatchResult {
   /** Whether a match was found */
   found: boolean;
   /** The index where the match starts (in the content that should be used for replacement) */
@@ -79,16 +79,18 @@ export interface Edit {
   newText: string;
 }
 
+export class EditNoChangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditNoChangeError";
+  }
+}
+
 interface MatchedEdit {
   editIndex: number;
   matchIndex: number;
   matchLength: number;
   newText: string;
-}
-
-export interface AppliedEditsResult {
-  baseContent: string;
-  newContent: string;
 }
 
 /**
@@ -97,7 +99,7 @@ export interface AppliedEditsResult {
  * fuzzy-normalized version of the content (trailing whitespace stripped,
  * Unicode quotes/dashes normalized to ASCII).
  */
-export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
@@ -184,13 +186,15 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
-function getNoChangeError(path: string, totalEdits: number): Error {
+function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
   if (totalEdits === 1) {
-    return new Error(
+    return new EditNoChangeError(
       `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
     );
   }
-  return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+  return new EditNoChangeError(
+    `No changes made to ${path}. The replacements produced identical content.`,
+  );
 }
 
 /**
@@ -205,7 +209,7 @@ export function applyEditsToNormalizedContent(
   normalizedContent: string,
   edits: Edit[],
   path: string,
-): AppliedEditsResult {
+): { baseContent: string; newContent: string } {
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -423,9 +427,55 @@ export interface EditDiffError {
   error: string;
 }
 
-export interface EditDiffOperations {
-  readFile: (absolutePath: string) => Promise<Buffer | string>;
-  access: (absolutePath: string) => Promise<void>;
+export function validateNoOpEditTargets(
+  normalizedContent: string,
+  noOpEdits: Edit[],
+  realEdits: Edit[],
+  path: string,
+): void {
+  if (noOpEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
+      path,
+    );
+  }
+  const exactNoOpEdits = noOpEdits.filter((edit) =>
+    normalizedContent.includes(normalizeToLF(edit.oldText)),
+  );
+  if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      [...exactNoOpEdits, ...realEdits].map((edit) => ({
+        oldText: edit.oldText,
+        newText: "",
+      })),
+      path,
+    );
+  }
+}
+
+export function splitNoOpEdits(
+  normalizedContent: string,
+  edits: Edit[],
+  path: string,
+): { noOpEdits: Edit[]; realEdits: Edit[] } {
+  const noOpEdits: Edit[] = [];
+  const realEdits: Edit[] = [];
+  for (const edit of edits) {
+    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
+    if (edit.oldText === edit.newText || fuzzyNoOp) {
+      applyEditsToNormalizedContent(
+        normalizedContent,
+        [{ oldText: edit.oldText, newText: "" }],
+        path,
+      );
+      noOpEdits.push(edit);
+    } else {
+      realEdits.push(edit);
+    }
+  }
+  return { noOpEdits, realEdits };
 }
 
 /**
@@ -436,7 +486,10 @@ export async function computeEditsDiff(
   path: string,
   edits: Edit[],
   cwd: string,
-  operations?: EditDiffOperations,
+  operations?: {
+    readFile: (absolutePath: string) => Promise<Buffer | string>;
+    access: (absolutePath: string) => Promise<void>;
+  },
 ): Promise<EditDiffResult | EditDiffError> {
   const absolutePath = resolveToCwd(path, cwd);
 
@@ -466,28 +519,23 @@ export async function computeEditsDiff(
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);
     const normalizedContent = normalizeToLF(content);
+    const { noOpEdits, realEdits } = splitNoOpEdits(normalizedContent, edits, path);
+    validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
+    if (realEdits.length === 0) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     const { baseContent, newContent } = applyEditsToNormalizedContent(
       normalizedContent,
-      edits,
+      realEdits,
       path,
     );
 
     // Generate the diff
     return generateDiffString(baseContent, newContent);
   } catch (err) {
+    if (err instanceof EditNoChangeError) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     return { error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * Compute the diff for a single edit operation without applying it.
- * Kept as a convenience wrapper for single-edit callers.
- */
-export async function computeEditDiff(
-  path: string,
-  oldText: string,
-  newText: string,
-  cwd: string,
-): Promise<EditDiffResult | EditDiffError> {
-  return computeEditsDiff(path, [{ oldText, newText }], cwd);
 }

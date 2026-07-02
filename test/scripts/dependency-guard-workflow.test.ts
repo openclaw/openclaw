@@ -182,6 +182,8 @@ describe("dependency guard workflow", () => {
 
   it("blocks package lockfile and manifest graph changes unless secops approves the current head sha", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
+    const sharedScript = readFileSync("scripts/github/guard-shared.mjs", "utf8");
+    const guardSources = `${script}\n${sharedScript}`;
     expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename.endsWith("package-lock.json")');
     expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
@@ -192,8 +194,8 @@ describe("dependency guard workflow", () => {
     expect(script).toContain("/allow-dependencies-change");
     expect(script).toContain("openclaw-secops");
     expect(script).toContain("securityApproverSet");
-    expect(script).toContain("/memberships/");
-    expect(script).toContain("isCommentNewerThan");
+    expect(guardSources).toContain("/memberships/");
+    expect(guardSources).toContain("isCommentNewerThan");
     expect(script).toContain("A later push requires a fresh approval.");
     expect(script).toContain("createAutoscrubCommit");
     expect(script).toContain("chore: remove dependency lockfile change");

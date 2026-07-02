@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
@@ -6,10 +7,12 @@ import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
@@ -45,6 +48,8 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 
 export type FollowupRun = {
   prompt: string;
+  /** Latest session to claim without rewriting the queued run before store refresh. */
+  admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
   transcriptPrompt?: string;
   /** Shared lifecycle owner for the current user-turn transcript append. */
@@ -75,12 +80,16 @@ export type FollowupRun = {
    * The chat/channel/user ID where the reply should be sent.
    */
   originatingTo?: string;
+  /** Transport-native chat/conversation ID for hook identity context. */
+  originatingChatId?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
   originatingThreadId?: string | number;
   /** Provider reply target for transports that model threads as message replies. */
   originatingReplyToId?: string;
+  /** Effective reply policy for deciding whether the reply target affects queued delivery. */
+  originatingReplyToMode?: ReplyToMode;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
@@ -96,11 +105,13 @@ export type FollowupRun = {
     groupChannel?: string;
     groupSpace?: string;
     senderId?: string;
+    channelContext?: PluginHookChannelContext;
     senderName?: string;
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+    approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
@@ -116,6 +127,10 @@ export type FollowupRun = {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
+    fastMode?: FastMode;
+    fastModeAutoOnSeconds?: number;
+    fastModeOverride?: boolean;
+    fastModeAutoOnSecondsOverride?: boolean;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;

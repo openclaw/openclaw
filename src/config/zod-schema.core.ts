@@ -207,7 +207,16 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-const ModelApiSchema = z.enum(MODEL_APIS);
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CHATGPT_RESPONSES_API =
+  "openai-chatgpt-responses" satisfies (typeof MODEL_APIS)[number];
+
+const ModelApiSchema = z.enum(MODEL_APIS, {
+  error: (issue) =>
+    issue.input === LEGACY_OPENAI_CODEX_RESPONSES_API
+      ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
+      : undefined,
+});
 
 const ModelCompatSchema = z
   .object({
@@ -429,10 +438,12 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "anthropic",
   "anthropic-vertex",
   "arcee",
+  "azure-openai-responses",
   "byteplus",
   "byteplus-plan",
   "cerebras",
   "chutes",
+  "claude-cli",
   "cloudflare-ai-gateway",
   "codex",
   "comfy",
@@ -443,6 +454,9 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "fal",
   "fireworks",
   "github-copilot",
+  "gmi",
+  "gmi-cloud",
+  "gmicloud",
   "google",
   "google-antigravity",
   "google-gemini-cli",
@@ -460,15 +474,23 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "mistral",
   "modelstudio",
   "moonshot",
+  "moonshot-ai",
+  "moonshotai",
   "nvidia",
+  "novita",
+  "novita-ai",
+  "novitaai",
   "ollama",
-  "openai",
+  "ollama-cloud",
   "openai",
   "opencode",
   "opencode-go",
   "openrouter",
   "qianfan",
   "qwen",
+  "qwen-cli",
+  "qwen-oauth",
+  "qwen-portal",
   "qwencloud",
   "sglang",
   "stepfun",
@@ -485,6 +507,8 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "xai",
   "xiaomi",
   "xiaomi-token-plan",
+  "z.ai",
+  "z-ai",
   "zai",
 ]);
 
@@ -785,7 +809,9 @@ export const CliBackendSchema = z
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z.literal("claude-stream-json").optional(),
+    jsonlDialect: z
+      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
+      .optional(),
     liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
@@ -832,6 +858,31 @@ export const CliBackendSchema = z
 export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   normalizeStringEntries(values);
 
+/**
+ * Closed set of sender-policy/allowFrom dependency violations. Both cases drop
+ * every inbound DM at runtime, so callers surface them as config problems.
+ */
+export type DmPolicyAllowFromViolation = "open_requires_wildcard" | "allowlist_requires_entries";
+
+/**
+ * Canonical cross-field check for dmPolicy vs allowFrom. This is the single
+ * source of truth shared by the Zod schema refinements and the CLI config
+ * validator so the rule cannot drift between the two surfaces.
+ */
+export const evaluateDmPolicyAllowFromDependency = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+}): DmPolicyAllowFromViolation | null => {
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (params.policy === "open" && !allow.includes("*")) {
+    return "open_requires_wildcard";
+  }
+  if (params.policy === "allowlist" && allow.length === 0) {
+    return "allowlist_requires_entries";
+  }
+  return null;
+};
+
 export const requireOpenAllowFrom = (params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -839,11 +890,10 @@ export const requireOpenAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "open") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "open_requires_wildcard"
+  ) {
     return;
   }
   params.ctx.addIssue({
@@ -865,11 +915,10 @@ export const requireAllowlistAllowFrom = (params: {
   path: Array<string | number>;
   message: string;
 }) => {
-  if (params.policy !== "allowlist") {
-    return;
-  }
-  const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.length > 0) {
+  if (
+    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
+    "allowlist_requires_entries"
+  ) {
     return;
   }
   params.ctx.addIssue({

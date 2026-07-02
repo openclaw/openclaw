@@ -10,6 +10,11 @@ import {
 } from "../config/sessions/test-helpers.js";
 import { callGateway } from "../gateway/call.js";
 import {
+  getAgentEventLifecycleGeneration,
+  registerAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
+import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
@@ -30,6 +35,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  resetAgentRunContextForTest();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
 });
 
@@ -67,6 +73,7 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
     ageMs: 1_000,
     stale: true,
     staleReasons: ["dead-pid"],
+    removable: true,
     removed: true,
   };
 }
@@ -123,6 +130,17 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
+    registerAgentRunContext("restart-run", {
+      sessionKey: "agent:main:main",
+      sessionId: "main-session",
+    });
+    registerAgentRunContext("key-only-run", {
+      sessionKey: "agent:main:main",
+    });
+    registerAgentRunContext("stale-session-run", {
+      sessionKey: "agent:main:main",
+      sessionId: "stale-session",
+    });
     const result = await markRestartAbortedMainSessions({
       stateDir: tmpDir,
       sessionKeys: ["agent:main:main", "agent:main:completed", "agent:main:subagent:child"],
@@ -135,6 +153,11 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
     expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toEqual([
+      { runId: "key-only-run", lifecycleGeneration },
+      { runId: "restart-run", lifecycleGeneration },
+    ]);
   });
 
   it("marks active sessions in a configured custom session store", async () => {
@@ -175,6 +198,333 @@ describe("main-session-restart-recovery", () => {
     });
 
     expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+  });
+
+  it("persists abort-registry runs after their event context was cleared", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "cleared-context-run",
+          lifecycleGeneration: "pre-restart",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+        },
+      ],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toEqual([
+      {
+        runId: "cleared-context-run",
+        lifecycleGeneration: "pre-restart",
+      },
+    ]);
+  });
+
+  it("marks queued abort-registry runs before lifecycle start changes session status", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        runtimeMs: 1_000,
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "queued-run",
+          lifecycleGeneration: "pre-restart",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+        },
+      ],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:main"]).toEqual(
+      expect.objectContaining({
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "queued-run",
+            lifecycleGeneration: "pre-restart",
+          },
+        ],
+      }),
+    );
+    expect(store["agent:main:main"]?.startedAt).toBeUndefined();
+    expect(store["agent:main:main"]?.endedAt).toBeUndefined();
+    expect(store["agent:main:main"]?.runtimeMs).toBeUndefined();
+  });
+
+  it("marks queued registered runs before lifecycle start without explicit candidates", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+      },
+    });
+    registerAgentRunContext("queued-context-run", {
+      sessionKey: "agent:main:main",
+      sessionId: "main-session",
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:main"]).toEqual(
+      expect.objectContaining({
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "queued-context-run",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+      }),
+    );
+  });
+
+  it("does not reopen a queued run that completed before store persistence", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "completed-run",
+          lifecycleGeneration: "pre-restart",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+        },
+      ],
+      isActiveRun: () => false,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("does not reopen a session completed after a failed terminal persistence candidate", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 3_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "failed-persistence-run",
+          lifecycleGeneration: "pre-restart",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 2_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("does not reopen a terminal row written at the observed event timestamp", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 2_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "just-persisted-run",
+          lifecycleGeneration: "pre-restart",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 2_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("does not reopen a completed session via current-generation maintenance-expired abort controller", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 3_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "stale-abort-controller-run",
+          lifecycleGeneration,
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 5_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("preserves current-generation markers across repeated restart marking", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "first-restart-run",
+            lifecycleGeneration,
+          },
+        ],
+      },
+    });
+
+    await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "second-restart-run",
+          lifecycleGeneration,
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+        },
+      ],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toEqual([
+      {
+        runId: "first-restart-run",
+        lifecycleGeneration,
+      },
+      {
+        runId: "second-restart-run",
+        lifecycleGeneration,
+      },
+    ]);
+  });
+
+  it("replaces an older marker when the same run id is active after another restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        restartRecoveryRuns: [
+          {
+            runId: "shared-run",
+            lifecycleGeneration: "first-generation",
+          },
+        ],
+      },
+    });
+
+    await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "shared-run",
+          lifecycleGeneration: "second-generation",
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+        },
+      ],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toEqual([
+      {
+        runId: "shared-run",
+        lifecycleGeneration: "second-generation",
+      },
+    ]);
   });
 
   it("uses active session ids to avoid marking stale duplicate keys in another store", async () => {
@@ -829,12 +1179,24 @@ describe("main-session-restart-recovery", () => {
         sessionId: "completed-session",
         updatedAt: cutoff - 10_000,
         status: "done",
+        restartRecoveryRuns: [
+          {
+            runId: "completed-prior-process-run",
+            lifecycleGeneration: "prior-process",
+          },
+        ],
       },
       "agent:main:already-marked": {
         sessionId: "already-marked-session",
         updatedAt: cutoff - 10_000,
         status: "running",
         abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "marked-prior-process-run",
+            lifecycleGeneration: "prior-process",
+          },
+        ],
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
@@ -863,6 +1225,8 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:cron:nightly"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:completed"]?.restartRecoveryRuns).toHaveLength(1);
+    expect(store["agent:main:already-marked"]?.restartRecoveryRuns).toHaveLength(1);
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 

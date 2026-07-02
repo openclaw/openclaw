@@ -166,4 +166,100 @@ describe("GitHub Copilot OAuth model policy", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("cancels model enablement response bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { cancel } }) as unknown as Response),
+    );
+
+    await expect(
+      testing.enableGitHubCopilotModel("copilot-token", "claude-sonnet-4.6"),
+    ).resolves.toBe(true);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GitHub Copilot OAuth bounded reads", () => {
+  it("caps oversized OAuth JSON responses instead of buffering the full body", async () => {
+    // 18 MiB body in 1 MiB chunks exceeds the 16 MiB default cap on
+    // the shared readProviderJsonResponse reader.
+    const CHUNK = 1024 * 1024;
+    const CHUNK_COUNT = 18;
+    let pulls = 0;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls >= CHUNK_COUNT) {
+          controller.close();
+          return;
+        }
+        pulls += 1;
+        controller.enqueue(encoder.encode("a".repeat(CHUNK)));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      "GitHub Copilot token refresh request: JSON response exceeds 16777216 bytes",
+    );
+  });
+
+  it("parses normal-size OAuth JSON responses under the byte cap", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: "copilot-token",
+              expires_at: Math.floor(Date.now() / 1000) + 3600,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    const result = await refreshGitHubCopilotToken("refresh-token");
+    expect(result.access).toBe("copilot-token");
+    expect(typeof result.expires).toBe("number");
+  });
+
+  it("cancels the upstream body when the bounded reader overflows", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(encoder.encode("a".repeat(1024 * 1024)));
+      },
+      cancel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(source, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      "GitHub Copilot token refresh request",
+    );
+
+    expect(cancel).toHaveBeenCalled();
+  });
 });
