@@ -118,7 +118,9 @@ function capabilitiesErrorOutcome(
   return { ok: false, status, error: { type, message } };
 }
 
-function resolveOperation(value: unknown): ContextEngineControlOperation | undefined {
+export function resolveContextEngineControlOperation(
+  value: unknown,
+): ContextEngineControlOperation | undefined {
   const operation = normalizeOptionalString(value);
   return operation && CONTROL_OPERATIONS.has(operation as ContextEngineControlOperation)
     ? (operation as ContextEngineControlOperation)
@@ -268,10 +270,11 @@ function classifyControlFailure(error: unknown): {
   type: ContextEngineControlErrorType;
   message: string;
 } {
-  const name =
+  const rawName =
     typeof error === "object" && error !== null && "name" in error
-      ? String((error as { name?: unknown }).name ?? "")
-      : "";
+      ? (error as { name?: unknown }).name
+      : undefined;
+  const name = typeof rawName === "string" ? rawName : "";
   const reasonCode =
     typeof error === "object" && error !== null && "reasonCode" in error
       ? normalizeOptionalString((error as { reasonCode?: unknown }).reasonCode)
@@ -353,7 +356,7 @@ export async function invokeContextEngineControl(params: {
     );
   }
 
-  const operation = resolveOperation(params.input.operation);
+  const operation = resolveContextEngineControlOperation(params.input.operation);
   if (!operation) {
     return errorOutcome(400, "invalid_request", "context-engine control requires operation");
   }
