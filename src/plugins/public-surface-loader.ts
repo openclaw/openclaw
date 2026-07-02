@@ -6,12 +6,18 @@ import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
-import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
+import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+  normalizeBundledPluginArtifactSubpath,
+  normalizeBundledPluginDirName,
+  resolveBundledPluginPublicSurfacePath,
+} from "./public-surface-runtime.js";
 import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -57,6 +63,37 @@ function createResolutionKey(params: { dirName: string; artifactBasename: string
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
+// Externalized official plugins ship the same public artifacts inside their
+// installed package (dist/ for published builds, top-level source for path
+// installs). Without this fallback, packaged installs silently lose
+// plugin-owned contracts (gateway auth bypass, doctor/secret/message-tool)
+// that only resolve from bundled locations in source checkouts.
+function resolveInstalledPluginPublicSurfaceLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  const dirName = normalizeBundledPluginDirName(params.dirName);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const installPath = loadInstalledPluginIndexInstallRecordsSync()[dirName]?.installPath?.trim();
+  if (!installPath) {
+    return null;
+  }
+  const pluginRoot = path.resolve(installPath);
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  const candidates = [
+    path.join(pluginRoot, "dist", artifactBasename),
+    ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((ext) =>
+      path.join(pluginRoot, `${sourceBaseName}${ext}`),
+    ),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return { modulePath: candidate, boundaryRoot: pluginRoot };
+    }
+  }
+  return null;
+}
+
 function resolvePublicSurfaceLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
@@ -69,7 +106,7 @@ function resolvePublicSurfaceLocationUncached(params: {
     artifactBasename: params.artifactBasename,
   });
   if (!modulePath) {
-    return null;
+    return resolveInstalledPluginPublicSurfaceLocation(params);
   }
   return {
     modulePath,

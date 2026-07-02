@@ -386,8 +386,9 @@ function buildPluginRequestStages(params: {
         if ((await params.getGatewayAuthBypassPaths()).has(params.requestPath)) {
           return false;
         }
-        // Bypass paths are limited to bundled channel callbacks; all other protected plugin
-        // routes must produce an AuthorizedGatewayHttpRequest before runtime scopes are derived.
+        // Bypass paths are limited to official channel plugin callbacks (bundled or
+        // installed); all other protected plugin routes must produce an
+        // AuthorizedGatewayHttpRequest before runtime scopes are derived.
         const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
         const requestAuth = await authorizeGatewayHttpRequestOrReply({
           req: params.req,
