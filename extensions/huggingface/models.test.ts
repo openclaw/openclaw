@@ -91,6 +91,38 @@ describe("huggingface models", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(25_000);
   });
 
+  it("rejects oversized model discovery responses, cancels the stream, and falls back to static catalog", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    stubAbortSignalTimeout();
+    let canceled = false;
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(canceled).toBe(true);
+    expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
+  });
+
   it("caps oversized live discovery timeout overrides", async () => {
     process.env.VITEST = "false";
     process.env.NODE_ENV = "development";
