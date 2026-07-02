@@ -715,39 +715,42 @@ class DebugProxyCaptureStoreImpl {
       throw new Error("path-based debug proxy capture store is unavailable");
     }
     const placeholders = sessionIds.map(() => "?").join(", ");
-    const result = runSqliteImmediateTransactionSync(this.db, () => {
-      const blobRows = this.db
-        .prepare(
-          `SELECT DISTINCT data_blob_id AS blobId
-           FROM capture_events
-           WHERE session_id IN (${placeholders})
-             AND data_blob_id IS NOT NULL`,
-        )
-        .all(...sessionIds) as Array<{ blobId?: string | null }>;
-      const eventCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_events
-               WHERE session_id IN (${placeholders})`,
-            )
-            .get(...sessionIds) as { count: number }
-        ).count ?? 0;
-      const sessionCount =
-        (
-          this.db
-            .prepare(
-              `SELECT COUNT(*) AS count
-               FROM capture_sessions
-               WHERE id IN (${placeholders})`,
-            )
-            .get(...sessionIds) as { count: number }
-        ).count ?? 0;
+    const blobRows = this.db
+      .prepare(
+        `SELECT DISTINCT data_blob_id AS blobId
+         FROM capture_events
+         WHERE session_id IN (${placeholders})
+           AND data_blob_id IS NOT NULL`,
+      )
+      .all(...sessionIds) as Array<{ blobId?: string | null }>;
+    const eventCount =
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM capture_events
+             WHERE session_id IN (${placeholders})`,
+          )
+          .get(...sessionIds) as { count: number }
+      ).count ?? 0;
+    const sessionCount =
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM capture_sessions
+             WHERE id IN (${placeholders})`,
+          )
+          .get(...sessionIds) as { count: number }
+      ).count ?? 0;
+    runSqliteImmediateTransactionSync(this.db, () => {
       this.db.prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`).run(
         ...sessionIds,
       );
-      this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(...sessionIds);
+      this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(
+        ...sessionIds,
+      );
+    });
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
