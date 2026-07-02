@@ -195,6 +195,42 @@ describe("isTarEofRaceError", () => {
   });
 });
 
+describe("isTarEnoentRaceError", () => {
+  const { isTarEnoentRaceError } = backupCreateInternals;
+
+  it("matches ENOENT errors with a path property (node-tar stat race)", () => {
+    const err = Object.assign(
+      new Error("ENOENT: no such file or directory, lstat '/state/sessions/abc.jsonl'"),
+      {
+        code: "ENOENT",
+        path: "/state/sessions/abc.jsonl",
+      },
+    );
+    expect(isTarEnoentRaceError(err)).toBe(true);
+  });
+
+  it("rejects ENOENT errors without a path property", () => {
+    const err = Object.assign(new Error("ENOENT: no such file or directory"), {
+      code: "ENOENT",
+    });
+    expect(isTarEnoentRaceError(err)).toBe(false);
+  });
+
+  it("rejects non-ENOENT errors even with a path", () => {
+    const err = Object.assign(new Error("EACCES: permission denied"), {
+      code: "EACCES",
+      path: "/state/sessions/abc.jsonl",
+    });
+    expect(isTarEnoentRaceError(err)).toBe(false);
+  });
+
+  it("rejects non-object inputs", () => {
+    expect(isTarEnoentRaceError(null)).toBe(false);
+    expect(isTarEnoentRaceError(undefined)).toBe(false);
+    expect(isTarEnoentRaceError("ENOENT")).toBe(false);
+  });
+});
+
 describe("writeTarArchiveWithRetry", () => {
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
@@ -275,6 +311,31 @@ describe("writeTarArchiveWithRetry", () => {
     expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
   });
 
+  it("retries on ENOENT race errors from concurrent file deletion", async () => {
+    const enoentErr = Object.assign(
+      new Error("ENOENT: no such file or directory, lstat '/state/sessions/abc.jsonl'"),
+      { code: "ENOENT", path: "/state/sessions/abc.jsonl" },
+    );
+    const runTar = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(enoentErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await backupCreateInternals.writeTarArchiveWithRetry({
+      tempArchivePath: "/tmp/backup.tar.gz.tmp",
+      runTar,
+      log,
+      sleepMs: sleep,
+    });
+
+    expect(runTar).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenNthCalledWith(1, 10_000);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toContain("concurrent file deletion");
+  });
+
   it("does not retry on non-EOF errors", async () => {
     const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
     const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
@@ -286,6 +347,24 @@ describe("writeTarArchiveWithRetry", () => {
         sleepMs: sleep,
       }),
     ).rejects.toThrow(/permission denied/);
+    expect(runTar).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("does not retry on ENOENT errors without a path property", async () => {
+    const enoentNoPath = Object.assign(new Error("ENOENT: no such file or directory"), {
+      code: "ENOENT",
+    });
+    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(enoentNoPath);
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    await expect(
+      backupCreateInternals.writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/ENOENT/);
     expect(runTar).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
