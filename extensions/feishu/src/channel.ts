@@ -654,7 +654,11 @@ function assertFeishuReadTargetAllowed(params: {
     }
     return;
   }
-  if (!chatId || groupPolicy === "disabled" || !isFeishuReadGroupAllowlisted(params)) {
+  if (
+    !chatId ||
+    groupPolicy === "disabled" ||
+    !isFeishuReadGroupAllowlisted({ account: params.account, chatId })
+  ) {
     throw new Error("Feishu read target chat is not allowed.");
   }
   if (
