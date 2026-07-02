@@ -202,13 +202,13 @@ export async function handleMatrixAction(
       throw new Error("Matrix reactions are disabled.");
     }
     const roomId = readRoomId(params);
-    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove a Matrix reaction.",
       });
       if (remove || isEmpty) {
+        assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
         const result = await removeMatrixReactions(roomId, messageId, {
           ...clientOpts,
           emoji: remove ? emoji : undefined,
@@ -218,6 +218,7 @@ export async function handleMatrixAction(
       await reactMatrixMessage(roomId, messageId, emoji, clientOpts);
       return jsonResult({ ok: true, added: emoji });
     }
+    assertMatrixReadTargetAllowed({ cfg, accountConfig, roomId });
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });

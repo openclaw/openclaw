@@ -186,6 +186,35 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("allows reaction adds without read allowlist room matches", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "react",
+        roomId: "!other:example",
+        messageId: "$msg",
+        emoji: "👍",
+      },
+      cfg,
+    );
+
+    expect(mocks.reactMatrixMessage).toHaveBeenCalledWith("!other:example", "$msg", "👍", {
+      cfg,
+    });
+    expect(mocks.removeMatrixReactions).not.toHaveBeenCalled();
+  });
+
   it("passes account-scoped opts to remove reactions", async () => {
     const cfg = {
       channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },

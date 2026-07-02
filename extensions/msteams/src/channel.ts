@@ -291,19 +291,20 @@ function assertMSTeamsReadTargetAllowed(params: {
   target?: string | null;
   enforce: boolean;
 }) {
-  const msteamsCfg = params.cfg.channels?.msteams;
-  if (!params.enforce || !msteamsCfg) {
+  if (!params.enforce) {
     return;
   }
+  const msteamsCfg = params.cfg.channels?.msteams;
   const target = normalizeOptionalString(params.target);
   const groupPolicy =
-    msteamsCfg.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist";
+    msteamsCfg?.groupPolicy ?? resolveDefaultGroupPolicy(params.cfg) ?? "allowlist";
   if (groupPolicy === "open") {
     return;
   }
   if (
     !target ||
     groupPolicy === "disabled" ||
+    !msteamsCfg ||
     !isMSTeamsReadTargetAllowed({ cfg: msteamsCfg, target })
   ) {
     throw new Error("Microsoft Teams read target is not allowed.");

@@ -96,6 +96,13 @@ const reactMissingEmojiDetail = "React requires an emoji (reaction type).";
 const searchMissingQueryError = "Search requires a target (to) and query.";
 const groupManagementAuthError =
   "Microsoft Teams group management requires an owner or operator.admin requester.";
+const openMSTeamsReadCfg = {
+  channels: {
+    msteams: {
+      groupPolicy: "open",
+    },
+  },
+};
 
 function padded(value: string) {
   return ` ${value} `;
@@ -288,6 +295,19 @@ describe("msteamsPlugin message actions", () => {
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
+  it("blocks explicit read targets when Teams uses env-only credentials", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
   it("allows explicit read targets inside the Teams route allowlist", async () => {
     await expectSuccessfulAction({
       mockFn: getMessageMSTeamsMock,
@@ -454,6 +474,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getMemberInfoMSTeamsMock,
       mockResult: { member: { id: "user-1" } },
       action: "member-info",
+      cfg: openMSTeamsReadCfg,
       actionParams: { userId: " user-1 " },
       runtimeParams: { userId: "user-1" },
       details: okMSTeamsActionDetails("member-info", {
@@ -473,6 +494,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: listChannelsMSTeamsMock,
       mockResult: { channels: [{ id: "channel-1" }] },
       action: "channel-list",
+      cfg: openMSTeamsReadCfg,
       actionParams: { teamId: " team-1 " },
       runtimeParams: { teamId: "team-1" },
       details: okMSTeamsActionDetails("channel-list", {
@@ -492,6 +514,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getChannelInfoMSTeamsMock,
       mockResult: { channel: { id: "channel-1" } },
       action: "channel-info",
+      cfg: openMSTeamsReadCfg,
       actionParams: {
         teamId: " team-1 ",
         channelId: " channel-1 ",
@@ -948,11 +971,14 @@ describe("msteamsPlugin message actions", () => {
   });
 
   it("requires a non-empty search query after trimming", async () => {
-    await expectActionParamError(
-      "search",
+    await expectActionError(
       {
-        to: targetChannelId,
-        query: "   ",
+        action: "search",
+        cfg: openMSTeamsReadCfg,
+        params: {
+          to: targetChannelId,
+          query: "   ",
+        },
       },
       searchMissingQueryError,
     );
