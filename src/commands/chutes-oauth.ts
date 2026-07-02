@@ -81,7 +81,13 @@ async function waitForLocalCallback(params: {
       `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
     );
   }
-  const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
+  const rawPort = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
+  if (!Number.isFinite(rawPort) || rawPort < 1 || rawPort > 65535) {
+    throw new Error(
+      `Chutes OAuth redirect URI port must be 1-65535 (got ${redirectUrl.port ?? "none"})`,
+    );
+  }
+  const port = rawPort;
   const expectedPath = redirectUrl.pathname || "/";
 
   return await new Promise<{ code: string; state: string }>((resolve, reject) => {
