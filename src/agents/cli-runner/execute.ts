@@ -1163,6 +1163,18 @@ export async function executePreparedCliRun(
           if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
             throw createCliAbortError();
           }
+          const streamingParserErrorText =
+            outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+          if (streamingParserErrorText) {
+            throw new FailoverError(streamingParserErrorText, {
+              reason: "format",
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus("format"),
+            });
+          }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();
           const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
@@ -1335,6 +1347,7 @@ export async function executePreparedCliRun(
           if (parsed.errorText) {
             const reason =
               classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
             throw new FailoverError(parsed.errorText, {
               reason,
               provider: params.provider,
@@ -1342,6 +1355,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus(reason),
+              code,
             });
           }
           const rawText = parsed.text;

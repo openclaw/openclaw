@@ -82,6 +82,23 @@ afterEach(() => {
   replyRunTesting.resetReplyRunRegistry();
 });
 
+const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;
+
+function mockSuccessfulClaudeJsonlRun() {
+  supervisorSpawnMock.mockResolvedValueOnce(
+    createManagedRun({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout: CLAUDE_OK_JSONL,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+  );
+}
+
 function buildPreparedCliRunContext(params: {
   provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
@@ -330,7 +347,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -418,7 +435,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -457,7 +474,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -476,7 +493,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("passes --session-id for new Claude sessions", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
 
     await executePreparedCliRun(
       buildPreparedCliRunContext({
@@ -499,7 +516,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("does not pass a Claude session id for side-question runs", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--max-turns", "1"]);
 
     await executePreparedCliRun(
@@ -523,7 +540,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("applies backend-owned per-run args before spawning", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
 
     await executePreparedCliRun(
@@ -609,7 +626,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -669,7 +686,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -3719,7 +3736,7 @@ ${JSON.stringify({
     vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "none");
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
     vi.stubEnv("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
 
     await executePreparedCliRun(
       buildPreparedCliRunContext({
