@@ -361,6 +361,51 @@ describe("provider auth profile helpers", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("bounds oversized Copilot token success body and cancels the stream", async () => {
+    vi.resetModules();
+
+    const chunk = new Uint8Array(1024 * 1024); // 1 MiB chunk
+    let readCount = 0;
+    let canceled = false;
+    // 64 chunks × 1 MiB = 64 MiB — far exceeds the 16 MiB cap
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (readCount >= 64) {
+          controller.close();
+          return;
+        }
+        readCount += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const response = new Response(oversizedBody, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const fetchImpl = vi.fn(async () => response);
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl,
+        cachePath: "/tmp/copilot-token.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save oversized token");
+        },
+      }),
+    ).rejects.toThrow("github-copilot.token");
+
+    // Stream must be cancelled before all 64 chunks are consumed
+    expect(readCount).toBeLessThan(64);
+    expect(canceled).toBe(true);
+  });
+
   it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {
     vi.resetModules();
 
