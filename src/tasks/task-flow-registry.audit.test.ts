@@ -226,6 +226,49 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("does not flag ended blocked flows as stale", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Terminal blocked work",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      setFlowWaiting({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        blockedTaskId: "task-missing",
+        blockedSummary: "Completion handoff did not produce a visible reply",
+        updatedAt: 1,
+      });
+
+      const blocked = listTaskFlowAuditFindings({ now: 31 * 60_000 });
+      expect(requireFinding(blocked, "stale_blocked", flow.flowId).flow?.flowId).toBe(flow.flowId);
+
+      const terminalFlow: TaskFlowRecord = {
+        ...flow,
+        status: "blocked" as const,
+        blockedTaskId: "task-missing",
+        blockedSummary: "Completion handoff did not produce a visible reply",
+        endedAt: 1,
+        updatedAt: 1,
+      };
+
+      const terminalFindings = listTaskFlowAuditFindings({
+        flows: [terminalFlow],
+        now: 31 * 60_000,
+      });
+      expect(
+        terminalFindings.some(
+          (finding) => finding.code === "stale_blocked" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBe(false);
+    });
+  });
+
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({
