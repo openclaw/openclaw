@@ -397,12 +397,24 @@ function escapeTelegramProgressHtml(text: string): string {
 }
 
 function renderTelegramProgressStringLine(text: string): string {
-  const clipped = clipTelegramProgressText(text.trim());
-  const italic = clipped.match(/^_(.*)_$/u);
-  if (italic) {
-    return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
-  }
-  return `<code>${escapeTelegramProgressHtml(clipped)}</code>`;
+  // Reasoning/commentary lanes carry model-authored markdown (e.g. `**bold**`,
+  // inline `` `code` ``, `_italic_` reasoning behind a 🧠/💬 marker). Render it
+  // through renderTelegramHtmlText — the parse_mode=HTML-safe converter — NOT
+  // markdownToTelegramRichHtml, whose rich-only block output (<h2> from a
+  // setext heading, <hr>, lists) makes Telegram reject the edit and drops the
+  // whole preview to unformatted plain text.
+  // Collapse to one line first: progress lines are single-line by contract, and
+  // multi-line commentary otherwise forms block markdown (`\n\n---\n\n` turns
+  // the paragraph above it into a setext heading).
+  const trimmed = text.replace(/\s+/gu, " ").trim();
+  // Clip INSIDE a whole-line `_…_` wrapper (the reasoning-lane contract, marker
+  // optional): clipping the assembled line chops the closing underscore, which
+  // silently degrades every long reasoning line from italic to plain text.
+  const italic = trimmed.match(/^(\S+ )?_(.*)_$/u);
+  const clipped = italic
+    ? `${italic[1] ?? ""}_${clipTelegramProgressText(italic[2] ?? "")}_`
+    : clipTelegramProgressText(trimmed);
+  return renderTelegramHtmlText(clipped);
 }
 
 function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
@@ -410,6 +422,9 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
     return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
   }
   if (!line.icon && line.label === "Commentary") {
+    // Commentary is model prose behind a 💬 marker: render its markdown (plain
+    // unless the model emphasized) via the shared converter — distinct from the
+    // 🧠 italic reasoning lane, mirroring Discord.
     return renderTelegramProgressStringLine(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
@@ -420,7 +435,10 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
-      parts.push(renderTelegramProgressStringLine(text));
+      // Generic item payload (e.g. an "Update" line) keeps the monospace payload
+      // styling shared with tool details; only the reasoning/commentary lanes
+      // carry model markdown that needs converting.
+      parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(text))}</code>`);
     }
   }
   if (line.status && line.status !== "completed" && line.status !== line.detail) {
@@ -1024,6 +1042,12 @@ export const dispatchTelegramMessage = async ({
     seed: progressSeed,
     formatLine: formatTelegramProgressLine,
     reasoningGate: streamReasoningInProgressDraft,
+    // Distinguish the streamed lanes in the window the way Discord does: 🧠
+    // reasoning (italic, default) vs 💬 commentary (plain). Without these the
+    // two lanes render identically and are indistinguishable.
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    commentaryItalics: false,
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;

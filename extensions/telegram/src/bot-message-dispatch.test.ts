@@ -3358,10 +3358,113 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n🛠️ Exec\n• Checking files",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+        "Shelling\n\n🛠️ Exec\n🧠 Checking files",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n🧠 <i>Checking files</i>",
       ),
     );
+  });
+
+  it("renders model markdown in streamed reasoning and commentary lanes", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onReasoningStream?.({ text: "<think>Running `sleep 4`</think>" });
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "c1",
+        progressText: "**Reading AGENTS.md**",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.parseMode).toBe("HTML");
+    // Reasoning stays 🧠 italic with inline code rendered (not a raw backtick).
+    expect(lastPreview?.text).toContain("🧠 <i>Running <code>sleep 4</code></i>");
+    // Commentary renders the model's bold (not raw `**`), distinct from reasoning.
+    expect(lastPreview?.text).toContain("💬 <b>Reading <code>AGENTS.md</code></b>");
+    expect(lastPreview?.text).not.toContain("**");
+    expect(lastPreview?.text).not.toContain("`sleep");
+  });
+
+  it("keeps clipped long reasoning lines italic behind the 🧠 marker", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    // Real reasoning routinely exceeds the progress clip limit; truncation must
+    // clip inside the `_…_` wrapper, not chop the closing underscore (which
+    // silently degrades the lane to plain text with a leaked underscore).
+    const longThought = "The user wants me to think carefully and run several steps. ".repeat(8);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: `<think>${longThought}</think>` });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling", maxLineChars: 300 } },
+      },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.parseMode).toBe("HTML");
+    expect(lastPreview?.text).toContain("🧠 <i>The user wants me to think carefully");
+    expect(lastPreview?.text).toMatch(/…<\/i>/u);
+    expect(lastPreview?.text).not.toContain("_");
+  });
+
+  it("keeps multi-line commentary markdown parse_mode-safe in progress drafts", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    // Models separate narration blocks with `\n\n---\n\n`; as block markdown that
+    // turns the paragraph above into a setext <h2> heading, which Telegram's
+    // parse_mode=HTML rejects — dropping the ENTIRE preview (all lanes) to
+    // unformatted plain text. Lane lines must render inline-safe HTML only.
+    const commentary =
+      "Planning: three sequential steps with a file read in between.\n\n---\n\n**Step 1:** Run `sleep 6 && date`";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onReasoningStream?.({ text: "<think>Planning the steps</think>" });
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "c1",
+        progressText: commentary,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.parseMode).toBe("HTML");
+    // Reasoning lane still italic, commentary collapsed to one inline-safe line.
+    expect(lastPreview?.text).toContain("🧠 <i>Planning the steps</i>");
+    expect(lastPreview?.text).toContain(
+      "💬 Planning: three sequential steps with a file read in between. --- <b>Step 1:</b> Run <code>sleep 6 &amp;&amp; date</code>",
+    );
+    // No rich-only block HTML that Telegram's parse_mode=HTML would reject.
+    expect(lastPreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
   });
 
   it("renders configured Telegram commentary progress from preamble item events", async () => {
@@ -3390,8 +3493,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\nChecking recent context",
-        "<b>Shelling</b>\n<i>Checking recent context</i>",
+        "Shelling\n\n💬 Checking recent context",
+        "<b>Shelling</b>\n💬 Checking recent context",
       ),
     );
   });
@@ -3478,8 +3581,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n• Checking files",
-        "<b>Shelling</b>\n<i>Checking files</i>",
+        "Shelling\n\n🧠 Checking files",
+        "<b>Shelling</b>\n🧠 <i>Checking files</i>",
       ),
     );
   });
