@@ -90,10 +90,6 @@ async function loadReadabilityDeps(): Promise<{
   }
 }
 
-function normalizeLowercaseStringOrEmpty(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
@@ -132,15 +128,17 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       j += 1;
     }
 
-    const tagName = normalizeLowercaseStringOrEmpty(html.slice(nameStart, j));
-    if (!tagName) {
+    if (j === nameStart) {
       continue;
     }
 
     if (closing) {
-      depth = Math.max(0, depth - 1);
+      if (depth > 0) {
+        depth -= 1;
+      }
       continue;
     }
+    const tagName = html.slice(nameStart, j).toLowerCase();
     if (HTML_VOID_TAGS.has(tagName)) {
       continue;
     }

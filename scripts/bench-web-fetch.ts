@@ -13,8 +13,10 @@ type BenchmarkCaseId =
   | "tool-text"
   | "tool-markdown"
   | "tool-html-article"
+  | "tool-html-article-text"
   | "tool-html-shell"
   | "extract-readable-article"
+  | "extract-readable-article-text"
   | "extract-basic-shell";
 
 type BenchmarkCase = {
@@ -58,8 +60,10 @@ const ALL_CASE_IDS = [
   "tool-text",
   "tool-markdown",
   "tool-html-article",
+  "tool-html-article-text",
   "tool-html-shell",
   "extract-readable-article",
+  "extract-readable-article-text",
   "extract-basic-shell",
 ] as const satisfies readonly BenchmarkCaseId[];
 
@@ -306,6 +310,7 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
   const textTool = createTool();
   const markdownTool = createTool();
   const articleTool = createTool();
+  const articleTextTool = createTool();
   const shellTool = createTool();
   return {
     "tool-create": {
@@ -339,6 +344,17 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
         await articleTool.execute("bench", { url: "https://example.com/article" });
       },
     },
+    "tool-html-article-text": {
+      id: "tool-html-article-text",
+      label: "execute article HTML fetch as text",
+      run: async () => {
+        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
+        await articleTextTool.execute("bench", {
+          url: "https://example.com/article-text",
+          extractMode: "text",
+        });
+      },
+    },
     "tool-html-shell": {
       id: "tool-html-shell",
       label: "execute shell HTML fallback fetch",
@@ -355,6 +371,18 @@ function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
           html: ARTICLE_HTML,
           url: "https://example.com/article",
           extractMode: "markdown",
+          config: toolConfig,
+        });
+      },
+    },
+    "extract-readable-article-text": {
+      id: "extract-readable-article-text",
+      label: "extract readable article HTML as text",
+      run: async () => {
+        await extractReadableContent({
+          html: ARTICLE_HTML,
+          url: "https://example.com/article-text",
+          extractMode: "text",
           config: toolConfig,
         });
       },
