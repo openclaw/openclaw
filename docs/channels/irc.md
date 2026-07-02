@@ -146,6 +146,13 @@ Or to allow **all** IRC channels (no per-channel allowlist) and still reply with
 }
 ```
 
+## Message formatting
+
+- `channels.irc.markdown` — Markdown rendering options. Object with an optional `tables` key:
+  - `tables`: `"off"`, `"bullets"`, `"code"`, or `"block"` — controls how tables are rendered in IRC messages.
+- `channels.irc.streaming.chunkMode`: `"length"` (default) or `"newline"` — controls how long messages are split. `"length"` splits at a character limit; `"newline"` splits at paragraph boundaries.
+- `channels.irc.responsePrefix` — prepended to every outbound reply.
+
 ## Security note (recommended for public channels)
 
 If you allow `allowFrom: ["*"]` in a public channel, anyone can prompt the bot.

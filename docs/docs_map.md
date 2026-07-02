@@ -501,6 +501,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Access control
   - H3: Common gotcha: allowFrom is for DMs, not channels
   - H2: Reply triggering (mentions)
+  - H2: Message formatting
   - H2: Security note (recommended for public channels)
   - H3: Same tools for everyone in the channel
   - H3: Different tools per sender (owner gets more power)
