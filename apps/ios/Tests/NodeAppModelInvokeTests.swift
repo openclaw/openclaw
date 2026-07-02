@@ -1342,6 +1342,8 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     }
 
     @Test @MainActor func systemNotifyReturnsUnavailableWhenNotificationsOff() async throws {
+        NotificationServingPreference.reset()
+        defer { NotificationServingPreference.reset() }
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
         let appModel = NodeAppModel(notificationCenter: center)
@@ -1360,7 +1362,30 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(center.addCalls == 0)
     }
 
+    @Test @MainActor func systemNotifyReturnsUnavailableWhenAppNotificationServingIsOff() async throws {
+        NotificationServingPreference.setEnabled(false)
+        defer { NotificationServingPreference.reset() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-app-off",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.addCalls == 0)
+    }
+
     @Test @MainActor func systemNotifySchedulesWhenNotificationsAreAlreadyAllowed() async throws {
+        NotificationServingPreference.reset()
+        defer { NotificationServingPreference.reset() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -1378,14 +1403,19 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     }
 
     @Test @MainActor func apnsRegistrationRequiresDisclosureAndNotificationAuthorization() async {
+        NotificationServingPreference.reset()
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
         PushEnrollmentConsent.reset()
-        defer { PushEnrollmentConsent.reset() }
+        defer {
+            PushEnrollmentConsent.reset()
+            NotificationServingPreference.reset()
+        }
 
-        #expect(await appModel._test_canPublishAPNsRegistration() == false)
-        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false) == false)
+        let requiresHostedRelayDisclosure = PushBuildConfig.current.usesOpenClawHostedRelay
+        #expect(await appModel._test_canPublishAPNsRegistration() == !requiresHostedRelayDisclosure)
+        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false))
 
         PushEnrollmentConsent.markDisclosureAccepted()
         center.status = .notDetermined
@@ -1393,9 +1423,177 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
         center.status = .authorized
         #expect(await appModel._test_canPublishAPNsRegistration())
+
+        NotificationServingPreference.setEnabled(false)
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
+    }
+
+    @Test @MainActor func disablingAPNsDeliveryRegistrationClearsStoredToken() {
+        let key = "push.apns.deviceTokenHex"
+        let registrationIdKey = "push.apns.clientRegistrationId"
+        let unregisterKey = "push.apns.unregisterPending"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        let previousRegistrationId = defaults.object(forKey: registrationIdKey)
+        let previousUnregister = defaults.object(forKey: unregisterKey)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            if let previousRegistrationId {
+                defaults.set(previousRegistrationId, forKey: registrationIdKey)
+            } else {
+                defaults.removeObject(forKey: registrationIdKey)
+            }
+            if let previousUnregister {
+                defaults.set(previousUnregister, forKey: unregisterKey)
+            } else {
+                defaults.removeObject(forKey: unregisterKey)
+            }
+        }
+        let center = MockBootstrapNotificationCenter()
+        let appModel = NodeAppModel(notificationCenter: center)
+
+        appModel.updateAPNsDeviceToken(Data([0xab, 0xcd]))
+        #expect(defaults.string(forKey: key) == "abcd")
+
+        appModel.disableAPNsDeliveryRegistration()
+
+        #expect(defaults.string(forKey: key) == nil)
+        #expect(defaults.string(forKey: registrationIdKey) == nil)
+        #expect(defaults.string(forKey: unregisterKey)?.contains("clientRegistrationId") == true)
+        #expect(defaults.string(forKey: unregisterKey)?.contains("sendGrant") == false)
+    }
+
+    @Test @MainActor func directAPNsPublishClearsStaleRelayStateBeforeOptOut() {
+        let key = "push.apns.deviceTokenHex"
+        let registrationIdKey = "push.apns.clientRegistrationId"
+        let unregisterKey = "push.apns.unregisterPending"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        let previousRegistrationId = defaults.object(forKey: registrationIdKey)
+        let previousUnregister = defaults.object(forKey: unregisterKey)
+        let previousRelayState = PushRelayRegistrationStore.loadRegistrationState()
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+            if let previousRegistrationId {
+                defaults.set(previousRegistrationId, forKey: registrationIdKey)
+            } else {
+                defaults.removeObject(forKey: registrationIdKey)
+            }
+            if let previousUnregister {
+                defaults.set(previousUnregister, forKey: unregisterKey)
+            } else {
+                defaults.removeObject(forKey: unregisterKey)
+            }
+            if let previousRelayState {
+                _ = PushRelayRegistrationStore.saveRegistrationState(previousRelayState)
+            } else {
+                _ = PushRelayRegistrationStore.clearRegistrationState()
+            }
+        }
+        _ = PushRelayRegistrationStore.saveRegistrationState(PushRelayRegistrationStore.RegistrationState(
+            relayHandle: "stale-relay-handle",
+            sendGrant: "stale-send-grant",
+            relayOrigin: "https://relay.example",
+            gatewayDeviceId: "gateway-1",
+            relayHandleExpiresAtMs: nil,
+            tokenDebugSuffix: "abcd",
+            lastAPNsTokenHashHex: "stale-token-hash",
+            installationId: "install-1",
+            lastTransport: PushTransportMode.relay.rawValue,
+            apnsEnvironment: PushAPNsEnvironment.production.rawValue,
+            relayProfile: PushRelayProfile.production.rawValue,
+            proofPolicy: PushProofPolicy.appleStrict.rawValue))
+        let center = MockBootstrapNotificationCenter()
+        let appModel = NodeAppModel(notificationCenter: center)
+
+        appModel.updateAPNsDeviceToken(Data([0xab, 0xcd]))
+        appModel._test_clearStaleRelayRegistrationStateAfterDirectPublish()
+        appModel.disableAPNsDeliveryRegistration()
+
+        let unregisterPayload = defaults.string(forKey: unregisterKey)
+        #expect(PushRelayRegistrationStore.loadRegistrationState() == nil)
+        #expect(unregisterPayload?.contains("\"transport\":\"direct\"") == true)
+        #expect(unregisterPayload?.contains("\"token\":\"abcd\"") == true)
+        #expect(unregisterPayload?.contains("stale-relay-handle") == false)
+        #expect(unregisterPayload?.contains("sendGrant") == false)
+    }
+
+    @Test @MainActor func pendingAPNsUnregisterKeepsRetryWhenRegisterPublishIsInFlight() {
+        let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+
+        appModel._test_setAPNsRegistrationPublishInFlight(true)
+        #expect(!appModel._test_shouldClearPendingAPNsUnregister(
+            ok: true,
+            event: "push.apns.unregister",
+            handled: false,
+            reason: "missing"))
+        #expect(appModel._test_shouldClearPendingAPNsUnregister(
+            ok: true,
+            event: "push.apns.unregister",
+            handled: true,
+            reason: "cleared"))
+
+        appModel._test_setAPNsRegistrationPublishInFlight(false)
+        #expect(appModel._test_shouldClearPendingAPNsUnregister(
+            ok: true,
+            event: "push.apns.unregister",
+            handled: false,
+            reason: "missing"))
+        #expect(!appModel._test_shouldClearPendingAPNsUnregister(
+            ok: true,
+            event: "push.apns.unregister",
+            handled: false,
+            reason: "mismatch"))
+    }
+
+    @Test @MainActor func directRelayCleanupRequiresExplicitAPNsRegisterAck() {
+        let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+
+        #expect(appModel._test_isAPNsRegisterPublishAccepted(
+            ok: true,
+            event: "push.apns.register",
+            handled: true,
+            reason: "registered"))
+        #expect(appModel._test_shouldClearStaleRelayRegistrationStateAfterDirectPublish(
+            ok: true,
+            event: "push.apns.register",
+            handled: true,
+            reason: "registered"))
+
+        #expect(!appModel._test_isAPNsRegisterPublishAccepted(
+            ok: true,
+            event: "push.apns.register",
+            handled: false,
+            reason: "register_failed"))
+        #expect(!appModel._test_shouldClearStaleRelayRegistrationStateAfterDirectPublish(
+            ok: true,
+            event: "push.apns.register",
+            handled: false,
+            reason: "register_failed"))
+
+        #expect(appModel._test_isAPNsRegisterPublishAccepted(
+            ok: true,
+            event: nil,
+            handled: nil,
+            reason: nil))
+        #expect(!appModel._test_shouldClearStaleRelayRegistrationStateAfterDirectPublish(
+            ok: true,
+            event: nil,
+            handled: nil,
+            reason: nil))
     }
 
     @Test @MainActor func chatPushWithoutSpeechReturnsUnavailableWhenNotificationsOff() async throws {
+        NotificationServingPreference.reset()
+        defer { NotificationServingPreference.reset() }
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
         let appModel = NodeAppModel(notificationCenter: center)
@@ -1414,7 +1612,30 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(center.addCalls == 0)
     }
 
+    @Test @MainActor func chatPushWithoutSpeechReturnsUnavailableWhenAppNotificationServingIsOff() async throws {
+        NotificationServingPreference.setEnabled(false)
+        defer { NotificationServingPreference.reset() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawChatPushParams(text: "Build finished", speak: false)
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "chat-push-app-off",
+            command: OpenClawChatCommand.push.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.addCalls == 0)
+    }
+
     @Test @MainActor func chatPushSchedulesWhenNotificationsAreAlreadyAllowed() async throws {
+        NotificationServingPreference.reset()
+        defer { NotificationServingPreference.reset() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)

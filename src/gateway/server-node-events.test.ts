@@ -46,6 +46,7 @@ const buildSessionLookup = (
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
+const clearApnsRegistrationIfCurrentIdentityMock = vi.hoisted(() => vi.fn());
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(() => ({
     deviceId: "gateway-device-1",
@@ -86,6 +87,7 @@ const runtimeMocks = vi.hoisted(() => ({
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   canonicalizeSessionEntryAliases: vi.fn(),
+  clearApnsRegistrationIfCurrentIdentity: clearApnsRegistrationIfCurrentIdentityMock,
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -156,6 +158,8 @@ const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntryAliases;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
+const clearApnsRegistrationIfCurrentIdentityVi =
+  runtimeMocks.clearApnsRegistrationIfCurrentIdentity;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
 const execEventHeartbeatOptions = (sessionKey?: string) => ({
@@ -265,6 +269,7 @@ describe("node exec events", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
     registerApnsRegistrationVi.mockClear();
+    clearApnsRegistrationIfCurrentIdentityVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -666,27 +671,128 @@ describe("node exec events", () => {
 
   it("stores direct APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-direct", {
+    const result = await handleNodeEvent(ctx, "node-direct", {
       event: "push.apns.register",
       payloadJSON: JSON.stringify({
         token: "abcd1234abcd1234abcd1234abcd1234",
         topic: "ai.openclaw.ios",
         environment: "sandbox",
+        clientRegistrationId: "registration-direct",
       }),
     });
 
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: true,
+      reason: "registered",
+    });
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-direct",
       transport: "direct",
       token: "abcd1234abcd1234abcd1234abcd1234",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
+      clientRegistrationId: "registration-direct",
     });
+  });
+
+  it("reports APNs register store failures so nodes keep cleanup state", async () => {
+    registerApnsRegistrationVi.mockRejectedValueOnce(new Error("store unavailable"));
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(ctx, "node-direct", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        clientRegistrationId: "registration-direct",
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: false,
+      reason: "register_failed",
+    });
+  });
+
+  it("clears APNs registrations from node unregister events", async () => {
+    clearApnsRegistrationIfCurrentIdentityVi.mockResolvedValueOnce("cleared");
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(ctx, "node-direct", {
+      event: "push.apns.unregister",
+      payloadJSON: JSON.stringify({
+        transport: "direct",
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        clientRegistrationId: "registration-old",
+      }),
+    });
+
+    expect(clearApnsRegistrationIfCurrentIdentityVi).toHaveBeenCalledWith({
+      nodeId: "node-direct",
+      identity: {
+        transport: "direct",
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        clientRegistrationId: "registration-old",
+      },
+    });
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.unregister",
+      handled: true,
+      reason: "cleared",
+    });
+  });
+
+  it("reports APNs unregister mismatches without clearing app retry proof", async () => {
+    clearApnsRegistrationIfCurrentIdentityVi.mockResolvedValueOnce("mismatch");
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(ctx, "node-direct", {
+      event: "push.apns.unregister",
+      payloadJSON: JSON.stringify({
+        transport: "direct",
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        clientRegistrationId: "registration-stale",
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.unregister",
+      handled: false,
+      reason: "mismatch",
+    });
+  });
+
+  it("propagates APNs unregister store failures so nodes can retry", async () => {
+    clearApnsRegistrationIfCurrentIdentityVi.mockRejectedValueOnce(new Error("store unavailable"));
+    const ctx = buildCtx();
+
+    await expect(
+      handleNodeEvent(ctx, "node-direct", {
+        event: "push.apns.unregister",
+        payloadJSON: JSON.stringify({
+          transport: "direct",
+          token: "abcd1234abcd1234abcd1234abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "sandbox",
+          clientRegistrationId: "registration-old",
+        }),
+      }),
+    ).rejects.toThrow("store unavailable");
   });
 
   it("stores relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
-    await handleNodeEvent(ctx, "node-relay", {
+    const result = await handleNodeEvent(ctx, "node-relay", {
       event: "push.apns.register",
       payloadJSON: JSON.stringify({
         transport: "relay",
@@ -698,9 +804,16 @@ describe("node exec events", () => {
         environment: "production",
         distribution: "official",
         tokenDebugSuffix: "abcd1234",
+        clientRegistrationId: "registration-relay",
       }),
     });
 
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: true,
+      reason: "registered",
+    });
     expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
       nodeId: "node-relay",
       transport: "relay",
@@ -711,7 +824,35 @@ describe("node exec events", () => {
       environment: "production",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      clientRegistrationId: "registration-relay",
     });
+  });
+
+  it("reports relay APNs gateway identity mismatches as failed register acknowledgements", async () => {
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "other-gateway-device",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        tokenDebugSuffix: "abcd1234",
+        clientRegistrationId: "registration-relay",
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "push.apns.register",
+      handled: false,
+      reason: "gateway_identity_mismatch",
+    });
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
   });
 
   it("stores sandbox relay APNs registrations from node events", async () => {
@@ -728,6 +869,7 @@ describe("node exec events", () => {
         environment: "sandbox",
         distribution: "official",
         tokenDebugSuffix: "abcd1234",
+        clientRegistrationId: "registration-relay-sandbox",
       }),
     });
 
@@ -741,6 +883,7 @@ describe("node exec events", () => {
       environment: "sandbox",
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
+      clientRegistrationId: "registration-relay-sandbox",
     });
   });
 

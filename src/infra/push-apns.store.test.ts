@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  clearApnsRegistrationIfCurrentIdentity,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
@@ -21,6 +22,7 @@ async function registerDirectApnsRegistration(params: {
   token: string;
   topic: string;
   environment?: unknown;
+  clientRegistrationId?: unknown;
   baseDir?: string;
 }) {
   return await registerApnsRegistration({
@@ -307,6 +309,143 @@ describe("push APNs registration store", () => {
       }),
     ).resolves.toBe(true);
     await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toBeNull();
+  });
+
+  it("clears one node registration after an explicit node opt-out", async () => {
+    const baseDir = await makeTempDir();
+    const clearedRegistration = await registerDirectApnsRegistration({
+      nodeId: "ios-node-1",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      clientRegistrationId: "registration-old",
+      baseDir,
+    });
+    const retainedRegistration = await registerDirectApnsRegistration({
+      nodeId: "ios-node-2",
+      token: "AAAA1234AAAA1234AAAA1234AAAA1234",
+      topic: "ai.openclaw.ios",
+      clientRegistrationId: "registration-retained",
+      baseDir,
+    });
+
+    await expect(
+      clearApnsRegistrationIfCurrentIdentity({
+        nodeId: clearedRegistration.nodeId,
+        identity: {
+          transport: "direct",
+          token: clearedRegistration.token,
+          topic: clearedRegistration.topic,
+          environment: clearedRegistration.environment,
+          clientRegistrationId: clearedRegistration.clientRegistrationId,
+        },
+        baseDir,
+      }),
+    ).resolves.toBe("cleared");
+    await expect(loadApnsRegistration(clearedRegistration.nodeId, baseDir)).resolves.toBeNull();
+    await expect(loadApnsRegistration(retainedRegistration.nodeId, baseDir)).resolves.toEqual(
+      retainedRegistration,
+    );
+    await expect(
+      clearApnsRegistrationIfCurrentIdentity({
+        nodeId: clearedRegistration.nodeId,
+        identity: {
+          transport: "direct",
+          token: clearedRegistration.token,
+          topic: clearedRegistration.topic,
+          environment: clearedRegistration.environment,
+          clientRegistrationId: clearedRegistration.clientRegistrationId,
+        },
+        baseDir,
+      }),
+    ).resolves.toBe("missing");
+  });
+
+  it("does not clear a newer registration with a stale opt-out identity", async () => {
+    const baseDir = await makeTempDir();
+    const freshRegistration = await registerDirectApnsRegistration({
+      nodeId: "ios-node-1",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      clientRegistrationId: "registration-fresh",
+      baseDir,
+    });
+
+    await expect(
+      clearApnsRegistrationIfCurrentIdentity({
+        nodeId: freshRegistration.nodeId,
+        identity: {
+          transport: "direct",
+          token: freshRegistration.token,
+          topic: freshRegistration.topic,
+          environment: freshRegistration.environment,
+          clientRegistrationId: "registration-stale",
+        },
+        baseDir,
+      }),
+    ).resolves.toBe("mismatch");
+    await expect(loadApnsRegistration(freshRegistration.nodeId, baseDir)).resolves.toEqual(
+      freshRegistration,
+    );
+  });
+
+  it("clears legacy registrations that predate client registration ids", async () => {
+    const baseDir = await makeTempDir();
+    const legacyRegistration = await registerDirectApnsRegistration({
+      nodeId: "ios-node-legacy",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      baseDir,
+    });
+
+    await expect(
+      clearApnsRegistrationIfCurrentIdentity({
+        nodeId: legacyRegistration.nodeId,
+        identity: {
+          transport: "direct",
+          token: legacyRegistration.token,
+          topic: legacyRegistration.topic,
+          environment: legacyRegistration.environment,
+          clientRegistrationId: "registration-after-upgrade",
+        },
+        baseDir,
+      }),
+    ).resolves.toBe("cleared");
+    await expect(loadApnsRegistration(legacyRegistration.nodeId, baseDir)).resolves.toBeNull();
+  });
+
+  it("clears relay registrations without persisting relay send grants in opt-out payloads", async () => {
+    const baseDir = await makeTempDir();
+    const relayRegistration = await registerApnsRegistration({
+      nodeId: "ios-node-relay",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      clientRegistrationId: "registration-relay",
+      baseDir,
+    });
+    if (relayRegistration.transport !== "relay") {
+      throw new Error("expected relay registration");
+    }
+
+    await expect(
+      clearApnsRegistrationIfCurrentIdentity({
+        nodeId: relayRegistration.nodeId,
+        identity: {
+          transport: "relay",
+          relayHandle: relayRegistration.relayHandle,
+          installationId: relayRegistration.installationId,
+          topic: relayRegistration.topic,
+          environment: relayRegistration.environment,
+          clientRegistrationId: relayRegistration.clientRegistrationId,
+        },
+        baseDir,
+      }),
+    ).resolves.toBe("cleared");
+    await expect(loadApnsRegistration(relayRegistration.nodeId, baseDir)).resolves.toBeNull();
   });
 
   it("only clears a registration when the stored entry still matches", async () => {

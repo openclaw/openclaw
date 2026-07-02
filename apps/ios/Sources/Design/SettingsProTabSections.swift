@@ -234,7 +234,7 @@ extension SettingsProTab {
                 icon: "checkmark.shield.fill",
                 title: "Approvals",
                 detail: self.notificationsNeedAttention
-                    ? "Out-of-app approval alerts need notification permission."
+                    ? "Out-of-app approval alerts need notifications enabled."
                     : (self.pendingApproval == nil ? "No gateway actions are waiting for review." :
                         "Review the pending gateway action."),
                 value: self.notificationsNeedAttention
@@ -261,7 +261,7 @@ extension SettingsProTab {
                             .font(.subheadline.weight(.semibold))
                         Text(
                             """
-                            Enable Notifications to receive approval notifications while OpenClaw is not open.
+                            Enable Notifications to receive approval alerts while OpenClaw is not open.
                             """)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -463,42 +463,44 @@ extension SettingsProTab {
             ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 12) {
-                        ProIconBadge(systemName: "bell", color: self.notificationStatus.color)
+                        ProIconBadge(systemName: "bell", color: self.notificationEffectiveStatusColor)
                         Text("Notifications")
                             .font(.headline)
                         Spacer(minLength: 8)
-                        ProValuePill(value: self.notificationStatusText, color: self.notificationStatus.color)
+                        Text(self.notificationStatusText)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(self.notificationEffectiveStatusColor)
+                            .accessibilityIdentifier("settings-notifications-status")
+                        Toggle("Notifications", isOn: self.notificationToggleBinding)
+                            .labelsHidden()
+                            .accessibilityIdentifier("settings-notifications-toggle")
+                            .accessibilityLabel("Notifications")
+                            .accessibilityHint("Turns OpenClaw notification delivery on or off")
                     }
                     .padding(12)
 
                     Divider().padding(.leading, 54)
 
-                    VStack(alignment: .leading) {
-                        Button {
-                            self.handleNotificationAction()
-                        } label: {
-                            Label(
-                                self.notificationActionText,
-                                systemImage: self.notificationStatus.actionIcon)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-
+                    VStack(alignment: .leading, spacing: 0) {
                         Text(self.notificationStatusDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings-notifications-detail")
+                            .padding(12)
 
+                        Divider().padding(.leading, 12)
                         Text(self.notificationRelayDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings-notifications-relay-detail")
+                            .padding(12)
                     }
-                    .padding(12)
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-privacy-notifications-card")
             .padding(.horizontal, OpenClawProMetric.pagePadding)
         }
     }

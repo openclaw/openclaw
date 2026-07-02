@@ -96,32 +96,6 @@ enum SettingsNotificationStatus: Equatable {
         }
     }
 
-    var actionTitle: String {
-        switch self {
-        case .notSet:
-            "Enable Notifications"
-        case .checking:
-            "Checking"
-        case .allowed:
-            "Manage in iOS Settings"
-        case .notAllowed, .unknown:
-            "Open iOS Settings"
-        }
-    }
-
-    var actionIcon: String {
-        switch self {
-        case .allowed:
-            "gear"
-        case .notAllowed, .unknown:
-            "gear.badge"
-        case .checking:
-            "hourglass"
-        case .notSet:
-            "bell.badge"
-        }
-    }
-
     var color: Color {
         switch self {
         case .allowed:
@@ -130,15 +104,6 @@ enum SettingsNotificationStatus: Equatable {
             OpenClawBrand.warn
         case .checking, .notSet:
             .secondary
-        }
-    }
-
-    var shouldOpenNotificationSettings: Bool {
-        switch self {
-        case .allowed, .notAllowed, .unknown:
-            true
-        case .checking, .notSet:
-            false
         }
     }
 

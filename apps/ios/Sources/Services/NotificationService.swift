@@ -14,6 +14,62 @@ enum NotificationAuthorizationStatus {
     case ephemeral
 }
 
+enum NotificationServingPreference {
+    static let storageKey = "notifications.serving.enabled"
+    static let defaultEnabled = true
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: self.storageKey) != nil else {
+            return self.defaultEnabled
+        }
+        return defaults.bool(forKey: self.storageKey)
+    }
+
+    static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: self.storageKey)
+    }
+
+    static func allowsSystemNotifications(_ status: NotificationAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
+        }
+    }
+
+    static func allowsSystemNotifications(_ status: UNAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
+        @unknown default:
+            false
+        }
+    }
+
+    static func isServingEnabled(
+        status: NotificationAuthorizationStatus,
+        defaults: UserDefaults = .standard) -> Bool
+    {
+        self.allowsSystemNotifications(status) && self.isEnabled(defaults: defaults)
+    }
+
+    static func isServingEnabled(
+        status: UNAuthorizationStatus,
+        defaults: UserDefaults = .standard) -> Bool
+    {
+        self.allowsSystemNotifications(status) && self.isEnabled(defaults: defaults)
+    }
+
+    #if DEBUG
+    static func reset(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: self.storageKey)
+    }
+    #endif
+}
+
 protocol NotificationCentering: Sendable {
     func authorizationStatus() async -> NotificationAuthorizationStatus
     func add(_ request: UNNotificationRequest) async throws

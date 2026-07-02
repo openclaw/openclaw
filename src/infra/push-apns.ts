@@ -36,6 +36,7 @@ type DirectApnsRegistration = {
   topic: string;
   environment: ApnsEnvironment;
   updatedAtMs: number;
+  clientRegistrationId?: string;
 };
 
 type RelayApnsRegistration = {
@@ -50,6 +51,7 @@ type RelayApnsRegistration = {
   updatedAtMs: number;
   relayOrigin?: string;
   tokenDebugSuffix?: string;
+  clientRegistrationId?: string;
 };
 
 /** Stored APNs registration for either direct device tokens or official relay handles. */
@@ -109,6 +111,7 @@ type RegisterDirectApnsParams = {
   token: string;
   topic: string;
   environment?: unknown;
+  clientRegistrationId?: unknown;
   baseDir?: string;
 };
 
@@ -123,10 +126,33 @@ type RegisterRelayApnsParams = {
   distribution?: unknown;
   relayOrigin?: unknown;
   tokenDebugSuffix?: unknown;
+  clientRegistrationId?: unknown;
   baseDir?: string;
 };
 
 type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
+
+export type DirectApnsRegistrationIdentity = {
+  transport?: "direct";
+  token?: unknown;
+  topic?: unknown;
+  environment?: unknown;
+  clientRegistrationId?: unknown;
+};
+
+export type RelayApnsRegistrationIdentity = {
+  transport: "relay";
+  relayHandle?: unknown;
+  installationId?: unknown;
+  topic?: unknown;
+  environment?: unknown;
+  clientRegistrationId?: unknown;
+};
+
+export type ApnsRegistrationIdentity =
+  | DirectApnsRegistrationIdentity
+  | RelayApnsRegistrationIdentity;
+export type ClearApnsRegistrationIdentityResult = "cleared" | "missing" | "mismatch";
 
 const APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
@@ -163,6 +189,16 @@ function normalizeRelayHandle(value: string): string {
 
 function normalizeInstallationId(value: string): string {
   return value.trim();
+}
+
+function normalizeClientRegistrationId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0
+    ? validateRelayIdentifier(trimmed, "clientRegistrationId", 128)
+    : undefined;
 }
 
 function validateRelayIdentifier(
@@ -300,6 +336,7 @@ function normalizeDirectRegistration(
   const token = normalizeApnsToken(record.token);
   const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
   const environment = normalizeApnsEnvironment(record.environment) ?? "sandbox";
+  const clientRegistrationId = normalizeClientRegistrationId(record.clientRegistrationId);
   const updatedAtMs =
     typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
       ? Math.trunc(record.updatedAtMs)
@@ -314,6 +351,7 @@ function normalizeDirectRegistration(
     topic,
     environment,
     updatedAtMs,
+    ...(clientRegistrationId ? { clientRegistrationId } : {}),
   };
 }
 
@@ -340,6 +378,7 @@ function normalizeRelayRegistration(
   const environment = normalizeApnsEnvironment(record.environment);
   const distribution = normalizeDistribution(record.distribution);
   const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
+  const clientRegistrationId = normalizeClientRegistrationId(record.clientRegistrationId);
   const updatedAtMs =
     typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
       ? Math.trunc(record.updatedAtMs)
@@ -367,6 +406,7 @@ function normalizeRelayRegistration(
     updatedAtMs,
     ...(relayOrigin ? { relayOrigin } : {}),
     tokenDebugSuffix: normalizeTokenDebugSuffix(record.tokenDebugSuffix),
+    ...(clientRegistrationId ? { clientRegistrationId } : {}),
   };
 }
 
@@ -465,6 +505,7 @@ export async function registerApnsRegistration(
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
       const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
+      const clientRegistrationId = normalizeClientRegistrationId(params.clientRegistrationId);
       if (!environment) {
         throw new Error("relay registrations must use valid APNs environment");
       }
@@ -483,10 +524,12 @@ export async function registerApnsRegistration(
         updatedAtMs,
         ...(relayOrigin ? { relayOrigin } : {}),
         tokenDebugSuffix: normalizeTokenDebugSuffix(params.tokenDebugSuffix),
+        ...(clientRegistrationId ? { clientRegistrationId } : {}),
       };
     } else {
       const token = normalizeApnsToken(params.token);
       const environment = normalizeApnsEnvironment(params.environment) ?? "sandbox";
+      const clientRegistrationId = normalizeClientRegistrationId(params.clientRegistrationId);
       if (!isLikelyApnsToken(token)) {
         throw new Error("invalid APNs token");
       }
@@ -497,6 +540,7 @@ export async function registerApnsRegistration(
         topic,
         environment,
         updatedAtMs,
+        ...(clientRegistrationId ? { clientRegistrationId } : {}),
       };
     }
 
@@ -545,7 +589,8 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
     a.transport !== b.transport ||
     a.topic !== b.topic ||
     a.environment !== b.environment ||
-    a.updatedAtMs !== b.updatedAtMs
+    a.updatedAtMs !== b.updatedAtMs ||
+    a.clientRegistrationId !== b.clientRegistrationId
   ) {
     return false;
   }
@@ -560,6 +605,43 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.distribution === b.distribution &&
       a.relayOrigin === b.relayOrigin &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
+    );
+  }
+  return false;
+}
+
+function isSameApnsRegistrationIdentity(
+  current: ApnsRegistration,
+  identity: ApnsRegistrationIdentity,
+): boolean {
+  const topic = typeof identity.topic === "string" ? normalizeTopic(identity.topic) : "";
+  const environment = normalizeApnsEnvironment(identity.environment);
+  const clientRegistrationId = normalizeClientRegistrationId(identity.clientRegistrationId);
+  if (!topic || !environment || !clientRegistrationId) {
+    return false;
+  }
+  if (current.topic !== topic || current.environment !== environment) {
+    return false;
+  }
+  if (current.clientRegistrationId && current.clientRegistrationId !== clientRegistrationId) {
+    return false;
+  }
+  if ((identity.transport ?? "direct") === "direct" && current.transport === "direct") {
+    const token = typeof identity.token === "string" ? normalizeApnsToken(identity.token) : "";
+    return isLikelyApnsToken(token) && current.token === token;
+  }
+  if (identity.transport === "relay" && current.transport === "relay") {
+    const relayHandle =
+      typeof identity.relayHandle === "string" ? normalizeRelayHandle(identity.relayHandle) : "";
+    const installationId =
+      typeof identity.installationId === "string"
+        ? normalizeInstallationId(identity.installationId)
+        : "";
+    return (
+      relayHandle.length > 0 &&
+      installationId.length > 0 &&
+      current.relayHandle === relayHandle &&
+      current.installationId === installationId
     );
   }
   return false;
@@ -584,6 +666,31 @@ export async function clearApnsRegistrationIfCurrent(params: {
     delete state.registrationsByNodeId[normalizedNodeId];
     await persistRegistrationsState(state, params.baseDir);
     return true;
+  });
+}
+
+/** Clears the persisted APNs registration only if it still matches the node opt-out identity. */
+export async function clearApnsRegistrationIfCurrentIdentity(params: {
+  nodeId: string;
+  identity: ApnsRegistrationIdentity;
+  baseDir?: string;
+}): Promise<ClearApnsRegistrationIdentityResult> {
+  const normalizedNodeId = normalizeNodeId(params.nodeId);
+  if (!normalizedNodeId) {
+    return "missing";
+  }
+  return await withLock(async () => {
+    const state = await loadRegistrationsState(params.baseDir);
+    const current = state.registrationsByNodeId[normalizedNodeId];
+    if (!current) {
+      return "missing";
+    }
+    if (!isSameApnsRegistrationIdentity(current, params.identity)) {
+      return "mismatch";
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, params.baseDir);
+    return "cleared";
   });
 }
 

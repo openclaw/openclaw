@@ -201,6 +201,80 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "appearance-menu")
     }
 
+    func testPrivacyOwnsNotificationsToggle() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Privacy proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "privacy-notifications-toggle"),
+            notificationStatus: "allowed",
+            notificationServing: "enabled")
+        try self.openPrivacySettings()
+
+        let toggle = try XCTUnwrap(self.notificationToggle)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8))
+        self.assertSwitch(toggle, isOn: true)
+        XCTAssertTrue(self.app?.otherElements["settings-privacy-notifications-card"].exists == true)
+        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Enabled")
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].exists == true)
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-relay-detail"].exists == true)
+        XCTAssertFalse(self.app?.buttons["Manage in iOS Settings"].exists == true)
+        XCTAssertFalse(self.app?.buttons["Open iOS Settings"].exists == true)
+        XCTAssertFalse(self.app?.buttons["Enable Notifications"].exists == true)
+
+        let cameraAccessTitle = try XCTUnwrap(app?.staticTexts["Camera Access"])
+        XCTAssertTrue(cameraAccessTitle.waitForExistence(timeout: 3))
+        XCTAssertLessThan(toggle.frame.minY, cameraAccessTitle.frame.minY)
+        self.attachScreenshot(named: "privacy-notifications-toggle")
+    }
+
+    func testPrivacyNotificationsToggleDisablesAppServingPreference() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Privacy proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "privacy-notifications-toggle-off"),
+            notificationStatus: "allowed",
+            notificationServing: "enabled")
+        try self.openPrivacySettings()
+
+        let toggle = try XCTUnwrap(self.notificationToggle)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8))
+        self.assertSwitch(toggle, isOn: true)
+        toggle.tap()
+
+        let switchedOff = expectation(
+            for: NSPredicate { _, _ in self.switchValue(toggle) == .some(false) },
+            evaluatedWith: toggle)
+        wait(for: [switchedOff], timeout: 3)
+        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Off")
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].label.contains("turned off") == true)
+        XCTAssertTrue(self.app?.navigationBars["Privacy"].exists == true)
+        self.attachScreenshot(named: "privacy-notifications-toggle-off")
+    }
+
+    func testPrivacyNotificationsDeniedStateShowsOffToggle() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Privacy proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "privacy-notifications-denied"),
+            notificationStatus: "denied",
+            notificationServing: "enabled")
+        try self.openPrivacySettings()
+
+        let toggle = try XCTUnwrap(self.notificationToggle)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 8))
+        self.assertSwitch(toggle, isOn: false)
+        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Denied")
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].label.contains("denied") == true)
+        XCTAssertFalse(self.app?.buttons["Manage in iOS Settings"].exists == true)
+        self.attachScreenshot(named: "privacy-notifications-denied")
+    }
+
     func testAgentUsesToolbarFilter() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -250,7 +324,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(controlApp.state, .runningForeground)
     }
 
-    private func launchApp(for target: ScreenshotTarget, appearance: String? = "dark") {
+    private func launchApp(
+        for target: ScreenshotTarget,
+        appearance: String? = "dark",
+        notificationStatus: String? = nil,
+        notificationServing: String? = nil)
+    {
         self.app?.terminate()
 
         let app = XCUIApplication()
@@ -267,10 +346,47 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
+        if let notificationStatus {
+            app.launchArguments += ["--openclaw-notification-status", notificationStatus]
+        }
+        if let notificationServing {
+            app.launchArguments += ["--openclaw-notification-serving", notificationServing]
+        }
         app.launch()
         self.app = app
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+    }
+
+    private func assertSwitch(_ element: XCUIElement, isOn: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(self.switchValue(element), .some(isOn), file: file, line: line)
+    }
+
+    private func switchValue(_ element: XCUIElement) -> Bool? {
+        switch element.value as? String {
+        case "1", "On":
+            true
+        case "0", "Off":
+            false
+        default:
+            nil
+        }
+    }
+
+    private var notificationToggle: XCUIElement? {
+        guard let app else { return nil }
+        let identified = app.switches["settings-notifications-toggle"]
+        if identified.exists {
+            return identified
+        }
+        return app.switches["Notifications"]
+    }
+
+    private func openPrivacySettings() throws {
+        let privacy = try XCTUnwrap(app?.buttons.containing(.staticText, identifier: "Privacy").firstMatch)
+        XCTAssertTrue(privacy.waitForExistence(timeout: 8))
+        privacy.tap()
+        XCTAssertTrue(self.app?.navigationBars["Privacy"].waitForExistence(timeout: 5) == true)
     }
 
     private func launchPairedLiveGatewayApp(

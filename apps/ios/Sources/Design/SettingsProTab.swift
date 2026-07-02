@@ -54,6 +54,8 @@ struct SettingsProTab: View {
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var isRequestingNotificationAuthorization = false
+    @AppStorage(NotificationServingPreference.storageKey) var notificationServingEnabled: Bool =
+        NotificationServingPreference.defaultEnabled
     @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
@@ -135,6 +137,7 @@ struct SettingsProTab: View {
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
+                self.applyNotificationUITestOverridesIfNeeded()
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
                 self.applyInitialRouteIfNeeded()
@@ -222,7 +225,7 @@ struct SettingsProTab: View {
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
-                    onContinue: self.requestNotificationAuthorizationFromSettings)
+                    onContinue: self.acceptNotificationRelayDisclosure)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button("Reset", role: .destructive) {

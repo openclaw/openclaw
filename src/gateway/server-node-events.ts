@@ -35,6 +35,7 @@ import {
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
+  clearApnsRegistrationIfCurrentIdentity,
   registerApnsRegistration,
   requestHeartbeat,
   resolveChatAttachmentMaxBytes,
@@ -823,7 +824,12 @@ export const handleNodeEvent = async (
             ctx.logGateway.warn(
               `push relay register rejected node=${nodeId}: gateway identity mismatch`,
             );
-            return undefined;
+            return {
+              ok: true,
+              event: evt.event,
+              handled: false,
+              reason: "gateway_identity_mismatch",
+            };
           }
           await registerApnsRegistration({
             nodeId,
@@ -836,6 +842,7 @@ export const handleNodeEvent = async (
             distribution: obj.distribution,
             relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
+            clientRegistrationId: obj.clientRegistrationId,
           });
         } else {
           await registerApnsRegistration({
@@ -844,12 +851,27 @@ export const handleNodeEvent = async (
             token: typeof obj.token === "string" ? obj.token : "",
             topic,
             environment,
+            clientRegistrationId: obj.clientRegistrationId,
           });
         }
       } catch (err) {
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
+        return { ok: true, event: evt.event, handled: false, reason: "register_failed" };
       }
-      return undefined;
+      return { ok: true, event: evt.event, handled: true, reason: "registered" };
+    }
+    case "push.apns.unregister": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      const result = await clearApnsRegistrationIfCurrentIdentity({ nodeId, identity: obj });
+      return {
+        ok: true,
+        event: evt.event,
+        handled: result === "cleared",
+        reason: result,
+      };
     }
     case NODE_PRESENCE_ALIVE_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);

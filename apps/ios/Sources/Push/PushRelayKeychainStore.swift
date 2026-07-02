@@ -91,6 +91,11 @@ enum PushRelayRegistrationStore {
         return KeychainStore.saveString(raw, service: self.service, account: self.registrationStateAccount)
     }
 
+    @discardableResult
+    static func clearRegistrationState() -> Bool {
+        KeychainStore.delete(service: self.service, account: self.registrationStateAccount)
+    }
+
     static func loadAppAttestKeyID(scope: AppAttestScope) -> String? {
         let value = KeychainStore.loadString(
             service: self.service,

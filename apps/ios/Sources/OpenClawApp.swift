@@ -130,21 +130,16 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
-        guard await Self.isNotificationAuthorizationAllowed() else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
+        guard await Self.isNotificationServingEnabled() else { return }
         application.registerForRemoteNotifications()
     }
 
-    private static func isNotificationAuthorizationAllowed() async -> Bool {
+    private static func isNotificationServingEnabled() async -> Bool {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .denied, .notDetermined:
-            return false
-        @unknown default:
-            return false
-        }
+        return NotificationServingPreference.isServingEnabled(status: settings.authorizationStatus)
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -429,7 +424,7 @@ enum WatchPromptNotificationBridge {
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
-        guard await self.isNotificationAuthorizationAllowed() else { return }
+        guard await self.isNotificationServingEnabled() else { return }
 
         let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
             let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -536,21 +531,10 @@ enum WatchPromptNotificationBridge {
         }
     }
 
-    private static func isNotificationAuthorizationAllowed() async -> Bool {
+    private static func isNotificationServingEnabled() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let status = await self.notificationAuthorizationStatus(center: center)
-        return self.isAuthorizationStatusAllowed(status)
-    }
-
-    private static func isAuthorizationStatusAllowed(_ status: UNAuthorizationStatus) -> Bool {
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .denied, .notDetermined:
-            return false
-        @unknown default:
-            return false
-        }
+        return NotificationServingPreference.isServingEnabled(status: status)
     }
 
     private static func notificationAuthorizationStatus(

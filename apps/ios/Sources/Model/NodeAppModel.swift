@@ -18,6 +18,28 @@ private struct GatewayRelayIdentityResponse: Decodable {
     let publicKey: String
 }
 
+private struct GatewayNodeEventPayload: Encodable {
+    var event: String
+    var payloadJSON: String?
+}
+
+private struct GatewayNodeEventResult: Decodable {
+    var ok: Bool?
+    var event: String?
+    var handled: Bool?
+    var reason: String?
+}
+
+private struct GatewayAPNsUnregisterPayload: Encodable {
+    var transport: String
+    var token: String?
+    var relayHandle: String?
+    var installationId: String?
+    var topic: String
+    var environment: String?
+    var clientRegistrationId: String
+}
+
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
     var statusText: String?
@@ -227,7 +249,10 @@ final class NodeAppModel {
     private var shareDeliveryChannel: String?
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
+    private var apnsClientRegistrationId: String?
     private var apnsLastRegisteredTokenHex: String?
+    private var apnsLastRegisteredClientRegistrationId: String?
+    private var apnsRegistrationPublishInFlightCount = 0
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     var operatorSession: GatewayNodeSession {
@@ -306,6 +331,15 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        self.apnsClientRegistrationId = UserDefaults.standard.string(
+            forKey: Self.apnsClientRegistrationIdUserDefaultsKey)
+        if self.apnsDeviceTokenHex != nil,
+           self.apnsClientRegistrationId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        {
+            let registrationId = UUID().uuidString
+            self.apnsClientRegistrationId = registrationId
+            UserDefaults.standard.set(registrationId, forKey: Self.apnsClientRegistrationIdUserDefaultsKey)
+        }
         self.restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
         GatewayDiagnostics.log("node app model: init start")
@@ -793,6 +827,8 @@ final class NodeAppModel {
     }
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
+    private static let apnsClientRegistrationIdUserDefaultsKey = "push.apns.clientRegistrationId"
+    private static let apnsUnregisterPendingUserDefaultsKey = "push.apns.unregisterPending"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
     private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
 
@@ -1375,7 +1411,7 @@ final class NodeAppModel {
         }
 
         let status = await self.notificationAuthorizationStatus()
-        guard Self.isNotificationAuthorizationAllowed(status) else {
+        guard Self.isNotificationServingEnabled(status) else {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -1429,8 +1465,8 @@ final class NodeAppModel {
 
         let shouldSpeak = params.speak ?? true
         let status = await self.notificationAuthorizationStatus()
-        let notificationsAllowed = Self.isNotificationAuthorizationAllowed(status)
-        if !notificationsAllowed, !shouldSpeak {
+        let notificationsServingEnabled = Self.isNotificationServingEnabled(status)
+        if !notificationsServingEnabled, !shouldSpeak {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -1438,7 +1474,7 @@ final class NodeAppModel {
         }
 
         let messageId = UUID().uuidString
-        if notificationsAllowed {
+        if notificationsServingEnabled {
             let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
                 let content = UNMutableNotificationContent()
                 content.title = "OpenClaw"
@@ -1483,21 +1519,16 @@ final class NodeAppModel {
         }
     }
 
-    private static func isNotificationAuthorizationAllowed(
+    private static func isNotificationServingEnabled(
         _ status: NotificationAuthorizationStatus) -> Bool
     {
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            true
-        case .denied, .notDetermined:
-            false
-        }
+        NotificationServingPreference.isServingEnabled(status: status)
     }
 
     private func presentNotificationPermissionGuidanceForExecApprovalIfNeeded(approvalId: String) async {
         guard !self.execApprovalNotificationGuidanceSuppressed else { return }
         let status = await self.notificationAuthorizationStatus()
-        guard !Self.isNotificationAuthorizationAllowed(status) else { return }
+        guard !Self.isNotificationServingEnabled(status) else { return }
         self.pendingNotificationPermissionGuidancePrompt =
             NotificationPermissionGuidancePrompt(approvalId: approvalId)
     }
@@ -4108,15 +4139,85 @@ extension NodeAppModel {
         let tokenHex = tokenData.map { String(format: "%02x", $0) }.joined()
         let trimmed = tokenHex.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let existingToken = self.apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingRegistrationId = self.apnsClientRegistrationId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let registrationId: String = if existingToken == trimmed,
+                                        let existingRegistrationId,
+                                        !existingRegistrationId.isEmpty
+        {
+            existingRegistrationId
+        } else {
+            UUID().uuidString
+        }
         self.apnsDeviceTokenHex = trimmed
+        self.apnsClientRegistrationId = registrationId
         UserDefaults.standard.set(trimmed, forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        UserDefaults.standard.set(registrationId, forKey: Self.apnsClientRegistrationIdUserDefaultsKey)
         Task { [weak self] in
             await self?.registerAPNsTokenIfNeeded()
         }
     }
 
+    func disableAPNsDeliveryRegistration() {
+        if let payloadJSON = self.makeAPNsUnregisterPayloadJSON() {
+            UserDefaults.standard.set(payloadJSON, forKey: Self.apnsUnregisterPendingUserDefaultsKey)
+        }
+        Task { [weak self] in
+            await self?.publishPendingAPNsUnregisterIfNeeded()
+        }
+        self.apnsDeviceTokenHex = nil
+        self.apnsClientRegistrationId = nil
+        self.apnsLastRegisteredTokenHex = nil
+        self.apnsLastRegisteredClientRegistrationId = nil
+        UserDefaults.standard.removeObject(forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: Self.apnsClientRegistrationIdUserDefaultsKey)
+        _ = PushRelayRegistrationStore.clearRegistrationState()
+    }
+
+    private func makeAPNsUnregisterPayloadJSON() -> String? {
+        let normalizedClientRegistrationId = self.apnsClientRegistrationId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !topic.isEmpty,
+              let clientRegistrationId = normalizedClientRegistrationId,
+              !clientRegistrationId.isEmpty
+        else {
+            return nil
+        }
+        if let relayState = PushRelayRegistrationStore.loadRegistrationState(),
+           relayState.lastTransport == PushTransportMode.relay.rawValue
+        {
+            return try? Self.encodePayload(GatewayAPNsUnregisterPayload(
+                transport: PushTransportMode.relay.rawValue,
+                token: nil,
+                relayHandle: relayState.relayHandle,
+                installationId: relayState.installationId,
+                topic: topic,
+                environment: relayState.apnsEnvironment,
+                clientRegistrationId: clientRegistrationId))
+        }
+        guard let token = self.apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty
+        else {
+            return nil
+        }
+        return try? Self.encodePayload(GatewayAPNsUnregisterPayload(
+            transport: PushTransportMode.direct.rawValue,
+            token: token,
+            relayHandle: nil,
+            installationId: nil,
+            topic: topic,
+            environment: PushBuildConfig.current.apnsEnvironment.rawValue,
+            clientRegistrationId: clientRegistrationId))
+    }
+
     private func registerAPNsTokenIfNeeded() async {
         let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        guard NotificationServingPreference.isEnabled() else {
+            await self.publishPendingAPNsUnregisterIfNeeded()
+            return
+        }
         guard await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport) else {
             return
         }
@@ -4134,7 +4235,19 @@ extension NodeAppModel {
             }
             return
         }
-        if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
+        guard let clientRegistrationId = self.apnsClientRegistrationId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !clientRegistrationId.isEmpty
+        else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("missing_client_registration_id")
+            }
+            return
+        }
+        if !usesRelayTransport,
+           token == self.apnsLastRegisteredTokenHex,
+           clientRegistrationId == self.apnsLastRegisteredClientRegistrationId
+        {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -4165,12 +4278,41 @@ extension NodeAppModel {
             let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
                 apnsTokenHex: token,
                 topic: topic,
-                gatewayIdentity: gatewayIdentity)
-            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
+                gatewayIdentity: gatewayIdentity,
+                clientRegistrationId: clientRegistrationId)
+            guard self.apnsDeviceTokenHex == token,
+                  self.apnsClientRegistrationId == clientRegistrationId
+            else {
+                await self.publishPendingAPNsUnregisterIfNeeded()
+                return
+            }
+            guard await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport) else {
+                await self.publishPendingAPNsUnregisterIfNeeded()
+                return
+            }
+            self.apnsRegistrationPublishInFlightCount += 1
+            defer {
+                self.apnsRegistrationPublishInFlightCount = max(
+                    0,
+                    self.apnsRegistrationPublishInFlightCount - 1)
+            }
+            let registerResult = try await self.publishGatewayNodeEvent(
+                event: "push.apns.register",
+                payloadJSON: payloadJSON)
+            try self.handleAPNsRegisterPublishResult(registerResult, usesRelayTransport: usesRelayTransport)
+            guard NotificationServingPreference.isEnabled(),
+                  self.apnsDeviceTokenHex == token,
+                  self.apnsClientRegistrationId == clientRegistrationId
+            else {
+                await self.publishPendingAPNsUnregisterIfNeeded()
+                return
+            }
             self.apnsLastRegisteredTokenHex = token
+            self.apnsLastRegisteredClientRegistrationId = clientRegistrationId
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.stage("gateway registration event published")
             }
+            UserDefaults.standard.removeObject(forKey: Self.apnsUnregisterPendingUserDefaultsKey)
         } catch {
             self.pushWakeLogger.error(
                 "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
@@ -4180,15 +4322,100 @@ extension NodeAppModel {
         }
     }
 
+    private func handleAPNsRegisterPublishResult(
+        _ result: GatewayNodeEventResult,
+        usesRelayTransport: Bool) throws
+    {
+        guard self.isAPNsRegisterPublishAccepted(result) else {
+            throw NSError(domain: "NodeAppModel", code: 23, userInfo: [
+                NSLocalizedDescriptionKey: "APNs registration was not acknowledged",
+            ])
+        }
+        guard self.shouldClearStaleRelayRegistrationStateAfterDirectPublish(result: result) else { return }
+        self.clearStaleRelayRegistrationStateAfterDirectPublish(usesRelayTransport: usesRelayTransport)
+    }
+
+    private func isAPNsRegisterPublishAccepted(_ result: GatewayNodeEventResult) -> Bool {
+        if result.event == nil, result.handled == nil {
+            return result.ok != false
+        }
+        return result.ok == true &&
+            result.event == "push.apns.register" &&
+            result.handled == true
+    }
+
+    private func shouldClearStaleRelayRegistrationStateAfterDirectPublish(result: GatewayNodeEventResult) -> Bool {
+        result.ok == true &&
+            result.event == "push.apns.register" &&
+            result.handled == true
+    }
+
+    private func clearStaleRelayRegistrationStateAfterDirectPublish(usesRelayTransport: Bool) {
+        guard !usesRelayTransport else { return }
+        _ = PushRelayRegistrationStore.clearRegistrationState()
+    }
+
+    private func publishPendingAPNsUnregisterIfNeeded() async {
+        guard let payloadJSON = UserDefaults.standard.string(forKey: Self.apnsUnregisterPendingUserDefaultsKey),
+              !payloadJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return
+        }
+        guard self.gatewayConnected else { return }
+        do {
+            let result = try await self.publishGatewayNodeEvent(
+                event: "push.apns.unregister",
+                payloadJSON: payloadJSON)
+            guard self.shouldClearPendingAPNsUnregister(result: result)
+            else {
+                throw NSError(domain: "NodeAppModel", code: 22, userInfo: [
+                    NSLocalizedDescriptionKey: "APNs unregister was not acknowledged",
+                ])
+            }
+            UserDefaults.standard.removeObject(forKey: Self.apnsUnregisterPendingUserDefaultsKey)
+        } catch {
+            self.pushWakeLogger.error(
+                "APNs unregister publish failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func shouldClearPendingAPNsUnregister(result: GatewayNodeEventResult) -> Bool {
+        guard result.ok == true,
+              result.event == "push.apns.unregister"
+        else {
+            return false
+        }
+        if result.handled == true { return true }
+        return result.reason == "missing" && self.apnsRegistrationPublishInFlightCount == 0
+    }
+
+    @discardableResult
+    private func publishGatewayNodeEvent(event: String, payloadJSON: String?) async throws -> GatewayNodeEventResult {
+        let requestJSON = try Self.encodePayload(
+            GatewayNodeEventPayload(event: event, payloadJSON: payloadJSON))
+        let response = try await self.nodeGateway.request(
+            method: "node.event",
+            paramsJSON: requestJSON,
+            timeoutSeconds: 10)
+        guard !response.isEmpty else {
+            return GatewayNodeEventResult(ok: true, event: nil, handled: nil)
+        }
+        return try JSONDecoder().decode(GatewayNodeEventResult.self, from: response)
+    }
+
     private func canPublishAPNsRegistration(usesRelayTransport: Bool) async -> Bool {
-        guard PushEnrollmentConsent.disclosureAccepted else {
+        let relayDisclosureAccepted =
+            !usesRelayTransport ||
+            !PushBuildConfig.current.usesOpenClawHostedRelay ||
+            PushEnrollmentConsent.disclosureAccepted
+        guard relayDisclosureAccepted else {
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
             }
             return false
         }
         let status = await self.notificationAuthorizationStatus()
-        guard Self.isNotificationAuthorizationAllowed(status) else {
+        guard Self.isNotificationServingEnabled(status) else {
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.skipped("notifications_not_authorized")
             }
@@ -5162,6 +5389,53 @@ extension NodeAppModel {
 
     func _test_canPublishAPNsRegistration(usesRelayTransport: Bool = true) async -> Bool {
         await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport)
+    }
+
+    func _test_clearStaleRelayRegistrationStateAfterDirectPublish() {
+        self.clearStaleRelayRegistrationStateAfterDirectPublish(usesRelayTransport: false)
+    }
+
+    func _test_isAPNsRegisterPublishAccepted(
+        ok: Bool?,
+        event: String?,
+        handled: Bool?,
+        reason: String?) -> Bool
+    {
+        self.isAPNsRegisterPublishAccepted(GatewayNodeEventResult(
+            ok: ok,
+            event: event,
+            handled: handled,
+            reason: reason))
+    }
+
+    func _test_shouldClearStaleRelayRegistrationStateAfterDirectPublish(
+        ok: Bool?,
+        event: String?,
+        handled: Bool?,
+        reason: String?) -> Bool
+    {
+        self.shouldClearStaleRelayRegistrationStateAfterDirectPublish(result: GatewayNodeEventResult(
+            ok: ok,
+            event: event,
+            handled: handled,
+            reason: reason))
+    }
+
+    func _test_setAPNsRegistrationPublishInFlight(_ inFlight: Bool) {
+        self.apnsRegistrationPublishInFlightCount = inFlight ? 1 : 0
+    }
+
+    func _test_shouldClearPendingAPNsUnregister(
+        ok: Bool?,
+        event: String?,
+        handled: Bool?,
+        reason: String?) -> Bool
+    {
+        self.shouldClearPendingAPNsUnregister(result: GatewayNodeEventResult(
+            ok: ok,
+            event: event,
+            handled: handled,
+            reason: reason))
     }
 
     nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
