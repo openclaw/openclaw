@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
@@ -370,6 +371,7 @@ private fun OverviewScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val execApprovals by viewModel.execApprovals.collectAsState()
@@ -442,7 +444,7 @@ private fun OverviewScreen(
           OverviewPrimaryPanel(
             agentName = activeAgentName,
             agentBadge = activeAgentBadge,
-            statusText = gatewaySummary(statusText, isConnected),
+            statusText = gatewaySummary(statusText, isConnected, gatewayConnectionProblem),
             isConnected = isConnected,
             pendingRunCount = pendingRunCount,
             sessionCount = sessions.size,
@@ -1373,6 +1375,7 @@ private fun SettingsShellScreen(
   val displayName by viewModel.displayName.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
@@ -1445,7 +1448,7 @@ private fun SettingsShellScreen(
 
       val settingsRows =
         listOf(
-          SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
+          SettingsRow("Gateway", gatewaySummary(statusText, isConnected, gatewayConnectionProblem), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
           SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
           SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
           SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
@@ -1802,19 +1805,36 @@ private fun relativeSessionTime(updatedAtMs: Long): String {
 
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
 
-private fun gatewaySummary(
+internal fun gatewaySummary(
   statusText: String,
   isConnected: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
   if (isConnected) return "Online and ready"
   val status = statusText.trim().lowercase()
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pairing") -> "Waiting for pairing"
-    status.contains("auth") -> "Authentication needed"
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
     else -> "Not connected"
   }
 }
+
+/** Maps an already-computed gateway auth-reject reason to a short, specific status label. */
+internal fun gatewayAuthNeededSummary(gatewayConnectionProblem: GatewayConnectionProblem?): String =
+  when (gatewayConnectionProblem?.code) {
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired"
+    "AUTH_TOKEN_MISSING" -> "Gateway token needed"
+    "AUTH_PASSWORD_MISSING" -> "Gateway password needed"
+    "AUTH_PASSWORD_MISMATCH" -> "Gateway password invalid"
+    "AUTH_TOKEN_MISMATCH",
+    "AUTH_DEVICE_TOKEN_MISMATCH",
+    -> "Saved auth invalid"
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> "Device identity required"
+    else -> "Authentication needed"
+  }

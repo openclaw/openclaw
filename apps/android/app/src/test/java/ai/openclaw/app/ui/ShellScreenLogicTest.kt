@@ -4,6 +4,7 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
@@ -392,9 +393,93 @@ class ShellScreenLogicTest {
     )
   }
 
+  @Test
+  fun gatewaySummaryReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
+    assertEquals("Setup code expired", gatewaySummary("auth error", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID")))
+    assertEquals("Gateway token needed", gatewaySummary("authentication needed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
+    assertEquals("Gateway password needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_PASSWORD_MISSING")))
+    assertEquals("Gateway password invalid", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_PASSWORD_MISMATCH")))
+    assertEquals("Saved auth invalid", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISMATCH")))
+    assertEquals("Saved auth invalid", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_DEVICE_TOKEN_MISMATCH")))
+    assertEquals("Device identity required", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("CONTROL_UI_DEVICE_IDENTITY_REQUIRED")))
+    assertEquals("Device identity required", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED")))
+  }
+
+  @Test
+  fun gatewaySummaryMatchesRealGatewayUnauthorizedFailureText() {
+    // "unauthorized" contains "auth" — this locks in that the real server-formatted
+    // message (formatGatewayAuthFailureMessage in ws-connection/auth-messages.ts) hits
+    // the status.contains("auth") gate, not just synthetic test strings.
+    assertEquals(
+      "Gateway token needed",
+      gatewaySummary(
+        "Gateway error: unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING"),
+      ),
+    )
+    assertEquals(
+      "Setup code expired",
+      gatewaySummary(
+        "Gateway error: unauthorized: bootstrap token invalid or expired (scan a fresh setup code)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID"),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewaySummaryMatchesRealGatewayDeviceIdentityFailureText() {
+    // Device-identity handshake rejections (message-handler.ts) say "device identity
+    // required" / "control ui requires device identity...", which do not contain "auth" —
+    // the status gate needs a second substring for these two codes to be reachable.
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: control ui requires device identity (use https or localhost secure context)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("CONTROL_UI_DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
+    assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))
+  }
+
+  @Test
+  fun gatewaySummaryLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
+    val problem = authProblem("AUTH_TOKEN_MISSING")
+    assertEquals("Online and ready", gatewaySummary("auth failed", isConnected = true, gatewayConnectionProblem = problem))
+    assertEquals("Connecting...", gatewaySummary("Reconnecting", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Waiting for pairing", gatewaySummary("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Certificate review needed", gatewaySummary("TLS handshake failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
   private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+
+  private fun authProblem(code: String): GatewayConnectionProblem =
+    GatewayConnectionProblem(
+      code = code,
+      message = "Authentication failed.",
+      reason = null,
+      requestId = null,
+      recommendedNextStep = null,
+      pauseReconnect = false,
+      retryable = false,
+    )
 }
