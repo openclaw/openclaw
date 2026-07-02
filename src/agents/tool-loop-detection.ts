@@ -197,6 +197,16 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function normalizeExitSignal(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return null;
+}
+
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
@@ -210,12 +220,29 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
     });
   }
 
-  if (status === "completed" || status === "failed") {
+  if (status === "completed") {
     return digestStable({
       status,
       exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
       timedOut: details.timedOut === true,
       output: nonEmptyStringField(details.aggregated) ?? text,
+    });
+  }
+
+  // #93917: Do not include output text for failed exec — error output often
+  // carries volatile noise (timestamps, PIDs, connection-refused-at-${time})
+  // that defeats no-progress detection. Stable failure discriminators
+  // (failureKind, exitSignal) are kept so different failure modes with the
+  // same exitCode do not incorrectly merge into one no-progress streak.
+  // Completed exec output is intentionally kept in the hash because varying
+  // completed output is a real progress signal.
+  if (status === "failed") {
+    return digestStable({
+      status,
+      exitCode: typeof details.exitCode === "number" ? details.exitCode : null,
+      timedOut: details.timedOut === true,
+      exitSignal: normalizeExitSignal(details.exitSignal),
+      failureKind: stringField(details.failureKind),
     });
   }
 

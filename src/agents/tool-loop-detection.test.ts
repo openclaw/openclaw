@@ -666,7 +666,10 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps changing empty-output exec failures below the global no-progress breaker", () => {
+    // #93917: Repeated failed exec calls with the same stable fingerprint
+    // (status, exitCode, timedOut, failureKind, exitSignal) but varying
+    // output text now correctly escalate to the global circuit breaker.
+    it("escalates repeated failed exec calls to the global breaker when status and exitCode are stable", () => {
       const state = createState();
       const params = { command: "openclaw flaky-helper" };
 
@@ -680,6 +683,7 @@ describe("tool-loop-detection", () => {
             details: {
               status: "failed",
               exitCode: null,
+              failureKind: "connection_refused",
               durationMs: 100 + index,
               aggregated: "",
             },
@@ -691,8 +695,107 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    // #93917: Different failure kinds with the same exitCode should NOT
+    // merge into one no-progress streak — each failure mode is a distinct
+    // problem that may need a different fix.
+    it("keeps distinct exec failure kinds below the global no-progress breaker", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      const failureKinds = ["timeout", "terminated", "connection_refused"];
+      let callIndex = 0;
+
+      for (const failureKind of failureKinds) {
+        for (
+          let i = 0;
+          i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / failureKinds.length);
+          i++
+        ) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            {
+              content: [{ type: "text", text: `${failureKind} error at attempt ${i}` }],
+              details: {
+                status: "failed",
+                exitCode: 1,
+                failureKind,
+                durationMs: 100 + i,
+                aggregated: "",
+              },
+            },
+            callIndex,
+          );
+          callIndex += 1;
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      // Different failure kinds → distinct hashes → no single streak
+      // reaches the circuit breaker threshold.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    // #93917: exitSignal can be a string ("SIGTERM") or a number (9 for
+    // SIGKILL). normalizeExitSignal preserves both forms so numeric
+    // signals don't collapse to null and falsely merge with exitSignal-less
+    // failures.
+    it("does not merge distinct exitSignal values into one failed no-progress streak", () => {
+      const state = createState();
+      const params = { command: "flaky-command" };
+
+      for (let i = 0; i < Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2); i++) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by SIGTERM (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "terminated",
+              exitSignal: "SIGTERM",
+            },
+          },
+          i,
+        );
+      }
+      for (
+        let i = Math.floor(GLOBAL_CIRCUIT_BREAKER_THRESHOLD / 2);
+        i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD;
+        i++
+      ) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          {
+            content: [{ type: "text", text: `killed by signal 9 (attempt ${i})` }],
+            details: {
+              status: "failed",
+              exitCode: null,
+              failureKind: "terminated",
+              exitSignal: 9,
+            },
+          },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
       }
     });
 
