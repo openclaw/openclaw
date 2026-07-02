@@ -132,6 +132,17 @@ describe("shortenHomeInString", () => {
       ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
     });
   });
+
+  it("does not shorten sibling directories whose name shares the home prefix", () => {
+    // Regression #98872: split(home) matched /home/alice2 when home is
+    // /home/alice, corrupting sibling paths to ~2/... .
+    withEnv({ HOME: "/home/alice" }, () => {
+      expect(shortenHomeInString("/home/alice/project")).toBe("~/project");
+      expect(shortenHomeInString("/home/alice2/project")).toBe("/home/alice2/project");
+      expect(shortenHomeInString("/home/alice")).toBe("~");
+      expect(shortenHomeInString("/home/alice/.config")).toBe("~/.config");
+    });
+  });
 });
 
 describe("resolveUserPath", () => {

@@ -156,7 +156,13 @@ export function shortenHomeInString(input: string): string {
   if (!display) {
     return input;
   }
-  return input.split(display.home).join(display.prefix);
+  // Only shorten the exact home directory or paths under it.
+  // split(home) matches sibling directories whose name shares the
+  // home prefix (e.g. /home/alice2 when home is /home/alice).
+  if (input === display.home) {
+    return display.prefix;
+  }
+  return input.split(display.home + "/").join(display.prefix + "/");
 }
 
 /** Shortens a path for display without changing non-home paths. */
