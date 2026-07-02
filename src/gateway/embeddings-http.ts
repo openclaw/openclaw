@@ -133,6 +133,7 @@ async function createConfiguredEmbeddingProvider(params: {
     const result = await adapter.create({
       config: params.cfg,
       agentDir: params.agentDir,
+      provider: providerId,
       model: params.model || adapter.defaultModel || "",
       local: params.memorySearch?.local,
       remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),

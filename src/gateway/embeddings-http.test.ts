@@ -431,6 +431,69 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
+  it("passes configured custom provider ids through memory-specific adapters", async () => {
+    const createOllamaMemoryProvider = vi.fn<
+      MemoryEmbeddingProviderAdapter["create"]
+    >(async (options) => ({
+      provider: {
+        id: options.provider ?? "missing-provider",
+        model: options.model,
+        embedQuery: async () => [7.1, 7.2],
+        embedBatch: async (texts: string[]) => texts.map(() => [7.1, 7.2]),
+      },
+    }));
+    registerMemoryEmbeddingProvider({
+      id: "ollama",
+      defaultModel: "nomic-embed-text",
+      transport: "remote",
+      create: createOllamaMemoryProvider,
+    });
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              "ollama-cpu": {
+                api: "ollama",
+                baseUrl: "http://127.0.0.1:11434",
+                models: [],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    testState.agentConfig = {
+      memorySearch: {
+        provider: "ollama-cpu",
+        model: "qwen3-embedding:4b",
+        outputDimensionality: 3,
+      },
+    };
+    resetConfigRuntimeState();
+
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: "hello",
+    });
+    await expectEmbeddingData(res, [
+      { object: "embedding", index: 0, embedding: [7.1, 7.2] },
+    ]);
+    expect(createOllamaMemoryProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama-cpu",
+        model: "qwen3-embedding:4b",
+        outputDimensionality: 3,
+      }),
+    );
+  });
+
   it("rejects invalid agent targets", async () => {
     const res = await postEmbeddings({
       model: "ollama/nomic-embed-text",

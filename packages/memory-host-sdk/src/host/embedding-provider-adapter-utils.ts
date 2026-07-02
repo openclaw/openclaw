@@ -8,16 +8,41 @@ export function isMissingEmbeddingApiKeyError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("No API key found for provider");
 }
 
-/** Return stable cache headers after removing provider-specific secret headers. */
+/**
+ * Canonical secret-bearing header names that must never enter cache identity.
+ * Cache identity is hashed into the memory provider key, so an auth/credential
+ * header would otherwise change the provider key and force a full reindex on
+ * every credential rotation. Applied to every adapter via sanitizeEmbeddingCacheHeaders.
+ */
+function isSensitiveEmbeddingHeaderName(name: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return (
+    normalized === "authorization" ||
+    normalized === "proxy-authorization" ||
+    normalized.includes("api-key") ||
+    normalized.includes("token") ||
+    normalized.includes("secret")
+  );
+}
+
+/**
+ * Return stable cache headers after removing secret headers. Sensitive headers
+ * are always dropped (see isSensitiveEmbeddingHeaderName) so no adapter can leak
+ * a credential into the provider-key hash; `excludedHeaderNames` removes extra
+ * adapter-specific names on top of that.
+ */
 export function sanitizeEmbeddingCacheHeaders(
   headers: Record<string, string>,
-  excludedHeaderNames: string[],
+  excludedHeaderNames: string[] = [],
 ): Array<[string, string]> {
   const excluded = new Set(
     excludedHeaderNames.map((name) => normalizeLowercaseStringOrEmpty(name)),
   );
   return Object.entries(headers)
-    .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
+    .filter(
+      ([key]) =>
+        !excluded.has(normalizeLowercaseStringOrEmpty(key)) && !isSensitiveEmbeddingHeaderName(key),
+    )
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value]);
 }

@@ -1,5 +1,8 @@
 // Ollama plugin module implements memory embedding adapter behavior.
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  sanitizeEmbeddingCacheHeaders,
+  type MemoryEmbeddingProviderAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
@@ -11,9 +14,10 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   transport: "remote",
   authProviderId: "ollama",
   create: async (options) => {
+    const resolvedProvider = options.provider ?? "ollama";
     const { provider, client } = await createOllamaEmbeddingProvider({
       ...options,
-      provider: "ollama",
+      provider: resolvedProvider,
       fallback: "none",
     });
     return {
@@ -22,9 +26,11 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         id: "ollama",
         inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
-          provider: "ollama",
+          provider: resolvedProvider,
+          baseUrl: client.baseUrl,
           model: client.model,
           outputDimensionality: client.outputDimensionality,
+          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
       },
     };
