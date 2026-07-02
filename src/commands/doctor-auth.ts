@@ -238,7 +238,9 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   const provider = rawProvider
     ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
     : null;
-  const command = buildOAuthRefreshFailureLoginCommand(provider);
+  const command = buildOAuthRefreshFailureLoginCommand(provider, {
+    profileId: params.profileId,
+  });
   if (classified.reason) {
     return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
   }

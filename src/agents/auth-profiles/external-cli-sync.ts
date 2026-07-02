@@ -198,26 +198,6 @@ export function readExternalCliBootstrapCredential(params: {
   );
 }
 
-/** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
-export function readExternalCliFallbackCredential(params: {
-  profileId: string;
-  credential: OAuthCredential;
-  allowKeychainPrompt?: boolean;
-}): OAuthCredential | null {
-  const provider =
-    resolveExternalCliSyncProvider(params) ??
-    EXTERNAL_CLI_SYNC_PROVIDERS.find((entry) =>
-      listExternalCliProviderIds(entry).includes(params.credential.provider),
-    );
-  if (!provider) {
-    return null;
-  }
-  return normalizeExternalCliCredentialProvider(
-    provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
-    params.credential.provider,
-  );
-}
-
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
   if (values === undefined) {
     return undefined;

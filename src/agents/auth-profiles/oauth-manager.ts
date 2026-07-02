@@ -18,7 +18,6 @@ import {
 } from "./oauth-refresh-lock-errors.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasMatchingOAuthIdentity,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -46,10 +45,6 @@ export type OAuthManagerAdapter = {
   ) => Promise<string>;
   refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
-    profileId: string;
-    credential: OAuthCredential;
-  }) => OAuthCredential | null;
-  readFallbackCredential?: (params: {
     profileId: string;
     credential: OAuthCredential;
   }) => OAuthCredential | null;
@@ -805,34 +800,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         } catch {
           // keep the original refresh error below
         }
-      }
-      const fallback = adapter.readFallbackCredential?.({
-        profileId: params.profileId,
-        credential: effectiveCredential,
-      });
-      if (
-        fallback &&
-        fallback.provider === params.credential.provider &&
-        hasUsableOAuthCredential(fallback) &&
-        hasMatchingOAuthIdentity(params.credential, fallback) &&
-        canReuseOAuthCredentialAfterRefreshFailure({
-          forceRefresh: params.forceRefresh,
-          attempted: effectiveCredential,
-          candidate: fallback,
-        })
-      ) {
-        log.info("using external OAuth credential after refresh failure", {
-          profileId: params.profileId,
-          provider: fallback.provider,
-          expires: new Date(fallback.expires).toISOString(),
-        });
-        return {
-          apiKey: await adapter.buildApiKey(fallback.provider, fallback, {
-            cfg: params.cfg,
-            agentDir: params.agentDir,
-          }),
-          credential: fallback,
-        };
       }
       throw new OAuthManagerRefreshError({
         credential: params.credential,

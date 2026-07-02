@@ -24,6 +24,14 @@ describe("oauth refresh failure hints", () => {
     );
   });
 
+  it("includes the profile id in refresh-failure login hints when known", () => {
+    expect(
+      buildOAuthRefreshFailureLoginCommand("openai", {
+        profileId: "openai:user@example.com",
+      }),
+    ).toBe("openclaw models auth login --provider openai --profile-id openai:user@example.com");
+  });
+
   it("classifies typed refresh failures without parsing the display message", () => {
     expect(
       classifyOAuthRefreshFailureError(

@@ -35,6 +35,7 @@ export class OAuthRefreshFailureError extends Error {
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const SAFE_PROFILE_ID_RE = /^[a-z0-9][a-z0-9._:@+-]*$/;
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -55,6 +56,16 @@ function sanitizeOAuthRefreshFailureProvider(provider: string | null | undefined
   const sanitized = provider ? sanitizeForLog(provider).replaceAll("`", "").trim() : "";
   const normalized = normalizeProviderId(sanitized);
   return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : null;
+}
+
+function sanitizeOAuthRefreshFailureProfileId(
+  profileId: string | null | undefined,
+  provider: string,
+): string | null {
+  const sanitized = profileId ? sanitizeForLog(profileId).replaceAll("`", "").trim() : "";
+  return sanitized && SAFE_PROFILE_ID_RE.test(sanitized) && sanitized.startsWith(`${provider}:`)
+    ? sanitized
+    : null;
 }
 
 /** Classify a raw OAuth refresh failure message into a stable reason code. */
@@ -106,9 +117,19 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
 }
 
 /** Build the login command operators should run after OAuth refresh failure. */
-export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
+export function buildOAuthRefreshFailureLoginCommand(
+  provider: string | null | undefined,
+  options?: { profileId?: string | null },
+): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  const sanitizedProfileId = sanitizedProvider
+    ? sanitizeOAuthRefreshFailureProfileId(options?.profileId, sanitizedProvider)
+    : null;
   return sanitizedProvider
-    ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
+    ? formatCliCommand(
+        sanitizedProfileId
+          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${sanitizedProfileId}`
+          : `openclaw models auth login --provider ${sanitizedProvider}`,
+      )
     : formatCliCommand("openclaw models auth login");
 }

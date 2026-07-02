@@ -28,10 +28,7 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import {
-  readExternalCliBootstrapCredential,
-  readExternalCliFallbackCredential,
-} from "./external-cli-sync.js";
+import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -239,14 +236,6 @@ const oauthManager = createOAuthManager({
       profileId,
       credential,
     }),
-  readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai"
-      ? readExternalCliFallbackCredential({
-          profileId,
-          credential,
-          allowKeychainPrompt: false,
-        })
-      : null,
   isRefreshTokenReusedError,
 });
 
