@@ -3435,6 +3435,51 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("keeps the turn alive when the no-live-message fallback bar send throws", async () => {
+    // Sibling of the F3 cleanup-throw guard: applyProgressCollapseSummary posts
+    // the bar durably when finalizeToPreview cannot edit in place. That fallback
+    // send is cosmetic and runs AFTER the in-band final, so a flood-wait/network
+    // throw must be swallowed (postCosmeticSummaryBar), never failing the turn.
+    const answerDraftStream = createTestDraftStream({}); // no messageId -> edit fails -> durable post
+    const reasoningDraftStream = createTestDraftStream({});
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    // Only the cosmetic bar send throws; the real final "Done" still delivers.
+    deliverReplies.mockImplementation(
+      async (params: { replies?: Array<{ text?: string }> }) => {
+        if (params.replies?.some((reply) => reply.text?.includes("⏱️"))) {
+          throw new Error("Too Many Requests: retry after 5");
+        }
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    let thrown: unknown;
+    try {
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress" } },
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeUndefined();
+    // The bar fallback send was attempted (and swallowed); the final survived.
+    const texts = allDeliveredReplyTexts();
+    expect(texts.some((text) => text.includes("⏱️"))).toBe(true);
+    expect(texts).toContain("Done");
+  });
+
   it("does not duplicate tool lines into the window under verbose", async () => {
     // Invariant D2 (persistent XOR window): when the durable verbose lane owns
     // tool messages, the window must render no tool line and must not count it.

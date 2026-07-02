@@ -1963,6 +1963,19 @@ export const dispatchTelegramMessage = async ({
       );
       return line || undefined;
     };
+    // The collapse summary bar is cosmetic and always reaches the user AFTER the
+    // real final answer (edited in place, or posted below it). A flood-wait /
+    // network throw from its durable send must never fail an otherwise-complete
+    // turn. Shared by BOTH bar-post fallbacks (the cleanup path and the
+    // finalizeToPreview-miss path) so neither can propagate a cosmetic failure
+    // into turn delivery; sendPayload throws durable.error on delivery failure.
+    const postCosmeticSummaryBar = async (line: string) => {
+      try {
+        await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
+      } catch (err) {
+        logVerbose(`telegram: collapse summary bar send failed: ${formatErrorMessage(err)}`);
+      }
+    };
     // Post-turn collapse summary (Discord parity) as a durable standalone
     // message. Used when there is no live window to collapse in place — the
     // final answer posts below so the timeline reads thoughts/tools → summary →
@@ -1972,15 +1985,9 @@ export const dispatchTelegramMessage = async ({
       if (!line) {
         return;
       }
-      // Cosmetic bar, posted from the cleanup fallback AFTER the real final is
-      // already delivered (message_tool_only/codex turns). A flood-wait/network
-      // throw here must never fail the turn — swallow and log. The once-guard
+      // Cleanup fallback bar (message_tool_only/codex turns): the once-guard
       // already fired in resolveProgressCollapseSummaryLine, so no retry storm.
-      try {
-        await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
-      } catch (err) {
-        logVerbose(`telegram: collapse summary bar send failed: ${formatErrorMessage(err)}`);
-      }
+      await postCosmeticSummaryBar(line);
     };
     // Apply a pre-resolved bar line to the window: edit the live window message
     // IN PLACE into the bar (no delete — deleting scroll-jumps the client), or
@@ -1998,7 +2005,11 @@ export const dispatchTelegramMessage = async ({
       if (typeof messageId === "number") {
         return "edited";
       }
-      await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
+      // finalizeToPreview could not edit in place (no live window id, or a
+      // flood-wait/terminal edit): post the bar durably instead. This send is
+      // cosmetic and runs after the final answer, so a throw must not fail the
+      // turn — the shared guarded helper swallows and logs.
+      await postCosmeticSummaryBar(line);
       return "posted";
     };
     // Reset answer-lane bookkeeping after a bar was edited/posted in place,
