@@ -453,6 +453,109 @@ describe("runAgentLoop deferred tool hydration", () => {
     expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
   });
 
+  it("does not terminate when a repeated error batch also contains a successful tool call", async () => {
+    const invalidArgs = {
+      task: "return to main",
+      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      fanoutMode: "tree",
+    };
+    const executeInvalid = vi.fn(async () => {
+      throw new Error("fanoutMode cannot be combined with targetSessionKey or targetSessionKeys.");
+    });
+    const executeProgress = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "made progress" }],
+      details: { status: "ok" },
+    }));
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message: AssistantMessage =
+          streamCalls <= 2
+            ? {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: `invalid-${streamCalls}`,
+                    name: "continue_delegate",
+                    arguments: invalidArgs,
+                  },
+                  {
+                    type: "toolCall",
+                    id: `progress-${streamCalls}`,
+                    name: "progress_probe",
+                    arguments: { step: streamCalls },
+                  },
+                ],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: TEST_USAGE,
+                stopReason: "toolUse",
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant",
+                content: [{ type: "text", text: "done" }],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: TEST_USAGE,
+                stopReason: "stop",
+                timestamp: Date.now(),
+              };
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [
+        {
+          role: "user",
+          content: "schedule targeted return and probe progress",
+          timestamp: Date.now(),
+        },
+      ],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            name: "continue_delegate",
+            label: "continue_delegate",
+            description: "Continuation delegate",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute: executeInvalid,
+          },
+          {
+            name: "progress_probe",
+            label: "progress_probe",
+            description: "Progress probe",
+            parameters: Type.Object({}, { additionalProperties: true }),
+            execute: executeProgress,
+          },
+        ],
+      },
+      config,
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(3);
+    expect(executeInvalid).toHaveBeenCalledTimes(2);
+    expect(executeProgress).toHaveBeenCalledTimes(2);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+  });
+
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
     const execute = vi.fn(
       async (): Promise<AgentToolResult<unknown>> => ({

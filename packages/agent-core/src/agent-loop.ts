@@ -143,44 +143,51 @@ function observeRepeatedToolError(params: {
   assistantMessage: AssistantMessage;
   toolResults: ToolResultMessage[];
 }): RepeatedToolErrorDiagnostic | undefined {
-  const errorResult = params.toolResults.find((result) => result.isError);
-  if (!errorResult) {
+  if (params.toolResults.length === 0 || params.toolResults.some((result) => !result.isError)) {
     params.state.lastKey = undefined;
     params.state.repeatCount = 0;
     return undefined;
   }
-  const toolCall = params.assistantMessage.content.find(
-    (entry): entry is AgentToolCall =>
-      entry.type === "toolCall" &&
-      entry.id === errorResult.toolCallId &&
-      entry.name === errorResult.toolName,
-  );
-  if (!toolCall) {
-    params.state.lastKey = undefined;
-    params.state.repeatCount = 0;
-    return undefined;
-  }
-  const error = extractToolResultErrorText(errorResult);
-  if (!error) {
-    params.state.lastKey = undefined;
-    params.state.repeatCount = 0;
-    return undefined;
-  }
-  const normalizedArgs = stringifyNormalizedToolErrorValue(toolCall.arguments);
-  const key = stringifyNormalizedToolErrorValue({
-    toolName: errorResult.toolName,
-    args: toolCall.arguments,
-    error,
+
+  const failures = params.toolResults.flatMap((result) => {
+    const toolCall = params.assistantMessage.content.find(
+      (entry): entry is AgentToolCall =>
+        entry.type === "toolCall" &&
+        entry.id === result.toolCallId &&
+        entry.name === result.toolName,
+    );
+    const error = extractToolResultErrorText(result);
+    return toolCall && error
+      ? [
+          {
+            toolName: result.toolName,
+            args: toolCall.arguments,
+            normalizedArgs: stringifyNormalizedToolErrorValue(toolCall.arguments),
+            error,
+          },
+        ]
+      : [];
   });
+  if (failures.length !== params.toolResults.length) {
+    params.state.lastKey = undefined;
+    params.state.repeatCount = 0;
+    return undefined;
+  }
+  const key = stringifyNormalizedToolErrorValue({ failures });
   params.state.repeatCount = params.state.lastKey === key ? params.state.repeatCount + 1 : 1;
   params.state.lastKey = key;
   if (params.state.repeatCount < REPEATED_TOOL_ERROR_LIMIT) {
     return undefined;
   }
+  const primary = failures[0];
   return {
-    toolName: errorResult.toolName,
-    normalizedArgs,
-    error,
+    toolName: failures.length === 1 ? primary.toolName : `${failures.length} tools`,
+    normalizedArgs:
+      failures.length === 1
+        ? primary.normalizedArgs
+        : stringifyNormalizedToolErrorValue(failures.map((failure) => failure.args)),
+    error:
+      failures.length === 1 ? primary.error : failures.map((failure) => failure.error).join("; "),
     repeatCount: params.state.repeatCount,
   };
 }
