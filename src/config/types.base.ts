@@ -225,6 +225,12 @@ export type SessionConfig = {
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
+  /**
+   * Allow deleting the main session via sessions.delete (default: false).
+   * The gateway recreates the main session on the next inbound event, so
+   * deleting only clears its stored entry and archives the transcript.
+   */
+  allowMainDelete?: boolean;
   sendPolicy?: SessionSendPolicyConfig;
   /** Session transcript write-lock acquisition policy. */
   writeLock?: SessionWriteLockConfig;

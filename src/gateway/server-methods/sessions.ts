@@ -2231,11 +2231,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       target.canonicalKey === "global" &&
       requestedAgentId !== undefined &&
       requestedAgentId !== resolveDefaultAgentId(cfg);
-    if (target.canonicalKey === mainKey && !isSelectedNonDefaultGlobal) {
+    const allowMainDelete = cfg.session?.allowMainDelete === true;
+    if (target.canonicalKey === mainKey && !isSelectedNonDefaultGlobal && !allowMainDelete) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `Cannot delete the main session (${mainKey}).`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Cannot delete the main session (${mainKey}). Set session.allowMainDelete to permit this.`,
+        ),
       );
       return;
     }
