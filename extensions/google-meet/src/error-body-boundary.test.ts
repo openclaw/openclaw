@@ -115,6 +115,9 @@ describe("google-meet response body boundary", () => {
       );
       const msg = error instanceof Error ? error.message : String(error);
       expect(msg).toContain("exceeds");
+      console.log(
+        `[google-meet loopback proof] oversized path (direct reader): cap=16777216 rejected=${msg}`,
+      );
     } finally {
       server.close();
     }
@@ -134,6 +137,9 @@ describe("google-meet response body boundary", () => {
         "Google Meet transport proof",
       );
       expect(result.name).toBe("spaces/live-server-test");
+      console.log(
+        `[google-meet loopback proof] normal path (direct reader): returned=${JSON.stringify(result)}`,
+      );
     } finally {
       server.close();
     }
@@ -164,6 +170,9 @@ describe("google-meet response body boundary", () => {
         expect.stringContaining("meet.googleapis.com"),
         expect.anything(),
       );
+      console.log(
+        `[google-meet loopback proof] oversized path (via fetchGoogleMeetSpace): cap=16777216 rejected=${msg}`,
+      );
     } finally {
       server.close();
     }
@@ -187,6 +196,9 @@ describe("google-meet response body boundary", () => {
       });
 
       expect(result.name).toBe("spaces/live-server-test");
+      console.log(
+        `[google-meet loopback proof] normal path (via fetchGoogleMeetSpace): returned=${JSON.stringify(result)}`,
+      );
     } finally {
       server.close();
     }
