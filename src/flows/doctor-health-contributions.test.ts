@@ -76,8 +76,12 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
-  collectHeartbeatTemplateHealthFindings: vi.fn(async () => []),
+  collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  repairHeartbeatTemplateHealthFindings: vi.fn(async () => ({
+    changes: [] as string[],
+    effects: [] as unknown[],
+  })),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
@@ -291,6 +295,7 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
 vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
   collectHeartbeatTemplateHealthFindings: mocks.collectHeartbeatTemplateHealthFindings,
   maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
+  repairHeartbeatTemplateHealthFindings: mocks.repairHeartbeatTemplateHealthFindings,
 }));
 
 vi.mock("../commands/doctor-device-pairing.js", () => ({
@@ -479,6 +484,8 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
     mocks.maybeRepairHeartbeatTemplate.mockReset();
     mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.repairHeartbeatTemplateHealthFindings.mockReset();
+    mocks.repairHeartbeatTemplateHealthFindings.mockResolvedValue({ changes: [], effects: [] });
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
@@ -1038,6 +1045,57 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/heartbeat-template" })],
     });
     expect(mocks.collectHeartbeatTemplateHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+  });
+
+  it("threads dry-run heartbeat template repairs through the structured check", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const heartbeatTemplateCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/heartbeat-template",
+    );
+    expect(heartbeatTemplateCheck).toBeDefined();
+    const findings = [
+      {
+        checkId: "core/doctor/heartbeat-template",
+        severity: "warning" as const,
+        message: "HEARTBEAT.md contains an older heartbeat documentation template.",
+        path: "/tmp/openclaw-workspace/HEARTBEAT.md",
+        requirement: "legacy-template",
+      },
+    ];
+    mocks.repairHeartbeatTemplateHealthFindings.mockResolvedValueOnce({
+      changes: ["Would replace heartbeat template."],
+      effects: [
+        {
+          kind: "file",
+          action: "would-replace-heartbeat-template",
+          target: "/tmp/openclaw-workspace/HEARTBEAT.md",
+          dryRunSafe: false,
+        },
+      ],
+    });
+
+    const result = await heartbeatTemplateCheck!.repair?.(
+      {
+        cfg: { agents: { defaults: { workspace: "/tmp/openclaw-workspace" } } },
+        mode: "fix",
+        dryRun: true,
+        diff: true,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+      findings,
+    );
+
+    expect(mocks.repairHeartbeatTemplateHealthFindings).toHaveBeenCalledWith({
+      cfg: { agents: { defaults: { workspace: "/tmp/openclaw-workspace" } } },
+      findings,
+      dryRun: true,
+      diff: true,
+    });
+    expect(result?.effects).toContainEqual(
+      expect.objectContaining({
+        action: "would-replace-heartbeat-template",
+      }),
+    );
   });
 
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
