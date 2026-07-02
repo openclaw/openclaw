@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadCronQuarantineFile,
   loadCronJobsStoreWithConfigJobs,
+  loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronQuarantinePath,
   resolveCronJobsStorePath,
   saveCronQuarantineFile,
@@ -36,6 +37,7 @@ import {
 import {
   acquireLegacyCronMigrationReceipt,
   hasLegacyCronMigrationReceipt,
+  hasLegacyCronMigrationReceiptReadOnly,
   markLegacyCronMigrationSourceRemoved,
 } from "./migration-ledger.js";
 import {
@@ -128,6 +130,7 @@ function cloneCronJobRecords(jobs: Array<Record<string, unknown>>): Array<Record
 async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
   onlyIfLegacyDetected?: boolean;
+  readOnly?: boolean;
 }): Promise<LegacyCronRepairState | null> {
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
   const quarantinePath = resolveCronQuarantinePath(storePath);
@@ -137,7 +140,9 @@ async function loadLegacyCronRepairState(params: {
     return null;
   }
 
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+  const loaded = params.readOnly
+    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath)
+    : await loadCronJobsStoreWithConfigJobs(storePath);
   const currentJobs =
     loaded.configJobs.length > 0
       ? loaded.configJobs.map((job, index) =>
@@ -164,7 +169,9 @@ async function loadLegacyCronRepairState(params: {
     const loadedLegacy = await loadLegacyCronStoreForMigration(storePath);
     legacyMigrationSource = loadedLegacy.migrationSource;
     legacyMigrationAlreadyImported = legacyMigrationSource
-      ? hasLegacyCronMigrationReceipt(legacyMigrationSource)
+      ? params.readOnly
+        ? hasLegacyCronMigrationReceiptReadOnly(legacyMigrationSource)
+        : hasLegacyCronMigrationReceipt(legacyMigrationSource)
       : false;
     if (!legacyMigrationAlreadyImported) {
       const merged = mergeLegacyCronJobs({
@@ -314,7 +321,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
 }): Promise<readonly HealthFinding[]> {
   let state: LegacyCronRepairState | null;
   try {
-    state = await loadLegacyCronRepairState({ cfg: params.cfg });
+    state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
     const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
     return [
@@ -445,7 +452,7 @@ export async function collectLegacyCronStoreRepairEffects(params: {
 }): Promise<readonly HealthRepairEffect[]> {
   let state: LegacyCronRepairState | null;
   try {
-    state = await loadLegacyCronRepairState({ cfg: params.cfg });
+    state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch {
     return [];
   }

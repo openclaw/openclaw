@@ -14,6 +14,7 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyCronStoreHealthFindings,
@@ -39,6 +40,7 @@ async function makeTempStorePath() {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   noteMock.mockClear();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -301,6 +303,37 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("collectLegacyCronStoreRepairEffects", () => {
+  it("does not create the shared state database while previewing legacy cron state", async () => {
+    const storePath = await makeTempStorePath();
+    const stateDir = path.join(path.dirname(storePath), "state-root");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const stateDbPath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    await writeLegacyCronArrayStore(storePath, [createLegacyCronJob()]);
+
+    await expect(
+      collectLegacyCronStoreHealthFindings({ cfg: createCronConfig(storePath) }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-cron-store",
+          requirement: "legacy-cron-store",
+        }),
+      ]),
+    );
+    await expect(
+      collectLegacyCronStoreRepairEffects({ cfg: createCronConfig(storePath) }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "would-migrate-legacy-cron-store",
+          target: storePath,
+        }),
+      ]),
+    );
+
+    expect(fsSync.existsSync(stateDbPath)).toBe(false);
+  });
+
   it("previews legacy cron store repair effects without mutating files", async () => {
     const storePath = await makeTempStorePath();
     await writeLegacyCronArrayStore(storePath, [
