@@ -133,20 +133,21 @@ If you edit files on the host outside OpenClaw after the initial seed, the remot
 
 All OpenShell config lives under `plugins.entries.openshell.config`:
 
-| Key                       | Type                     | Default       | Description                                           |
-| ------------------------- | ------------------------ | ------------- | ----------------------------------------------------- |
-| `mode`                    | `"mirror"` or `"remote"` | `"mirror"`    | Workspace sync mode                                   |
-| `command`                 | `string`                 | `"openshell"` | Path or name of the `openshell` CLI                   |
-| `from`                    | `string`                 | `"openclaw"`  | Sandbox source for first-time create                  |
-| `gateway`                 | `string`                 | —             | OpenShell gateway name (`--gateway`)                  |
-| `gatewayEndpoint`         | `string`                 | —             | OpenShell gateway endpoint URL (`--gateway-endpoint`) |
-| `policy`                  | `string`                 | —             | OpenShell policy ID for sandbox creation              |
-| `providers`               | `string[]`               | `[]`          | Provider names to attach when sandbox is created      |
-| `gpu`                     | `boolean`                | `false`       | Request GPU resources                                 |
-| `autoProviders`           | `boolean`                | `true`        | Pass `--auto-providers` during sandbox create         |
-| `remoteWorkspaceDir`      | `string`                 | `"/sandbox"`  | Primary writable workspace inside the sandbox         |
-| `remoteAgentWorkspaceDir` | `string`                 | `"/agent"`    | Agent workspace mount path (for read-only access)     |
-| `timeoutSeconds`          | `number`                 | `120`         | Timeout for `openshell` CLI operations                |
+| Key                       | Type                     | Default       | Description                                                                                                                                                                                                         |
+| ------------------------- | ------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                    | `"mirror"` or `"remote"` | `"mirror"`    | Workspace sync mode                                                                                                                                                                                                 |
+| `command`                 | `string`                 | `"openshell"` | Path or name of the `openshell` CLI                                                                                                                                                                                 |
+| `from`                    | `string`                 | `"openclaw"`  | Sandbox source for first-time create                                                                                                                                                                                |
+| `gateway`                 | `string`                 | —             | OpenShell gateway name (`--gateway`)                                                                                                                                                                                |
+| `gatewayEndpoint`         | `string`                 | —             | OpenShell gateway endpoint URL (`--gateway-endpoint`)                                                                                                                                                               |
+| `policy`                  | `string`                 | —             | OpenShell policy ID for sandbox creation                                                                                                                                                                            |
+| `providers`               | `string[]`               | `[]`          | Provider names to attach when sandbox is created                                                                                                                                                                    |
+| `gpu`                     | `boolean`                | `false`       | Request GPU resources                                                                                                                                                                                               |
+| `autoProviders`           | `boolean`                | `true`        | Pass `--auto-providers` during sandbox create                                                                                                                                                                       |
+| `remoteWorkspaceDir`      | `string`                 | `"/sandbox"`  | Primary writable workspace inside the sandbox                                                                                                                                                                       |
+| `remoteAgentWorkspaceDir` | `string`                 | `"/agent"`    | Agent workspace mount path (for read-only access)                                                                                                                                                                   |
+| `timeoutSeconds`          | `number`                 | `120`         | Timeout for `openshell` CLI operations                                                                                                                                                                              |
+| `env`                     | `object`                 | `{}`          | Non-secret env vars (`KEY: VALUE`) passed to sandbox create. Keys must be valid shell identifiers and must not use the reserved `OPENSHELL_` prefix. Changing env requires [sandbox recreation](#when-to-recreate). |
 
 Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) are configured under
 `agents.defaults.sandbox` as with any backend. See
@@ -204,6 +205,31 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) are configured under
           gpu: true,
           providers: ["openai"],
           timeoutSeconds: 180,
+        },
+      },
+    },
+  },
+}
+```
+
+### Mirror mode with environment variables
+
+Configure non-sensitive runtime settings such as API base URLs or model names
+without hard-coding them into the sandbox image:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          from: "openclaw",
+          mode: "mirror",
+          env: {
+            MODEL_BASE_URL: "https://api.example.com/v1",
+            MODEL_NAME: "gpt-oss-20b",
+          },
         },
       },
     },
@@ -278,6 +304,7 @@ Recreate after changing any of these:
 - `plugins.entries.openshell.config.from`
 - `plugins.entries.openshell.config.mode`
 - `plugins.entries.openshell.config.policy`
+- `plugins.entries.openshell.config.env`
 
 ```bash
 openclaw sandbox recreate --all
@@ -299,7 +326,8 @@ the intended remote workspace.
 ## How it works
 
 1. OpenClaw calls `openshell sandbox create` (with `--from`, `--gateway`,
-   `--policy`, `--providers`, `--gpu` flags as configured).
+   `--policy`, `--providers`, `--gpu` flags as configured, plus any
+   `--env KEY=VALUE` entries from the `env` config).
 2. OpenClaw calls `openshell sandbox ssh-config <name>` to get SSH connection
    details for the sandbox.
 3. Core writes the SSH config to a temp file and opens an SSH session using the

@@ -18,6 +18,7 @@ describe("openshell plugin config", () => {
       remoteWorkspaceDir: "/sandbox",
       remoteAgentWorkspaceDir: "/agent",
       timeoutMs: 120_000,
+      env: {},
     });
   });
 
@@ -60,6 +61,7 @@ describe("openshell plugin config", () => {
       remoteWorkspaceDir: "/sandbox/project",
       remoteAgentWorkspaceDir: "/agent/session",
       timeoutMs: 120_000,
+      env: {},
     });
   });
 
@@ -77,6 +79,58 @@ describe("openshell plugin config", () => {
         timeoutSeconds: 2_147_001,
       }),
     ).toThrow("timeoutSeconds must be a number <= 2147000");
+  });
+
+  it("accepts env vars", () => {
+    expect(
+      resolveOpenShellPluginConfig({
+        env: { FOO: "bar", BAZ: "qux" },
+      }).env,
+    ).toEqual({ FOO: "bar", BAZ: "qux" });
+  });
+
+  it("defaults env to empty object", () => {
+    expect(resolveOpenShellPluginConfig({}).env).toEqual({});
+  });
+
+  it("rejects env keys with leading whitespace", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        env: { " FOO": "bar" },
+      }),
+    ).toThrow("has surrounding whitespace");
+  });
+
+  it("rejects env keys with trailing whitespace", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        env: { "FOO ": "bar" },
+      }),
+    ).toThrow("has surrounding whitespace");
+  });
+
+  it("rejects env keys with OPENSHELL_ prefix", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        env: { OPENSHELL_API_KEY: "secret" },
+      }),
+    ).toThrow("reserved OPENSHELL_ prefix");
+  });
+
+  it("rejects env keys that are not valid env var names", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        env: { "123invalid": "value" },
+      }),
+    ).toThrow("not a valid environment variable name");
+  });
+
+  it("rejects env keys with special characters", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        env: { "FOO-BAR": "value" },
+      }),
+    ).toThrow("not a valid environment variable name");
   });
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
