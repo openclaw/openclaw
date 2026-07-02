@@ -813,6 +813,12 @@ struct RootTabsSourceGuardTests {
         #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
         #expect(appSource.contains("await Self.isNotificationServingEnabled()"))
         #expect(appSource.contains("NotificationServingPreference.isServingEnabled"))
+        let disclosurePreparation = try Self.extract(
+            actionsSource,
+            from: "func prepareHostedRelayDisclosureIfNeeded()",
+            to: "func acceptNotificationRelayDisclosure()")
+        #expect(disclosurePreparation.contains("self.showNotificationRelayDisclosure = true"))
+        #expect(!disclosurePreparation.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("acceptNotificationRelayDisclosure"))
         #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))

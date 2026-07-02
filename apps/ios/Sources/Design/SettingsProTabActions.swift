@@ -440,13 +440,9 @@ extension SettingsProTab {
     }
 
     func prepareHostedRelayDisclosureIfNeeded() -> Bool {
-        if PushBuildConfig.current.usesOpenClawHostedRelay {
-            guard PushEnrollmentConsent.disclosureAccepted else {
-                self.showNotificationRelayDisclosure = true
-                return false
-            }
-        } else {
-            PushEnrollmentConsent.markDisclosureAccepted()
+        if PushBuildConfig.current.usesOpenClawHostedRelay, !PushEnrollmentConsent.disclosureAccepted {
+            self.showNotificationRelayDisclosure = true
+            return false
         }
         return true
     }
