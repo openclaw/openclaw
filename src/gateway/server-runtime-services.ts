@@ -156,7 +156,7 @@ function recoverPendingSessionDeliveries(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
-}): void {
+}): () => void {
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
@@ -174,6 +174,34 @@ function recoverPendingSessionDeliveries(params: {
     );
   }, 1_250);
   timer.unref?.();
+
+  // Schedule periodic retry so session deliveries deferred by retry backoff
+  // are retried automatically after their backoff window elapses. The recovery
+  // function's backoff/eligibility/drain-protection logic prevents redundant
+  // or premature retries. Use a fresh Date.now() cutoff so entries enqueued
+  // after the startup sessionDeliveryRecoveryMaxEnqueuedAt are also recovered.
+  const periodicTimer = setInterval(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: Date.now(),
+      });
+    })().catch((err: unknown) =>
+      params.log.error(`Session delivery periodic retry failed: ${String(err)}`),
+    );
+  }, 60_000);
+  periodicTimer.unref?.();
+
+  // Return a stop handle so the gateway close path can cancel the periodic
+  // retry interval and prevent stale deliveries after shutdown.
+  return () => {
+    clearTimeout(timer);
+    clearInterval(periodicTimer);
+  };
 }
 
 function startGatewayModelPricingRefreshOnDemand(params: {
@@ -222,11 +250,19 @@ export function activateGatewayScheduledServices(params: {
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
   pluginLookUpTable?: PluginMetadataRegistryView;
-}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
+}): {
+  heartbeatRunner: HeartbeatRunner;
+  stopModelPricingRefresh: () => void;
+  stopSessionDeliveryRecovery: () => void;
+} {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
-    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
+    return {
+      heartbeatRunner: createNoopHeartbeatRunner(),
+      stopModelPricingRefresh: () => {},
+      stopSessionDeliveryRecovery: () => {},
+    };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
   if (params.startCron !== false) {
@@ -239,7 +275,7 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  recoverPendingSessionDeliveries({
+  const stopSessionDeliveryRecovery = recoverPendingSessionDeliveries({
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
@@ -251,5 +287,5 @@ export function activateGatewayScheduledServices(params: {
         log: params.log,
       })
     : () => {};
-  return { heartbeatRunner, stopModelPricingRefresh };
+  return { heartbeatRunner, stopModelPricingRefresh, stopSessionDeliveryRecovery };
 }
