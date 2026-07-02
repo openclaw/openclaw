@@ -51,14 +51,18 @@ function writeManifestlessClaudeBundle(rootDir: string) {
   fs.writeFileSync(path.join(rootDir, "skills", "SKILL.md"), "# Workspace skill\n", "utf8");
 }
 
-function writePackagePlugin(rootDir: string, options: { configPaths?: readonly string[] } = {}) {
+function writePackagePlugin(
+  rootDir: string,
+  options: { configPaths?: readonly string[]; pluginId?: string } = {},
+) {
+  const pluginId = options.pluginId ?? "demo";
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "demo",
-      name: "Demo",
+      id: pluginId,
+      name: pluginId,
       description: "one",
       configSchema: { type: "object" },
       ...(options.configPaths ? { activation: { onConfigPaths: options.configPaths } } : {}),
@@ -67,7 +71,7 @@ function writePackagePlugin(rootDir: string, options: { configPaths?: readonly s
   );
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
-    JSON.stringify({ name: "demo", version: "1.0.0" }),
+    JSON.stringify({ name: pluginId, version: "1.0.0" }),
     "utf8",
   );
 }
@@ -440,6 +444,49 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
     const whatsappPlugin = requirePluginRecord(result.snapshot.plugins, "whatsapp");
     expect(whatsappPlugin.origin).toBe("global");
+  });
+
+  it("recovers configured global source plugins missing from a stale persisted registry", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "memory-demo": { enabled: true },
+        },
+        allow: ["memory-demo"],
+        slots: {
+          memory: "memory-demo",
+        },
+      },
+    };
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("memory-demo");
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+    writePackagePlugin(path.join(stateDir, "extensions", "memory-demo"), {
+      pluginId: "memory-demo",
+    });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
+    expect(memoryPlugin.origin).toBe("global");
   });
 
   it("does not recover retained managed npm generations as install records", async () => {
