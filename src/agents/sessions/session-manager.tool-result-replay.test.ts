@@ -98,6 +98,52 @@ async function writeSessionWithToolResultContent(
   await fs.writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
 }
 
+async function writeSessionWithAssistantContent(
+  sessionFile: string,
+  content: unknown,
+): Promise<void> {
+  const entries = [
+    {
+      type: "session",
+      version: 3,
+      id: "string-assistant-session",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      cwd: "/tmp/tool-result-replay",
+    },
+    {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-07-01T00:00:01.000Z",
+      message: { role: "user", content: "say hello", timestamp: 1 },
+    },
+    {
+      type: "message",
+      id: "assistant-1",
+      parentId: "user-1",
+      timestamp: "2026-07-01T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        stopReason: "stop",
+        timestamp: 2,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        content,
+      },
+    },
+  ];
+  await fs.writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+}
+
 describe("SessionManager tool-result replay", () => {
   afterEach(async () => {
     await Promise.all(
@@ -118,6 +164,43 @@ describe("SessionManager tool-result replay", () => {
     }
 
     expect(toolResult.content).toEqual([{ type: "text", text: "lookup result text" }]);
+  });
+
+  it("replays string assistant JSONL content as Anthropic assistant text", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    await writeSessionWithAssistantContent(sessionFile, "assistant replay text");
+    const context = SessionManager.open(
+      sessionFile,
+      dir,
+      "/tmp/tool-result-replay",
+    ).buildSessionContext();
+    const assistant = context.messages.find((message) => message.role === "assistant");
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("assistant message missing");
+    }
+    expect(assistant.content).toEqual([{ type: "text", text: "assistant replay text" }]);
+
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(makeAnthropicModel(), toLlmContext(context), {
+      apiKey: "sk-ant-provider",
+      onPayload: (payload) => {
+        capturedPayload = payload;
+        throw new Error("stop before network");
+      },
+    });
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{
+        role: string;
+        content: string | Array<{ type?: unknown; text?: unknown }>;
+      }>;
+    };
+    const assistantPayload = payload.messages.find((message) => message.role === "assistant");
+
+    expect(assistantPayload?.content).toEqual([{ type: "text", text: "assistant replay text" }]);
   });
 
   it("replays string tool-result JSONL content as Anthropic tool text", async () => {

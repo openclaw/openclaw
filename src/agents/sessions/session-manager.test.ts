@@ -58,6 +58,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-05-27T00:00:02.000Z",
       message: { role: "assistant", content: "important answer" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "important answer" }] },
+    };
     const originalTranscript =
       [
         JSON.stringify(originalHeader).slice(0, 30),
@@ -71,8 +75,8 @@ describe("SessionManager.open", () => {
 
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
 
-    expect(sessionManager.getEntries()).toEqual([userEntry, assistantEntry]);
-    expect(sessionManager.getChildren(userEntry.id)).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([userEntry, normalizedAssistantEntry]);
+    expect(sessionManager.getChildren(userEntry.id)).toEqual([normalizedAssistantEntry]);
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important question");
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important answer");
     await expect(fs.readFile(sessionFile, "utf8")).resolves.not.toBe(originalTranscript);
@@ -1432,6 +1436,10 @@ describe("SessionManager.open", () => {
       timestamp: "2026-06-04T00:00:01.000Z",
       message: { role: "assistant", content: "carried context" },
     };
+    const normalizedAssistantEntry = {
+      ...assistantEntry,
+      message: { role: "assistant", content: [{ type: "text", text: "carried context" }] },
+    };
     await fs.writeFile(
       sessionFile,
       [
@@ -1456,7 +1464,7 @@ describe("SessionManager.open", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
     expect(records).toContainEqual(metadata);
-    expect(sessionManager.getEntries()).toEqual([assistantEntry]);
+    expect(sessionManager.getEntries()).toEqual([normalizedAssistantEntry]);
   });
 
   it("bridges parent-linked opaque rows without exposing them as session entries", async () => {

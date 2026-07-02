@@ -100,6 +100,8 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return params.error.code === "cli_unknown_empty_failure";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
+    case "context_overflow":
+      return params.error.code === "cli_context_overflow";
     default:
       return false;
   }

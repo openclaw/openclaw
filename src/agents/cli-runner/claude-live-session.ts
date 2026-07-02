@@ -833,11 +833,13 @@ function createResultError(
   const result = typeof parsed.result === "string" ? parsed.result.trim() : "";
   const message = extractCliErrorMessage(raw) ?? (result || "Claude CLI failed.");
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
+  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
   return new FailoverError(message, {
     reason,
     provider: session.providerId,
     model: session.modelId,
     status: resolveFailoverStatus(reason),
+    code,
   });
 }
 
@@ -1012,6 +1014,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
     return;
   }
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
+  const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
   failTurn(
     session,
     new FailoverError(message, {
@@ -1019,6 +1022,7 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
       provider: session.providerId,
       model: session.modelId,
       status: resolveFailoverStatus(reason),
+      code,
     }),
   );
 }
@@ -1376,6 +1380,9 @@ export async function runClaudeLiveSessionTurn(params: {
       reject,
     });
   });
+  // Timeout/abort can reject the turn while stdin is backpressured. Keep the
+  // rejection handled until the final await below rethrows the canonical result.
+  void outputPromise.catch(() => undefined);
   const abort = () => abortTurn(liveSession, createAbortError());
   let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
@@ -1394,7 +1401,7 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await writeTurnInput(liveSession, params.prompt);
+        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }

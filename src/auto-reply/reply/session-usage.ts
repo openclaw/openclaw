@@ -234,7 +234,7 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
@@ -285,7 +285,7 @@ export async function persistSessionUsageUpdate(params: {
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
