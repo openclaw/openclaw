@@ -817,22 +817,30 @@ function resolveToolAlias(
   requestedName: string,
   tools: readonly AgentTool[] | undefined,
 ): AgentTool | undefined {
-  if (!tools?.length) return undefined;
+  if (!tools?.length) {
+    return undefined;
+  }
   // 1. Case-insensitive exact match.
   const lower = requestedName.trim().toLowerCase();
   const caseMatch = tools.find((t) => t.name.toLowerCase() === lower);
-  if (caseMatch) return caseMatch;
+  if (caseMatch) {
+    return caseMatch;
+  }
   // 2. Normalised alias map — strip non-alphanumeric, look up candidates.
   const normalizedIndex = new Map<string, AgentTool>();
   for (const tool of tools) {
     const n = normalizeToolName(tool.name);
-    if (n && !normalizedIndex.has(n)) normalizedIndex.set(n, tool);
+    if (n && !normalizedIndex.has(n)) {
+      normalizedIndex.set(n, tool);
+    }
   }
   const aliasTargets = TOOL_NAME_ALIASES[normalizeToolName(requestedName)];
   if (aliasTargets) {
     for (const target of aliasTargets) {
       const found = normalizedIndex.get(normalizeToolName(target));
-      if (found) return found;
+      if (found) {
+        return found;
+      }
     }
   }
   return undefined;
