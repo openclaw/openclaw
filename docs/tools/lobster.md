@@ -172,10 +172,10 @@ Notes:
 
 Lobster step shells receive `process.env` from the gateway plus a small, fixed set of injected variables. **No other `LOBSTER_*` variables are populated.** The complete set is:
 
-| Variable                   | Where it appears | Description                                                                                                                        |
-| -------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `LOBSTER_ARG_<UPPER_NAME>` | Every step       | One per declared workflow `arg`; the upper-cased arg name carries the resolved value (default or `argsJson` override).             |
-| `LOBSTER_FINAL_STATUS`     | Final step only  | The terminal status of the workflow (`ok`, `needs_approval`, `cancelled`, or `error`). Useful for `on_finish`-style cleanup steps. |
+| Variable                   | Where it appears | Description                                                                                                                                   |
+| -------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LOBSTER_ARGS_JSON`        | Every step       | The full resolved `args` object serialized as JSON (`{}` when the workflow declares no `args`).                                               |
+| `LOBSTER_ARG_<UPPER_NAME>` | Every step       | One per declared workflow `arg`; the arg name is upper-cased with any non-alphanumeric characters collapsed to `_`, carrying the resolved value (default or `argsJson` override). |
 
 #### Patterns that do not work
 
