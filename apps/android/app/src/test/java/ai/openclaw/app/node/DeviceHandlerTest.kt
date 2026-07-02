@@ -1,5 +1,7 @@
 package ai.openclaw.app.node
 
+import android.Manifest
+import android.app.Application
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import kotlinx.serialization.json.Json
@@ -15,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class DeviceHandlerTest {
@@ -275,6 +278,34 @@ class DeviceHandlerTest {
   }
 
   @Test
+  fun handleDevicePermissions_requiresContactsReadAndWritePermissions() {
+    val app = appContext()
+    shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS)
+    shadowOf(app).denyPermissions(Manifest.permission.WRITE_CONTACTS)
+
+    val readOnly = DeviceHandler(app).handleDevicePermissions(null)
+    assertEquals("denied", permissionStatus(readOnly.payloadJson, "contacts"))
+
+    shadowOf(app).grantPermissions(Manifest.permission.WRITE_CONTACTS)
+    val readWrite = DeviceHandler(app).handleDevicePermissions(null)
+    assertEquals("granted", permissionStatus(readWrite.payloadJson, "contacts"))
+  }
+
+  @Test
+  fun handleDevicePermissions_requiresCalendarReadAndWritePermissions() {
+    val app = appContext()
+    shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
+    shadowOf(app).denyPermissions(Manifest.permission.WRITE_CALENDAR)
+
+    val readOnly = DeviceHandler(app).handleDevicePermissions(null)
+    assertEquals("denied", permissionStatus(readOnly.payloadJson, "calendar"))
+
+    shadowOf(app).grantPermissions(Manifest.permission.WRITE_CALENDAR)
+    val readWrite = DeviceHandler(app).handleDevicePermissions(null)
+    assertEquals("granted", permissionStatus(readWrite.payloadJson, "calendar"))
+  }
+
+  @Test
   fun handleDeviceHealth_returnsExpectedShape() {
     val handler = DeviceHandler(appContext())
 
@@ -423,12 +454,25 @@ class DeviceHandlerTest {
     assertTrue(isSystemDeviceApp(appInfo))
   }
 
-  private fun appContext(): Context = RuntimeEnvironment.getApplication()
+  private fun appContext(): Application = RuntimeEnvironment.getApplication()
 
   private fun parsePayload(payloadJson: String?): JsonObject {
     val jsonString = payloadJson ?: error("expected payload")
     return Json.parseToJsonElement(jsonString).jsonObject
   }
+
+  private fun permissionStatus(
+    payloadJson: String?,
+    key: String,
+  ): String =
+    parsePayload(payloadJson)
+      .getValue("permissions")
+      .jsonObject
+      .getValue(key)
+      .jsonObject
+      .getValue("status")
+      .jsonPrimitive
+      .content
 }
 
 private class FakeDeviceAppSource(
