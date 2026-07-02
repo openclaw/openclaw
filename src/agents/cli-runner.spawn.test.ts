@@ -3080,6 +3080,104 @@ ${JSON.stringify({
     );
   });
 
+  it("marks quiet Claude live exit-zero turns as retryable empty responses", async () => {
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-empty-run",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => exited),
+      cancel: vi.fn(),
+    }));
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-empty",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "empty_response",
+        code: "cli_unknown_empty_failure",
+      },
+    );
+  });
+
+  it("preserves Claude live stderr classification on exit-zero failures", async () => {
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "Prompt is too long",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-exit-zero-overflow-run",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => exited),
+      cancel: vi.fn(),
+    }));
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-exit-zero-overflow",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    );
+  });
+
   it("fails when Claude exits before a live turn starts", async () => {
     supervisorSpawnMock.mockImplementationOnce(async () => ({
       runId: "live-run",
