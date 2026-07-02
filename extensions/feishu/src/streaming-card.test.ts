@@ -88,7 +88,6 @@ describe("FeishuStreamingSession", () => {
           }
           const failedStatus = failedContentUpdateStatuses.get(updateIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         } else if (url.includes("/elements/content")) {
@@ -96,7 +95,6 @@ describe("FeishuStreamingSession", () => {
           replaceBodies.push(init?.body ?? "");
           const failedStatus = failedReplaceStatuses.get(replaceIndex);
           if (failedStatus !== undefined) {
-            ok = false;
             status = failedStatus;
           }
         }
