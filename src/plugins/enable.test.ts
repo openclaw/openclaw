@@ -164,7 +164,7 @@ describe("enablePluginInConfig", () => {
 });
 
 describe("enableExplicitlySelectedPluginInConfig", () => {
-  it("appends ClickClack to a restrictive allowlist before enabling it", () => {
+  it("appends an explicitly selected plugin to a restrictive allowlist before enabling it", () => {
     const result = enableExplicitlySelectedPluginInConfig(
       {
         plugins: {
@@ -180,10 +180,27 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
     expect(result.config.channels?.clickclack?.enabled).toBe(true);
   });
 
-  it("keeps unrelated explicit plugin enables blocked by a restrictive allowlist", () => {
+  it("appends an explicitly selected channel plugin to a restrictive allowlist before enabling it", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as OpenClawConfig,
+      "telegram",
+    );
+
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "telegram"]);
+    expect(result.config.plugins?.entries?.telegram?.enabled).toBe(true);
+    expect(result.config.channels?.telegram?.enabled).toBe(true);
+  });
+
+  it("keeps explicitly selected plugins blocked by the denylist without changing the allowlist", () => {
     const cfg = {
       plugins: {
         allow: ["memory-core"],
+        deny: ["google"],
       },
     } as OpenClawConfig;
 
@@ -193,24 +210,6 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
       config: cfg,
       enabled: false,
       pluginId: "google",
-      reason: "blocked by allowlist",
-    });
-  });
-
-  it("keeps ClickClack blocked by the denylist without changing the allowlist", () => {
-    const cfg = {
-      plugins: {
-        allow: ["memory-core"],
-        deny: ["clickclack"],
-      },
-    } as OpenClawConfig;
-
-    const result = enableExplicitlySelectedPluginInConfig(cfg, "clickclack");
-
-    expect(result).toEqual({
-      config: cfg,
-      enabled: false,
-      pluginId: "clickclack",
       reason: "blocked by denylist",
     });
   });
