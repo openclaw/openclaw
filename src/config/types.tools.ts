@@ -382,6 +382,16 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Explicit in-workspace aliases that may resolve outside the workspace when workspaceOnly is true.
+   * File tools must still address the in-workspace alias path; direct target paths remain outside scope.
+   */
+  workspaceAliases?: {
+    /** Relative path inside the workspace, usually a symlinked directory such as "memory". */
+    path: string;
+    /** Absolute host directory that the alias must resolve into. */
+    target: string;
+  }[];
 };
 
 export type SessionsSpawnToolsConfig = {

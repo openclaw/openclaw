@@ -15,6 +15,40 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts tools.fs.workspaceAliases", () => {
+    const res = validateConfigObject({
+      tools: {
+        fs: {
+          workspaceOnly: true,
+          workspaceAliases: [{ path: "memory", target: "/home/alice/.openclaw/workspace/memory" }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.list[].tools.fs.workspaceAliases", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              fs: {
+                workspaceAliases: [
+                  { path: "memory", target: "/home/alice/.openclaw/workspace/memory" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
