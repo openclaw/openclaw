@@ -182,7 +182,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     }
   });
 
-  it("requests one setup-timeout restart when concurrent manual runs both stall before runner start", async () => {
+  it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
     vi.useFakeTimers();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     vi.setSystemTime(now);

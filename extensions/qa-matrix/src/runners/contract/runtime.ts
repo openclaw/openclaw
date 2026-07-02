@@ -29,6 +29,7 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
@@ -623,6 +624,13 @@ function isMatrixQaStaleConfigPatchError(error: unknown) {
   return formatErrorMessage(error).toLowerCase().includes("config changed since last load");
 }
 
+function resolveMatrixQaOutputDir(params: { outputDir?: string; repoRoot: string }) {
+  return (
+    params.outputDir ??
+    path.join(params.repoRoot, ".artifacts", "qa-e2e", `matrix-${createLiveTransportQaRunId()}`)
+  );
+}
+
 async function startMatrixQaLiveLaneGateway(params: {
   repoRoot: string;
   transport: {
@@ -657,9 +665,7 @@ export async function runMatrixQaLive(params: {
   alternateModel?: string;
 }): Promise<MatrixQaRunResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputDir =
-    params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
+  const outputDir = resolveMatrixQaOutputDir({ outputDir: params.outputDir, repoRoot });
   await fs.mkdir(outputDir, { recursive: true });
 
   const defaultModels = resolveMatrixQaModels({
@@ -1276,6 +1282,7 @@ export const testing = {
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
   remainingMatrixQaRunMs,
+  resolveMatrixQaOutputDir,
   resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,

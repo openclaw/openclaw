@@ -203,7 +203,10 @@ export function extractCanvasShortcodes(text: string | undefined): {
     attrs: Record<string, string>;
     body?: string;
   }> = [];
-  const blockRe = /\[embed\s+([^\]]*?)\]([\s\S]*?)\[\/embed\]/gi;
+  // Exclude a self-closing open tag ("[embed ... /]") from starting a block
+  // match by requiring the attrs group not to end with a slash; otherwise the
+  // block regex greedily swallows visible text up to a later stray [/embed].
+  const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
     let match: RegExpExecArray | null;

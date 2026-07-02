@@ -7,7 +7,10 @@ const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
   }),
 }));
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => {
+const {
+  loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
+  loadBundledPluginPublicArtifactModuleSyncMock,
+} = vi.hoisted(() => {
   const providerBase = {
     label: "Fixture",
     hint: "fixture",
@@ -18,49 +21,74 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => {
     getCredentialValue: () => undefined,
     setCredentialValue: () => ({}),
   };
+  const lowLevelLoaderMock = vi.fn(
+    ({ dirName, artifactBasename }: { dirName: string; artifactBasename: string }) => {
+      if (dirName === "brave" && artifactBasename === "web-search-contract-api.js") {
+        return {
+          createBraveWebSearchProvider: () => ({
+            ...providerBase,
+            id: "brave",
+            createTool: () => null,
+          }),
+        };
+      }
+      if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
+        return {
+          createFuzzpluginWebSearchProvider: () => {
+            throw new Error("fuzzplugin web provider factory failed");
+          },
+          createMockpluginWebSearchProvider: () => ({
+            ...providerBase,
+            id: "mockplugin",
+            createTool: () => null,
+          }),
+        };
+      }
+      if (dirName === "fuzzplugin" && artifactBasename === "web-search-contract-api.js") {
+        return {
+          createFuzzpluginWebSearchProvider: () => {
+            throw new Error("fuzzplugin web provider factory failed");
+          },
+        };
+      }
+      if (dirName === "firecrawl" && artifactBasename === "web-fetch-contract-api.js") {
+        return {
+          createFirecrawlWebFetchProvider: () => ({
+            ...providerBase,
+            id: "firecrawl",
+            createTool: () => null,
+          }),
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  );
   return {
-    loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-      ({ dirName, artifactBasename }: { dirName: string; artifactBasename: string }) => {
-        if (dirName === "brave" && artifactBasename === "web-search-contract-api.js") {
-          return {
-            createBraveWebSearchProvider: () => ({
-              ...providerBase,
-              id: "brave",
-              createTool: () => null,
-            }),
-          };
+    loadBundledPluginPublicArtifactModuleSyncMock: lowLevelLoaderMock,
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock: vi.fn(
+      ({
+        dirName,
+        artifactCandidates,
+      }: {
+        dirName: string;
+        artifactCandidates: readonly string[];
+      }) => {
+        for (const artifactBasename of artifactCandidates) {
+          try {
+            return lowLevelLoaderMock({ dirName, artifactBasename });
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.startsWith("Unable to resolve bundled plugin public surface ")
+            ) {
+              continue;
+            }
+            throw error;
+          }
         }
-        if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
-          return {
-            createFuzzpluginWebSearchProvider: () => {
-              throw new Error("fuzzplugin web provider factory failed");
-            },
-            createMockpluginWebSearchProvider: () => ({
-              ...providerBase,
-              id: "mockplugin",
-              createTool: () => null,
-            }),
-          };
-        }
-        if (dirName === "fuzzplugin" && artifactBasename === "web-search-contract-api.js") {
-          return {
-            createFuzzpluginWebSearchProvider: () => {
-              throw new Error("fuzzplugin web provider factory failed");
-            },
-          };
-        }
-        if (dirName === "firecrawl" && artifactBasename === "web-fetch-contract-api.js") {
-          return {
-            createFirecrawlWebFetchProvider: () => ({
-              ...providerBase,
-              id: "firecrawl",
-              createTool: () => null,
-            }),
-          };
-        }
-        throw new Error(
-          `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-        );
+        return null;
       },
     ),
   };
@@ -78,6 +106,8 @@ vi.mock("./public-surface-loader.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./public-surface-loader.js")>();
   return {
     ...actual,
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync:
+      loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
     loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
   };
 });
@@ -99,6 +129,7 @@ function expectSingleProvider<T>(providers: T[] | null | undefined): T {
 describe("web provider public artifacts explicit fast path", () => {
   beforeEach(() => {
     loadPluginManifestRegistryMock.mockClear();
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
   });
 

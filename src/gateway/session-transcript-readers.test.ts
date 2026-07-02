@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesWithStats,
@@ -16,21 +17,17 @@ import {
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
-  let originalStateDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-readers-"));
     storePath = path.join(tempDir, "sessions.json");
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

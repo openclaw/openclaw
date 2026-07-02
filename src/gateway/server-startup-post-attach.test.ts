@@ -388,6 +388,11 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: { hooks: { internal: { enabled: false } } },
+      }),
+    );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
@@ -563,15 +568,19 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
 
-    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
 
-    expect(result).toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
+        expect(result).toBeNull();
+        expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("refreshes the restart sentinel when the sentinel row exists", async () => {
@@ -585,15 +594,16 @@ describe("startGatewayPostAttachRuntime", () => {
         },
         { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       );
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-      hoisted.refreshLatestUpdateRestartSentinel.mockClear();
-      hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+        hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
 
-      const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
 
-      expect(result).toBe(sentinel);
-      expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+        expect(result).toBe(sentinel);
+        expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+      });
     } finally {
       closeOpenClawStateDatabaseForTest();
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -2235,6 +2245,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
+    activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

@@ -152,6 +152,7 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
+        self.registerForRemoteNotificationsIfEnrollmentReady()
 
         let issueCount = SettingsDiagnostics.issueCount(
             gatewayConnected: self.gatewayDiagnosticConnected,
@@ -187,11 +188,11 @@ extension SettingsProTab {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
     }
@@ -285,11 +286,11 @@ extension SettingsProTab {
 
     func connectAfterScannedGatewayLink() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         await self.connectManual()
     }
 
@@ -318,19 +319,15 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int) async -> Bool {
+    func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
-        self.setupStatusText = "Checking gateway reachability..."
-        let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
-        if !ok {
-            self.setupStatusText = "Can't reach gateway at \(trimmed):\(port). Check Tailscale or LAN."
-        }
-        return ok
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
+        return true
     }
 
     func resetOnboarding() {
@@ -358,9 +355,11 @@ extension SettingsProTab {
         }
     }
 
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            resetTitle: "Reset onboarding")
     }
 
     func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -372,6 +371,10 @@ extension SettingsProTab {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         await self.retryGatewayConnectionFromProblem()
     }
 
@@ -417,6 +420,7 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
@@ -437,6 +441,7 @@ extension SettingsProTab {
 
     func requestNotificationAuthorizationFromSettings() {
         guard !self.isRequestingNotificationAuthorization else { return }
+        PushEnrollmentConsent.markDisclosureAccepted()
         self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
@@ -448,10 +453,17 @@ extension SettingsProTab {
             await MainActor.run {
                 self.isRequestingNotificationAuthorization = false
                 self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                guard granted, self.notificationStatus.allowsNotifications else { return }
-                UIApplication.shared.registerForRemoteNotifications()
+                guard granted else { return }
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
+    }
+
+    @MainActor
+    func registerForRemoteNotificationsIfEnrollmentReady() {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationStatus.allowsNotifications else { return }
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     @MainActor
@@ -545,6 +557,12 @@ extension SettingsProTab {
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if self.isTransientSetupStatus(trimmedSetup),
+           !gatewayStatus.isEmpty,
+           gatewayStatus != "Offline"
+        {
+            return gatewayStatus
+        }
         if !trimmedSetup.isEmpty { return trimmedSetup }
         if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
@@ -569,6 +587,11 @@ extension SettingsProTab {
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Check Tailscale, then connect again."
         }
+        if lower.contains("tls fingerprint verification timed out")
+            || lower.contains("no tls endpoint detected")
+        {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if lower.contains("timed out") {
             return "Connection timed out. Make sure Tailscale is connected, then try again."
         }
@@ -576,6 +599,13 @@ extension SettingsProTab {
             return "Connected, but some controls are restricted for nodes. This is expected."
         }
         return nil
+    }
+
+    func isTransientSetupStatus(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "setup code applied. connecting..."
+            || lower.hasPrefix("qr loaded. connecting to ")
+            || lower == "checking gateway reachability..."
     }
 
     var shouldShowRealtimeVoicePicker: Bool {
@@ -819,8 +849,11 @@ extension SettingsProTab {
 
     var notificationRelayDetail: String {
         if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
             return """
-            This build uses OpenClaw's hosted push relay at ios-push-relay.openclaw.ai for notification \
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
             delivery data.
             """
         }

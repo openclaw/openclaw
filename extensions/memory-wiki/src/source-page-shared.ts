@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { preserveHumanNotesBlock } from "./markdown.js";
 import {
   setImportedSourceEntry,
   shouldSkipImportedSourceWrite,
@@ -10,6 +11,15 @@ import {
 import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
+type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
+
+async function readExistingImportedSourcePage(vault: VaultRoot, pagePath: string): Promise<string> {
+  try {
+    return await vault.readText(pagePath);
+  } catch {
+    return await vault.readText(pagePath);
+  }
+}
 
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
@@ -51,12 +61,13 @@ export async function writeImportedSourcePage(params: {
 
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
-  if (existing !== rendered) {
+  const existing = pageStat ? await readExistingImportedSourcePage(vault, params.pagePath) : "";
+  const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
+  if (existing !== nextRendered) {
     await writeGuardedVaultPage({
       vault,
       pagePath: params.pagePath,
-      content: rendered,
+      content: nextRendered,
       pageStat,
       pageLabel: "imported source page",
     });
@@ -74,5 +85,5 @@ export async function writeImportedSourcePage(params: {
       renderFingerprint: params.renderFingerprint,
     },
   });
-  return { pagePath: params.pagePath, changed: existing !== rendered, created };
+  return { pagePath: params.pagePath, changed: existing !== nextRendered, created };
 }

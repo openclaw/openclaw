@@ -475,6 +475,9 @@ export function createAgentEventHandler({
       contextTokens: row?.contextTokens,
       estimatedCostUsd: row?.estimatedCostUsd,
       responseUsage: row?.responseUsage,
+      // Carry the row-built channel-aware effective mode so the chat snapshot
+      // matches the session-event/list projections.
+      effectiveResponseUsage: row?.effectiveResponseUsage,
       modelProvider: row?.modelProvider,
       model: row?.model,
       status: snapshotSource.status,

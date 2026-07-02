@@ -51,5 +51,6 @@ done
 
 (
   cd "${ROOT_DIR}/apps/ios"
-  IOS_RELEASE_BUILD_NUMBER="${BUILD_NUMBER}" run_ios_fastlane ios release_upload
+  # App Store Connect screenshot reservations can fail with 500s under parallel deliver uploads.
+  DELIVER_NUMBER_OF_THREADS=1 FL_MAX_NUMBER_OF_THREADS=1 OPENCLAW_IOS_RELEASE_WRAPPER=1 IOS_RELEASE_BUILD_NUMBER="${BUILD_NUMBER}" run_ios_fastlane ios release_upload
 )

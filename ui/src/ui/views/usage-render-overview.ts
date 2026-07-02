@@ -398,6 +398,7 @@ function renderDailyChartCompact(
   // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
+  const selectedDaySet = new Set(selectedDays);
 
   return html`
     <div class="daily-chart-compact">
@@ -424,7 +425,7 @@ function renderDailyChartCompact(
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
           ${daily.map((d, idx) => {
             const heightPx = barHeights[idx];
-            const isSelected = selectedDays.includes(d.date);
+            const isSelected = selectedDaySet.has(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
             const shortLabel =

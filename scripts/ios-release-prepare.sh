@@ -6,10 +6,6 @@ usage() {
 Usage:
   scripts/ios-release-prepare.sh --build-number 7 [--team-id TEAMID]
 
-Optional custom relay:
-  OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com \
-    scripts/ios-release-prepare.sh --build-number 7 [--team-id TEAMID]
-
 Prepares local App Store release inputs without touching local signing overrides:
 - reads apps/ios/version.json and writes apps/ios/build/Version.xcconfig
 - writes apps/ios/build/AppStoreRelease.xcconfig with canonical bundle IDs
@@ -32,9 +28,6 @@ CANONICAL_TEAM_ID="FWJYW4S8P8"
 
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
-DEFAULT_IOS_PUSH_RELAY_BASE_URL="https://ios-push-relay.openclaw.ai"
-PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-${DEFAULT_IOS_PUSH_RELAY_BASE_URL}}}"
-PUSH_RELAY_BASE_URL_XCCONFIG=""
 IOS_VERSION=""
 RELEASE_SIGNING_XCCONFIG=""
 
@@ -59,31 +52,6 @@ write_generated_file() {
   tmp_file="$(mktemp "${output_path}.XXXXXX")"
   cat >"${tmp_file}"
   mv -f "${tmp_file}" "${output_path}"
-}
-
-validate_push_relay_base_url() {
-  local value="$1"
-
-  if [[ "${value}" =~ [[:space:]] ]]; then
-    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: whitespace is not allowed." >&2
-    exit 1
-  fi
-
-  if [[ "${value}" == *'$'* || "${value}" == *'('* || "${value}" == *')'* || "${value}" == *'='* ]]; then
-    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: contains forbidden xcconfig characters." >&2
-    exit 1
-  fi
-
-  if [[ ! "${value}" =~ ^https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?(/[A-Za-z0-9._~!&*+,;:@%/-]*)?$ ]]; then
-    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: expected https://host[:port][/path]." >&2
-    exit 1
-  fi
-
-  local port="${BASH_REMATCH[2]:-}"
-  if [[ -n "${port}" ]] && (( 10#${port} > 65535 )); then
-    echo "Invalid OPENCLAW_PUSH_RELAY_BASE_URL: port must be between 1 and 65535." >&2
-    exit 1
-  fi
 }
 
 require_option_value() {
@@ -144,14 +112,10 @@ if [[ "${TEAM_ID}" != "${CANONICAL_TEAM_ID}" ]]; then
   exit 1
 fi
 
-validate_push_relay_base_url "${PUSH_RELAY_BASE_URL}"
-
-# `.xcconfig` treats `//` as a comment opener. Break the URL with a helper setting
-# so Xcode still resolves it back to `https://...` at build time.
-PUSH_RELAY_BASE_URL_XCCONFIG="$(
-  printf '%s' "${PUSH_RELAY_BASE_URL}" \
-    | sed 's#//#$(OPENCLAW_URL_SLASH)$(OPENCLAW_URL_SLASH)#g'
-)"
+if [[ -n "${OPENCLAW_PUSH_RELAY_BASE_URL:-}" || -n "${IOS_PUSH_RELAY_BASE_URL:-}" ]]; then
+  echo "iOS App Store release uses the canonical hosted push relay; custom relay URL overrides are not allowed." >&2
+  exit 1
+fi
 
 prepare_build_dir
 
@@ -185,12 +149,11 @@ OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclawfoundation.app.share
 OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclawfoundation.app.activitywidget
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp
+OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClawAppAttest.entitlements
 OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT = production
-OPENCLAW_PUSH_TRANSPORT = relay
-OPENCLAW_PUSH_DISTRIBUTION = official
-OPENCLAW_URL_SLASH = /
-OPENCLAW_PUSH_RELAY_BASE_URL = ${PUSH_RELAY_BASE_URL_XCCONFIG}
-OPENCLAW_PUSH_APNS_ENVIRONMENT = production
+OPENCLAW_APP_ATTEST_ENVIRONMENT = production
+OPENCLAW_PUSH_MODE = appStore
+OPENCLAW_PUSH_RELAY_BASE_URL =
 EOF
 
 (

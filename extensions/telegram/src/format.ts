@@ -346,6 +346,8 @@ type TelegramHtmlTagSupport = {
   attrPatterns: ReadonlyMap<string, RegExp>;
 };
 
+type TelegramTableAlignment = NonNullable<MarkdownTableMeta["aligns"]>[number];
+
 const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   simpleTags: TELEGRAM_SIMPLE_HTML_TAGS,
   attrPatterns: TELEGRAM_ATTR_HTML_TAG_PATTERNS,
@@ -466,16 +468,25 @@ function escapeUnsupportedTelegramHtml(
   return result;
 }
 
+function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
+  return (
+    Number.isInteger(codePoint) &&
+    codePoint >= 0 &&
+    codePoint <= 0x10ffff &&
+    !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+  );
+}
+
 function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
   if (entity.startsWith("#x") || entity.startsWith("#X")) {
     const codePoint = Number.parseInt(entity.slice(2), 16);
-    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    return isValidTelegramHtmlEntityCodePoint(codePoint)
       ? String.fromCodePoint(codePoint)
       : fallback;
   }
   if (entity.startsWith("#")) {
     const codePoint = Number.parseInt(entity.slice(1), 10);
-    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+    return isValidTelegramHtmlEntityCodePoint(codePoint)
       ? String.fromCodePoint(codePoint)
       : fallback;
   }
@@ -972,19 +983,25 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   }
   const renderCellValue = (cell: MarkdownTableCell | undefined) =>
     cell ? renderTelegramHtml(cell) : "";
-  const renderCell = (tag: "td" | "th", value: MarkdownTableCell | undefined) =>
-    `<${tag}>${renderCellValue(value)}</${tag}>`;
+  const renderCell = (
+    tag: "td" | "th",
+    value: MarkdownTableCell | undefined,
+    align: TelegramTableAlignment | undefined,
+  ) => {
+    const alignAttr = align ? ` align="${align}"` : "";
+    return `<${tag}${alignAttr}>${renderCellValue(value)}</${tag}>`;
+  };
   const head = table.headers.length
-    ? `<thead><tr>${table.headerCells.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
+    ? `<thead><tr>${table.headerCells.map((cell, index) => renderCell("th", cell, table.aligns?.[index])).join("")}</tr></thead>`
     : "";
   const bodyRows = table.rowCells
     .map(
       (row) =>
-        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index])).join("")}</tr>`,
+        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index], table.aligns?.[index])).join("")}</tr>`,
     )
     .join("");
   const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
-  return `<table>${head}${body}</table>\n\n`;
+  return `<table bordered striped>${head}${body}</table>\n\n`;
 }
 
 function renderTelegramRichHtmlDocument(

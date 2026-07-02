@@ -5,9 +5,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
+
+let mockFunctionCallSequence = 0;
 
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
@@ -167,6 +170,21 @@ const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
+  /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
+const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
+  /upload-file action to send a PNG with caption\s+((?:WHATSAPP_QA_AGENT_UPLOAD|WHATSAPP_QA_GROUP_AGENT_UPLOAD)_[A-Z0-9]+)/i;
+const QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_PENDING_HISTORY_TRIGGER_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL =
+  "Chat history since last reply (untrusted, for context):";
+const QA_WHATSAPP_BROADCAST_PROMPT_RE = /\bopenclawqa broadcast fanout check\s+([A-Z0-9_]+)\b/i;
+const QA_WHATSAPP_RUNTIME_AGENT_RE = /\bRuntime:\s*[^\n]*\bagent=([A-Za-z0-9_-]+)/i;
+const QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE = /\bWHATSAPP_QA_ACTIVATION_ALWAYS_([A-Z0-9]+)\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE = /\bWHATSAPP_QA_REPLY_TO_BOT_SEED_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
+  /\bWHATSAPP_QA_REPLY_TO_BOT_TRIGGER_[A-Z0-9]+\b/u;
+const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -187,7 +205,7 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
-const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
+const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -219,7 +237,7 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
@@ -249,7 +267,7 @@ function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
 }
 
 function transcriptionTextForAudioRequest(rawBody: string) {
-  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+  if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
   return QA_AUDIO_TRANSCRIPTION_TEXT;
@@ -638,6 +656,111 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
+function buildWhatsAppPendingHistoryReply(allInputText: string) {
+  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
+  if (!triggerMatch?.[1]) {
+    return undefined;
+  }
+  const suffix = triggerMatch[1];
+  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
+  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
+  const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
+  const contextSentinelPattern = new RegExp(
+    `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
+    "u",
+  );
+  if (
+    !quietMarkerPattern.test(priorGroupContext) ||
+    !contextSentinelPattern.test(priorGroupContext)
+  ) {
+    return "WHATSAPP_QA_PENDING_HISTORY_MISSING_CONTEXT";
+  }
+  return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
+}
+
+function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
+  const blocks = extractJsonBlocksByLabel(
+    beforeTrigger,
+    QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
+  );
+  return blocks
+    .flatMap((block) => {
+      if (!Array.isArray(block)) {
+        return [];
+      }
+      return block.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return [];
+        }
+        const body = (entry as Record<string, unknown>)["body"];
+        return typeof body === "string" ? [body] : [];
+      });
+    })
+    .join("\n");
+}
+
+function extractJsonBlocksByLabel(text: string, label: string): unknown[] {
+  const blockRe = new RegExp(
+    `${escapeRegExp(label)}\\s*\\n\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``,
+    "gu",
+  );
+  const blocks: unknown[] = [];
+  for (const match of text.matchAll(blockRe)) {
+    const rawJson = match[1];
+    if (!rawJson) {
+      continue;
+    }
+    try {
+      blocks.push(JSON.parse(rawJson) as unknown);
+    } catch {
+      // The mock only trusts the exact structured block emitted by the inbound
+      // prompt builder; malformed user text must not satisfy this QA oracle.
+    }
+  }
+  return blocks;
+}
+
+function buildWhatsAppBroadcastReply(allInputText: string) {
+  const promptMatch = QA_WHATSAPP_BROADCAST_PROMPT_RE.exec(allInputText);
+  const token = promptMatch?.[1];
+  if (!token) {
+    return undefined;
+  }
+  const agentId = QA_WHATSAPP_RUNTIME_AGENT_RE.exec(allInputText)?.[1];
+  if (agentId === "main") {
+    return `${token}_MAIN`;
+  }
+  if (agentId === "qa-second") {
+    return `${token}_SECOND`;
+  }
+  return "WHATSAPP_QA_BROADCAST_AGENT_CONTEXT_MISSING";
+}
+
+function buildWhatsAppGroupDispatchReply(allInputText: string) {
+  const activationMatch = QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE.exec(allInputText);
+  if (activationMatch?.[1]) {
+    return `WHATSAPP_QA_ACTIVATION_ALWAYS_${activationMatch[1]}`;
+  }
+  const triggerMatch = QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE.exec(allInputText);
+  if (triggerMatch?.[0]) {
+    return triggerMatch[0];
+  }
+  return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
+}
+
+function buildWhatsAppBatchedReply(allInputText: string) {
+  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
+  const suffix = finalMatch?.[1];
+  if (!suffix) {
+    return undefined;
+  }
+  const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
+  if (!allInputText.includes(firstMarker)) {
+    return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
+  }
+  return finalMatch[0];
+}
+
 function countImageInputs(value: unknown): number {
   const seen = new WeakSet<object>();
   const stack = [value];
@@ -772,8 +895,10 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
-  const callId = `call_mock_${name}_${callSuffix}`;
-  const itemId = `fc_mock_${name}_${callSuffix}`;
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const callId = `call_mock_${name}_${uniqueSuffix}`;
+  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
   const item = {
     type: "function_call",
     id: itemId,
@@ -785,7 +910,7 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
-    responseId: `resp_mock_${name}_${callSuffix}`,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
     serialized,
   };
 }
@@ -860,6 +985,9 @@ function extractToolSearchTarget(text: string): string | null {
 }
 
 function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode && targetTool === "web_search") {
+    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -1351,7 +1479,10 @@ function buildAssistantText(
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
-    return "QA-STRANDED-85714 is present in this private final reply and I am not calling the message tool. This second sentence makes the omitted delivery substantive enough for the warning check.";
+    return [
+      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
+      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
+    ].join(" ");
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
@@ -1487,6 +1618,16 @@ function buildAssistantText(
   }
   if (
     toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
+  }
+  if (
+    toolOutput &&
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
   ) {
     return [
@@ -1500,16 +1641,6 @@ function buildAssistantText(
       "Follow-up:",
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
-      return `FAKE_PLUGIN_OK ${targetTool}`;
-    }
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -1532,49 +1663,57 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
 function buildReleaseAuditJson() {
   return `${JSON.stringify(
     {
-      verified: true,
+      verified: false,
       findings: [
         {
           id: "REL-GATEWAY-417",
           source: "src/gateway/reconnect.ts",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
+          verified: true,
         },
         {
           id: "REL-CHANNEL-238",
           source: "src/channels/delivery.ts",
           status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+          verified: true,
         },
         {
           id: "REL-CRON-904",
           source: "src/scheduling/cron.ts",
           status: "single-run lock verified for restart wakeups",
+          verified: true,
         },
         {
           id: "REL-MEMORY-552",
           source: "src/memory/recall.ts",
           status:
             "fallback summary survives empty memory search; ranking sample needs second reviewer",
+          verified: true,
         },
         {
           id: "REL-PLUGIN-319",
           source: "src/plugins/runtime.ts",
           status: "bundled runtime manifest loads cleanly after restart",
+          verified: true,
         },
         {
           id: "REL-INSTALL-846",
           source: "install/update.ts",
           status: "update smoke passed from previous stable tag",
+          verified: true,
         },
         {
           id: "REL-DOCS-611",
           source: "docs/operator-notes.md",
           status:
             "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+          verified: true,
         },
         {
           id: "REL-UI-BLOCKED",
           source: "ui/control-panel.ts",
           status: "blocked: source file was referenced by checklist but missing from the fixture",
+          verified: false,
         },
       ],
     },
@@ -2224,6 +2363,48 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  if (whatsAppPendingHistoryReply) {
+    return buildAssistantEvents(whatsAppPendingHistoryReply);
+  }
+  const whatsAppBroadcastReply = buildWhatsAppBroadcastReply(allInputText);
+  if (whatsAppBroadcastReply) {
+    return buildAssistantEvents(whatsAppBroadcastReply);
+  }
+  const whatsAppGroupDispatchReply = buildWhatsAppGroupDispatchReply(allInputText);
+  if (whatsAppGroupDispatchReply) {
+    return buildAssistantEvents(whatsAppGroupDispatchReply);
+  }
+  const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
+  if (whatsAppBatchedReply) {
+    return buildAssistantEvents(whatsAppBatchedReply);
+  }
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "react",
+        emoji: "👍",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
+  const whatsAppUploadMatch = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(allInputText);
+  if (whatsAppUploadMatch?.[1]) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "upload-file",
+        buffer: TINY_PNG_BASE64,
+        caption: whatsAppUploadMatch[1],
+        contentType: "image/png",
+        filename: "whatsapp-qa-agent-upload.png",
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+  }
   if (
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
@@ -2593,10 +2774,10 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/memory tools check/i.test(allInputText)) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
-        query: "project codename ORBIT-9",
+        query: "hidden project codename",
         maxResults: 3,
       });
     }
@@ -2604,10 +2785,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)

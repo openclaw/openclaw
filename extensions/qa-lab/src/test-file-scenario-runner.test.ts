@@ -179,7 +179,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs"],
+      ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
       [
         "scripts/run-vitest.mjs",
         "run",
@@ -239,6 +239,26 @@ describe("qa test file scenario runner", () => {
         status: "pass",
       },
     });
+  });
+
+  it("can return aggregate evidence without writing a duplicate evidence file", async () => {
+    const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      writeEvidenceFile: false,
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: "pass\n",
+        stderr: "",
+      }),
+    });
+
+    expect(result.evidence.entries).toHaveLength(1);
+    await expect(fs.access(result.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
@@ -435,6 +455,43 @@ describe("qa test file scenario runner", () => {
         status: "pass",
       },
     });
+  });
+
+  it("uses script scenario timeout overrides when running producer commands", async () => {
+    const repoRoot = await makeTempRepo("qa-script-scenario-timeout-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-timeout");
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
+    }
+    scenario.execution.timeoutMs = 3 * 60 * 60_000;
+
+    const commands: QaScenarioCommandExecution[] = [];
+    await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      commandTimeoutMs: 30 * 60_000,
+      runCommand: async (command) => {
+        commands.push(command);
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "pass",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script pass\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
   });
 
   it("times out script scenarios and kills descendant process groups", async () => {

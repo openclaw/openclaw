@@ -10,6 +10,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
 import type { ToolRenderResultOptions } from "../extensions/types.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
 
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
@@ -17,7 +18,10 @@ export function shortenPath(path: unknown): string {
     return "";
   }
   const home = os.homedir();
-  if (path.startsWith(home)) {
+  if (path === home) {
+    return "~";
+  }
+  if (path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) {
     return `~${path.slice(home.length)}`;
   }
   return path;
@@ -103,6 +107,29 @@ export function formatSessionToolOutput(
     text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
   }
   return text;
+}
+
+export function appendSessionToolTruncationWarning(
+  text: string,
+  theme: Pick<Theme, "fg">,
+  options: {
+    limit?: { count: number; noun: string };
+    truncation?: Pick<TruncationResult, "truncated" | "maxBytes">;
+    additionalWarnings?: readonly string[];
+  },
+): string {
+  const warnings: string[] = [];
+  if (options.limit) {
+    warnings.push(`${options.limit.count} ${options.limit.noun} limit`);
+  }
+  if (options.truncation?.truncated) {
+    warnings.push(`${formatSize(options.truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
+  }
+  warnings.push(...(options.additionalWarnings ?? []));
+  if (warnings.length === 0) {
+    return text;
+  }
+  return `${text}\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
 }
 
 /** Formats the invalid-argument marker with the active theme. */

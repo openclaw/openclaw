@@ -407,6 +407,7 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
+      cutIndex = cutPoints[cutPoints.length - 1];
       for (const cutPoint of cutPoints) {
         if (cutPoint >= i) {
           cutIndex = cutPoint;

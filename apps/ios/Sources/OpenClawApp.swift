@@ -123,8 +123,28 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         let notificationCenter = UNUserNotificationCenter.current()
         notificationCenter.delegate = self
         ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
-        application.registerForRemoteNotifications()
+        Task { @MainActor in
+            await self.registerForRemoteNotificationsIfEnrollmentReady(application)
+        }
         return true
+    }
+
+    private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard await Self.isNotificationAuthorizationAllowed() else { return }
+        application.registerForRemoteNotifications()
+    }
+
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .denied, .notDetermined:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -610,6 +630,10 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
+            // Reruns must exercise onboarding instead of saved pairing state.
+            GatewayOnboardingReset.reset(appModel: appModel, instanceId: GatewaySettingsStore.currentInstanceID())
+        }
         if Self.screenshotModeEnabled {
             UIView.setAnimationsEnabled(false)
             UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
@@ -626,7 +650,8 @@ struct OpenClawApp: App {
         _gatewayController = State(
             initialValue: GatewayConnectionController(
                 appModel: appModel,
-                startDiscovery: !Self.screenshotModeEnabled))
+                startDiscovery: !Self.screenshotModeEnabled,
+                deferDiscoveryUntilLocalNetworkRequest: true))
     }
 
     var body: some Scene {

@@ -6,8 +6,6 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
-import { toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
-
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -133,6 +131,11 @@ function isQuickJsInterruptedError(error: unknown): boolean {
   if (error instanceof CodeModeGuestError) {
     return false;
   }
+  // Match on the raw QuickJS message, not the formatted errorMessage() string,
+  // which now leads with the error name and appends backtrace frames.
+  if (error instanceof JSException) {
+    return error.message === "interrupted";
+  }
   return errorMessage(error) === "interrupted";
 }
 
@@ -152,14 +155,56 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+// QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
+// no leading "Name: message" header like V8. Returning .stack alone therefore
+// dropped the actual cause, surfacing failures to the model as a bare location
+// (e.g. "at openclaw-code-mode:user.js:2:37"). Lead with name+message so the
+// model can self-correct, and keep the frames for location.
+function formatQuickJsError(name: string, message: string, stack: string | undefined): string {
+  const header = message ? `${name}: ${message}` : name;
+  if (!stack || stack.split(/\r?\n/, 1)[0] === header) {
+    return header;
+  }
+  return `${header}\n${stack}`;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof JSException) {
-    return error.stack || error.message || String(error);
+    return formatQuickJsError(error.name, error.message, error.stack);
   }
   if (error instanceof Error) {
     return error.message || String(error);
   }
   return String(error);
+}
+
+function toJsonSafe(value: unknown): unknown {
+  if (value === undefined) {
+    return null;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
+  } catch {
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message };
+    }
+    if (value === null) {
+      return null;
+    }
+    switch (typeof value) {
+      case "string":
+      case "number":
+      case "boolean":
+        return value;
+      case "bigint":
+      case "symbol":
+      case "function":
+        return String(value);
+      default:
+        return Object.prototype.toString.call(value);
+    }
+  }
 }
 
 const CONTROLLER_SOURCE = String.raw`
@@ -548,7 +593,15 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     try {
-      throw new CodeModeGuestError(errorMessage(vm.dump(settled.error)));
+      // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
+      // format it like the synchronous path so async rejections keep their cause
+      // and location instead of collapsing to the bare message.
+      const dumped = vm.dump(settled.error);
+      const text =
+        dumped instanceof Error
+          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
+          : errorMessage(dumped);
+      throw new CodeModeGuestError(text);
     } finally {
       settled.error.dispose();
     }
@@ -727,10 +780,15 @@ async function main(): Promise<CodeModeWorkerResult> {
       output: [],
     };
   } catch (error) {
+    const timedOut = isQuickJsInterruptedError(error);
     return {
       status: "failed",
-      error: errorMessage(error),
-      code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
+      error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
+      code: timedOut
+        ? "timeout"
+        : error instanceof CodeModeWorkerFailure
+          ? error.code
+          : "internal_error",
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

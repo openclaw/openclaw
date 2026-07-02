@@ -18,6 +18,7 @@ import {
   type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
+import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
 /** Result of applying a reset-message model override. */
 type ResetModelResult = {
@@ -109,12 +110,14 @@ function buildSelectionFromExplicit(params: {
 function applySelectionToSession(params: {
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
 }) {
-  const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey) {
+  const { selection, sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
+  const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
+  if (!sessionEntry || !sessionKey) {
     return;
   }
   const { updated } = applyModelOverrideToSessionEntry({
@@ -124,7 +127,11 @@ function applySelectionToSession(params: {
   if (!updated) {
     return;
   }
-  sessionStore[sessionKey] = sessionEntry;
+  if (sessionEntryHandle) {
+    sessionEntryHandle.replaceCurrent(sessionEntry);
+  } else if (sessionStore) {
+    sessionStore[sessionKey] = sessionEntry;
+  }
   if (storePath) {
     void import("../../config/sessions/session-accessor.js")
       .then(({ replaceSessionEntry }) =>
@@ -146,6 +153,7 @@ export async function applyResetModelOverride(params: {
   sessionCtx: TemplateContext;
   ctx: MsgContext;
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -248,6 +256,7 @@ export async function applyResetModelOverride(params: {
   applySelectionToSession({
     selection,
     sessionEntry: params.sessionEntry,
+    sessionEntryHandle: params.sessionEntryHandle,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,

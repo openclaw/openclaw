@@ -556,12 +556,24 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
+      .option("--agent <id>", "Scope the cost summary to a specific agent id")
+      .option("--all-agents", "Aggregate the cost summary across all agents", false)
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
             const rpcOpts = resolveGatewayRpcOptions(opts, command);
             const days = parseDaysOption(opts.days);
-            const result = await callGatewayCli("usage.cost", rpcOpts, { days });
+            const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
+            // The gateway honors agentScope only when no agentId is set, so reject the
+            // ambiguous combination here instead of silently dropping --all-agents.
+            if (agentId && opts.allAgents) {
+              throw new Error("Use --agent or --all-agents, not both");
+            }
+            const result = await callGatewayCli("usage.cost", rpcOpts, {
+              days,
+              ...(agentId ? { agentId } : {}),
+              ...(opts.allAgents ? { agentScope: "all" } : {}),
+            });
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;

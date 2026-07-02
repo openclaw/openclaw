@@ -1,4 +1,4 @@
-/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
+/** Executes detached cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -39,6 +40,7 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -65,19 +67,19 @@ const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 const MAX_CRON_DELIVERY_TARGET_CONTEXT_CHARS = 1000;
 
-function resolveIsolatedCronPromptCacheKey(params: {
+function resolveDetachedCronPromptCacheKey(params: {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
   provider: string;
   model: string;
 }): string | undefined {
-  if (params.job.sessionTarget !== "isolated") {
+  if (!isDetachedCronSessionTarget(params.job.sessionTarget)) {
     return undefined;
   }
   const material = JSON.stringify({
     version: 1,
-    kind: "isolated-cron",
+    kind: "detached-cron",
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -85,7 +87,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
     model: params.model,
   });
   const digest = createHash("sha256").update(material).digest("hex").slice(0, 32);
-  // Isolated cron rotates transcript/session ids per run; keep cache affinity
+  // Detached cron rotates transcript/session ids per run; keep cache affinity
   // on stable job identity without sending raw local session labels upstream.
   return `openclaw-cron-${digest}`;
 }
@@ -161,8 +163,19 @@ function buildCronDeliveryTargetRuntimeContext(params: {
   ].join("\n");
 }
 
-function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
-  return toolsAllow?.some((toolName) => normalizeToolName(toolName) === "*")
+function resolveCliRuntimeToolsAllow(
+  toolsAllow?: string[],
+  toolsAllowIsDefault?: boolean,
+): string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  // CLI runners reject runtime toolsAllow. Drop only the auto-stamped default;
+  // explicit per-cron restrictions stay fail-closed in prepareCliRunContext.
+  if (toolsAllowIsDefault) {
+    return undefined;
+  }
+  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }
@@ -199,11 +212,12 @@ export function createCronPromptExecutor(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -249,13 +263,21 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const sourceReplyDeliveryMode = params.sourceDelivery.sourceReplyDeliveryMode;
-  const messageChannel = params.sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  if (!params.sourceDelivery) {
+    logWarn(
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
+    );
+  }
+  const sourceDelivery =
+    params.sourceDelivery ??
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
+  const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
+  const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
     resolvedDeliveryOk: params.resolvedDeliveryOk,
     messageToolPromptEnabled: params.messageToolPromptEnabled,
     resolvedDelivery: params.resolvedDelivery,
-    sourceDelivery: params.sourceDelivery,
+    sourceDelivery,
   });
 
   const runPrompt = async (promptText: string) => {
@@ -272,6 +294,7 @@ export function createCronPromptExecutor(params: {
       agentDir: params.agentDir,
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.cfgWithAgentDefaults,
@@ -310,6 +333,7 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
+            cleanupCliLiveSessionOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
@@ -325,8 +349,11 @@ export function createCronPromptExecutor(params: {
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             sourceReplyDeliveryMode,
-            requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-            toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
+            requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            toolsAllow: resolveCliRuntimeToolsAllow(
+              params.agentPayload?.toolsAllow,
+              params.agentPayload?.toolsAllowIsDefault,
+            ),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
@@ -344,7 +371,7 @@ export function createCronPromptExecutor(params: {
           return result;
         }
         const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
+        const promptCacheKey = resolveDetachedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
@@ -365,7 +392,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
-          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
+          cleanupBundleMcpOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
           allowGatewaySubagentBinding: true,
           messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
@@ -421,9 +448,9 @@ export function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-          disableMessageTool: !params.sourceDelivery.messageTool.enabled,
-          forceMessageTool: params.sourceDelivery.messageTool.force,
+          requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+          disableMessageTool: !sourceDelivery.messageTool.enabled,
+          forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -474,11 +501,12 @@ export async function executeCronRun(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -514,6 +542,14 @@ export async function executeCronRun(params: {
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
+  if (!params.sourceDelivery) {
+    logWarn(
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
+    );
+  }
+  const sourceDelivery =
+    params.sourceDelivery ??
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -533,7 +569,7 @@ export async function executeCronRun(params: {
     resolvedDeliveryOk: params.resolvedDeliveryOk,
     messageToolPromptEnabled: params.messageToolPromptEnabled,
     deliveryRequested: params.deliveryRequested,
-    sourceDelivery: params.sourceDelivery,
+    sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,

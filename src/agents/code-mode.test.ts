@@ -779,6 +779,71 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("uses tools recovery guidance for guessed tool ids", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const writeTool = pluginTool("write", "Write a file to the workspace");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, writeTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("file_write", {
+            path: "memory/2026-05-22.md",
+            content: "remember this",
+          });
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: file_write. Did you mean: write? Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("uses tools recovery guidance when no generic Code Mode suggestion matches", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("missing_tool", {});
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+  });
+
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -882,8 +947,10 @@ describe("Code Mode", () => {
       },
       searchHits: [],
       allHasMcp: false,
-      directDescribe: "Unknown tool id: github__create_issue",
-      directCall: "Unknown tool id: github__create_issue",
+      directDescribe:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+      directCall:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
@@ -1572,6 +1639,76 @@ describe("Code Mode", () => {
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
+  it("surfaces the QuickJS error name and message for guest syntax errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-syntax", { code: "const x = ;" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    // Regression guard: QuickJS stacks are frames only, so the error used to
+    // collapse to a bare "at openclaw-code-mode:user.js:..." location with the
+    // actual cause dropped. The model now sees the name and message.
+    expect(error).toContain("SyntaxError");
+    expect(error).toContain("unexpected token");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
+  it("surfaces the QuickJS error name and message for guest runtime errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-runtime", { code: "return missingFn();" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    expect(error).toContain("ReferenceError");
+    expect(error).toContain("missingFn is not defined");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
+  it("does not duplicate host error headers or expose host stack frames", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-host-error", {
+        code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
+      }),
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      error: "Error: unsupported code mode bridge method",
+    });
+  });
+
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -1829,7 +1966,7 @@ describe("Code Mode", () => {
     );
 
     expect(details.status).toBe("failed");
-    expect(details.error).toBe("boom");
+    expect(String(details.error)).toContain("Error: boom");
     expect(details.output).toEqual([{ type: "text", text: "before" }]);
   });
 
@@ -1978,9 +2115,11 @@ describe("Code Mode", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "internal_error",
-      error: "interrupted",
-    });
+    // A guest error whose message happens to be "interrupted" must stay
+    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
+    expect(result).toMatchObject({ code: "internal_error" });
+    if (result.status === "failed") {
+      expect(result.error).toContain("interrupted");
+    }
   });
 });

@@ -1,5 +1,13 @@
 // Public gateway protocol entrypoint. Keep this barrel aligned with schema.ts
 // so clients can import wire types, JSON schemas, and validators from one place.
+export {
+  buildClawHubTrustErrorDetails,
+  ClawHubTrustErrorCodes,
+  isClawHubTrustErrorCode,
+  readClawHubTrustErrorDetails,
+  type ClawHubTrustErrorCode,
+  type ClawHubTrustErrorDetails,
+} from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import {
   type AgentEvent,
