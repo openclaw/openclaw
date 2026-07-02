@@ -18,6 +18,7 @@ export type MentionSource =
   | "explicit_bot"
   | "subteam"
   | "mention_pattern"
+  | "native"
   | "implicit_thread"
   | "command_bypass"
   | "none";
@@ -268,6 +269,14 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** True when this channel can decide whether the current bot target was mentioned. */
+  CanDetectMention?: boolean;
+  /** True when provider mention metadata or mention-pattern text was present. */
+  HasAnyMention?: boolean;
+  /** True when the current channel policy requires a mention before replying. */
+  RequireMention?: boolean;
+  /** Final mention decision after native/text detection and policy fallback. */
+  EffectiveWasMentioned?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */
