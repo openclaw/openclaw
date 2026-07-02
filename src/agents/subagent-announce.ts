@@ -1348,6 +1348,15 @@ export async function runSubagentAnnounceFlow(params: {
               // costCapTokens). The child-queue drain arms the shared hedge timer
               // for the unmatured entry; restart recovery re-drives it if the
               // process dies first.
+              //
+              // Enqueue `chainTask` RAW: it is the clean parsed delegate body —
+              // stripContinuationSignal already removed the `+Ns` delay (kept
+              // separately in delayMs) and it carries no chain-hop wrapper. The
+              // shared delegate dispatcher applies the `[continuation:chain-hop:N]`
+              // wrapper at dispatch time (see delegate-dispatch.ts spawn task),
+              // exactly like the normal continue_delegate queue contract. Do NOT
+              // pre-wrap it the way the immediate `doChainSpawn` payload does, or
+              // the dispatcher would double-wrap the hop marker.
               enqueuePendingDelegate(params.childSessionKey, {
                 task: chainTask,
                 delayMs: clampedDelay,
