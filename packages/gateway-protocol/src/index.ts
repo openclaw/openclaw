@@ -550,6 +550,53 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
   return validate;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function withChatHistoryParamRules<T>(base: ProtocolValidator<T>): ProtocolValidator<T> {
+  let errors: ValidationError[] | null = null;
+
+  const validate = ((data: unknown): data is T => {
+    if (!base(data)) {
+      errors = base.errors;
+      return false;
+    }
+    if (isObjectRecord(data) && data.includeFamily === true && data.offset !== undefined) {
+      errors = [
+        {
+          keyword: "includeFamilyOffset",
+          instancePath: "/offset",
+          schemaPath: "#/properties/offset",
+          params: { disallowedWith: "includeFamily" },
+          message: "includeFamily cannot be combined with offset",
+        },
+      ];
+      return false;
+    }
+    errors = null;
+    return true;
+  }) as ProtocolValidator<T>;
+
+  Object.defineProperties(validate, {
+    errors: {
+      configurable: true,
+      enumerable: true,
+      get: () => errors,
+      set: (nextErrors: ValidationError[] | null | undefined) => {
+        errors = nextErrors ?? null;
+      },
+    },
+    schema: {
+      configurable: true,
+      enumerable: true,
+      get: () => base.schema,
+    },
+  });
+
+  return validate;
+}
+
 // Public per-method validators. Names intentionally mirror the exported schema
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
@@ -906,7 +953,9 @@ export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
-export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
+export const validateChatHistoryParams = withChatHistoryParamRules(
+  lazyCompile(ChatHistoryParamsSchema),
+);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);

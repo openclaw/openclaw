@@ -50,8 +50,7 @@ function isInMemoryDatabasePath(dbPath: string): boolean {
   const fragmentIndex = dbPath.indexOf("#");
   const uriWithoutFragment = fragmentIndex === -1 ? dbPath : dbPath.slice(0, fragmentIndex);
   const queryIndex = uriWithoutFragment.indexOf("?");
-  const uriPath =
-    queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
+  const uriPath = queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
   try {
     if (decodeURIComponent(uriPath.slice("file:".length)) === ":memory:") {
       return true;

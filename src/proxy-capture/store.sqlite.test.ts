@@ -1,8 +1,10 @@
 // Proxy capture SQLite store tests cover persisted capture reads and writes.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -37,6 +39,40 @@ function readMode(target: string): number {
 }
 
 describe("DebugProxyCaptureStore", () => {
+  it.each([
+    ":memory:",
+    "file::memory:?cache=shared",
+    "file:%3Amemory:?cache=shared",
+    "file:proxy-capture?mode=memory&cache=shared",
+    "file:proxy-capture?mode=memory#ignored",
+  ])("keeps SQLite memory path %s off the filesystem", (dbPath) => {
+    const mkdirSync = vi.spyOn(fs, "mkdirSync");
+    const openSync = vi.spyOn(fs, "openSync");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    const store = new DebugProxyCaptureStore(dbPath, "unused");
+    try {
+      expect(store.db.prepare("PRAGMA database_list").get()).toMatchObject({ file: "" });
+      expect(mkdirSync).not.toHaveBeenCalled();
+      expect(openSync).not.toHaveBeenCalled();
+      expect(existsSync).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+    }
+  });
+
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-failed-open-"));
+    cleanupDirs.push(root);
+    const dbPath = path.join(root, "capture.sqlite");
+    fs.writeFileSync(dbPath, "not a sqlite database");
+
+    expect(() => new DebugProxyCaptureStore(dbPath, path.join(root, "blobs"))).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(dbPath)).toEqual([]);
+  });
+
   it("keeps the cached store open until the last lease releases", () => {
     const options = { env: makeStateEnv("openclaw-proxy-capture-lease-") };
 
