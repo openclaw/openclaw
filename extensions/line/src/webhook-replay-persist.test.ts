@@ -1,15 +1,19 @@
 // Line tests cover webhook replay dedupe persistence across restart.
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { installIsolatedPluginStateDirForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLineWebhookReplayCache } from "./bot-handlers.js";
 
-// Persistence is backed by the extensions Vitest setup, which isolates HOME /
-// OPENCLAW_STATE_DIR per worker (test/setup.extensions.ts). A second cache
-// instance reading the same on-disk namespace == a process restart with an
-// empty in-memory cache. resetPluginStateStoreForTests() closes the shared DB
-// handle between tests (it does not clear rows).
+// Per-test state dir: a second cache instance reading the same on-disk
+// namespace == a process restart with an empty in-memory cache, and the
+// committed keys cannot leak into other suites sharing the worker.
+let stateDir: ReturnType<typeof installIsolatedPluginStateDirForTests>;
+
+beforeEach(() => {
+  stateDir = installIsolatedPluginStateDirForTests();
+});
+
 afterEach(() => {
-  resetPluginStateStoreForTests();
+  stateDir.restore();
 });
 
 describe("line webhook replay cache persistence", () => {

@@ -9,6 +9,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   buildTtsSupplementMediaPayload,
@@ -190,6 +191,14 @@ export function createMattermostInboundReplayGuard(): ClaimableDedupe {
     ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
     memoryMaxSize: RECENT_MATTERMOST_MESSAGE_MAX,
     stateMaxEntries: MATTERMOST_INBOUND_REPLAY_STATE_MAX_ENTRIES,
+    // Persistent dedupe fails open on storage errors; without this hook a
+    // broken state DB silently downgrades to memory-only (restart replays return).
+    onDiskError: (error) => {
+      getChildLogger({ module: "mattermost" }).warn(
+        { error: String(error) },
+        "mattermost inbound replay dedupe storage failed",
+      );
+    },
   });
 }
 

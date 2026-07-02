@@ -57,8 +57,8 @@ export type {
   DurableInboundReceiveJournalOptions,
   DurableInboundReceivePendingRecord,
   DurableInboundReceiveQueueJournalOptions,
+  DurableInboundReceiveReplayableJournal,
   DurableInboundReceiveReleaseOptions,
-  DurableInboundReceiveReplaySummary,
 } from "./durable-receive.js";
 export type {
   ChannelIngressQueue,

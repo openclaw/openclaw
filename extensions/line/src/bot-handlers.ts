@@ -10,6 +10,7 @@ import {
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -107,6 +108,14 @@ export function createLineWebhookReplayCache(): LineWebhookReplayCache {
     ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
     memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
     stateMaxEntries: LINE_WEBHOOK_REPLAY_STATE_MAX_ENTRIES,
+    // Persistent dedupe fails open on storage errors; without this hook a
+    // broken state DB silently downgrades to memory-only (restart replays return).
+    onDiskError: (error) => {
+      getChildLogger({ module: "line" }).warn(
+        { error: String(error) },
+        "line webhook replay dedupe storage failed",
+      );
+    },
   });
 }
 

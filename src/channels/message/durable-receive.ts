@@ -74,7 +74,6 @@ export type DurableInboundReceiveReleaseOptions = {
 export type DurableInboundReceiveFailOptions = {
   reason: string;
   message?: string;
-  failedAt?: number;
 };
 
 /** Durable receive journal facade used by channel receive pipelines. */
@@ -90,8 +89,20 @@ export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata
     options?: DurableInboundReceiveCompleteOptions<TCompletedMetadata>,
   ): Promise<void>;
   release(id: string, options?: DurableInboundReceiveReleaseOptions): Promise<boolean>;
-  fail(id: string, options: DurableInboundReceiveFailOptions): Promise<boolean>;
   deletePending(id: string): Promise<boolean>;
+};
+
+/**
+ * Journal with a dead-letter terminal state, as returned by both factories.
+ * Kept as an intersection so the shipped DurableInboundReceiveJournal type
+ * stays source-compatible for external implementers.
+ */
+export type DurableInboundReceiveReplayableJournal<
+  TPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+> = DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> & {
+  fail(id: string, options: DurableInboundReceiveFailOptions): Promise<boolean>;
 };
 
 /** Queue-backed durable receive journal options with optional retention pruning. */
@@ -121,7 +132,7 @@ export function createDurableInboundReceiveJournal<
   TCompletedMetadata = unknown,
 >(
   options: DurableInboundReceiveJournalOptions<TPayload, TMetadata, TCompletedMetadata>,
-): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
+): DurableInboundReceiveReplayableJournal<TPayload, TMetadata, TCompletedMetadata> {
   const now = options.now ?? Date.now;
 
   const accept = async (
@@ -246,7 +257,7 @@ export function createDurableInboundReceiveJournal<
 
   const fail = async (
     id: string,
-    failOptions: DurableInboundReceiveFailOptions,
+    _failOptions: DurableInboundReceiveFailOptions,
   ): Promise<boolean> => {
     const key = normalizeDurableInboundReceiveId(id);
     const pendingRecord = await options.pendingStore.lookup(key);
@@ -254,10 +265,11 @@ export function createDurableInboundReceiveJournal<
       return false;
     }
     // The store-backed journal has no separate failed store; a completed
-    // tombstone is the terminal state that keeps redeliveries deduped.
+    // tombstone is the terminal state that keeps redeliveries deduped. The
+    // reason/message are only persisted by the queue-backed flavor.
     await options.completedStore.register(
       key,
-      { id: key, completedAt: failOptions.failedAt ?? now() },
+      { id: key, completedAt: now() },
       { ttlMs: options.completedTtlMs },
     );
     await options.pendingStore.delete(key);
@@ -281,7 +293,7 @@ export function createDurableInboundReceiveJournalFromQueue<
   TCompletedMetadata = unknown,
 >(
   options: DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata>,
-): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
+): DurableInboundReceiveReplayableJournal<TPayload, TMetadata, TCompletedMetadata> {
   const prune = async (protectId?: string) => {
     if (options.retention) {
       await options.queue.prune({
@@ -309,6 +321,9 @@ export function createDurableInboundReceiveJournalFromQueue<
       if (result.kind === "pending" || result.kind === "claimed") {
         return { kind: "pending", duplicate: true, record: result.record };
       }
+      // Dead-lettered (failed) rows map to a pending-duplicate so consumers
+      // skip redeliveries without running completed-side effects (e.g. read
+      // receipts) for a message that was never actually delivered.
       return {
         kind: "pending",
         duplicate: true,
@@ -344,15 +359,13 @@ export function createDurableInboundReceiveJournalFromQueue<
       await prune(normalizeDurableInboundReceiveId(id));
       return released;
     },
-    fail: async (id, failOptions) => {
-      const failed = await options.queue.fail(normalizeDurableInboundReceiveId(id), {
+    // No trailing prune: the pass-level prune in pending()/accept() owns
+    // retention; a per-fail prune would double the write transactions.
+    fail: async (id, failOptions) =>
+      await options.queue.fail(normalizeDurableInboundReceiveId(id), {
         reason: failOptions.reason,
         ...(failOptions.message === undefined ? {} : { message: failOptions.message }),
-        ...(failOptions.failedAt === undefined ? {} : { failedAt: failOptions.failedAt }),
-      });
-      await prune(normalizeDurableInboundReceiveId(id));
-      return failed;
-    },
+      }),
     deletePending: async (id) => {
       const deleted = await options.queue.delete(normalizeDurableInboundReceiveId(id));
       await prune();
@@ -363,31 +376,25 @@ export function createDurableInboundReceiveJournalFromQueue<
 
 const DURABLE_INBOUND_REPLAY_DEAD_LETTER_REASON = "max_replay_attempts";
 
-/** Summary of one bounded replay pass over pending inbound receives. */
-export type DurableInboundReceiveReplaySummary = {
-  processed: number;
-  deadLettered: number;
-};
-
 /**
  * Replays pending inbound receives with a hard attempt bound.
  *
- * Each pass counts the attempt before processing so a run that stalls or
- * crashes still converges on the cap; without this, a poison event replays on
- * every reconnect/restart forever (re-delivery storm, #97538).
+ * `attempts` bounds TOTAL delivery attempts (replay passes plus any retryable
+ * failures the channel pipeline releases), so a run that stalls or crashes
+ * still converges on the cap; without this, a poison event replays on every
+ * reconnect/restart forever (re-delivery storm, #97538).
  */
 export async function replayPendingDurableInboundReceives<
   TPayload,
   TMetadata = unknown,
   TCompletedMetadata = unknown,
 >(params: {
-  journal: DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata>;
+  journal: DurableInboundReceiveReplayableJournal<TPayload, TMetadata, TCompletedMetadata>;
   maxAttempts: number;
   process: (record: DurableInboundReceivePendingRecord<TPayload, TMetadata>) => Promise<void>;
   onDeadLetter?: (record: DurableInboundReceivePendingRecord<TPayload, TMetadata>) => void;
-}): Promise<DurableInboundReceiveReplaySummary> {
-  let processed = 0;
-  let deadLettered = 0;
+}): Promise<void> {
+  const errors: unknown[] = [];
   for (const record of await params.journal.pending()) {
     if (record.attempts >= params.maxAttempts) {
       await params.journal.fail(record.id, {
@@ -395,13 +402,24 @@ export async function replayPendingDurableInboundReceives<
         ...(record.lastError === undefined ? {} : { message: record.lastError }),
       });
       params.onDeadLetter?.(record);
-      deadLettered += 1;
       continue;
     }
-    // Record the attempt up front; successful processing completes the row.
-    await params.journal.release(record.id);
-    await params.process(record);
-    processed += 1;
+    // Count the attempt up front; successful processing completes the row.
+    // release() returning false means the row vanished since the pending()
+    // snapshot (completed concurrently or pruned) — processing the stale
+    // snapshot would double-deliver, so skip it.
+    if (!(await params.journal.release(record.id))) {
+      continue;
+    }
+    try {
+      await params.process(record);
+    } catch (err) {
+      // One poison record must not starve the rest of the pass; it keeps its
+      // bumped attempts and converges on the cap over later passes.
+      errors.push(err);
+    }
   }
-  return { processed, deadLettered };
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "durable inbound replay failed for some records");
+  }
 }

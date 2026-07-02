@@ -1,4 +1,5 @@
 // Discord plugin module implements inbound dedupe behavior.
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { DiscordMessageEvent } from "./listeners.js";
 import { resolveDiscordMessageChannelId } from "./message-utils.js";
@@ -23,6 +24,14 @@ export function createDiscordInboundReplayGuard(): ClaimableDedupe {
     ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
     memoryMaxSize: RECENT_DISCORD_MESSAGE_MAX,
     stateMaxEntries: DISCORD_INBOUND_DEDUPE_STATE_MAX_ENTRIES,
+    // Persistent dedupe fails open on storage errors; without this hook a
+    // broken state DB silently downgrades to memory-only (restart replays return).
+    onDiskError: (error) => {
+      getChildLogger({ module: "discord" }).warn(
+        { error: String(error) },
+        "discord inbound replay dedupe storage failed",
+      );
+    },
   });
 }
 
