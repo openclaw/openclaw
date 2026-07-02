@@ -174,6 +174,13 @@
         outline-offset: 3px;
       }
 
+      .mount-fallback__retry-status {
+        margin: 12px 0 0;
+        color: #9fb0bd;
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+
       html[data-theme-mode="light"] body.openclaw-mount-fallback-active {
         color: #151b21;
         background: #f5f7fa;
@@ -194,6 +201,10 @@
       html[data-theme-mode="light"] .mount-fallback__panel a {
         color: #0369a1;
       }
+
+      html[data-theme-mode="light"] .mount-fallback__retry-status {
+        color: #6b7785;
+      }
     </style>
   </head>
   <body>
@@ -209,12 +220,12 @@
       <div class="mount-fallback__panel" tabindex="-1">
         <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
         <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
-        <p>
+        <p id="openclaw-mount-fallback-reason">
           The browser loaded the static page, but the app bundle did not register the
           <code>openclaw-app</code> web component. A browser extension or early content script may
           be blocking module execution.
         </p>
-        <ul>
+        <ul id="openclaw-mount-fallback-steps">
           <li>Try again in a clean browser profile or private window.</li>
           <li>Disable extensions that run on all pages, then reload this dashboard.</li>
           <li>
@@ -239,6 +250,7 @@
             Keep waiting
           </button>
         </div>
+        <p id="openclaw-mount-retry-status" class="mount-fallback__retry-status" hidden></p>
       </div>
     </section>
     <script>
@@ -251,9 +263,18 @@
         var panel = fallback.querySelector(".mount-fallback__panel");
         var retry = document.getElementById("openclaw-mount-retry");
         var wait = document.getElementById("openclaw-mount-wait");
+        var retryStatus = document.getElementById("openclaw-mount-retry-status");
+        var titleEl = document.getElementById("openclaw-mount-fallback-title");
+        var reasonEl = document.getElementById("openclaw-mount-fallback-reason");
+        var stepsEl = document.getElementById("openclaw-mount-fallback-steps");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
         var timer;
+        var retryCount = 0;
+        var maxRetries = 5;
+        var backoffSchedule = [2000, 4000, 8000, 16000, 32000];
+        var retrying = false;
+        var probeResult = null; // null = not probed, "reachable", "unreachable"
 
         function appMounted() {
           try {
@@ -284,11 +305,148 @@
               panel.focus();
             }
           }
+          // Probe gateway reachability to distinguish restart from extension blocking
+          probeGateway();
+        }
+
+        function probeGateway() {
+          if (probeResult !== null) return; // already probed
+          try {
+            fetch(window.location.href, {
+              method: "GET",
+              cache: "no-store",
+              headers: { "X-OpenClaw-Probe": "1" },
+            }).then(
+              function (res) {
+                probeResult = res && res.ok ? "reachable" : "unreachable";
+                updateFallbackMessage();
+              },
+              function () {
+                probeResult = "unreachable";
+                updateFallbackMessage();
+              },
+            );
+          } catch (e) {
+            probeResult = "unreachable";
+            updateFallbackMessage();
+          }
+        }
+
+        function updateFallbackMessage() {
+          if (probeResult === null || !titleEl || !reasonEl || !stepsEl) return;
+          if (probeResult === "unreachable") {
+            titleEl.textContent = "Control UI is starting up";
+            reasonEl.textContent =
+              "The gateway is restarting or temporarily unavailable. The app bundle will be retried automatically — please wait.";
+            stepsEl.innerHTML =
+              '<li>The gateway may take a few seconds to come back online.</li>' +
+              '<li>If this persists after 30 seconds, try reloading the page.</li>' +
+              '<li>See <a href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page" target="_blank" rel="noopener noreferrer">Control UI troubleshooting</a>.</li>';
+          } else {
+            titleEl.textContent = "Control UI did not start";
+            reasonEl.textContent =
+              "The browser loaded the static page, but the app bundle did not register the " +
+              "openclaw-app web component. A browser extension or early content script may " +
+              "be blocking module execution.";
+            stepsEl.innerHTML =
+              '<li>Try again in a clean browser profile or private window.</li>' +
+              '<li>Disable extensions that run on all pages, then reload this dashboard.</li>' +
+              '<li>See <a href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page" target="_blank" rel="noopener noreferrer">Control UI troubleshooting</a>.</li>';
+          }
         }
 
         function armFallbackTimer() {
           window.clearTimeout(timer);
           timer = window.setTimeout(showFallback, delay);
+        }
+
+        function fetchAppBundle() {
+          try {
+            return fetch("/src/main.ts", { cache: "no-store" }).then(
+              function (res) {
+                return res && res.ok;
+              },
+              function () {
+                return false;
+              },
+            );
+          } catch (e) {
+            return Promise.resolve(false);
+          }
+        }
+
+        function showRetryStatus(message) {
+          if (!retryStatus) return;
+          retryStatus.textContent = message;
+          retryStatus.hidden = false;
+        }
+
+        function hideRetryStatus() {
+          if (!retryStatus) return;
+          retryStatus.hidden = true;
+          retryStatus.textContent = "";
+        }
+
+        function performRetry() {
+          if (retrying || appMounted()) return;
+          if (retryCount >= maxRetries) {
+            showRetryStatus(
+              "Automatic retry limit reached. Use \u201cTry again\u201d to reload the page.",
+            );
+            return;
+          }
+          retrying = true;
+          var attempt = retryCount + 1;
+          var backoff = backoffSchedule[retryCount] || 32000;
+          showRetryStatus("Retrying (attempt " + attempt + " of " + maxRetries + ")\u2026");
+          fetchAppBundle().then(function (ok) {
+            retrying = false;
+            retryCount++;
+            if (ok && appMounted()) {
+              hideRetryStatus();
+              hideFallback();
+              return;
+            }
+            if (ok && !appMounted()) {
+              // Bundle is fetchable but component hasn\u2019t registered yet \u2014 give it more time
+              showRetryStatus(
+                "Bundle fetched; waiting for app to initialize\u2026",
+              );
+              timer = window.setTimeout(performRetry, backoff);
+              return;
+            }
+            // Fetch failed \u2014 gateway likely still restarting
+            if (retryCount >= maxRetries) {
+              showRetryStatus(
+                "Automatic retry limit reached. Use \u201cTry again\u201d to reload the page.",
+              );
+            } else {
+              showRetryStatus(
+                "Gateway still unavailable. Next retry in " + Math.round(backoff / 1000) + "s\u2026",
+              );
+              timer = window.setTimeout(performRetry, backoff);
+            }
+          });
+        }
+
+        function startRetrySequence() {
+          hideFallback();
+          hideRetryStatus();
+          retryCount = 0;
+          retrying = false;
+          window.clearTimeout(timer);
+          // Reset probe so we re-check gateway status on the next fallback
+          probeResult = null;
+          performRetry();
+          // Arm a safety timer in case retries don\u2019t trigger fallback show
+          timer = window.setTimeout(function () {
+            if (!appMounted()) {
+              showFallback();
+              if (retryCount < maxRetries && !retrying) {
+                performRetry();
+              }
+            }
+          }, delay);
         }
 
         armFallbackTimer();
@@ -298,6 +456,7 @@
             function () {
               window.clearTimeout(timer);
               hideFallback();
+              hideRetryStatus();
             },
             function () {},
           );
@@ -310,8 +469,7 @@
         }
         if (wait) {
           wait.addEventListener("click", function () {
-            hideFallback();
-            armFallbackTimer();
+            startRetrySequence();
           });
         }
       })();
