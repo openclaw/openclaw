@@ -156,7 +156,12 @@ function summarizeGatewaySchemaErrors(value: unknown): string {
 }
 
 export function parseDiscordGatewayInfoBody(body: string): APIGatewayBotInfo {
-  const parsed = JSON.parse(body) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error("Discord gateway info body is not valid JSON.");
+  }
   if (!Check(discordGatewayBotInfoSchema, parsed)) {
     throw new Error(summarizeGatewaySchemaErrors(parsed));
   }
