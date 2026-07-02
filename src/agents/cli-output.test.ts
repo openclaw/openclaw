@@ -669,6 +669,47 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("marks Claude CLI synthetic placeholder assistant turns as empty synthetic output", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-synthetic" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            model: "<synthetic>",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-synthetic",
+          result: "",
+          usage: { input_tokens: 8, output_tokens: 0 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-synthetic",
+      usage: {
+        input: 8,
+        output: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+      syntheticPlaceholder: true,
+    });
+  });
+
   it("unwraps nested Claude agent result JSON from stream-json output", () => {
     const result = parseCliJsonl(
       [
@@ -1022,6 +1063,45 @@ describe("createCliJsonlStreamingParser", () => {
       cacheRead: 125,
       cacheWrite: undefined,
       total: undefined,
+    });
+  });
+
+  it("preserves synthetic placeholder markers in streaming Claude output", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream-synthetic" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            model: "<synthetic>",
+            content: [{ type: "text", text: "Continue from where you left off." }],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-stream-synthetic",
+          result: "",
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "session-stream-synthetic",
+      usage: undefined,
+      syntheticPlaceholder: true,
     });
   });
 

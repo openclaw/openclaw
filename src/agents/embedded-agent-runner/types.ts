@@ -151,7 +151,7 @@ export type EmbeddedAgentRunMeta = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
-  terminalReplyKind?: "silent-empty";
+  terminalReplyKind?: "silent-empty" | "synthetic-placeholder";
   yielded?: boolean;
   error?: {
     kind:

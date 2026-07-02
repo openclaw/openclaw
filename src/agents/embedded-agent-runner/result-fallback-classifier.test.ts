@@ -460,4 +460,118 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it("classifies synthetic-placeholder terminal replies as fallback-worthy for claude-cli", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message:
+        "claude-cli/Claude-Opus-4.7 ended with a synthetic placeholder and no visible assistant reply",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("keeps a synthetic-placeholder marker with visible final text out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          finalAssistantVisibleText: "Here is the requested answer.",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps a synthetic-placeholder marker with a visible payload out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        payloads: [{ text: "Here is the requested answer." }],
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("preserves hook block results with a synthetic-placeholder marker", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          error: {
+            kind: "hook_block",
+            message: "Blocked by hook",
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps fallback-safe incomplete turns ahead of synthetic-placeholder classification", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "Claude-Opus-4.7",
+      result: {
+        payloads: [{ isError: true, text: "Agent couldn't generate a response." }],
+        meta: {
+          durationMs: 42,
+          terminalReplyKind: "synthetic-placeholder",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent couldn't generate a response.",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "Agent couldn't generate a response.",
+      reason: "format",
+      code: "incomplete_result",
+      preserveResultOnExhaustion: true,
+      preserveResultPriority: 1,
+    });
+  });
+
+  it("keeps explicit silent terminal replies out of fallback", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        meta: {
+          durationMs: 42,
+          finalAssistantVisibleText: "NO_REPLY",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
 });

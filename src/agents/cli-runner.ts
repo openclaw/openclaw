@@ -810,10 +810,14 @@ export async function runPreparedCliAgent(
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
       : output.text.trim();
+    // Synthetic-placeholder turns surface through the classifier path so the
+    // run result carries terminalReplyKind metadata for observability instead of
+    // collapsing into a generic empty_response failover error.
     if (
       !assistantText &&
       !output.didSendViaMessagingTool &&
-      params.allowEmptyAssistantReplyAsSilent !== true
+      params.allowEmptyAssistantReplyAsSilent !== true &&
+      output.syntheticPlaceholder !== true
     ) {
       const emptyOutputDiagnostics = formatCliEmptyOutputDiagnostics(output);
       if (emptyOutputDiagnostics) {
@@ -927,6 +931,9 @@ export async function runPreparedCliAgent(
               ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
               ...(rawText ? { finalAssistantRawText: rawText } : {}),
             }
+          : {}),
+        ...(resultParams.output.syntheticPlaceholder
+          ? { terminalReplyKind: "synthetic-placeholder" as const }
           : {}),
         systemPromptReport: context.systemPromptReport,
         ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
