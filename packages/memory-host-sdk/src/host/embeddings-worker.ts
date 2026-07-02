@@ -2,7 +2,6 @@
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveStableNodePath } from "../../../../src/infra/stable-node-path.js";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
   createLocalEmbeddingWorkerFailureError,
@@ -146,12 +145,6 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
-/** Cached stable Node path: resolved once at module load to survive Homebrew Node upgrades.
- *  Homebrew records process.execPath as a Cellar path (e.g. /opt/homebrew/Cellar/node/26.3.0/bin/node)
- *  which ceases to exist after `brew upgrade`.  The stable path resolves to the opt/bin symlink
- *  that survives upgrades.  Wrapped in a promise so it can be re-resolved on ENOENT. */
-let stableNodePathPromise = resolveStableNodePath(process.execPath).then((p) => p);
-
 /** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -281,7 +274,7 @@ class LocalEmbeddingWorkerClient {
         LocalEmbeddingWorkerClient.resolveNodeFromPath()
           .then((freshPath) => {
             // Replace the cached promise so all future forks use the fresh path.
-            stableNodePathPromise = Promise.resolve(freshPath);
+
             this.child = null;
             const retry = fork(this.scriptPath, [], {
               execArgv: resolveWorkerExecArgv(),
@@ -291,11 +284,15 @@ class LocalEmbeddingWorkerClient {
             });
             retry.on("message", (m) => this.handleMessage(m));
             retry.on("exit", (c, s) => {
-              if (this.child === retry) this.child = null;
+              if (this.child === retry) {
+                this.child = null;
+              }
               this.rejectPending(createWorkerExitError(c, s));
             });
             retry.on("error", (e) => {
-              if (this.child === retry) this.child = null;
+              if (this.child === retry) {
+                this.child = null;
+              }
               this.rejectPending(
                 createLocalEmbeddingWorkerFailureError({
                   message: `Local embedding worker process failed: ${e.message}`,
