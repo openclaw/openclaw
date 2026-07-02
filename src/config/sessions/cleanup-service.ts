@@ -36,6 +36,11 @@ import {
   shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
+import {
+  EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
+  resolveSessionArchiveCleanupRules,
+  type SessionArchiveCleanupReport,
+} from "./store-maintenance-operations.js";
 import { loadSessionStore } from "./store.js";
 import {
   resolveSessionStoreTargets,
@@ -76,6 +81,7 @@ export type SessionCleanupSummary = {
   modelRunPruned: number;
   pruned: number;
   capped: number;
+  archiveCleanup: SessionArchiveCleanupReport;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
   diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
   wouldMutate: boolean;
@@ -109,6 +115,34 @@ export type SessionsCleanupRunResult = {
 };
 
 const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
+
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
+
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
+}
+
+async function cleanupArchivedTranscriptsForSummary(params: {
+  storePath: string;
+  maintenance: ResolvedSessionMaintenanceConfig;
+  dryRun: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
+}): Promise<SessionArchiveCleanupReport> {
+  const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+  const result = await cleanupArchivedSessionTranscripts({
+    directories: [path.dirname(path.resolve(params.storePath))],
+    rules: resolveSessionArchiveCleanupRules(params.maintenance),
+    dryRun: params.dryRun,
+    excludeCanonicalPaths: params.excludeCanonicalPaths,
+  });
+  return {
+    scannedFiles: result.scanned,
+    removedFiles: result.removed,
+  };
+}
 
 function isTranscriptMessageRole(role: unknown): boolean {
   return (
@@ -513,6 +547,12 @@ async function previewStoreCleanup(params: {
     dryRun: true,
     excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
   });
+  const archiveCleanup = await cleanupArchivedTranscriptsForSummary({
+    storePath: params.target.storePath,
+    maintenance: params.maintenance,
+    dryRun: true,
+    excludeCanonicalPaths: budgetRemovedFilePaths,
+  });
   const budgetEvictedKeys = new Set<string>();
   for (const key of Object.keys(beforeBudgetStore)) {
     if (!Object.hasOwn(previewStore, key)) {
@@ -539,6 +579,7 @@ async function previewStoreCleanup(params: {
     modelRunPruned > 0 ||
     pruned > 0 ||
     capped > 0 ||
+    archiveCleanup.removedFiles > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
     (diskBudget?.removedFiles ?? 0) > 0;
@@ -556,6 +597,7 @@ async function previewStoreCleanup(params: {
     modelRunPruned,
     pruned,
     capped,
+    archiveCleanup,
     unreferencedArtifacts,
     diskBudget,
     wouldMutate,
@@ -728,12 +770,16 @@ export async function runSessionsCleanup(params: {
                 modelRunPruned: 0,
                 pruned: 0,
                 capped: 0,
+                archiveCleanup: { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT },
                 unreferencedArtifacts,
                 diskBudget: null,
                 wouldMutate: false,
               }),
               dryRun: false,
               unreferencedArtifacts,
+              archiveCleanup: preview?.summary.archiveCleanup ?? {
+                ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
+              },
               wouldMutate:
                 (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
               repaired: repairedApplied,
@@ -753,6 +799,7 @@ export async function runSessionsCleanup(params: {
               modelRunPruned: appliedReport.modelRunPruned,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
+              archiveCleanup: appliedReport.archiveCleanup,
               unreferencedArtifacts,
               diskBudget: appliedReport.diskBudget,
               wouldMutate:
@@ -762,6 +809,7 @@ export async function runSessionsCleanup(params: {
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
+                appliedReport.archiveCleanup.removedFiles > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
                 (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedReport.diskBudget?.removedFiles ?? 0) > 0,

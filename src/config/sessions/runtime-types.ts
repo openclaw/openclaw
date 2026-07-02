@@ -38,6 +38,10 @@ export type SessionMaintenanceApplyReportRuntime = {
   modelRunPruned: number;
   pruned: number;
   capped: number;
+  archiveCleanup?: {
+    scannedFiles: number;
+    removedFiles: number;
+  };
   diskBudget: Record<string, unknown> | null;
 };
 
