@@ -8,8 +8,11 @@ import type {
   PluginStateKeyedStore,
 } from "../../plugin-state/plugin-state-store.types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createDurableInboundReceiveJournalFromQueue } from "./durable-receive.js";
-import { createDurableInboundReceiveJournal } from "./durable-receive.js";
+import {
+  createDurableInboundReceiveJournal,
+  createDurableInboundReceiveJournalFromQueue,
+  replayPendingDurableInboundReceives,
+} from "./durable-receive.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type TestPayload = { body: string };
@@ -332,6 +335,115 @@ describe("createDurableInboundReceiveJournal", () => {
         receivedAt: 2,
       },
     ]);
+  });
+
+  it("fail() dead-letters a pending record so it is not replayed or re-accepted", async () => {
+    const journal = createDurableInboundReceiveJournal<
+      TestPayload,
+      TestMetadata,
+      TestCompletedMetadata
+    >({
+      pendingStore: createMemoryStore(),
+      completedStore: createMemoryStore(),
+      now: () => 10,
+    });
+
+    await journal.accept("poison", { body: "boom" });
+    await expect(journal.fail("poison", { reason: "max_replay_attempts" })).resolves.toBe(true);
+    await expect(journal.pending()).resolves.toEqual([]);
+    const redelivered = await journal.accept("poison", { body: "boom again" });
+    expect(redelivered.kind).not.toBe("accepted");
+    expect(redelivered.duplicate).toBe(true);
+  });
+
+  it("fail() on the queue-backed journal dead-letters and blocks re-accept", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<TestPayload, TestMetadata, TestCompletedMetadata>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+      const journal = createDurableInboundReceiveJournalFromQueue({ queue });
+
+      await journal.accept("poison", { body: "boom" });
+      await expect(journal.fail("poison", { reason: "max_replay_attempts" })).resolves.toBe(true);
+      await expect(journal.pending()).resolves.toEqual([]);
+      const redelivered = await journal.accept("poison", { body: "boom again" });
+      expect(redelivered.kind).not.toBe("accepted");
+      expect(redelivered.duplicate).toBe(true);
+    });
+  });
+
+  it("bounded replay processes fresh records, counts the attempt, and dead-letters at the cap", async () => {
+    const journal = createDurableInboundReceiveJournal<
+      TestPayload,
+      TestMetadata,
+      TestCompletedMetadata
+    >({
+      pendingStore: createMemoryStore(),
+      completedStore: createMemoryStore(),
+      now: () => 10,
+    });
+    await journal.accept("fresh", { body: "ok" }, { receivedAt: 1 });
+    await journal.accept("poison", { body: "boom" }, { receivedAt: 2 });
+    await journal.release("poison");
+    await journal.release("poison");
+
+    const processed: string[] = [];
+    const summary = await replayPendingDurableInboundReceives({
+      journal,
+      maxAttempts: 2,
+      process: async (record) => {
+        processed.push(record.id);
+        await journal.complete(record.id);
+      },
+    });
+
+    expect(processed).toEqual(["fresh"]);
+    expect(summary).toEqual({ processed: 1, deadLettered: 1 });
+    await expect(journal.pending()).resolves.toEqual([]);
+    const redelivered = await journal.accept("poison", { body: "boom again" });
+    expect(redelivered.kind).not.toBe("accepted");
+  });
+
+  it("bounded replay attempt counting survives a replay that never finishes", async () => {
+    const journal = createDurableInboundReceiveJournal<
+      TestPayload,
+      TestMetadata,
+      TestCompletedMetadata
+    >({
+      pendingStore: createMemoryStore(),
+      completedStore: createMemoryStore(),
+      now: () => 10,
+    });
+    await journal.accept("stall", { body: "hangs" });
+
+    // Simulate a stalled run: process neither completes nor releases; the
+    // attempt must still be recorded so restarts converge on the cap.
+    await replayPendingDurableInboundReceives({
+      journal,
+      maxAttempts: 2,
+      process: async () => {},
+    });
+    await expect(journal.pending()).resolves.toMatchObject([{ id: "stall", attempts: 1 }]);
+
+    await replayPendingDurableInboundReceives({
+      journal,
+      maxAttempts: 2,
+      process: async () => {},
+    });
+    await expect(journal.pending()).resolves.toMatchObject([{ id: "stall", attempts: 2 }]);
+
+    const summary = await replayPendingDurableInboundReceives({
+      journal,
+      maxAttempts: 2,
+      process: async () => {
+        throw new Error("should not process past the cap");
+      },
+    });
+    expect(summary).toEqual({ processed: 0, deadLettered: 1 });
+    await expect(journal.pending()).resolves.toEqual([]);
   });
 
   it("can use the shared channel ingress queue as durable storage", async () => {

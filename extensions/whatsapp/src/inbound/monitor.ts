@@ -15,6 +15,7 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { replayPendingDurableInboundReceives } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -70,6 +71,7 @@ import {
   createWhatsAppDurableInboundReceiveJournal,
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
+  WHATSAPP_DURABLE_INBOUND_MAX_REPLAY_ATTEMPTS,
   type WhatsAppDurableInboundMetadata,
   type WhatsAppDurableInboundPayload,
   type WhatsAppReadReceiptTarget,
@@ -1257,19 +1259,30 @@ export async function attachWebInboxToSocket(
   };
 
   const replayPendingDurableInboundMessages = async () => {
-    const pending = await durableInboundJournal.pending();
-    for (const record of pending) {
-      await processDurableInboundMessage(
-        deserializeWhatsAppDurableInboundMessage(record.payload.message),
-        record.payload.upsertType,
-        record.payload.receivedAt,
-        {
-          id: record.id,
-          payload: record.payload,
-          metadata: record.metadata,
-        },
-      );
-    }
+    // Bounded replay: without the cap a poison event (e.g. a heavy multimodal
+    // batch that stalls the run) re-delivers on every reconnect forever (#97538).
+    await replayPendingDurableInboundReceives({
+      journal: durableInboundJournal,
+      maxAttempts: WHATSAPP_DURABLE_INBOUND_MAX_REPLAY_ATTEMPTS,
+      onDeadLetter: (record) => {
+        inboundLogger.warn(
+          { durableId: record.id, attempts: record.attempts },
+          "dropping durable WhatsApp inbound after max replay attempts",
+        );
+      },
+      process: async (record) => {
+        await processDurableInboundMessage(
+          deserializeWhatsAppDurableInboundMessage(record.payload.message),
+          record.payload.upsertType,
+          record.payload.receivedAt,
+          {
+            id: record.id,
+            payload: record.payload,
+            metadata: record.metadata,
+          },
+        );
+      },
+    });
   };
 
   type EnrichedInboundMessage = {

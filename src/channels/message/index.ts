@@ -6,6 +6,7 @@ export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 export {
   createDurableInboundReceiveJournal,
   createDurableInboundReceiveJournalFromQueue,
+  replayPendingDurableInboundReceives,
 } from "./durable-receive.js";
 export { createChannelIngressQueue } from "./ingress-queue.js";
 export {
@@ -51,11 +52,13 @@ export type {
   DurableInboundReceiveAcceptResult,
   DurableInboundReceiveCompletedRecord,
   DurableInboundReceiveCompleteOptions,
+  DurableInboundReceiveFailOptions,
   DurableInboundReceiveJournal,
   DurableInboundReceiveJournalOptions,
   DurableInboundReceivePendingRecord,
   DurableInboundReceiveQueueJournalOptions,
   DurableInboundReceiveReleaseOptions,
+  DurableInboundReceiveReplaySummary,
 } from "./durable-receive.js";
 export type {
   ChannelIngressQueue,

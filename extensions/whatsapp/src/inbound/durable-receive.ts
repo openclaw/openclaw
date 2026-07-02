@@ -10,6 +10,9 @@ const WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES = 450;
 const WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES = 450;
 const WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const WHATSAPP_DURABLE_INBOUND_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Replay dead-letter bound: each reconnect replay counts one attempt, so a
+// poison event stops re-delivering after this many reconnects (#97538).
+export const WHATSAPP_DURABLE_INBOUND_MAX_REPLAY_ATTEMPTS = 5;
 
 export type WhatsAppReadReceiptTarget = {
   remoteJid: string;

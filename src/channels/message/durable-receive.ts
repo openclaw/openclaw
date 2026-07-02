@@ -70,6 +70,13 @@ export type DurableInboundReceiveReleaseOptions = {
   releasedAt?: number;
 };
 
+/** Options recorded when dead-lettering an inbound event. */
+export type DurableInboundReceiveFailOptions = {
+  reason: string;
+  message?: string;
+  failedAt?: number;
+};
+
 /** Durable receive journal facade used by channel receive pipelines. */
 export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
   accept(
@@ -83,6 +90,7 @@ export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata
     options?: DurableInboundReceiveCompleteOptions<TCompletedMetadata>,
   ): Promise<void>;
   release(id: string, options?: DurableInboundReceiveReleaseOptions): Promise<boolean>;
+  fail(id: string, options: DurableInboundReceiveFailOptions): Promise<boolean>;
   deletePending(id: string): Promise<boolean>;
 };
 
@@ -236,11 +244,32 @@ export function createDurableInboundReceiveJournal<
     return true;
   };
 
+  const fail = async (
+    id: string,
+    failOptions: DurableInboundReceiveFailOptions,
+  ): Promise<boolean> => {
+    const key = normalizeDurableInboundReceiveId(id);
+    const pendingRecord = await options.pendingStore.lookup(key);
+    if (!pendingRecord) {
+      return false;
+    }
+    // The store-backed journal has no separate failed store; a completed
+    // tombstone is the terminal state that keeps redeliveries deduped.
+    await options.completedStore.register(
+      key,
+      { id: key, completedAt: failOptions.failedAt ?? now() },
+      { ttlMs: options.completedTtlMs },
+    );
+    await options.pendingStore.delete(key);
+    return true;
+  };
+
   return {
     accept,
     pending,
     complete,
     release,
+    fail,
     deletePending: (id) => options.pendingStore.delete(normalizeDurableInboundReceiveId(id)),
   };
 }
@@ -315,10 +344,64 @@ export function createDurableInboundReceiveJournalFromQueue<
       await prune(normalizeDurableInboundReceiveId(id));
       return released;
     },
+    fail: async (id, failOptions) => {
+      const failed = await options.queue.fail(normalizeDurableInboundReceiveId(id), {
+        reason: failOptions.reason,
+        ...(failOptions.message === undefined ? {} : { message: failOptions.message }),
+        ...(failOptions.failedAt === undefined ? {} : { failedAt: failOptions.failedAt }),
+      });
+      await prune(normalizeDurableInboundReceiveId(id));
+      return failed;
+    },
     deletePending: async (id) => {
       const deleted = await options.queue.delete(normalizeDurableInboundReceiveId(id));
       await prune();
       return deleted;
     },
   };
+}
+
+const DURABLE_INBOUND_REPLAY_DEAD_LETTER_REASON = "max_replay_attempts";
+
+/** Summary of one bounded replay pass over pending inbound receives. */
+export type DurableInboundReceiveReplaySummary = {
+  processed: number;
+  deadLettered: number;
+};
+
+/**
+ * Replays pending inbound receives with a hard attempt bound.
+ *
+ * Each pass counts the attempt before processing so a run that stalls or
+ * crashes still converges on the cap; without this, a poison event replays on
+ * every reconnect/restart forever (re-delivery storm, #97538).
+ */
+export async function replayPendingDurableInboundReceives<
+  TPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+>(params: {
+  journal: DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata>;
+  maxAttempts: number;
+  process: (record: DurableInboundReceivePendingRecord<TPayload, TMetadata>) => Promise<void>;
+  onDeadLetter?: (record: DurableInboundReceivePendingRecord<TPayload, TMetadata>) => void;
+}): Promise<DurableInboundReceiveReplaySummary> {
+  let processed = 0;
+  let deadLettered = 0;
+  for (const record of await params.journal.pending()) {
+    if (record.attempts >= params.maxAttempts) {
+      await params.journal.fail(record.id, {
+        reason: DURABLE_INBOUND_REPLAY_DEAD_LETTER_REASON,
+        ...(record.lastError === undefined ? {} : { message: record.lastError }),
+      });
+      params.onDeadLetter?.(record);
+      deadLettered += 1;
+      continue;
+    }
+    // Record the attempt up front; successful processing completes the row.
+    await params.journal.release(record.id);
+    await params.process(record);
+    processed += 1;
+  }
+  return { processed, deadLettered };
 }
