@@ -753,12 +753,27 @@ async function foldMaturedWorkIntoActiveTurn(
   }
   if (!delivery.delivered) {
     const retryDueAt = now + HEDGE_DISPATCH_FAILURE_RETRY_MS;
+    const retryAfterActiveRun =
+      delivery.reason === "active-embedded-run-required-for-transcript-proof" ||
+      delivery.reason.startsWith("queued-without-transcript-commit:");
     for (const work of works) {
       clearIdleRetryForWork(work);
       requeueWorkForRetry(work, {
         dueAt: retryDueAt,
         summary: `Continuation fold-note delivery failed (${delivery.reason}); keeping row recoverable.`,
+        ...(retryAfterActiveRun
+          ? {
+              idleRetry: {
+                trigger: "reply-run-ended",
+                reasonCategory: classifyContinuationWorkReason(work.reason),
+                armedAt: now,
+              },
+            }
+          : {}),
       });
+    }
+    if (retryAfterActiveRun) {
+      registerIdleRetry(sessionKey, { kind: "reply-run-ended" });
     }
     log.warn(
       `[continuation:work-fold-note-undelivered] session=${sessionKey} count=${works.length} reason=${delivery.reason} rows kept recoverable, not terminalized`,

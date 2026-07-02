@@ -2877,6 +2877,48 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     expect(flow?.stateJson).not.toMatchObject({ disposition: "folded-active" });
   });
 
+  it("parks active-fold rows for idle grant when the active run cannot prove note delivery", async () => {
+    const sessionKey = "agent:main:fold-active-no-proof";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 5_000,
+      electedAt: Date.now() - 10_000,
+      anchorFinalizedAt: Date.now() - 5_000,
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "grant after unsupported active fold",
+      originRunId: "run-origin-UP",
+    });
+    activeSessions.add(sessionKey);
+    activeQueueHandleAvailable = false;
+
+    await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(activeQueueDeliveries).toHaveLength(0);
+    let flow = [...mockFlows.values()][0];
+    expect(flow?.status).toBe("queued");
+    expect(flow?.stateJson).toMatchObject({
+      dueAt: 1_000_000,
+      recoveryDueAt: 1_030_000,
+      idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+    });
+
+    activeQueueHandleAvailable = true;
+    resolveReplyRunIdle(sessionKey);
+    await waitForTurnGrantCount(1);
+
+    expect(turnGrants).toHaveLength(1);
+    flow = [...mockFlows.values()][0];
+    expect(flow?.status).toBe("succeeded");
+    expect(flow?.stateJson).toMatchObject({
+      disposition: "granted",
+      dueAt: 1_000_000,
+      originRunId: "run-origin-UP",
+    });
+  });
+
   it("aggregates multiple matured active-overlap rows into one bounded provenance note", async () => {
     const sessionKey = "agent:main:fold-aggregate";
     mockSessionStore[sessionKey] = { sessionKey };
