@@ -282,7 +282,9 @@ enum TalkModeRoutingResolver {
             activeProvider = "openai"
             realtimeProvider = "openai"
             realtimeModelId = defaultRealtimeModelId
-            route = .realtimeWebRTC
+            // Provider selection can replace provider details, but an explicit Gateway-owned
+            // realtime route must remain on the Gateway (for example, Azure-backed OpenAI).
+            route = parsed.usesExplicitGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
         }
 
         return TalkModeResolvedRouting(
@@ -340,6 +342,7 @@ struct TalkModeGatewayConfigState {
     let normalizedPayload: Bool
     let missingResolvedPayload: Bool
     let executionMode: TalkModeExecutionMode
+    let usesExplicitGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
     let configuredModelId: String?
@@ -399,6 +402,7 @@ enum TalkModeGatewayConfigParser {
         let realtimeModelId = realtimeModel ?? defaultRealtimeModelIdFallback
         let realtimeVoiceId = Self.firstString(realtime, keys: ["voice"])
             ?? Self.firstString(realtimeProviderConfig, keys: ["voice"])
+        let realtimeTransport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
         let executionMode = Self.resolvedExecutionMode(realtime)
         let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let interruptOnSpeech = talk?["interruptOnSpeech"]?.boolValue
@@ -412,6 +416,8 @@ enum TalkModeGatewayConfigParser {
             normalizedPayload: selection?.normalizedPayload == true,
             missingResolvedPayload: talk != nil && selection == nil,
             executionMode: executionMode,
+            usesExplicitGatewayRealtimeTransport: realtimeTransport == "gateway-relay"
+                || realtimeTransport == "provider-websocket",
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
             configuredModelId: model,

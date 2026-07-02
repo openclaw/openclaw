@@ -3003,7 +3003,10 @@ extension TalkModeManager {
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
-        if forceSpeaker, !Self.hasExternalAudioOutput(session.currentRoute) {
+        if TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: forceSpeaker,
+            outputPortTypes: session.currentRoute.outputs.map(\.portType))
+        {
             try? session.overrideOutputAudioPort(.speaker)
         } else {
             try? session.overrideOutputAudioPort(.none)
@@ -3024,7 +3027,10 @@ extension TalkModeManager {
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
-        if forceSpeaker, !Self.hasExternalAudioOutput(session.currentRoute) {
+        if TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: forceSpeaker,
+            outputPortTypes: session.currentRoute.outputs.map(\.portType))
+        {
             try? session.overrideOutputAudioPort(.speaker)
         } else {
             try? session.overrideOutputAudioPort(.none)
@@ -3047,17 +3053,6 @@ extension TalkModeManager {
         return "category=\(session.category.rawValue) mode=\(session.mode.rawValue) "
             + "opts=\(session.categoryOptions.rawValue) inputAvail=\(session.isInputAvailable) "
             + "routeIn=[\(inputs)] routeOut=[\(outputs)] availIn=[\(available)]"
-    }
-
-    private static func hasExternalAudioOutput(_ route: AVAudioSessionRouteDescription) -> Bool {
-        route.outputs.contains(where: { output in
-            switch output.portType {
-            case .airPlay, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .carAudio, .headphones, .usbAudio:
-                true
-            default:
-                false
-            }
-        })
     }
 }
 

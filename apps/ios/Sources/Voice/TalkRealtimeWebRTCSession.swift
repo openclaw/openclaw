@@ -919,7 +919,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
         session.ignoresPreferredAttributeConfigurationErrors = true
         try session.setConfiguration(config, active: true)
-        try? session.overrideOutputAudioPort(forceSpeaker ? .speaker : .none)
+        let shouldForceSpeaker = TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: forceSpeaker,
+            outputPortTypes: AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType))
+        try? session.overrideOutputAudioPort(shouldForceSpeaker ? .speaker : .none)
     }
 }
 

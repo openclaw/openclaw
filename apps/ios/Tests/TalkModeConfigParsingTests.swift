@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import OpenClawKit
 import Testing
@@ -507,7 +508,7 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
     }
 
-    @Test func `open AI selection overrides non open AI realtime provider`() {
+    @Test func `open AI selection overrides non open AI web RTC provider`() {
         let config: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -536,6 +537,68 @@ struct TalkModeManagerTests {
         #expect(routing.realtimeModelId == "gpt-realtime-2")
         #expect(routing.executionMode == .realtimeWebRTC)
         #expect(routing.route == .realtimeWebRTC)
+    }
+
+    @Test func `open AI selection preserves explicit gateway owned transport`() {
+        for transport in ["gateway-relay", "provider-websocket"] {
+            let config: [String: Any] = [
+                "talk": [
+                    "realtime": [
+                        "provider": "google",
+                        "mode": "realtime",
+                        "transport": transport,
+                        "brain": "agent-consult",
+                    ],
+                ],
+            ]
+            let parsed = TalkModeGatewayConfigParser.parse(
+                config: config,
+                defaultProvider: "elevenlabs",
+                defaultModelIdFallback: "eleven_v3",
+                defaultRealtimeModelIdFallback: "gpt-realtime-2",
+                defaultSilenceTimeoutMs: 900)
+            let routing = TalkModeRoutingResolver.resolve(
+                parsed: parsed,
+                providerSelection: .openAIRealtime,
+                defaultProvider: "elevenlabs",
+                defaultRealtimeModelId: "gpt-realtime-2")
+
+            #expect(routing.realtimeProvider == "openai")
+            #expect(routing.executionMode == .realtimeRelay)
+            #expect(routing.route == .realtimeRelay)
+        }
+    }
+
+    @Test func `speaker preference preserves external audio routes`() {
+        #expect(TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: true,
+            outputPortTypes: [.builtInReceiver]))
+        #expect(TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: true,
+            outputPortTypes: [.builtInSpeaker]))
+        #expect(!TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: false,
+            outputPortTypes: [.builtInReceiver]))
+        #expect(!TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: true,
+            outputPortTypes: []))
+
+        let externalOutputs: [AVAudioSession.Port] = [
+            .airPlay,
+            .bluetoothA2DP,
+            .bluetoothHFP,
+            .bluetoothLE,
+            .carAudio,
+            .headphones,
+            .HDMI,
+            .lineOut,
+            .usbAudio,
+        ]
+        for output in externalOutputs {
+            #expect(!TalkAudioRoute.shouldForceSpeaker(
+                preferenceEnabled: true,
+                outputPortTypes: [output]))
+        }
     }
 
     @Test func `maps open AI realtime default transport to native web RTC`() {
