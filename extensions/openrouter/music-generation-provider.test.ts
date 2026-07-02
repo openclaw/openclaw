@@ -286,6 +286,28 @@ describe("openrouter music generation provider", () => {
     );
   });
 
+  it("skips malformed SSE data lines without crashing", async () => {
+    const audioBase64 = Buffer.from("wav-bytes").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: {not valid json either}\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: audioBase64 } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    const result = await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-pro-preview",
+      prompt: "handle malformed sse",
+      cfg: {},
+    });
+
+    // Valid audio after the malformed line should still be processed
+    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("wav-bytes"));
+  });
+
   it("times out stalled OpenRouter audio streams after headers", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: stalledSseResponse(
