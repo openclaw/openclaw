@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
@@ -43,6 +44,24 @@ class OnboardingFlowLogicTest {
       onboardingBackStateAfterBack(
         step = OnboardingStep.Permissions,
         permissionsBackStep = OnboardingStep.Recovery,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalBackCanReturnToPermissionsDuringPermissionReapproval() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.Permissions),
+      onboardingBackDestination(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = OnboardingStep.Permissions,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Permissions),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = OnboardingStep.Permissions,
       ),
     )
   }
@@ -111,6 +130,34 @@ class OnboardingFlowLogicTest {
     assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false))
     assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true))
     assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true))
+  }
+
+  @Test
+  fun permissionChangesRequireNodeApprovalWhenAdvertisedSurfaceChanges() {
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Off,
+      ),
+    )
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = false,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+    )
+    assertFalse(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = true,
+        requestedCameraEnabled = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+    )
   }
 
   @Test
