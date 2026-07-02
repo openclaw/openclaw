@@ -1,7 +1,8 @@
+// Exec approvals CLI tests cover approval command registration and output handling.
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-// Exec approvals CLI tests cover approval command registration and output handling.
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -595,6 +596,24 @@ describe("exec approvals CLI", () => {
     try {
       // Directories are not regular files; readFileWithBound must reject them.
       await expect(testing.readFileWithBound(tmpDir, 100)).rejects.toThrow("not a regular file");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects FIFO (named pipe) paths without blocking", async () => {
+    // mkfifo is POSIX-only; skip on Windows
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approvals-fifo-"));
+    try {
+      const fifoPath = path.join(tmpDir, "test-fifo");
+      execSync(["mkfifo", fifoPath].join(" "), { stdio: "ignore" });
+      // readFileWithBound must reject the FIFO quickly (no hang) because
+      // the file descriptor is opened with O_NONBLOCK, so open succeeds
+      // immediately and stat.isFile() returns false for FIFOs.
+      await expect(testing.readFileWithBound(fifoPath, 100)).rejects.toThrow("not a regular file");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

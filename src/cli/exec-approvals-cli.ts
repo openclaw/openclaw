@@ -1,4 +1,5 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -78,8 +79,10 @@ async function readFileWithBound(
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
   // Open the file handle first, then check and read via the same fd to
-  // prevent TOCTOU races and reject non-regular files (/dev/zero, FIFOs, etc.).
-  const fd = await fs.open(filePath, "r");
+  // prevent TOCTOU races and reject non-regular files. Use O_NONBLOCK so
+  // that POSIX FIFOs (named pipes) without a writer fail fast on the
+  // stat.isFile() check rather than blocking the CLI indefinitely.
+  const fd = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   try {
     const stat = await fd.stat();
     if (!stat.isFile()) {
