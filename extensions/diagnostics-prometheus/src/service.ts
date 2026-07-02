@@ -784,6 +784,18 @@ function recordDiagnosticEvent(
         seconds(evt.ageMs),
       );
       return;
+    case "session.activity.evicted": {
+      const evicted = evt.evictedTools + evt.evictedModelCalls;
+      if (evicted > 0) {
+        store.counter(
+          "openclaw_session_activity_evicted_total",
+          "Orphaned tool/model activity markers evicted with no remaining owner.",
+          { reason: evt.reason },
+          evicted,
+        );
+      }
+      return;
+    }
     case "queue.lane.enqueue":
     case "queue.lane.dequeue":
       store.gauge(

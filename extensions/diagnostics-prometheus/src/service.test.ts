@@ -1,6 +1,5 @@
 // Diagnostics Prometheus tests cover service plugin behavior.
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
-// Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
@@ -638,6 +637,32 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("key-should-not-export");
     expect(rendered).not.toContain("talk-session-should-not-export");
     expect(rendered).not.toContain("turn-should-not-export");
+  });
+
+  it("counts evicted orphaned activity markers without exporting raw ids", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.activity.evicted",
+        sessionId: "session-should-not-export",
+        sessionKey: "key-should-not-export",
+        reason: "orphaned_no_owner",
+        evictedTools: 2,
+        evictedModelCalls: 1,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_session_activity_evicted_total{reason="orphaned_no_owner"} 3',
+    );
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("key-should-not-export");
   });
 
   it("caps metric series growth and reports dropped series", () => {
