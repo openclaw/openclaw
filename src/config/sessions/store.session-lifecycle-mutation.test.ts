@@ -2,10 +2,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
+  cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   loadSessionEntry,
@@ -13,6 +21,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 type TestTranscriptEvent = Parameters<typeof replaceSqliteTranscriptEvents>[1][number];
@@ -250,6 +259,115 @@ describe("session store lifecycle mutations", () => {
     );
   });
 
+  it("durably writes SQLite transcript archives before deleting entry rows", async () => {
+    const now = Date.now();
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:durable-delete", storePath },
+      {
+        sessionId: "durable-delete-session",
+        updatedAt: now,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: "agent:main:durable-delete", sessionId: "durable-delete-session", storePath },
+      [createTranscriptEvent("durable-delete-session", "durable archive first")],
+    );
+
+    const originalWriteFileSync = fs.writeFileSync;
+    const entryObservedDuringArchiveWrite: boolean[] = [];
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+      const filePath = String(args[0]);
+      if (filePath.includes("durable-delete-session.jsonl.deleted.")) {
+        entryObservedDuringArchiveWrite.push(
+          loadSessionEntry({ sessionKey: "agent:main:durable-delete", storePath })?.sessionId ===
+            "durable-delete-session",
+        );
+      }
+      return originalWriteFileSync(...args);
+    });
+
+    try {
+      const result = await deleteSessionEntryLifecycle({
+        archiveTranscript: true,
+        storePath,
+        target: {
+          canonicalKey: "agent:main:durable-delete",
+          storeKeys: ["agent:main:durable-delete"],
+        },
+      });
+
+      expect(result.deleted).toBe(true);
+      expect(result.archivedTranscripts).toHaveLength(1);
+      expect(entryObservedDuringArchiveWrite).toEqual([true]);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("probes duplicate SQLite transcript archives before deleting entry rows", async () => {
+    const now = Date.now();
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:duplicate-archive", storePath },
+      {
+        sessionId: "duplicate-archive-session",
+        updatedAt: now,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      {
+        sessionKey: "agent:main:duplicate-archive",
+        sessionId: "duplicate-archive-session",
+        storePath,
+      },
+      [createTranscriptEvent("duplicate-archive-session", "reuse archive")],
+    );
+    const archivePath = path.join(
+      path.dirname(storePath),
+      "duplicate-archive-session.jsonl.deleted.2026-01-01T00-00-00.000Z",
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      archivePath,
+      `${createTranscriptEventLine("duplicate-archive-session", "reuse archive")}\n`,
+      "utf-8",
+    );
+
+    const originalReaddirSync = fs.readdirSync;
+    const entryObservedDuringDuplicateProbe: boolean[] = [];
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+      const dirPath = String(args[0]);
+      if (dirPath === path.dirname(storePath)) {
+        entryObservedDuringDuplicateProbe.push(
+          loadSessionEntry({ sessionKey: "agent:main:duplicate-archive", storePath })?.sessionId ===
+            "duplicate-archive-session",
+        );
+      }
+      return originalReaddirSync(...args);
+    });
+
+    try {
+      const result = await deleteSessionEntryLifecycle({
+        archiveTranscript: true,
+        storePath,
+        target: {
+          canonicalKey: "agent:main:duplicate-archive",
+          storeKeys: ["agent:main:duplicate-archive"],
+        },
+      });
+
+      expect(result.deleted).toBe(true);
+      expect(result.archivedTranscripts).toEqual([
+        {
+          archivedPath: archivePath,
+          sourcePath: path.join(path.dirname(storePath), "duplicate-archive-session.jsonl"),
+        },
+      ]);
+      expect(entryObservedDuringDuplicateProbe).toEqual([true]);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("deletes a SQLite entry without archiving transcripts when archiveTranscript is false", async () => {
     const now = Date.now();
     await replaceSessionEntry(
@@ -352,6 +470,68 @@ describe("session store lifecycle mutations", () => {
       }),
     ).resolves.toEqual([]);
   });
+
+  it("preserves raw SQLite entry references during lifecycle cleanup", async () => {
+    const sessionId = "raw-shared-session";
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:cleanup-target", storePath },
+      { sessionId, updatedAt: Date.now() },
+    );
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:protected-raw-reference", storePath },
+      { sessionId, updatedAt: Date.now() },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: "agent:main:cleanup-target", sessionId, storePath },
+      [createTranscriptEvent(sessionId, "cleanup-marker shared transcript")],
+    );
+    const database = openLifecycleTestDatabase(storePath);
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_entries")
+        .set({ entry_json: "{not valid json" })
+        .where("session_key", "=", "agent:main:protected-raw-reference"),
+    );
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath,
+      sessionKeySegmentPrefix: "cleanup-target",
+      transcriptContentMarker: "cleanup-marker",
+      orphanTranscriptMinAgeMs: 0,
+      nowMs: Date.now() + 1,
+    });
+
+    expect(result).toEqual({ archivedTranscriptArtifacts: 0, removedEntries: 1 });
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_entries")
+          .select("session_key")
+          .where("session_key", "=", "agent:main:cleanup-target"),
+      ),
+    ).toBeUndefined();
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_entries")
+          .select(["entry_json", "session_id"])
+          .where("session_key", "=", "agent:main:protected-raw-reference"),
+      ),
+    ).toEqual({
+      entry_json: "{not valid json",
+      session_id: sessionId,
+    });
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("sessions").select("session_id").where("session_id", "=", sessionId),
+      )?.session_id,
+    ).toBe(sessionId);
+  });
 });
 
 function createTranscriptEvent(sessionId: string, content: string): TestTranscriptEvent {
@@ -395,4 +575,15 @@ function recordTranscriptUpdateFiles(): { files: string[]; unsubscribe: () => vo
       }
     }),
   };
+}
+
+function openLifecycleTestDatabase(storePath: string) {
+  const target = resolveSqliteTargetFromSessionStorePath(storePath);
+  if (!target.path) {
+    throw new Error(`Could not resolve SQLite database path for ${storePath}`);
+  }
+  return openOpenClawAgentDatabase({
+    agentId: target.agentId ?? "main",
+    path: target.path,
+  });
 }

@@ -1680,3 +1680,4 @@
 {"type":"close","timestamp":"2026-07-02T00:30:31.723164Z","issue_id":"clawdbot-d02.1.9.1.40-68a.17","payload":{}}
 {"type":"comment","timestamp":"2026-07-02T00:55:39.769131Z","issue_id":"clawdbot-d02.1.9.1.40-68a.2","payload":{"body":"Closeout clarification after autoreview: startup warning-tier is limited to cases where runtime state is preserved or safely absent. Malformed transcript imports now preserve the parseable prefix in SQLite and archive the original damaged file before startup continues. Whole-store failures such as store_unreadable/store_not_object remain blocking because there is no per-entry import proof."}}
 {"type":"close","timestamp":"2026-07-02T01:21:12.283842Z","issue_id":"clawdbot-d02.1.9.1.40-68a.24","payload":{}}
+{"type":"close","timestamp":"2026-07-02T02:24:40.211637Z","issue_id":"clawdbot-d02.1.9.1.40-68a.6","payload":{}}
