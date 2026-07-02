@@ -832,6 +832,131 @@ describe("runAgentLoop tool-name alias resolution", () => {
     ) as { content?: Array<{ type: string; text?: string }> } | undefined;
     expect(errorResult?.content?.[0]?.text).toMatch(/Available tools:.*Read/);
   });
+
+  it("does not alias Agent to sessions_spawn (returns not-found because arg shapes differ)", async () => {
+    // Regression: sessions_spawn requires `task`, Claude Code Agent emits `prompt`.
+    // Silently aliasing would produce a schema-validation failure instead of a
+    // usable dispatch; the correct behaviour is to surface the not-found error so
+    // the model retries with a valid tool name.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "spawned" }],
+        details: { ok: true },
+      }),
+    );
+    const sessionsSpawnTool: AgentTool = {
+      name: "sessions_spawn",
+      label: "sessions_spawn",
+      description: "Spawn sub-session",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "spawn agent", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [sessionsSpawnTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("Agent"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(
+      /Tool Agent not found\. Available tools:.*sessions_spawn/,
+    );
+  });
+
+  it("accepts a deferred-tool resolver that returns an alias-equivalent name", async () => {
+    // The deferred resolver may materialise a tool under its canonical name
+    // (e.g. `memory_search`) even when the model called `KnowledgeSearch`; the
+    // dispatch path must accept that as a valid resolution rather than throwing
+    // on the name mismatch it does for genuinely unrelated resolutions.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "deferred search" }],
+        details: { ok: true },
+      }),
+    );
+    const deferredTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Deferred memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+    const resolveDeferredTool = vi
+      .fn<Parameters<NonNullable<AgentLoopConfig["resolveDeferredTool"]>>, Promise<AgentTool>>()
+      .mockResolvedValue(deferredTool);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search deferred", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "KnowledgeSearch",
+        isError: false,
+      }),
+    );
+  });
+
+  it("still rejects a deferred-tool resolver that returns an unrelated name", async () => {
+    // If the deferred resolver returns something with no alias/case relation to
+    // the requested name, that's a bug in the resolver — surface it as an error.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "should not run" }],
+        details: { ok: true },
+      }),
+    );
+    const unrelatedTool: AgentTool = {
+      name: "not_related",
+      label: "not_related",
+      description: "Unrelated tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+    const resolveDeferredTool = vi
+      .fn<Parameters<NonNullable<AgentLoopConfig["resolveDeferredTool"]>>, Promise<AgentTool>>()
+      .mockResolvedValue(unrelatedTool);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(
+      /Deferred tool resolver returned "not_related" for requested "KnowledgeSearch"/,
+    );
+  });
 });
 
 describe("agentLoop tool termination", () => {

@@ -797,13 +797,18 @@ function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): Age
 // Lowercase-normalised alias map.  Keys are normalised requested names (lower,
 // non-alphanumeric stripped); values are ordered fallback tool-name candidates —
 // the first one present in the agent's tool context wins.
-// Claude Code trains models on these tool names; OpenClaw exposes different names.
+// Claude Code trains models on these tool names; OpenClaw exposes different names
+// with argument-compatible schemas (KnowledgeSearch/Glob/Grep all take a single
+// string).  Agent/Task are intentionally NOT included here because sessions_spawn
+// has a different argument shape (`task` vs `prompt`) and mapping it correctly
+// requires argument translation that belongs in the agent's tool context, not in
+// a shared alias table.  Deployments that need the Agent/Task alias can wrap
+// sessions_spawn with a compatible arg shape or bind the alias in their own
+// tool catalog.
 const TOOL_NAME_ALIASES: Readonly<Record<string, readonly string[]>> = {
   knowledgesearch: ["memory_search", "knowledge_search", "wiki_search", "search"],
   glob: ["find"],
   grep: ["grep"],
-  agent: ["sessions_spawn"],
-  task: ["sessions_spawn"],
 };
 
 function normalizeToolName(name: string): string {
@@ -873,8 +878,11 @@ async function resolveToolCallTool(
         },
         signal,
       );
-      // Keep execution and lifecycle/audit identity aligned with the original model call.
-      if (resolvedTool && resolvedTool.name !== toolCall.name) {
+      // Keep execution and lifecycle/audit identity aligned with the original model
+      // call — the deferred resolver may return an alias-compatible name, so accept
+      // any resolvedTool whose name is exact-, case-, or alias-equivalent to the
+      // requested name, and reject only genuinely unrelated resolutions.
+      if (resolvedTool && resolveToolAlias(toolCall.name, [resolvedTool]) !== resolvedTool) {
         throw new Error(
           `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
         );
