@@ -216,8 +216,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 8))
         self.assertSwitch(toggle, isOn: true)
         XCTAssertTrue(self.app?.otherElements["settings-privacy-notifications-card"].exists == true)
-        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Enabled")
-        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].exists == true)
+        XCTAssertFalse(self.app?.staticTexts["settings-notifications-status"].exists == true)
+        XCTAssertEqual(
+            self.app?.staticTexts["settings-notifications-detail"].label,
+            "OpenClaw can show approval prompts and event alerts when the app is not active.")
         XCTAssertTrue(self.app?.staticTexts["settings-notifications-relay-detail"].exists == true)
         XCTAssertFalse(self.app?.buttons["Manage in iOS Settings"].exists == true)
         XCTAssertFalse(self.app?.buttons["Open iOS Settings"].exists == true)
@@ -249,8 +251,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
             for: NSPredicate { _, _ in self.switchValue(toggle) == .some(false) },
             evaluatedWith: toggle)
         wait(for: [switchedOff], timeout: 3)
-        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Off")
-        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].label.contains("turned off") == true)
+        XCTAssertFalse(self.app?.staticTexts["settings-notifications-status"].exists == true)
+        XCTAssertEqual(
+            self.app?.staticTexts["settings-notifications-detail"].label,
+            "OpenClaw can show approval prompts and event alerts when the app is not active.")
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-relay-detail"].exists == true)
         XCTAssertTrue(self.app?.navigationBars["Privacy"].exists == true)
         self.attachScreenshot(named: "privacy-notifications-toggle-off")
     }
@@ -269,8 +274,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let toggle = try XCTUnwrap(self.notificationToggle)
         XCTAssertTrue(toggle.waitForExistence(timeout: 8))
         self.assertSwitch(toggle, isOn: false)
-        XCTAssertEqual(self.app?.staticTexts["settings-notifications-status"].label, "Denied")
-        XCTAssertTrue(self.app?.staticTexts["settings-notifications-detail"].label.contains("denied") == true)
+        XCTAssertFalse(self.app?.staticTexts["settings-notifications-status"].exists == true)
+        XCTAssertEqual(
+            self.app?.staticTexts["settings-notifications-detail"].label,
+            "OpenClaw can show approval prompts and event alerts when the app is not active.")
+        XCTAssertTrue(self.app?.staticTexts["settings-notifications-relay-detail"].exists == true)
         XCTAssertFalse(self.app?.buttons["Manage in iOS Settings"].exists == true)
         self.attachScreenshot(named: "privacy-notifications-denied")
     }

@@ -916,27 +916,6 @@ extension SettingsProTab {
         return self.notificationStatus.color
     }
 
-    var notificationStatusDetail: String {
-        switch self.notificationStatus {
-        case .checking:
-            "Checking iOS notification permission."
-        case .allowed:
-            if self.notificationsServingEnabled {
-                "OpenClaw can show approval prompts and event alerts when the app is not active."
-            } else if !self.notificationRelayDisclosureAccepted {
-                "Review hosted push relay disclosure to enable notification delivery."
-            } else {
-                "OpenClaw notification delivery is turned off."
-            }
-        case .notAllowed:
-            "Notifications have been denied. Enable them in iOS Settings."
-        case .notSet:
-            "Enable notifications to receive approval prompts and event alerts outside the app."
-        case .unknown:
-            "OpenClaw cannot determine the current notification permission state."
-        }
-    }
-
     var notificationRelayDetail: String {
         if PushBuildConfig.current.usesOpenClawHostedRelay {
             let host = PushBuildConfig.current.relayBaseURL.flatMap {

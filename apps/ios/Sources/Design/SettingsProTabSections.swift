@@ -463,18 +463,15 @@ extension SettingsProTab {
             ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 12) {
-                        ProIconBadge(systemName: "bell", color: self.notificationEffectiveStatusColor)
+                        ProIconBadge(systemName: "bell", color: .secondary)
                         Text("Notifications")
                             .font(.headline)
                         Spacer(minLength: 8)
-                        Text(self.notificationStatusText)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(self.notificationEffectiveStatusColor)
-                            .accessibilityIdentifier("settings-notifications-status")
                         Toggle("Notifications", isOn: self.notificationToggleBinding)
                             .labelsHidden()
                             .accessibilityIdentifier("settings-notifications-toggle")
                             .accessibilityLabel("Notifications")
+                            .accessibilityValue(self.notificationsServingEnabled ? "On" : "Off")
                             .accessibilityHint("Turns OpenClaw notification delivery on or off")
                     }
                     .padding(12)
@@ -482,21 +479,18 @@ extension SettingsProTab {
                     Divider().padding(.leading, 54)
 
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(self.notificationStatusDetail)
+                        Text("OpenClaw can show approval prompts and event alerts when the app is not active.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("settings-notifications-detail")
-                            .padding(12)
-
-                        Divider().padding(.leading, 12)
                         Text(self.notificationRelayDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("settings-notifications-relay-detail")
-                            .padding(12)
                     }
+                    .padding(12)
                 }
             }
             .accessibilityElement(children: .contain)
