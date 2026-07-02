@@ -3639,10 +3639,30 @@ async function runEmbeddedAgentInternal(
           const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
+          const promptTimeoutAssistantTextCandidate =
+            (finalAssistantVisibleText ?? finalAssistantRawText)?.trim() ||
+            (attempt.assistantTexts ?? []).join("\n\n").trim();
+          const promptTimeoutHadUnsafeActivity =
+            Boolean(
+              attempt.clientToolCalls ||
+                attempt.yieldDetected ||
+                attempt.didSendViaMessagingTool ||
+                attempt.didDeliverSourceReplyViaMessageTool ||
+                attempt.didSendDeterministicApprovalPrompt ||
+                attempt.lastToolError ||
+                attempt.replayMetadata.hadPotentialSideEffects,
+            ) || (attempt.toolMetas?.length ?? 0) > 0;
+          const canRecoverCodexCompletionTimeoutAssistantText =
+            timedOutDuringPrompt &&
+            shouldSurfaceCodexCompletionTimeout &&
+            attempt.codexAppServerFailure?.replayBlockedReason === "assistant_output" &&
+            !promptTimeoutHadUnsafeActivity &&
+            promptTimeoutAssistantTextCandidate.length > 0;
           const recoveredFinalAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
-            ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
-              ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
+            (["completed", "end_turn", "stop"].includes(finalAssistantStopReason) ||
+              canRecoverCodexCompletionTimeoutAssistantText)
+              ? promptTimeoutAssistantTextCandidate
               : undefined;
           const payloadAlreadyContainsRecoveredFinalAssistant =
             recoveredFinalAssistantTextAfterPromptTimeout
@@ -3668,6 +3688,7 @@ async function runEmbeddedAgentInternal(
           const hasPartialAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+            !recoveredFinalAssistantTextAfterPromptTimeout &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
             !attempt.didSendViaMessagingTool &&

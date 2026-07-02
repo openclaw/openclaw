@@ -244,6 +244,46 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it("delivers safe assistant text after a missing turn/completed timeout", async () => {
+    const assistantText = "The direct answer survived the missing terminal event.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexTurnCompletionIdleTimeoutAttempt({
+        assistantTexts: [assistantText],
+        lastAssistant: {
+          role: "assistant",
+          content: [{ type: "text", text: assistantText }],
+          stopReason: "error",
+        } as EmbeddedRunAttemptResult["lastAssistant"],
+        codexAppServerFailure: {
+          kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "completion",
+          transport: "stdio",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          replaySafe: false,
+          replayBlockedReason: "assistant_output",
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "codex",
+      model: "gpt-5.5",
+      runId: "run-codex-turn-completion-idle-timeout-assistant-output",
+    });
+
+    expect(result.payloads?.[0]).toMatchObject({
+      text: assistantText,
+    });
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
+    expect(result.payloads?.some((payload) => payload.text === CODEX_MISSING_TERMINAL_MESSAGE)).toBe(
+      false,
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
   it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({
