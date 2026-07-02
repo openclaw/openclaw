@@ -45,7 +45,31 @@ describe("resolveGeneratedModuleFormatter", () => {
     });
   });
 
-  it("wraps pnpm.cmd explicitly on Windows instead of using shell mode", () => {
+  it("wraps the direct formatter on Windows when available", () => {
+    const formatterPath = "C:\\repo\\node_modules\\.bin\\oxfmt.cmd";
+
+    expect(
+      resolveGeneratedModuleFormatter({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        existsSync: (value) => value === formatterPath,
+        outputPath: "C:\\Users\\test\\AppData\\Local\\Temp\\generated output.ts",
+        platform: "win32",
+        repoRoot: "C:\\repo",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        'C:\\repo\\node_modules\\.bin\\oxfmt.cmd --write "C:\\Users\\test\\AppData\\Local\\Temp\\generated output.ts"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps pnpm.cmd explicitly on Windows when the direct formatter is unavailable", () => {
     expect(
       resolveGeneratedModuleFormatter({
         comSpec: "C:\\Windows\\System32\\cmd.exe",

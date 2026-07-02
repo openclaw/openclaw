@@ -25,6 +25,7 @@ import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../au
 import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -41,6 +42,7 @@ import {
 import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
 import {
   checkInboundAccessControl,
+  emitWhatsAppMessagePreAuthHooks,
   type AcceptedInboundAccessControlResult,
 } from "./access-control.js";
 import {
@@ -817,7 +819,7 @@ export async function attachWebInboxToSocket(
 
     const group = isGroupJid(remoteJid);
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
-    // Applies to both groups and DMs/self-chat — without this, self-chat mode
+    // Applies to both groups and DMs/self-chat - without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
     if (
       Boolean(msg.key?.fromMe) &&
@@ -846,9 +848,31 @@ export async function attachWebInboxToSocket(
       return null;
     }
 
+    const messageTimestampSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
+    const messageTimestampMs =
+      messageTimestampSeconds !== undefined ? messageTimestampSeconds * 1000 : undefined;
+    const preAuthContent = extractText(msg.message ?? undefined);
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
+    const accessCfg = options.loadConfig?.() ?? options.cfg;
     if (!from) {
+      const policy = resolveWhatsAppInboundPolicy({
+        cfg: accessCfg,
+        accountId: options.accountId,
+        selfE164: self.e164 ?? null,
+      });
+      if (!group && !msg.key?.fromMe && policy.dmPolicy !== "disabled") {
+        emitWhatsAppMessagePreAuthHooks({
+          accountId: options.accountId,
+          from: remoteJid,
+          content: preAuthContent ?? "",
+          senderName: (msg.pushName ?? "").trim() || undefined,
+          senderE164: null,
+          remoteJid,
+          messageId: id,
+          messageTimestampMs,
+        });
+      }
       return null;
     }
     const senderE164 = group
@@ -864,21 +888,18 @@ export async function attachWebInboxToSocket(
       groupSubject = meta.subject;
       groupParticipants = meta.participants;
     }
-    const messageTimestampSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
-    const messageTimestampMs =
-      messageTimestampSeconds !== undefined ? messageTimestampSeconds * 1000 : undefined;
-
-    const accessCfg = options.loadConfig?.() ?? options.cfg;
     const access = await checkInboundAccessControl({
       cfg: accessCfg,
       accountId: options.accountId,
       from,
       selfE164: self.e164 ?? null,
       senderE164,
+      content: preAuthContent,
       senderJid: participantJid,
       group,
       pushName: msg.pushName ?? undefined,
       isFromMe: Boolean(msg.key?.fromMe),
+      messageId: id,
       messageTimestampMs,
       connectedAtMs,
       verbose: options.verbose,

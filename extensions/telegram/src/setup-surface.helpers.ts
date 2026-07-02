@@ -1,6 +1,5 @@
 // Telegram helper module supports setup surface.helpers behavior.
 import {
-  addWildcardAllowFrom,
   applySetupAccountConfigPatch,
   type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
@@ -8,12 +7,12 @@ import {
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
+import { mergeTelegramAllowFromEntries, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { promptTelegramAllowFromForAccount } from "./setup-core.js";
 
 const channel = "telegram" as const;
@@ -48,7 +47,7 @@ export function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId
   const policy = merged.dmPolicy ?? "pairing";
   const hasAllowFrom =
     Array.isArray(merged.allowFrom) &&
-    merged.allowFrom.some((entry) => normalizeOptionalString(String(entry)));
+    merged.allowFrom.some((entry) => normalizeTelegramAllowFromEntry(entry));
   return policy === "pairing" && !hasAllowFrom;
 }
 
@@ -90,7 +89,14 @@ export const telegramSetupDmPolicy: ChannelSetupDmPolicy = {
     const merged = mergeTelegramAccountConfig(cfg, resolvedAccountId);
     const patch = {
       dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(merged.allowFrom) } : {}),
+      ...(policy === "open"
+        ? {
+            allowFrom: mergeTelegramAllowFromEntries({
+              existing: merged.allowFrom,
+              additions: ["*"],
+            }),
+          }
+        : {}),
     };
     return accountId == null && resolvedAccountId !== DEFAULT_ACCOUNT_ID
       ? applySetupAccountConfigPatch({

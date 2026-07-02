@@ -677,11 +677,11 @@ function rememberAppendedSessionEntry(
   const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
     Boolean(
       publishOwnedAppend &&
-      beforeAppendSnapshot &&
-      snapshot &&
-      snapshot.dev === beforeAppendSnapshot.dev &&
-      snapshot.ino === beforeAppendSnapshot.ino &&
-      snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+        beforeAppendSnapshot &&
+        snapshot &&
+        snapshot.dev === beforeAppendSnapshot.dev &&
+        snapshot.ino === beforeAppendSnapshot.ino &&
+        snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
     );
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
@@ -748,7 +748,6 @@ function rememberAppendedSessionEntry(
   trimSessionEntriesCache();
   return { snapshot, cacheAdvanced: true, ownedAppendVerified: true };
 }
-
 function publishRememberedSessionFileSnapshot(
   filePath: string,
   snapshot: SessionFileSnapshot | undefined,

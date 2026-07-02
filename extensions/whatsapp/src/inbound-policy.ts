@@ -12,6 +12,10 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import {
+  normalizeWhatsAppAllowFromEntryNumbers,
+  resolveWhatsAppAllowFromSenderGroup,
+} from "./allow-from-groups.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
@@ -31,6 +35,7 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSamePhone: (value?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (conversationId: string) => boolean;
+  resolveSenderGroup: (senderId?: string | null) => string | undefined;
 };
 
 function normalizeWhatsAppIngressPhone(value: string): string | null {
@@ -75,7 +80,8 @@ export function resolveWhatsAppInboundPolicy(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const configuredAllowFrom = account.allowFrom ?? [];
+  const configuredAllowFromEntries = account.allowFrom ?? [];
+  const configuredAllowFrom = normalizeWhatsAppAllowFromEntryNumbers(configuredAllowFromEntries);
   const dmPolicy = account.dmPolicy ?? "pairing";
   const dmAllowFrom =
     configuredAllowFrom.length > 0 ? configuredAllowFrom : params.selfE164 ? [params.selfE164] : [];
@@ -121,6 +127,11 @@ export function resolveWhatsAppInboundPolicy(params: {
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
         groupId: resolveWhatsAppGroupConversationId(conversationId),
+      }),
+    resolveSenderGroup: (senderId) =>
+      resolveWhatsAppAllowFromSenderGroup({
+        allowFrom: configuredAllowFromEntries,
+        senderId,
       }),
   };
 }

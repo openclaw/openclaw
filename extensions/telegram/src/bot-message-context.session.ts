@@ -25,6 +25,11 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeTelegramAllowFromEntries,
+  type TelegramAllowFromGroup,
+  type TelegramAllowFromEntry,
+} from "./allow-from.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -203,8 +208,9 @@ export async function buildTelegramInboundContextPayload(params: {
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
-  dmAllowFrom?: Array<string | number>;
+  dmAllowFrom?: readonly TelegramAllowFromEntry[];
   effectiveGroupAllow?: NormalizedAllowFrom;
+  senderGroup?: TelegramAllowFromGroup;
   topicName?: string;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<{
@@ -256,6 +262,7 @@ export async function buildTelegramInboundContextPayload(params: {
     options,
     dmAllowFrom,
     effectiveGroupAllow,
+    senderGroup,
     topicName,
     sessionRuntime: sessionRuntimeOverride,
   } = params;
@@ -602,6 +609,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      SenderGroup: senderGroup,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
@@ -626,7 +634,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const pinnedMainDmOwner = !isGroup
     ? sessionRuntime.resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: dmAllowFrom,
+        allowFrom: normalizeTelegramAllowFromEntries(dmAllowFrom ?? []),
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;

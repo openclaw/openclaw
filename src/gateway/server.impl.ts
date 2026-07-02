@@ -1771,6 +1771,7 @@ export async function startGatewayServer(
       logChannels,
       logCron,
       logReload,
+      defaultWorkspaceDir,
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },

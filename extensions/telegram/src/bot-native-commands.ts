@@ -51,6 +51,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import type { TelegramAllowFromEntry } from "./allow-from.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -575,7 +576,7 @@ export type RegisterTelegramHandlerParams = {
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
   telegramDeps: TelegramBotDeps;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
   resolveGroupActivation: (params: {
@@ -616,7 +617,7 @@ export type RegisterTelegramNativeCommandsParams = {
   runtime: RuntimeEnv;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   groupAllowFrom?: Array<string | number>;
   replyToMode: ReplyToMode;
   textLimit: number;
@@ -642,7 +643,7 @@ async function resolveTelegramCommandAuth(params: {
   accountId: string;
   telegramCfg: TelegramAccountConfig;
   readChannelAllowFromStore: TelegramBotDeps["readChannelAllowFromStore"];
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   groupAllowFrom?: Array<string | number>;
   useAccessGroups: boolean;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
@@ -782,7 +783,7 @@ async function resolveTelegramCommandAuth(params: {
     cfg,
     telegramCfg,
     topicConfig,
-    groupConfig,
+    groupConfig: isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
     effectiveGroupAllow,
     senderId,
     senderUsername,

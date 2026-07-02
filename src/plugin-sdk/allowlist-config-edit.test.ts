@@ -13,6 +13,14 @@ import {
   readConfiguredAllowlistEntries,
 } from "./allowlist-config-edit.js";
 
+function readStringField(entry: unknown, key: string): string | undefined {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const value = (entry as Record<string, unknown>)[key];
+  return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+}
+
 describe("readConfiguredAllowlistEntries", () => {
   it("coerces mixed entries to non-empty strings", () => {
     expect(readConfiguredAllowlistEntries(["owner", 42, ""])).toEqual(["owner", "42"]);
@@ -207,6 +215,86 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
         scope: { channelId: "demo", accountId: "alt" },
       },
     });
+  });
+
+  it("updates grouped dm allowlist entries when the access group is explicit", () => {
+    const groupedAdapter = buildDmGroupAccountAllowlistAdapter({
+      channelId: "demo",
+      resolveAccount: () => ({ dmAllowFrom: [] as string[], groupAllowFrom: [] as string[] }),
+      normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
+      resolveDmAllowFrom: (account) => account.dmAllowFrom,
+      resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+      readConfigEntry: (entry) => {
+        if (typeof entry === "string") {
+          return entry;
+        }
+        return readStringField(entry, "number");
+      },
+      readConfigEntryAccessGroup: (entry) => readStringField(entry, "group"),
+      formatConfigEntry: ({ entry, accessGroup }) => ({ number: entry, group: accessGroup }),
+    });
+    const parsedConfig = {
+      channels: {
+        demo: {
+          allowFrom: [{ number: "+15550001111", group: "restricted" }],
+        },
+      },
+    };
+
+    const result = groupedAdapter.applyConfigEdit?.({
+      cfg: {},
+      parsedConfig,
+      scope: "dm",
+      action: "add",
+      entry: "+15550001111",
+      accessGroup: "friends",
+      accessGroupExplicit: true,
+    });
+
+    expect(result).toEqual({
+      kind: "ok",
+      changed: true,
+      accessGroupChanged: { from: "restricted", to: "friends" },
+      pathLabel: "channels.demo.allowFrom",
+      writeTarget: { kind: "channel", scope: { channelId: "demo" } },
+    });
+    expect(parsedConfig.channels.demo.allowFrom).toEqual([
+      { number: "+15550001111", group: "friends" },
+    ]);
+  });
+
+  it("keeps existing grouped dm entries when the access group is only the default", () => {
+    const groupedAdapter = buildDmGroupAccountAllowlistAdapter({
+      channelId: "demo",
+      resolveAccount: () => ({ dmAllowFrom: [] as string[], groupAllowFrom: [] as string[] }),
+      normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
+      resolveDmAllowFrom: (account) => account.dmAllowFrom,
+      resolveGroupAllowFrom: (account) => account.groupAllowFrom,
+      readConfigEntry: (entry) => readStringField(entry, "number"),
+      readConfigEntryAccessGroup: (entry) => readStringField(entry, "group"),
+      formatConfigEntry: ({ entry, accessGroup }) => ({ number: entry, group: accessGroup }),
+    });
+    const parsedConfig = {
+      channels: {
+        demo: {
+          allowFrom: [{ number: "+15550001111", group: "friends" }],
+        },
+      },
+    };
+
+    const result = groupedAdapter.applyConfigEdit?.({
+      cfg: {},
+      parsedConfig,
+      scope: "dm",
+      action: "add",
+      entry: "+15550001111",
+      accessGroup: "restricted",
+    });
+
+    expect(result).toMatchObject({ kind: "ok", changed: false });
+    expect(parsedConfig.channels.demo.allowFrom).toEqual([
+      { number: "+15550001111", group: "friends" },
+    ]);
   });
 });
 

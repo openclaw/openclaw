@@ -39,6 +39,24 @@ const WhatsAppDirectEntrySchema = z
   .strict()
   .optional();
 
+const WhatsAppAllowFromGroupSchema = z.enum([
+  "trusted",
+  "partner",
+  "friends",
+  "family",
+  "work",
+  "restricted",
+]);
+
+const WhatsAppGroupedAllowFromEntrySchema = z
+  .object({
+    number: z.string(),
+    group: WhatsAppAllowFromGroupSchema,
+  })
+  .strict();
+
+const WhatsAppAllowFromEntrySchema = z.union([z.string(), WhatsAppGroupedAllowFromEntrySchema]);
+
 const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
 const WhatsAppAckReactionSchema = z
@@ -82,7 +100,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       ? DmPolicySchema.optional().default("pairing")
       : DmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
-    allowFrom: z.array(z.string()).optional(),
+    allowFrom: z.array(WhatsAppAllowFromEntrySchema).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: params.useDefaults
@@ -111,6 +129,26 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   };
 }
 
+function readWhatsAppAllowFromPolicyEntry(entry: unknown): string | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    const value = String(entry).trim();
+    return value || undefined;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const number = (entry as Record<string, unknown>).number;
+  return typeof number === "string" && number.trim() ? number.trim() : undefined;
+}
+
+function normalizeWhatsAppAllowFromPolicyEntries(allowFrom: unknown): string[] {
+  if (!Array.isArray(allowFrom)) {
+    return [];
+  }
+  return normalizeStringEntries(
+    allowFrom.flatMap((entry) => readWhatsAppAllowFromPolicyEntry(entry) ?? []),
+  );
+}
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
   allowFrom: unknown;
@@ -121,7 +159,7 @@ function enforceOpenDmPolicyAllowFromStar(params: {
   if (params.dmPolicy !== "open") {
     return;
   }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
+  const allow = normalizeWhatsAppAllowFromPolicyEntries(params.allowFrom);
   if (allow.includes("*")) {
     return;
   }
@@ -142,7 +180,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   if (params.dmPolicy !== "allowlist") {
     return;
   }
-  const allow = normalizeStringEntries(Array.isArray(params.allowFrom) ? params.allowFrom : []);
+  const allow = normalizeWhatsAppAllowFromPolicyEntries(params.allowFrom);
   if (allow.length > 0) {
     return;
   }

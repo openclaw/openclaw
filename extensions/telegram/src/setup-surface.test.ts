@@ -167,6 +167,20 @@ describe("telegramSetupDmPolicy", () => {
     expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
     expect(next?.channels?.telegram?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
   });
+
+  it("preserves grouped allowFrom entries when adding the open-policy wildcard", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          allowFrom: [{ number: "123", group: "friends" }],
+        },
+      },
+    };
+
+    const next = telegramSetupDmPolicy.setPolicy?.(cfg, "open");
+
+    expect(next?.channels?.telegram?.allowFrom).toEqual([{ number: "123", group: "friends" }, "*"]);
+  });
 });
 
 describe("telegramSetupWizard allowFrom", () => {
@@ -213,6 +227,27 @@ describe("telegramSetupWizard allowFrom", () => {
         process.env.OPENCLAW_LOCALE = previousLocale;
       }
     }
+  });
+
+  it("preserves grouped allowFrom entries when adding a sender", async () => {
+    const next = await promptTelegramAllowFromForAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            allowFrom: [{ number: "123", group: "friends" }],
+          },
+        },
+      },
+      prompter: {
+        note: vi.fn(async () => {}),
+        text: vi.fn(async () => "456"),
+      } as never,
+    });
+
+    expect(next.channels?.telegram?.allowFrom).toEqual([
+      { number: "123", group: "friends" },
+      "456",
+    ]);
   });
 
   it("localizes legacy allowFrom prompt copy", async () => {

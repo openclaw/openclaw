@@ -168,6 +168,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
     isSamePhone: () => false,
     resolveConversationGroupPolicy: () => "allowlist",
     resolveConversationRequireMention: () => false,
+    resolveSenderGroup: () => undefined,
   };
 }
 
@@ -304,6 +305,21 @@ describe("processMessage group system prompt wiring", () => {
     ).toBe("from config");
   });
 
+  it("passes grouped allowFrom access into the inbound context", async () => {
+    resolvePolicyMock.mockReturnValue({
+      ...makePolicy(makeAccount()),
+      resolveSenderGroup: () => "friends",
+    });
+
+    await callProcessMessage();
+
+    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+      sender: {
+        e164: "+15550002222",
+        group: "friends",
+      },
+    });
+  });
   it("marks detected WhatsApp slash messages as text command turns", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     isControlCommandMessageMock.mockReturnValue(true);
@@ -431,6 +447,7 @@ describe("processMessage group system prompt wiring", () => {
         threadId: undefined,
         messageId: "msg1",
         senderId: "+15550002222",
+        senderGroup: undefined,
         sessionKey: baseRoute.sessionKey,
         runId: undefined,
         metadata: {
@@ -445,6 +462,7 @@ describe("processMessage group system prompt wiring", () => {
           senderName: "Alice",
           senderUsername: undefined,
           senderE164: "+15550002222",
+          senderGroup: undefined,
           guildId: undefined,
           channelName: undefined,
           topicName: undefined,
@@ -486,6 +504,7 @@ describe("processMessage group system prompt wiring", () => {
           senderName: "Alice",
           senderUsername: undefined,
           senderE164: "+15550002222",
+          senderGroup: undefined,
           guildId: undefined,
           channelName: undefined,
           topicName: undefined,

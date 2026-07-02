@@ -2,6 +2,7 @@
 // Generate Bundled Channel Config Metadata script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
 
@@ -334,7 +335,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = JSON.parse(
   });
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file://").href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const check = process.argv.includes("--check");
   const result = await writeBundledChannelConfigMetadataModule({ check });
   if (!result.changed) {

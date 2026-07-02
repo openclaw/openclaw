@@ -65,6 +65,7 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
+  PluginHookMessagePreAuthEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -129,6 +130,7 @@ export type {
   PluginHookInboundClaimResult,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
+  PluginHookMessagePreAuthEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
@@ -1054,6 +1056,17 @@ export function createHookRunner(
   }
 
   /**
+   * Run message_pre_auth hook.
+   * Fires before channel allowlist/pairing decisions and never returns a reply.
+   */
+  async function runMessagePreAuth(
+    event: PluginHookMessagePreAuthEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_pre_auth", event, ctx);
+  }
+
+  /**
    * Run message_received hook.
    * Runs in parallel (fire-and-forget).
    */
@@ -1643,6 +1656,7 @@ export function createHookRunner(
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
+    runMessagePreAuth,
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,

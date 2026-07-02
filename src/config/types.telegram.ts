@@ -100,6 +100,21 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+type TelegramAllowFromGroup =
+  | "trusted"
+  | "partner"
+  | "friends"
+  | "family"
+  | "work"
+  | "restricted";
+
+type TelegramGroupedAllowFromEntry = {
+  number: string | number;
+  group: TelegramAllowFromGroup;
+};
+
+type TelegramAllowFromEntry = string | number | TelegramGroupedAllowFromEntry;
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -139,7 +154,7 @@ export type TelegramAccountConfig = {
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
-  allowFrom?: Array<string | number>;
+  allowFrom?: TelegramAllowFromEntry[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
   defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
@@ -341,7 +356,7 @@ export type TelegramDirectConfig = {
   /** If true, require messages to be from a topic when topics are enabled. */
   requireTopic?: boolean;
   /** Optional allowlist for DM senders (numeric Telegram user IDs). */
-  allowFrom?: Array<string | number>;
+  allowFrom?: TelegramAllowFromEntry[];
   /** Optional system prompt snippet for this DM. */
   systemPrompt?: string;
   /** Controls outbound error reporting for this DM. */

@@ -23,6 +23,7 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { normalizeWhatsAppAllowFromEntryNumbers } from "./allow-from-groups.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
@@ -60,7 +61,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   defaultAccountId: resolveDefaultWhatsAppAccountId,
   clearBaseFields: [],
   allowTopLevel: false,
-  resolveAllowFrom: (account) => account.allowFrom,
+  resolveAllowFrom: (account) => normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
   formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.defaultTo,
 });
@@ -68,7 +69,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
 const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppAccount>({
   channelKey: WHATSAPP_CHANNEL,
   resolvePolicy: (account) => account.dmPolicy,
-  resolveAllowFrom: (account) => account.allowFrom,
+  resolveAllowFrom: (account) => normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
   policyPathSuffix: "dmPolicy",
   normalizeEntry: (raw) => normalizeE164(raw),
   inheritSharedDefaultsFromDefaultAccount: true,
@@ -200,7 +201,7 @@ export function createWhatsAppPluginBase(params: {
           extra: {
             linked: Boolean(account.authDir),
             dmPolicy: account.dmPolicy,
-            allowFrom: account.allowFrom,
+            allowFrom: normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
           },
         }),
     },

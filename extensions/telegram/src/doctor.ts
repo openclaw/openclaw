@@ -17,7 +17,14 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
-import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  createTelegramAllowFromEntry,
+  isNumericTelegramSenderUserId,
+  normalizeTelegramAllowFromEntry,
+  readTelegramAllowFromEntryGroup,
+  readTelegramAllowFromEntryNumber,
+  type TelegramAllowFromEntry,
+} from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
 import {
@@ -35,7 +42,7 @@ type TelegramApiRootBotEndpointHit = {
   value: string;
   normalized: string;
 };
-type DoctorAllowFromList = Array<string | number>;
+type DoctorAllowFromList = TelegramAllowFromEntry[];
 type DoctorAccountRecord = Record<string, unknown>;
 
 type TelegramAllowFromListRef = {
@@ -55,7 +62,7 @@ function sanitizeForLog(value: string): string {
 }
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
-  return Array.isArray(values) && values.some((entry) => normalizeOptionalString(String(entry)));
+  return Array.isArray(values) && values.some((entry) => normalizeTelegramAllowFromEntry(entry));
 }
 
 function collectTelegramAccountScopes(
@@ -193,7 +200,10 @@ export function scanTelegramInvalidAllowFromEntries(
       if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
         continue;
       }
-      hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
+      hits.push({
+        path: pathLabel,
+        entry: readTelegramAllowFromEntryNumber(entry) ?? normalized,
+      });
     }
   };
 
@@ -488,26 +498,30 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     const out: DoctorAllowFromList = [];
     const replaced: Array<{ from: string; to: string }> = [];
     for (const entry of raw) {
+      const rawNumber = readTelegramAllowFromEntryNumber(entry);
       const normalized = normalizeTelegramAllowFromEntry(entry);
       if (!normalized) {
         continue;
       }
+      const group = readTelegramAllowFromEntryGroup(entry);
+      const formatEntry = (number: string): TelegramAllowFromEntry =>
+        group ? createTelegramAllowFromEntry({ number, group }) : number;
       if (normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
-        out.push(normalized);
+        out.push(formatEntry(normalized));
         continue;
       }
-      const resolved = await resolveUserId(String(entry));
+      const resolved = await resolveUserId(normalized);
       if (resolved) {
-        out.push(resolved);
-        replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });
+        out.push(formatEntry(resolved));
+        replaced.push({ from: rawNumber ?? normalized, to: resolved });
       } else {
-        out.push(normalizeOptionalString(String(entry)) ?? "");
+        out.push(formatEntry(rawNumber ?? normalized));
       }
     }
     const deduped: DoctorAllowFromList = [];
     const seen = new Set<string>();
     for (const entry of out) {
-      const keyValue = normalizeOptionalString(String(entry)) ?? "";
+      const keyValue = normalizeTelegramAllowFromEntry(entry);
       if (!keyValue || seen.has(keyValue)) {
         continue;
       }

@@ -247,6 +247,18 @@ You can scope the opt-in to one account:
 Only enable this for plugins you trust to receive inbound WhatsApp message
 content and identifiers.
 
+WhatsApp also emits the observation-only `message_pre_auth` plugin hook and
+`message:pre-auth` internal hook for direct messages from senders that are not
+already admitted by `dmPolicy` and `allowFrom`. This pre-auth event fires before
+the channel blocks the message or sends any pairing challenge, carries the raw
+text available before preprocessing plus sender/profile fields, creates no agent
+session, never runs the model, and has no reply path to the sender. Use it for
+silent operator-side workflows such as phrase-gated access requests.
+If WhatsApp only exposes an unmapped LID for a not-yet-admitted sender, the
+pre-auth `senderId` falls back to that raw WhatsApp JID and E.164 phone metadata
+is omitted. Treat that event as informational until WhatsApp exposes a stable
+phone identity; a raw LID is not a usable `allowFrom` approval target.
+
 ## Access control and activation
 
 <Tabs>
@@ -258,7 +270,38 @@ content and identifiers.
     - `open` (requires `allowFrom` to include `"*"`)
     - `disabled`
 
-    `allowFrom` accepts E.164-style numbers (normalized internally).
+    `allowFrom` accepts E.164-style numbers (normalized internally). It also accepts grouped entries:
+
+    ```json
+    {
+      "channels": {
+        "whatsapp": {
+          "dmPolicy": "allowlist",
+          "allowFrom": [
+            "+<trusted-sender-number>",
+            { "number": "+<friend-sender-number>", "group": "friends" }
+          ]
+        }
+      }
+    }
+    ```
+
+    Supported groups are `trusted`, `partner`, `friends`, `family`, `work`, and `restricted`. Grouped entries still authorize the sender like the legacy string form, and admitted WhatsApp turns include the sender group in message context as `SenderGroup`, hook context metadata as `senderGroup`, and trusted inbound system prompt metadata as `sender_group`.
+
+    You can reference `sender_group` from your agent's `SOUL.md` to adjust behavior by access group:
+
+    ```md
+    ## WhatsApp sender groups
+
+    The current WhatsApp sender group is available in trusted inbound metadata as `sender_group`.
+
+    - `trusted`: Full access.
+    - `partner`: Broad access; ask the operator to confirm sensitive actions.
+    - `friends`: Normal conversation, without sensitive tools.
+    - `family`: Warm, supportive tone, without tools.
+    - `work`: Professional and formal focus.
+    - `restricted`: Basic and reserved interaction for unknown senders.
+    ```
 
     `allowFrom` is a DM sender access-control list. It does not gate explicit outbound sends to WhatsApp group JIDs or `@newsletter` channel JIDs.
 
@@ -270,6 +313,7 @@ content and identifiers.
     - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron or heartbeat recipients
     - if no allowlist is configured, the linked self number is allowed by default
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
+    - use `/allowlist add dm --channel whatsapp --group <group> <sender-number>` to add or move a sender between access groups
 
   </Tab>
 

@@ -1,13 +1,17 @@
 // Whatsapp helper module supports setup test helpers behavior.
 import { expect } from "vitest";
+import type { WhatsAppAllowFromEntry } from "./allow-from-groups.js";
 
 type WhatsAppSetupConfig = {
   channels?: {
     whatsapp?: {
       selfChatMode?: boolean;
       dmPolicy?: string;
-      allowFrom?: string[];
-      accounts?: Record<string, { dmPolicy?: string; allowFrom?: string[]; authDir?: string }>;
+      allowFrom?: WhatsAppAllowFromEntry[];
+      accounts?: Record<
+        string,
+        { dmPolicy?: string; allowFrom?: WhatsAppAllowFromEntry[]; authDir?: string }
+      >;
     };
   };
 };
@@ -106,7 +110,7 @@ function expectWhatsAppDmAccess(
   expected: {
     selfChatMode: boolean;
     dmPolicy: string;
-    allowFrom?: string[];
+    allowFrom?: WhatsAppAllowFromEntry[];
   },
 ): void {
   expect(cfg.channels?.whatsapp?.selfChatMode).toBe(expected.selfChatMode);
