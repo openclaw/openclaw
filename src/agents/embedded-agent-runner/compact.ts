@@ -666,7 +666,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
       profileId: authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
-      fallbackOnIncompatibleProfile: true,
+      // Only fall through to auth.order for auto/inherited profiles.
+      // User-pinned profiles remain fail-fast to preserve explicit selection.
+      fallbackOnIncompatibleProfile: params.authProfileIdSource !== "user",
     });
 
     if (!apiKeyInfo.apiKey) {

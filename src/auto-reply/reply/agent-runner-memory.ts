@@ -965,6 +965,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
       agentHarnessId:
         entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
       thinkLevel: params.followupRun.run.thinkLevel,

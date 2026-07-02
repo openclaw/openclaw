@@ -95,6 +95,9 @@ async function resolveHarnessCompactApiKey(params: {
     profileId: compactParams.authProfileId,
     agentDir,
     workspaceDir,
+    // Only fall through to auth.order for auto/inherited profiles.
+    // User-pinned profiles remain fail-fast to preserve explicit selection.
+    fallbackOnIncompatibleProfile: compactParams.authProfileIdSource !== "user",
   });
   return apiKeyInfo.apiKey?.trim() || undefined;
 }

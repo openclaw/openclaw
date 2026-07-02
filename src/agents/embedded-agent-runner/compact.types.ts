@@ -32,6 +32,10 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  /** Source signal for the auth profile: "auto" (inherited/steering) or "user" (pinned).
+   *  Compaction uses this to gate incompatible-profile fallback: only auto/inherited
+   *  profiles are eligible; user-pinned profiles remain fail-fast. */
+  authProfileIdSource?: "auto" | "user";
   /** Host-resolved provider credential for native harness compaction. */
   resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */
