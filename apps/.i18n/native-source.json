@@ -11490,6 +11490,22 @@
       "id": "native.apple.d2db26b3bb266491"
     },
     {
+      "kind": "conditional-branch",
+      "line": 255,
+      "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift",
+      "source": "Off",
+      "surface": "apple",
+      "id": "native.apple.b6bc54876f20104f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 255,
+      "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift",
+      "source": "Paused",
+      "surface": "apple",
+      "id": "native.apple.5590d661cdc81fbf"
+    },
+    {
       "kind": "ui-named-argument",
       "line": 96,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",

@@ -106,6 +106,7 @@ final class VoiceWakeManager: NSObject {
     private var tapDrainTask: Task<Void, Never>?
     private var scheduledStartTask: Task<Void, Never>?
     private var isStarting: Bool = false
+    private var isSuspendedForExternalAudio: Bool = false
 
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
@@ -162,7 +163,10 @@ final class VoiceWakeManager: NSObject {
         self.suppressedByTalk = suppressed
         if suppressed {
             self.cancelScheduledStart()
-            _ = self.suspendForExternalAudioCapture()
+            if self.isListening {
+                self.isListening = false
+                self.tearDownRecognitionPipeline()
+            }
             if self.isEnabled {
                 self.statusText = "Paused"
             }
@@ -196,6 +200,11 @@ final class VoiceWakeManager: NSObject {
         guard self.isEnabled else { return }
         if self.isListening { return }
         if self.isStarting { return }
+        guard !self.isSuspendedForExternalAudio else {
+            self.isListening = false
+            self.statusText = "Paused"
+            return
+        }
 
         self.isStarting = true
         defer { self.isStarting = false }
@@ -241,9 +250,9 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        guard self.isEnabled, !self.suppressedByTalk else {
+        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else {
             self.isListening = false
-            self.statusText = self.suppressedByTalk ? "Paused" : "Off"
+            self.statusText = self.isEnabled ? "Paused" : "Off"
             return
         }
 
@@ -262,17 +271,19 @@ final class VoiceWakeManager: NSObject {
         self.isEnabled = false
         self.isListening = false
         self.statusText = "Off"
+        self.isSuspendedForExternalAudio = false
         self.cancelScheduledStart()
         self.tearDownRecognitionPipeline()
     }
 
     /// Temporarily releases the microphone so other subsystems (e.g. camera video capture) can record audio.
-    /// Returns `true` when listening or a pending restart was active and was suspended.
+    /// Returns `true` when listening, starting, or a pending restart was active and was suspended.
     func suspendForExternalAudioCapture() -> Bool {
         let hadPendingStart = self.scheduledStartTask != nil
         self.cancelScheduledStart()
-        guard self.isEnabled, self.isListening || hadPendingStart else { return false }
+        guard self.isEnabled, self.isListening || self.isStarting || hadPendingStart else { return false }
 
+        self.isSuspendedForExternalAudio = true
         self.isListening = false
         self.statusText = "Paused"
         self.tearDownRecognitionPipeline()
@@ -281,11 +292,12 @@ final class VoiceWakeManager: NSObject {
 
     func resumeAfterExternalAudioCapture(wasSuspended: Bool) {
         guard wasSuspended else { return }
+        self.isSuspendedForExternalAudio = false
         self.scheduleStart(after: Self.externalAudioResumeDelayNs)
     }
 
     private func startRecognition() throws {
-        guard self.isEnabled, !self.suppressedByTalk else { return }
+        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else { return }
 
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
@@ -516,6 +528,10 @@ final class VoiceWakeManager: NSObject {
 extension VoiceWakeManager {
     func _test_handleRecognitionCallback(transcript: String?, segments: [WakeWordSegment], errorText: String?) {
         self.handleRecognitionCallback(transcript: transcript, segments: segments, errorText: errorText)
+    }
+
+    func _test_setStartInFlight(_ isStarting: Bool) {
+        self.isStarting = isStarting
     }
 }
 #endif
