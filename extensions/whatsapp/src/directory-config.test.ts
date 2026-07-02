@@ -1,11 +1,48 @@
 // Whatsapp tests cover directory config plugin behavior.
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
+  listWhatsAppDirectoryGroupsLive,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+
+vi.mock("./connection-controller-registry.js", () => ({
+  getRegisteredWhatsAppConnectionController: vi.fn(),
+}));
+
+vi.mock("./active-listener.js", () => ({
+  resolveWebAccountId: vi.fn().mockReturnValue("default"),
+}));
+
+vi.mock("./auth-store.js", () => ({
+  readWebAuthExistsForDecision: vi.fn(),
+  resolveDefaultWebAuthDir: vi.fn().mockReturnValue("/tmp/wa-auth-default"),
+}));
+
+vi.mock("./session.js", () => ({
+  createWaSocket: vi.fn(),
+  waitForWaConnection: vi.fn(),
+}));
+
+import { readWebAuthExistsForDecision } from "./auth-store.js";
+import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import { createWaSocket, waitForWaConnection } from "./session.js";
+
+const mockGetCurrentSock = vi.fn();
+
+beforeEach(() => {
+  vi.mocked(getRegisteredWhatsAppConnectionController).mockReset();
+  vi.mocked(readWebAuthExistsForDecision).mockReset();
+  vi.mocked(createWaSocket).mockReset();
+  vi.mocked(waitForWaConnection).mockReset();
+  mockGetCurrentSock.mockReset();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("whatsapp directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as never;
@@ -53,5 +90,316 @@ describe("whatsapp directory", () => {
       { kind: "group", id: "120363111111111111@g.us" },
       { kind: "group", id: "120363222222222222@g.us" },
     ]);
+  });
+});
+
+describe("whatsapp directory groups live", () => {
+  const runtimeEnv = createDirectoryTestRuntime() as never;
+
+  function mockController(sock: unknown) {
+    vi.mocked(getRegisteredWhatsAppConnectionController).mockReturnValue({
+      getCurrentSock: () => sock as never,
+      getActiveListener: () => null,
+      getSelfIdentity: () => null,
+    });
+  }
+
+  function mockStandaloneAuth(exists: boolean) {
+    vi.mocked(readWebAuthExistsForDecision).mockResolvedValue(
+      exists ? { outcome: "stable", exists: true } : { outcome: "stable", exists: false },
+    );
+  }
+
+  function mockStandaloneSocket(groupMap: Record<string, { id: string; subject?: string }>) {
+    vi.mocked(createWaSocket).mockResolvedValue({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue(groupMap),
+      end: vi.fn(),
+    } as never);
+    vi.mocked(waitForWaConnection).mockResolvedValue(undefined);
+  }
+
+  it("fetches groups from the process-local controller socket", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({
+        "120363111111111111@g.us": {
+          id: "120363111111111111@g.us",
+          subject: "Family Chat",
+        },
+        "120363222222222222@g.us": {
+          id: "120363222222222222@g.us",
+          subject: "Work Group",
+        },
+      }),
+    });
+
+    const cfg = { channels: { whatsapp: {} } } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([
+      { kind: "group", id: "120363111111111111@g.us", name: "Family Chat" },
+      { kind: "group", id: "120363222222222222@g.us", name: "Work Group" },
+    ]);
+  });
+
+  it("falls back to config when no controller and auth is not linked", async () => {
+    mockController(null);
+    mockStandaloneAuth(false);
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "/tmp/wa-auth",
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("falls back to config when using default auth dir and auth is not linked", async () => {
+    mockController(null);
+    mockStandaloneAuth(false);
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("returns groups fetched from a standalone socket (no controller)", async () => {
+    mockController(null);
+    mockStandaloneAuth(true);
+    mockStandaloneSocket({
+      "120363111111111111@g.us": {
+        id: "120363111111111111@g.us",
+        subject: "Family Chat",
+      },
+      "120363222222222222@g.us": {
+        id: "120363222222222222@g.us",
+        subject: "Work Group",
+      },
+    });
+
+    const cfg = {
+      channels: { whatsapp: { authDir: "/tmp/wa-auth" } },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([
+      { kind: "group", id: "120363111111111111@g.us", name: "Family Chat" },
+      { kind: "group", id: "120363222222222222@g.us", name: "Work Group" },
+    ]);
+
+    expect(createWaSocket).toHaveBeenCalledWith(false, false, { authDir: "/tmp/wa-auth" });
+    expect(waitForWaConnection).toHaveBeenCalled();
+  });
+
+  it("falls back to config when standalone socket creation fails", async () => {
+    mockController(null);
+    mockStandaloneAuth(true);
+    vi.mocked(createWaSocket).mockRejectedValue(new Error("connection refused"));
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "/tmp/wa-auth",
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("filters live results by group name/subject", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({
+        "120363111111111111@g.us": {
+          id: "120363111111111111@g.us",
+          subject: "Family Chat",
+        },
+        "120363222222222222@g.us": {
+          id: "120363222222222222@g.us",
+          subject: "Work Group",
+        },
+        "120363333333333333@g.us": {
+          id: "120363333333333333@g.us",
+          subject: "Football Fans",
+        },
+      }),
+    });
+
+    const cfg = { channels: { whatsapp: {} } } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: "Family",
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us", name: "Family Chat" }]);
+  });
+
+  it("applies query filter to live results by JID", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({
+        "120363111111111111@g.us": {
+          id: "120363111111111111@g.us",
+          subject: "Family Chat",
+        },
+        "120363222222222222@g.us": {
+          id: "120363222222222222@g.us",
+          subject: "Work Group",
+        },
+        "120363333333333333@g.us": {
+          id: "120363333333333333@g.us",
+          subject: "Football Fans",
+        },
+      }),
+    });
+
+    const cfg = { channels: { whatsapp: {} } } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: "111111",
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us", name: "Family Chat" }]);
+  });
+
+  it("applies limit to live results", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({
+        "120363111111111111@g.us": {
+          id: "120363111111111111@g.us",
+          subject: "Group A",
+        },
+        "120363222222222222@g.us": {
+          id: "120363222222222222@g.us",
+          subject: "Group B",
+        },
+        "120363333333333333@g.us": {
+          id: "120363333333333333@g.us",
+          subject: "Group C",
+        },
+      }),
+    });
+
+    const cfg = { channels: { whatsapp: {} } } as unknown as OpenClawConfig;
+
+    const result = await listWhatsAppDirectoryGroupsLive({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: 2,
+      runtime: runtimeEnv,
+    } as never);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe("120363111111111111@g.us");
+    expect(result[1].id).toBe("120363222222222222@g.us");
+  });
+
+  it("falls back to config when controller socket throws", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockRejectedValue(new Error("network error")),
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "/tmp/wa-auth",
+          groups: {
+            "120363111111111111@g.us": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
+  });
+
+  it("handles socket returning empty groups", async () => {
+    mockController({
+      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+    });
+
+    const cfg = {
+      channels: { whatsapp: {} },
+    } as unknown as OpenClawConfig;
+
+    await expect(
+      listWhatsAppDirectoryGroupsLive({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      } as never),
+    ).resolves.toEqual([]);
   });
 });
