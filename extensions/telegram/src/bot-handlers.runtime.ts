@@ -167,7 +167,7 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
-import { resolvePromptContextTextDedupeKey } from "./prompt-context-dedupe.js";
+import { mergeTelegramPromptContextMessages } from "./prompt-context-dedupe.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
@@ -1311,18 +1311,10 @@ export const registerTelegramHandlers = ({
         entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
       ),
     );
-    const cacheTextKeys = new Set(
-      cachePromptMessages
-        .map((message) => resolvePromptContextTextDedupeKey(message))
-        .filter((key) => key !== undefined),
-    );
-    const sessionOnlyPromptMessages = sessionPromptMessages.filter((message) => {
-      const key = resolvePromptContextTextDedupeKey(message);
-      return key === undefined || !cacheTextKeys.has(key);
+    const { sessionOnlyPromptMessages, promptMessages } = mergeTelegramPromptContextMessages({
+      sessionPromptMessages,
+      cachePromptMessages,
     });
-    const promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted(
-      (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
-    );
     return promptMessages.length > 0
       ? [
           {
