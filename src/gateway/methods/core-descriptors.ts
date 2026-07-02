@@ -102,6 +102,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.list", scope: "operator.read" },
   { name: "agents.create", scope: "operator.admin" },
   { name: "agents.update", scope: "operator.admin" },
+  { name: "agents.setDefault", scope: "operator.admin" },
   { name: "agents.delete", scope: "operator.admin" },
   { name: "agents.files.list", scope: "operator.read" },
   { name: "agents.files.get", scope: "operator.read" },

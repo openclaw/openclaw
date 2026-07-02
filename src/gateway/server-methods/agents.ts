@@ -13,6 +13,7 @@ import {
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
   validateAgentsListParams,
+  validateAgentsSetDefaultParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
@@ -54,6 +55,7 @@ import {
   createAgentConfigEntry,
   deleteAgentConfigEntry,
   isConfiguredAgent,
+  setDefaultAgentConfigEntry,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
@@ -695,6 +697,36 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, agentId }, undefined);
+  },
+  "agents.setDefault": async ({ params, respond, context }) => {
+    if (!validateAgentsSetDefaultParams(params)) {
+      respondInvalidMethodParams(
+        respond,
+        "agents.setDefault",
+        validateAgentsSetDefaultParams.errors,
+      );
+      return;
+    }
+
+    const cfg = context.getRuntimeConfig();
+    const agentId = normalizeAgentId(params.agentId);
+    if (!isConfiguredAgent(cfg, agentId)) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
+
+    let result: Awaited<ReturnType<typeof setDefaultAgentConfigEntry>>;
+    try {
+      result = await setDefaultAgentConfigEntry({ agentId });
+    } catch (error) {
+      if (error instanceof AgentConfigPreconditionError) {
+        respondAgentConfigPreconditionError(respond, error);
+        return;
+      }
+      throw error;
+    }
+
+    respond(true, { ok: true, defaultId: result.defaultId }, undefined);
   },
   "agents.delete": async ({ params, respond, context }) => {
     if (!validateAgentsDeleteParams(params)) {

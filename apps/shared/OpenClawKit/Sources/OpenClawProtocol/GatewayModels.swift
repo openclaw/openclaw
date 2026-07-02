@@ -4493,6 +4493,38 @@ public struct AgentsUpdateResult: Codable, Sendable {
     }
 }
 
+public struct AgentsSetDefaultParams: Codable, Sendable {
+    public let agentid: String
+
+    public init(
+        agentid: String)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
+
+public struct AgentsSetDefaultResult: Codable, Sendable {
+    public let ok: Bool
+    public let defaultid: String
+
+    public init(
+        ok: Bool,
+        defaultid: String)
+    {
+        self.ok = ok
+        self.defaultid = defaultid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case defaultid = "defaultId"
+    }
+}
+
 public struct AgentsDeleteParams: Codable, Sendable {
     public let agentid: String
     public let deletefiles: Bool?

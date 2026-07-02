@@ -585,6 +585,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.list",
       "agents.create",
       "agents.update",
+      "agents.setDefault",
       "agents.delete",
       "agents.files.list",
       "agents.files.get",

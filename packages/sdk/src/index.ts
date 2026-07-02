@@ -22,6 +22,7 @@ export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
   AgentsCreateParams,
   AgentsDeleteParams,
+  AgentsSetDefaultParams,
   AgentsUpdateParams,
   AgentRunParams,
   ApprovalDecisionParams,

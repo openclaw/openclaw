@@ -6,6 +6,7 @@ import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentsCreateParams,
   AgentsDeleteParams,
+  AgentsSetDefaultParams,
   AgentsUpdateParams,
   AgentRunParams,
   ApprovalDecisionParams,
@@ -745,6 +746,10 @@ export class AgentsNamespace {
 
   async update(params: AgentsUpdateParams): Promise<unknown> {
     return await this.client.request("agents.update", params);
+  }
+
+  async setDefault(params: AgentsSetDefaultParams): Promise<unknown> {
+    return await this.client.request("agents.setDefault", params);
   }
 
   async delete(params: AgentsDeleteParams): Promise<unknown> {
