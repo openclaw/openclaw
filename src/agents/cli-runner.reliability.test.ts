@@ -1546,6 +1546,7 @@ describe("runCliAgent reliability", () => {
             ...context.params,
             agentId: "main",
             sessionFile,
+            timeoutMs: 5_000,
             workspaceDir: dir,
             onBeforeFreshCliSessionRetry: clearBeforeRetry,
           },
