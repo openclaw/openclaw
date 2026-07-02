@@ -111,7 +111,7 @@ This table maps common inference tasks to the corresponding infer command.
 | ----------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Uses the normal local path by default                 |
 | Run a model prompt on images  | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple image inputs             |
-| Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
+| Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Repeat `--file` to pass reference/input images        |
 | Describe an image file or URL | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
 | Transcribe audio              | `openclaw infer audio transcribe --file ./memo.m4a --json`                                    | `--model` must be `<provider/model>`                  |
 | Synthesize speech             | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json`                        | `tts status` is gateway-oriented                      |
@@ -190,6 +190,7 @@ openclaw infer image generate --prompt "friendly lobster illustration" --json
 openclaw infer image generate --prompt "cinematic product photo of headphones" --json
 openclaw infer image generate --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "simple red circle sticker on a transparent background" --json
 openclaw infer image generate --model openai/gpt-image-2 --quality low --openai-moderation low --prompt "low-cost draft poster" --json
+openclaw infer image generate --file ./reference.png --prompt "create a new poster using this style" --json
 openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 --json
 openclaw infer image edit --file ./logo.png --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "keep the logo, remove the background" --json
 openclaw infer image edit --file ./poster.png --prompt "make this a vertical story ad" --size 2160x3840 --aspect-ratio 9:16 --resolution 4K --json

@@ -198,6 +198,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
     flags: [
+      "--file",
       "--prompt",
       "--model",
       "--count",
@@ -2302,6 +2303,7 @@ export function registerCapabilityCli(program: Command) {
   image
     .command("generate")
     .description("Generate images")
+    .option("--file <path>", "Input/reference image file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
     .option("--count <n>", "Number of images")
@@ -2335,6 +2337,7 @@ export function registerCapabilityCli(program: Command) {
           openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
           quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          file: opts.file as string[] | undefined,
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
