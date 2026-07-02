@@ -7,6 +7,7 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
+  NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -23,12 +24,17 @@ import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
+import * as nativeCommandRouteModule from "./native-command-route.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   replyWithDiscordModelPickerProviders,
   type DispatchDiscordCommandInteraction,
 } from "./native-command-ui.js";
+import {
+  createDiscordNativeCommand,
+  testing as discordNativeCommandTesting,
+} from "./native-command.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
@@ -49,8 +55,14 @@ type MockInteraction = {
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   editReply: ReturnType<typeof vi.fn>;
+  defer: ReturnType<typeof vi.fn>;
   acknowledge: ReturnType<typeof vi.fn>;
   acknowledged: boolean;
+  options: {
+    getString: ReturnType<typeof vi.fn>;
+    getNumber: ReturnType<typeof vi.fn>;
+    getBoolean: ReturnType<typeof vi.fn>;
+  };
   client: object;
 };
 
@@ -70,6 +82,7 @@ function createModelPickerContext(): ModelPickerContext {
         dm: {
           enabled: true,
           policy: "open",
+          allowFrom: ["*"],
         },
       },
     },
@@ -107,8 +120,14 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
     editReply: vi.fn().mockResolvedValue({ ok: true }),
+    defer: vi.fn().mockResolvedValue({ ok: true }),
     acknowledge: vi.fn(),
     acknowledged: false,
+    options: {
+      getString: vi.fn().mockReturnValue(null),
+      getNumber: vi.fn().mockReturnValue(null),
+      getBoolean: vi.fn().mockReturnValue(null),
+    },
     client: {},
   };
   interaction.acknowledge.mockImplementation(async () => {
@@ -135,6 +154,22 @@ function createModelCommandDefinition(): ChatCommandDefinition {
     argsParsing: "none" as CommandArgsParsing,
     scope: "native",
   };
+}
+
+function createNativeModelCommand(cfg: OpenClawConfig) {
+  return createDiscordNativeCommand({
+    command: {
+      name: "model",
+      description: "Show or set the model",
+      acceptsArgs: true,
+    } satisfies NativeCommandSpec,
+    cfg,
+    discordConfig: cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
+  });
 }
 
 function mockModelCommandPipeline(modelCommand: ChatCommandDefinition) {
@@ -286,6 +321,35 @@ function createBoundThreadBindingManager(params: {
   };
 }
 
+function installFixedMainRoute() {
+  return vi
+    .spyOn(nativeCommandRouteModule, "resolveDiscordNativeInteractionRouteState")
+    .mockResolvedValue({
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        matchedBy: "default",
+      },
+      effectiveRoute: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        matchedBy: "default",
+      },
+      boundSessionKey: undefined,
+      configuredRoute: null,
+      configuredBinding: null,
+      bindingReadiness: null,
+    });
+}
+
 describe("Discord model picker interactions", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
@@ -353,6 +417,236 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledTimes(1);
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
     expect(interaction.update).not.toHaveBeenCalled();
+  });
+
+  it("opens the Discord model picker for bare /model when model choices are configured", async () => {
+    const context = createModelPickerContext();
+    const cfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "anthropic/claude-sonnet-4-5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.example.test/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+          anthropic: {
+            baseUrl: "https://api.anthropic.example.test/v1",
+            models: [
+              {
+                id: "claude-sonnet-4-5",
+                name: "Claude Sonnet 4.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const pickerData = createModelsProviderData({
+      openai: ["gpt-5.5"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    pickerData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(pickerData);
+    const command = createNativeModelCommand(cfg);
+    const interaction = createInteraction({ userId: "owner" });
+    const routeSpy = vi.fn<
+      typeof nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState
+    >(
+      async () =>
+        ({
+          route: {
+            agentId: "main",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            lastRoutePolicy: "session",
+            matchedBy: "default",
+          },
+          effectiveRoute: {
+            agentId: "codex",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:codex:acp:binding:discord:default:dm",
+            mainSessionKey: "agent:codex:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          boundSessionKey: "agent:codex:acp:binding:discord:default:dm",
+          configuredRoute: null,
+          configuredBinding: {
+            record: {
+              conversation: {
+                conversationId: "owner",
+              },
+            },
+            statefulTarget: {
+              agentId: "codex",
+            },
+          },
+          bindingReadiness: { ok: true },
+        }) as never,
+    );
+    const previousRouteState =
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(routeSpy);
+
+    try {
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+    } finally {
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(previousRouteState);
+    }
+
+    expect(firstMockArg(routeSpy, "resolve route state")).toMatchObject({
+      enforceConfiguredBindingReadiness: true,
+    });
+    expect(routeSpy).toHaveBeenCalledTimes(1);
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "codex");
+    expect(interaction.followUp).toHaveBeenCalledTimes(1);
+    const payload = JSON.stringify(firstMockArg(interaction.followUp, "interaction.followUp"));
+    expect(payload).toContain("gpt-5.5");
+    expect(payload).not.toContain("Choose a model for /model.");
+  });
+
+  it("checks configured ACP binding readiness before opening bare /model picker", async () => {
+    const context = createModelPickerContext();
+    const cfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {},
+            "anthropic/claude-sonnet-4-5": {},
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "owner" },
+          },
+          acp: { mode: "persistent" },
+        },
+      ],
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.example.test/v1",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+          anthropic: {
+            baseUrl: "https://api.anthropic.example.test/v1",
+            models: [
+              {
+                id: "claude-sonnet-4-5",
+                name: "Claude Sonnet 4.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const loadSpy = vi.spyOn(modelPickerModule, "loadDiscordModelPickerData");
+    const routeSpy = vi.fn<
+      typeof nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState
+    >(
+      async () =>
+        ({
+          route: {
+            agentId: "main",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:main:main",
+            mainSessionKey: "agent:main:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          effectiveRoute: {
+            agentId: "codex",
+            channel: "discord",
+            accountId: "default",
+            sessionKey: "agent:codex:acp:binding:discord:default:dm",
+            mainSessionKey: "agent:codex:main",
+            lastRoutePolicy: "session",
+            matchedBy: "binding.channel",
+          },
+          boundSessionKey: "agent:codex:acp:binding:discord:default:dm",
+          configuredRoute: null,
+          configuredBinding: {
+            record: {
+              conversation: {
+                conversationId: "owner",
+              },
+            },
+            statefulTarget: {
+              agentId: "codex",
+            },
+          },
+          bindingReadiness: { ok: false, error: "missing configured binding" },
+        }) as never,
+    );
+    const previousRouteState =
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(routeSpy);
+    const command = createNativeModelCommand(cfg);
+    const interaction = createInteraction({ userId: "owner" });
+
+    try {
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+    } finally {
+      discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(previousRouteState);
+    }
+
+    expect(firstMockArg(routeSpy, "resolve route state")).toMatchObject({
+      enforceConfiguredBindingReadiness: true,
+    });
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Configured ACP binding is unavailable right now. Please try again.",
+      ephemeral: true,
+    });
   });
 
   it("requires submit click before routing selected model through /model pipeline", async () => {
@@ -802,57 +1096,50 @@ describe("Discord model picker interactions", () => {
 
   it("persists suffixed LM Studio model overrides when dispatch leaves the routed session stale", async () => {
     const context = createModelPickerContext();
-    context.threadBindings = createBoundThreadBindingManager({
-      accountId: "default",
-      threadId: "thread-bound",
-      targetSessionKey: "agent:worker:subagent:bound",
-      agentId: "worker",
-    });
+    const fixedMainRoute = installFixedMainRoute();
     const pickerData = createModelsProviderData({
       anthropic: ["claude-sonnet-4-5"],
       lmstudio: ["unsloth/gemma-4-26b-a4b-it@iq4_xs"],
     });
     const modelCommand = createModelCommandDefinition();
-    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "main" });
     await upsertSessionEntry({
       storePath,
-      sessionKey: "agent:worker:subagent:bound",
+      sessionKey: "agent:main:main",
       entry: {
         updatedAt: Date.now(),
-        sessionId: "bound-session",
+        sessionId: "main-session",
       },
     });
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
+    try {
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+      mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = createDispatchSpy();
-    const button = createModelPickerFallbackButton(context, dispatchSpy);
-    const submitInteraction = createInteraction({ userId: "owner" });
-    submitInteraction.channel = {
-      type: ChannelType.PublicThread,
-      id: "thread-bound",
-    };
+      const dispatchSpy = createDispatchSpy();
+      const button = createModelPickerFallbackButton(context, dispatchSpy);
+      const submitInteraction = createInteraction({ userId: "owner" });
 
-    await button.run(submitInteraction as unknown as PickerButtonInteraction, {
-      ...createModelsViewSubmitData(),
-      p: "lmstudio",
-      mi: "1",
-    });
+      await button.run(submitInteraction as unknown as PickerButtonInteraction, {
+        ...createModelsViewSubmitData(),
+        p: "lmstudio",
+        mi: "1",
+      });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("lmstudio");
-    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe(
-      "unsloth/gemma-4-26b-a4b-it@iq4_xs",
-    );
-    expect(store["agent:worker:subagent:bound"]?.liveModelSwitchPending).toBe(true);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
-    });
-    expect(
-      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
-    ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(store["agent:main:main"]?.providerOverride).toBe("lmstudio");
+      expect(store["agent:main:main"]?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
+      expect(store["agent:main:main"]?.liveModelSwitchPending).toBe(true);
+      expectDispatchedModelSelection({
+        dispatchSpy,
+        model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
+      });
+      expect(
+        JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+      ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
+    } finally {
+      fixedMainRoute.mockRestore();
+    }
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
