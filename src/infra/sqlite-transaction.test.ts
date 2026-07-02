@@ -194,7 +194,7 @@ describe("runSqliteImmediateTransactionSync", () => {
     });
     const db = {
       exec() {},
-    } as import("node:sqlite").DatabaseSync;
+    } as unknown as import("node:sqlite").DatabaseSync;
 
     runSqliteImmediateTransactionSync(db, () => "committed", {
       busyTimeoutMs: 5_000,
