@@ -3,6 +3,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  ConversationIdentityDecision,
+  ConversationIdentityParams,
+} from "../routing/conversation-identity.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
@@ -70,7 +74,13 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
 const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const resolveConversationIdentityModeMock = vi.hoisted(() =>
-  vi.fn(() => ({ mode: "personal", allowed: true, reason: "internal" })),
+  vi.fn(
+    (_params: ConversationIdentityParams): ConversationIdentityDecision => ({
+      mode: "personal",
+      allowed: true,
+      reason: "internal",
+    }),
+  ),
 );
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -85,7 +95,7 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn((): OpenClawConfig => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   canonicalizeSessionEntryAliases: vi.fn(),

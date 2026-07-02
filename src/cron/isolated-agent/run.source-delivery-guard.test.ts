@@ -56,6 +56,9 @@ function makeExecutor(overrides: Partial<Parameters<typeof createCronPromptExecu
     agentSessionKey: "cron:source-delivery-guard",
     runSessionKey: "cron:source-delivery-guard:run:test-session-id",
     workspaceDir: "/tmp/workspace",
+    conversationIdentity: {
+      decision: { mode: "personal", allowed: true, reason: "internal" },
+    },
     resolvedVerboseLevel: "off",
     thinkLevel: undefined,
     timeoutMs: 60_000,
@@ -412,6 +415,9 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     agentSessionKey: "cron:source-delivery-guard",
     runSessionKey: "cron:source-delivery-guard:run:test-session-id",
     workspaceDir: "/tmp/workspace",
+    conversationIdentity: {
+      decision: { mode: "personal", allowed: true, reason: "internal" },
+    },
     skillsSnapshot: emptySkillsSnapshot,
     agentPayload: null,
     useSubagentFallbacks: false,

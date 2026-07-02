@@ -319,6 +319,11 @@ describe("heartbeat-wake", () => {
   it("forwards wake target fields and preserves them across retries", async () => {
     vi.useFakeTimers();
     const handler = setRetryOnceHeartbeatHandler();
+    const resolveCurrentRoute = () => ({
+      agentId: "ops",
+      sessionKey: "agent:ops:guildchat:channel:alerts",
+      matchedBy: "binding.channel" as const,
+    });
 
     requestHeartbeat({
       source: "cron",
@@ -335,6 +340,7 @@ describe("heartbeat-wake", () => {
         groupId: "C_ALERTS",
         groupSpace: "T_WORK",
         senderId: "U_OWNER",
+        resolveCurrentRoute,
       },
       coalesceMs: 0,
     });
@@ -356,6 +362,7 @@ describe("heartbeat-wake", () => {
         groupId: "C_ALERTS",
         groupSpace: "T_WORK",
         senderId: "U_OWNER",
+        resolveCurrentRoute,
       },
     });
 
@@ -376,6 +383,7 @@ describe("heartbeat-wake", () => {
         groupId: "C_ALERTS",
         groupSpace: "T_WORK",
         senderId: "U_OWNER",
+        resolveCurrentRoute,
       },
     });
   });

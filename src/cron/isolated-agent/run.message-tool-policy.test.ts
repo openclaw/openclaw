@@ -348,6 +348,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       agentSessionKey: "cron:message-tool-policy",
       runSessionKey: "cron:message-tool-policy:run:test-session-id",
       workspaceDir: "/tmp/workspace",
+      conversationIdentity: {
+        decision: { mode: "personal", allowed: true, reason: "internal" },
+      },
       resolvedVerboseLevel: "off",
       thinkLevel: undefined,
       timeoutMs: 60_000,

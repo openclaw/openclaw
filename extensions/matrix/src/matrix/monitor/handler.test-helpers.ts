@@ -194,9 +194,12 @@ export function createMatrixHandlerTestHarness(
   );
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
-  const cfgForHandler =
-    options.cfg ??
-    ({
+  const withDefaultAgentRegistry = (config: unknown) => ({
+    agents: { list: [{ id: "main", default: true }, { id: "ops" }, { id: "bound" }] },
+    ...(config && typeof config === "object" ? config : {}),
+  });
+  const cfgForHandler = withDefaultAgentRegistry(
+    options.cfg ?? {
       channels: {
         matrix: {
           dm: {
@@ -204,7 +207,8 @@ export function createMatrixHandlerTestHarness(
           },
         },
       },
-    } as const);
+    },
+  );
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -214,7 +218,9 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
+        current:
+          options.currentConfig ??
+          (() => (options.liveCfg ? withDefaultAgentRegistry(options.liveCfg) : cfgForHandler)),
       },
       channel: {
         pairing: {

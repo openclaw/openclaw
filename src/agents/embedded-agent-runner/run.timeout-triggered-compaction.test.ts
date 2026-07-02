@@ -47,6 +47,7 @@ type CompactRuntimeContext = {
   maxAttempts?: number;
   messageChannel?: string;
   messageProvider?: string;
+  policyMessageProvider?: string;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
