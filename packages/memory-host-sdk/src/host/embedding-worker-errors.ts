@@ -5,6 +5,7 @@ export const LOCAL_EMBEDDING_WORKER_ERROR_CODES = {
   exited: "LOCAL_EMBEDDING_WORKER_EXITED",
   processError: "LOCAL_EMBEDDING_WORKER_PROCESS_ERROR",
   ipcError: "LOCAL_EMBEDDING_WORKER_IPC_ERROR",
+  staleNodePath: "LOCAL_EMBEDDING_WORKER_STALE_NODE_PATH",
 } as const;
 
 /** Error code union for local embedding worker failures. */

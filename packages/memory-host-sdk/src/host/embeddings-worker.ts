@@ -2,6 +2,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveStableNodePath } from "../../../../src/infra/stable-node-path.js";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
   createLocalEmbeddingWorkerFailureError,
@@ -145,6 +146,12 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
+/** Cached stable Node path: resolved once at module load to survive Homebrew Node upgrades.
+ *  Homebrew records process.execPath as a Cellar path (e.g. /opt/homebrew/Cellar/node/26.3.0/bin/node)
+ *  which ceases to exist after `brew upgrade`.  The stable path resolves to the opt/bin symlink
+ *  that survives upgrades.  Wrapped in a promise so it can be re-resolved on ENOENT. */
+let stableNodePathPromise = resolveStableNodePath(process.execPath).then((p) => p);
+
 /** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -227,6 +234,19 @@ class LocalEmbeddingWorkerClient {
     }
   }
 
+  /** Re-resolve the stable Node executable from the OS search path (PATH).
+   *  This is used as a fallback when the initial execPath is a Homebrew Cellar path that was
+   *  removed by `brew upgrade` — requiring a fresh lookup after the binary was deleted. */
+  private static async resolveNodeFromPath(): Promise<string> {
+    const { createRequire } = await import("node:module");
+    const require = createRequire(import.meta.url);
+    try {
+      return require.resolve("node");
+    } catch {
+      return process.execPath;
+    }
+  }
+
   /** Ensure the child process exists and has lifecycle failure handlers installed. */
   private ensureChild(): ChildProcess {
     if (this.child?.connected) {
@@ -235,6 +255,7 @@ class LocalEmbeddingWorkerClient {
 
     const child = fork(this.scriptPath, [], {
       execArgv: resolveWorkerExecArgv(),
+      execPath: process.execPath,
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
@@ -248,6 +269,56 @@ class LocalEmbeddingWorkerClient {
     child.on("error", (err) => {
       if (this.child === child) {
         this.child = null;
+      }
+      const isENOENT = (err as NodeJS.ErrnoException).code === "ENOENT";
+      // On ENOENT the execPath may point at a Homebrew Cellar path that was removed by
+      // `brew upgrade`.  Re-resolve node from PATH and retry once with the fresh path.
+      const doRetry =
+        isENOENT &&
+        !process.execPath.includes("/bin/node") &&
+        !process.execPath.includes("/opt/node");
+      if (doRetry) {
+        LocalEmbeddingWorkerClient.resolveNodeFromPath()
+          .then((freshPath) => {
+            // Replace the cached promise so all future forks use the fresh path.
+            stableNodePathPromise = Promise.resolve(freshPath);
+            this.child = null;
+            const retry = fork(this.scriptPath, [], {
+              execArgv: resolveWorkerExecArgv(),
+              execPath: freshPath,
+              serialization: "json",
+              stdio: ["ignore", "ignore", "ignore", "ipc"],
+            });
+            retry.on("message", (m) => this.handleMessage(m));
+            retry.on("exit", (c, s) => {
+              if (this.child === retry) this.child = null;
+              this.rejectPending(createWorkerExitError(c, s));
+            });
+            retry.on("error", (e) => {
+              if (this.child === retry) this.child = null;
+              this.rejectPending(
+                createLocalEmbeddingWorkerFailureError({
+                  message: `Local embedding worker process failed: ${e.message}`,
+                  code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+                  reason: "process-error",
+                  cause: e,
+                }),
+              );
+            });
+            this.child = retry;
+          })
+          .catch(() => {
+            /* fall through to rejection below */
+          });
+        this.rejectPending(
+          createLocalEmbeddingWorkerFailureError({
+            message: `Local embedding worker execPath stale (Homebrew upgrade detected); re-resolving node from PATH`,
+            code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.staleNodePath,
+            reason: "process-error",
+            cause: err,
+          }),
+        );
+        return;
       }
       this.rejectPending(
         createLocalEmbeddingWorkerFailureError({
