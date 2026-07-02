@@ -1243,6 +1243,31 @@ describe("tool turn outcome annotation (#89683)", () => {
     expect(tools[0].turnSucceeded).toBe(false);
   });
 
+  it("keeps adjacent agent-initiated failed turns scoped without a user boundary", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      { role: "assistant", content: [], senderLabel: "cron-turn-1", timestamp: 2 },
+      failedTool(3),
+      assistantReply("Recovered on the next autonomous turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it("does not treat non-text assistant content as a turn boundary", () => {
+    const tools = toolGroups([
+      userMsg("make a preview", 1),
+      failedTool(2),
+      {
+        role: "assistant",
+        content: [createAssistantCanvasBlock({ suffix: "tool_turn_outcome" })],
+        timestamp: 3,
+      },
+      failedTool(4),
+      assistantReply("Done.", 5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, true]);
+  });
+
   it("scopes the outcome per turn at user boundaries", () => {
     const tools = toolGroups([
       userMsg("first", 1),
