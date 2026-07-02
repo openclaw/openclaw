@@ -376,7 +376,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
-        if (outputTruncated) return;
+        if (outputTruncated) {
+          return;
+        }
         const chunkBytes = Buffer.byteLength(chunk, "utf8");
         if (totalStdoutBytes + chunkBytes > maxOutputBytes) {
           const remaining = maxOutputBytes - totalStdoutBytes;
@@ -399,7 +401,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
         }
       });
       child.stderr?.on("data", (chunk: string) => {
-        if (outputTruncated) return;
+        if (outputTruncated) {
+          return;
+        }
         const chunkBytes = Buffer.byteLength(chunk, "utf8");
         if (totalStderrBytes + chunkBytes > maxOutputBytes) {
           const remaining = maxOutputBytes - totalStderrBytes;

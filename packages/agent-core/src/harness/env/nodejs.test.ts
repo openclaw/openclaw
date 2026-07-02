@@ -244,7 +244,9 @@ describe("NodeExecutionEnv exec output bounding", () => {
   it("returns full output when under the cap", async () => {
     const result = await env.exec('printf "hello"', { maxOutputBytes: 1024 });
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
     expect(result.value.stdout).toBe("hello");
     expect(result.value.stdout).not.toContain("[output truncated]");
   });
@@ -255,7 +257,9 @@ describe("NodeExecutionEnv exec output bounding", () => {
       maxOutputBytes: 1024,
     });
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
     expect(result.value.stdout.length).toBeLessThanOrEqual(1200);
     expect(result.value.stdout).toContain("[output truncated]");
   });
@@ -265,7 +269,9 @@ describe("NodeExecutionEnv exec output bounding", () => {
       maxOutputBytes: 1024,
     });
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
     expect(result.value.stderr).toContain("[output truncated]");
   });
 
@@ -274,7 +280,9 @@ describe("NodeExecutionEnv exec output bounding", () => {
       maxOutputBytes: 64 * 1024,
     });
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected ok");
+    if (!result.ok) {
+      throw new Error("expected ok");
+    }
     expect(result.value.stdout).toBe("z".repeat(500));
     expect(result.value.stdout).not.toContain("[output truncated]");
   });
