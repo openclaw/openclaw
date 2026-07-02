@@ -162,6 +162,9 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   if (!tls && !isLocalCleartextGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
+  if (uri.port != -1 && uri.port !in 1..65535) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  }
   val defaultPort = if (tls) 443 else 18789
   val displayPort = if (tls) 443 else 80
   val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
@@ -244,29 +247,22 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
-/** Strips accidental ws/wss/http(s) scheme prefixes from manual host input. */
-internal fun normalizeManualGatewayHostInput(raw: String): String? {
-  var value = raw.trim()
-  if (value.isEmpty()) return null
-  value = value.replace(Regex("^(?i)(wss?|https?)://"), "")
-  value = value.trimEnd('/')
-  if (value.isEmpty()) return null
-  if (value.startsWith('[')) {
-    val end = value.indexOf(']')
-    if (end <= 0) return null
-    return value.substring(1, end).trim()
-  }
-  val hostPart = value.substringBefore(':').trim()
-  return hostPart.ifEmpty { null }
-}
-
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,
   portInput: String,
   tls: Boolean,
 ): String? {
-  val host = normalizeManualGatewayHostInput(hostInput) ?: return null
+  val host = hostInput.trim()
+  if (host.isEmpty()) return null
+  // A pasted endpoint is already a complete authority; its scheme and port
+  // must not be silently replaced by stale values from the separate controls.
+  if (host.contains("://")) {
+    val parsed = parseGatewayEndpointResult(host)
+    return host.takeUnless { parsed.error == GatewayEndpointValidationError.INVALID_URL }
+  }
+  val bareHost = host.trimEnd('/')
+  if (bareHost.isEmpty() || bareHost.contains('/')) return null
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
@@ -276,7 +272,7 @@ internal fun composeGatewayManualUrl(
     }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(host, port)}"
+  return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
 }
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
