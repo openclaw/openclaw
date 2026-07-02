@@ -4,7 +4,7 @@ import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[\r\n]/;
 
 export function isWindowsBatchCommand(
   resolvedCommand: string,
@@ -17,14 +17,31 @@ export function isWindowsBatchCommand(
   return ext === ".cmd" || ext === ".bat";
 }
 
+/**
+ * Escape a single argument for a cmd.exe command line.
+ *
+ * Carriage returns and newlines can never safely appear in a cmd.exe command
+ * line and are rejected.  `&|<>` are escaped with `^` (cmd.exe treats `^&` as
+ * a literal ampersand).  `%` is doubled to `%%` so cmd.exe does not attempt
+ * environment-variable expansion.  Arguments that contain spaces or double
+ * quotes are wrapped in double quotes with internal quotes escaped as `""`.
+ */
 function escapeForWindowsCmdExe(arg: string): string {
   if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
     throw new Error(
       `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
+        "Newline characters are not supported in cmd.exe command lines.",
     );
   }
-  const escaped = arg.replace(/\^/g, "^^");
+  // Escape ^ first so subsequent replacements don't create new ^ sequences.
+  // Then escape &|<> with ^, and double % signs to suppress variable expansion.
+  let escaped = arg
+    .replace(/\^/g, "^^")
+    .replace(/&/g, "^&")
+    .replace(/\|/g, "^|")
+    .replace(/</g, "^<")
+    .replace(/>/g, "^>")
+    .replace(/%/g, "%%");
   if (!escaped.includes(" ") && !escaped.includes('"')) {
     return escaped;
   }

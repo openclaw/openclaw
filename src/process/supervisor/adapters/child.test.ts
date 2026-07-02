@@ -459,6 +459,28 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
+  it("escapes gemini prompt metacharacters through cmd wrapper on Windows (#98573)", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3339,
+      argv: ["gemini", "--prompt", "install foo & run bar | baz > out.txt"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    // The prompt arg must be safe for cmd.exe: no unescaped &|<> in the
+    // command line, and no throw from escapeForWindowsCmdExe.
+    // argv = [cmd.exe, /d, /s, /c, <command-line>]
+    const cmdLine = spawnArgs.argv?.[4] as string | undefined;
+    expect(cmdLine).toBeDefined();
+    // Metacharacters must be caret-escaped
+    expect(cmdLine).toContain("^&");
+    expect(cmdLine).toContain("^|");
+    expect(cmdLine).toContain("^>");
+    // The spawn must have succeeded (no throw)
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
   it("wraps claude CLI command through trusted cmd.exe on Windows", async () => {
     setPlatform("win32");
 
