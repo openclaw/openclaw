@@ -5,14 +5,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import type { PluginCandidate } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type { BundledChannelConfigCollector } from "./manifest-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -618,16 +620,41 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
             return !pluginId || pluginIdSet.has(pluginId);
           })
         : params.index.diagnostics;
-      const candidates = params.index.plugins
+      const indexCandidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
+
+      // Also discover plugins from config load.paths. These may not be in the
+      // persisted index (e.g., after an npm plugin install only refreshed the
+      // index without including workspace extensions). Merge them in as a
+      // defensive fallback so config-origin plugins always appear in the
+      // manifest registry regardless of index completeness.
+      const normalized = normalizePluginsConfigWithResolver(params.config?.plugins);
+      let candidates = indexCandidates;
+      let extraDiagnostics: readonly PluginDiagnostic[] = [];
+
+      if (normalized.loadPaths.length > 0) {
+        const loadPathDiscovery = discoverOpenClawPlugins({
+          extraPaths: normalized.loadPaths,
+          env,
+        });
+        const indexRootDirs = new Set(indexCandidates.map((c) => c.rootDir));
+        const extraCandidates = loadPathDiscovery.candidates.filter(
+          (c) => !indexRootDirs.has(c.rootDir),
+        );
+        if (extraCandidates.length > 0) {
+          candidates = [...indexCandidates, ...extraCandidates];
+          extraDiagnostics = loadPathDiscovery.diagnostics;
+        }
+      }
+
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
         candidates,
-        diagnostics: [...diagnostics],
+        diagnostics: [...diagnostics, ...extraDiagnostics],
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
         ...(params.bundledChannelConfigCollector
           ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
