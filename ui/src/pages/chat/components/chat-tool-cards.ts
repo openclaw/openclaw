@@ -1,25 +1,25 @@
 // Control UI chat module implements tool cards behavior.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { icons, type IconName } from "../../components/icons.ts";
-import { isMarkdownBlockArtText } from "../../components/markdown.ts";
-import "../../components/tooltip.ts";
-import { t } from "../../i18n/index.ts";
-import type { ToolCard } from "../../lib/chat/chat-types.ts";
+import { icons, type IconName } from "../../../components/icons.ts";
+import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
+import "../../../components/tooltip.ts";
+import { t } from "../../../i18n/index.ts";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
   type ToolPreview,
-} from "../../lib/chat/tool-cards.ts";
+} from "../../../lib/chat/tool-cards.ts";
 import {
   formatToolDetail,
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   resolveToolDisplay,
   type EmbedSandboxMode,
-} from "../../lib/chat/tool-display.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+} from "../../../lib/chat/tool-display.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 
 const TOOL_PREVIEW_MAX_LINES = 2;
 const TOOL_PREVIEW_MAX_CHARS = 100;

@@ -2,8 +2,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
@@ -15,6 +17,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -30,7 +33,6 @@ import type { RealtimeTalkCatalogProvider } from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
-import { renderSideResult, type ChatSideResult } from "../side-result.ts";
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -780,6 +782,44 @@ export function renderChatQueue(props: ChatQueueProps) {
         })}
       </div>
     </div>
+  `;
+}
+
+export function renderSideResult(
+  sideResult: ChatSideResult | null | undefined,
+  onDismiss?: () => void,
+): TemplateResult | typeof nothing {
+  if (!sideResult) {
+    return nothing;
+  }
+  return html`
+    <section
+      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label="BTW side result"
+    >
+      <div class="chat-side-result__header">
+        <div class="chat-side-result__label-row">
+          <span class="chat-side-result__label">BTW</span>
+          <span class="chat-side-result__meta">Not saved to chat history</span>
+        </div>
+        <openclaw-tooltip content="Dismiss">
+          <button
+            class="btn chat-side-result__dismiss"
+            type="button"
+            aria-label="Dismiss BTW result"
+            @click=${() => onDismiss?.()}
+          >
+            ${icons.x}
+          </button>
+        </openclaw-tooltip>
+      </div>
+      <div class="chat-side-result__question">${sideResult.question}</div>
+      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
+        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
+      </div>
+    </section>
   `;
 }
 

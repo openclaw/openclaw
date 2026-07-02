@@ -26,7 +26,6 @@ import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
-import { renderWelcomeState } from "./chat-welcome.ts";
 import { renderChatQueue } from "./components/chat-composer.ts";
 import { renderChatQuotaPill } from "./components/chat-controls.ts";
 import {
@@ -35,6 +34,7 @@ import {
 } from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
+import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
@@ -183,7 +183,7 @@ vi.mock("./chat-thread.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("./grouped-render.ts", () => ({
+vi.mock("./components/chat-message.ts", () => ({
   getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
   renderMessageGroup: renderMessageGroupMock,
   renderStreamGroup: (parts: Array<{ kind: string; text?: string }>) => {

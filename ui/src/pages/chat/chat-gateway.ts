@@ -20,6 +20,7 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-result.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { unsubscribeSessionMessages, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -47,7 +48,6 @@ import {
   cacheChatMessages,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { parseChatSideResult, type ChatSideResult } from "./side-result.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -528,10 +528,6 @@ function resolveDefaultAgentId(state: ChatState): string | undefined {
         ? snapshot.sessionDefaults.defaultAgentId
         : undefined;
   return agentId ? normalizeAgentId(agentId) : undefined;
-}
-
-function chatEventAgentScopeMatches(state: ChatState, payload: ChatEventPayload): boolean {
-  return chatScopedEventAgentScopeMatches(state, payload.sessionKey, payload.agentId);
 }
 
 function chatScopedEventAgentScopeMatches(

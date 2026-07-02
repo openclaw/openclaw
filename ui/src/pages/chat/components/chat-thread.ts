@@ -21,18 +21,18 @@ import {
   stableBooleanMapSignature,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat-welcome.ts";
 import { DeletedMessages } from "../deleted-messages.ts";
+import { PinnedMessages } from "../pinned-messages.ts";
+import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
-} from "../grouped-render.ts";
-import { PinnedMessages } from "../pinned-messages.ts";
-import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
-import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+} from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();

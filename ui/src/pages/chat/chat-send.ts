@@ -14,6 +14,7 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -73,7 +74,6 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
-import type { ChatSideResult } from "./side-result.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type ChatHost = ChatInputHistoryState & {
@@ -2291,10 +2291,10 @@ export async function refreshChat(
           row.key === refreshedSessionKey,
       );
       if (sessionInfo) {
-        const reconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
+        const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
           publishRunStatus: true,
         });
-        if (!reconciled) {
+        if (!runReconciled) {
           reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
         }
       }

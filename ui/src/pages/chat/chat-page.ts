@@ -57,6 +57,7 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
   type DetailFullMessageResult,
@@ -64,7 +65,6 @@ import {
 } from "./components/chat-sidebar.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
-import { createSessionWorkspaceProps } from "./session-workspace.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./view.ts";
 
 type ChatRouteData = {

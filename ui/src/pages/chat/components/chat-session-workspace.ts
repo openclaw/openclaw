@@ -1,17 +1,20 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../api/types.ts";
-import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
-import { t } from "../../i18n/index.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
+import { t } from "../../../i18n/index.ts";
 import {
   scopedAgentParamsForSession,
   type SessionCapability,
   type SessionScopeHost,
-} from "../../lib/sessions/index.ts";
-import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+} from "../../../lib/sessions/index.ts";
+import {
+  resolveAgentIdFromSessionKey,
+  normalizeAgentId,
+} from "../../../lib/sessions/session-key.ts";
+import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;

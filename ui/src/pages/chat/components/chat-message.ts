@@ -2,46 +2,49 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
-import { resolveLocalUserName } from "../../app/user-identity.ts";
-import { icons, type IconName } from "../../components/icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
-import { t } from "../../i18n/index.ts";
-import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
+import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { icons, type IconName } from "../../../components/icons.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import { t } from "../../../i18n/index.ts";
+import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type {
   ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
   ToolCard,
-} from "../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
-import { resolveUiHourCycleOptions } from "../../lib/format.ts";
-import { detectTextDirection } from "../../lib/text-direction.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
-import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
-export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
-import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
-import "../../components/tooltip.ts";
-import { extractThinkingCached, formatReasoningMarkdown } from "../../lib/chat/message-extract.ts";
-import { isToolResultMessage, normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+} from "../../../lib/chat/chat-types.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
+import { openExternalUrlSafe } from "../../../ui/open-external-url.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
+export { resolveAssistantTextAvatar } from "../../../ui/views/agents-utils.ts";
+import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
+import "../../../components/tooltip.ts";
+import {
+  extractThinkingCached,
+  formatReasoningMarkdown,
+} from "../../../lib/chat/message-extract.ts";
+import { isToolResultMessage, normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import {
   extractToolCardsCached,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
-} from "../../lib/chat/tool-cards.ts";
-import { formatCompactTokenCount } from "../../lib/format.ts";
-import { renderChatAvatar } from "./chat-avatar.ts";
+} from "../../../lib/chat/tool-cards.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { renderChatAvatar } from "../chat-avatar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
-} from "./tool-cards.ts";
+} from "./chat-tool-cards.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -605,7 +608,6 @@ function buildGroupedMessageRenderOptions(
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
   };

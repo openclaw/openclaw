@@ -11,10 +11,10 @@ import {
   renderCompactionIndicator,
   renderContextNotice,
   renderFallbackIndicator,
+  renderSideResult,
   resetContextNoticeThemeCacheForTest,
   type ChatRunControlsProps,
 } from "./components/chat-composer.ts";
-import { renderSideResult } from "./side-result.ts";
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},

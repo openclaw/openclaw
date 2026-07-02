@@ -11,6 +11,7 @@ import type {
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
+import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import {
@@ -19,12 +20,16 @@ import {
   resetChatComposerState,
 } from "./components/chat-composer.ts";
 import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
+import "./components/chat-sidebar.ts";
+import {
+  renderSessionWorkspaceRail,
+  type SessionWorkspaceProps,
+} from "./components/chat-session-workspace.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import "./components/chat-sidebar.ts";
 import {
   isChatThreadSearchOpen,
   renderChatPinnedMessages,
@@ -38,8 +43,6 @@ import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import { renderSessionWorkspaceRail, type SessionWorkspaceProps } from "./session-workspace.ts";
-import type { ChatSideResult } from "./side-result.ts";
 import "../../components/resizable-divider.ts";
 
 export type ChatProps = {

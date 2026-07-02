@@ -1,14 +1,14 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { extractToolCards } from "../../lib/chat/tool-cards.ts";
-import { buildToolCardSidebarContent } from "./tool-cards.ts";
+import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
+import { buildToolCardSidebarContent } from "./chat-tool-cards.ts";
 
-vi.mock("../../components/icons.ts", () => ({
+vi.mock("../../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../../lib/chat/tool-display.ts", () => ({
+vi.mock("../../../lib/chat/tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name }: { name: string }) => ({
     name,
@@ -453,8 +453,8 @@ with Example Deck
 
 describe("tool-card canvas URLs", () => {
   async function loadResolver() {
-    return vi.importActual<typeof import("../../lib/chat/tool-display.ts")>(
-      "../../lib/chat/tool-display.ts",
+    return vi.importActual<typeof import("../../../lib/chat/tool-display.ts")>(
+      "../../../lib/chat/tool-display.ts",
     );
   }
 

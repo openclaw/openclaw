@@ -2,15 +2,15 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import { setUiTimeFormatPreference } from "../../lib/format.ts";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
-} from "./grouped-render.ts";
+} from "./chat-message.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
@@ -23,7 +23,7 @@ const streamingMarkdownRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="streaming-markdown">${value}</div>`),
 );
 
-vi.mock("../../local-storage.ts", () => ({
+vi.mock("../../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
     getItem: (key: string) => localStorageValues.get(key) ?? null,
     removeItem: (key: string) => localStorageValues.delete(key),
@@ -31,8 +31,8 @@ vi.mock("../../local-storage.ts", () => ({
   }),
 }));
 
-vi.mock("../../components/markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/markdown.ts")>();
+vi.mock("../../../components/markdown.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../components/markdown.ts")>();
   return {
     ...actual,
     toSanitizedMarkdownHtml: markdownRenderMock,
@@ -41,7 +41,7 @@ vi.mock("../../components/markdown.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("../../components/icons.ts", () => ({
+vi.mock("../../../components/icons.ts", () => ({
   icons: {},
 }));
 
@@ -60,7 +60,7 @@ function requireFirstMockArg(
   return arg;
 }
 
-vi.mock("../../ui/views/agents-utils.ts", () => {
+vi.mock("../../../ui/views/agents-utils.ts", () => {
   const isRenderableControlUiAvatarUrl = (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
 
@@ -111,8 +111,8 @@ vi.mock("./chat-avatar.ts", () => ({
   },
 }));
 
-vi.mock("../../lib/chat/tool-display.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../lib/chat/tool-display.ts")>();
+vi.mock("../../../lib/chat/tool-display.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/chat/tool-display.ts")>();
   return {
     ...actual,
     formatToolDetail: () => undefined,
