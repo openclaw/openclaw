@@ -29,25 +29,26 @@ jobs:
         run: npm install -g @google/gemini-cli
 
       - name: Reproduce the bug — raw spawn("gemini") fails on Windows (no .cmd resolve)
+        continue-on-error: true
         shell: pwsh
         run: |
           Write-Host "============================================"
           Write-Host "BUG REPRODUCTION: Node spawn without .cmd"
           Write-Host "============================================"
-          $result = node -e "
+          $output = node -e @"
             const { spawn } = require('child_process');
             const c = spawn('gemini', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
             c.stdout.on('data', d => process.stdout.write(d));
-            c.on('error', e => { console.error('ENOENT:', e.message); process.exit(1); });
-            c.on('close', code => { console.log('exit:', code); });
-          " 2>&1
-          Write-Host $result
-          if ($result -match "ENOENT") {
-            Write-Host "✅ Bug confirmed: raw spawn('gemini') fails with ENOENT on Windows"
+            c.on('error', e => { console.error('ENOENT: ' + e.message); process.exit(1); });
+            c.on('close', code => { if (code !== 0) process.exit(code); });
+"@ 2>&1
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "✅ Bug confirmed: raw spawn('gemini') failed with exit code $LASTEXITCODE"
+            Write-Host "  Node does not resolve .cmd shims on Windows"
           } else {
-            Write-Host "❌ Unexpected: raw spawn succeeded (this contradicts the issue)"
+            Write-Host "❌ Unexpected: spawn succeeded"
           }
-          Write-Host ""
 
       - name: Workaround — spawn gemini.cmd explicitly works
         shell: pwsh
@@ -55,18 +56,19 @@ jobs:
           Write-Host "============================================"
           Write-Host "WORKAROUND: spawn with .cmd explicit"
           Write-Host "============================================"
-          $result = node -e "
+          $output = node -e @"
             const { spawn } = require('child_process');
             const c = spawn('gemini.cmd', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
             c.stdout.on('data', d => process.stdout.write(d));
-            c.on('error', e => { console.error('Error:', e.message); process.exit(1); });
-            c.on('close', code => { console.log('exit:', code); });
-          " 2>&1
-          Write-Host $result
-          if ($result -match "\d+\.\d+\.\d+") {
-            Write-Host "✅ Workaround confirmed: gemini.cmd works when .cmd is appended"
+            c.on('error', e => { console.error('Error: ' + e.message); process.exit(1); });
+            c.on('close', code => process.exit(code));
+"@ 2>&1
+          Write-Host $output
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Workaround confirmed: spawn('gemini.cmd') works on Windows"
+          } else {
+            Write-Host "❌ spawn gemini.cmd failed with exit code $LASTEXITCODE"
           }
-          Write-Host ""
 
       - name: Build openclaw (with fix)
         run: pnpm build
