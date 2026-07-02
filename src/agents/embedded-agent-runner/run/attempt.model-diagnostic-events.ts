@@ -52,6 +52,7 @@ type ModelCallDiagnosticContext = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   onStarted?: () => void;
+  onEnded?: () => void;
 };
 
 type ModelCallEventBase = Omit<
@@ -93,6 +94,7 @@ type ModelCallObservationState = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
   terminalEventEmitted?: boolean;
+  onEnded?: () => void;
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
@@ -535,6 +537,7 @@ function emitModelCallCompleted(
     return;
   }
   state.terminalEventEmitted = true;
+  state.onEnded?.();
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEventWithPrivateData(
@@ -564,6 +567,7 @@ function emitModelCallError(
     return;
   }
   state.terminalEventEmitted = true;
+  state.onEnded?.();
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEventWithPrivateData(
@@ -829,6 +833,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       responseStreamBytes: 0,
       modelContent,
       contentCapture: ctx.contentCapture,
+      onEnded: ctx.onEnded,
     };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 

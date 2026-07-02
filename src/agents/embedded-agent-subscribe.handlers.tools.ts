@@ -205,6 +205,7 @@ const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  potentialSideEffect: boolean;
   hasRepliedRef?: { value: boolean };
 };
 
@@ -221,6 +222,17 @@ export function countActiveToolExecutions(runId: string): number {
   let count = 0;
   for (const key of toolStartData.keys()) {
     if (key.startsWith(prefix)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function countActivePotentialSideEffectToolExecutions(runId: string): number {
+  const prefix = `${runId}:`;
+  let count = 0;
+  for (const [key, record] of toolStartData) {
+    if (key.startsWith(prefix) && record.potentialSideEffect) {
       count += 1;
     }
   }
@@ -817,13 +829,6 @@ export function handleToolExecutionStart(
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
-    toolStartData.set(buildToolStartKey(runId, toolCallId), {
-      startTime: startedAt,
-      args,
-      ...(ctx.params.hasRepliedRef
-        ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
-        : {}),
-    });
     traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
@@ -894,10 +899,16 @@ export function handleToolExecutionStart(
       evt.replaySafe === true ||
       ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
       ctx.params.replaySafeToolNames?.has(toolName) === true;
-    ctx.state.toolMetaById.set(
-      toolCallId,
-      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
-    );
+    const callSummary = buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false);
+    toolStartData.set(buildToolStartKey(runId, toolCallId), {
+      startTime: startedAt,
+      args,
+      potentialSideEffect: !callSummary.replaySafe,
+      ...(ctx.params.hasRepliedRef
+        ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
+        : {}),
+    });
+    ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
