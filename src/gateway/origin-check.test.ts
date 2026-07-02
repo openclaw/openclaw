@@ -141,6 +141,51 @@ describe("checkBrowserOrigin", () => {
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
+    {
+      name: "accepts custom-scheme origin in allowlist (tauri://)",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts custom-scheme origin with port in allowlist (electron://)",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "electron://localhost:5173",
+        allowedOrigins: ["electron://localhost:5173"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "rejects custom-scheme origin not in allowlist",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["https://control.example.com"],
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts custom-scheme origin via wildcard",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["*"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "handles custom-scheme origin with local-loopback dev fallback",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        isLocalClient: true,
+      },
+      expected: { ok: true as const, matchedBy: "local-loopback" as const },
+    },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
