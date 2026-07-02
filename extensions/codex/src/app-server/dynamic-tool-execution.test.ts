@@ -40,6 +40,48 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(timeoutMs);
   });
 
+  it("uses per-call timeoutSeconds when timeoutMs is absent", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-timeout-seconds",
+          namespace: null,
+          tool: "sessions_send",
+          arguments: { timeoutSeconds: 12 },
+        },
+        config: undefined,
+      }),
+    ).toBe(12_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-timeout-ms-wins",
+          namespace: null,
+          tool: "sessions_send",
+          arguments: { timeoutMs: 1234, timeoutSeconds: 12 },
+        },
+        config: undefined,
+      }),
+    ).toBe(1234);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-invalid-timeout-seconds",
+          namespace: null,
+          tool: "sessions_send",
+          arguments: { timeoutSeconds: 0 },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
   it("ignores partial dynamic tool timeout strings", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({

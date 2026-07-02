@@ -898,7 +898,12 @@ function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number 
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+  // Tool schemas expose seconds-form budgets to models; mirror that as the
+  // outer app-server watchdog when no millisecond override is supplied.
+  return (
+    readSidePositiveFiniteTimeoutMs(value.timeoutMs) ??
+    readSideTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readSideImageGenerationModelTimeoutMs(

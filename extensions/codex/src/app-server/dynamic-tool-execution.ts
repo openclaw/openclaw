@@ -443,7 +443,11 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readPositiveFiniteTimeoutMs(value.timeoutMs);
+  // Tool schemas expose seconds-form budgets to models; mirror that as the
+  // outer app-server watchdog when no millisecond override is supplied.
+  return (
+    readPositiveFiniteTimeoutMs(value.timeoutMs) ?? readTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readConfiguredDynamicToolTimeoutMs(
