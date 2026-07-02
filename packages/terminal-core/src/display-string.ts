@@ -78,7 +78,9 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
   let output = "";
   let cursor = 0;
   const isBeforeBoundary = (value: string | undefined) =>
-    value === undefined || value === "/" || value === "\\" || /[\s("'`:=\[{,]/u.test(value);
+    value === undefined || value === "/" || value === "\\" || /[\s("'`:=[{,]/u.test(value);
+  const isTrailingDelimiter = (value: string | undefined) =>
+    value === undefined || /\s/u.test(value) || /[)"'`:,;\]}]/u.test(value);
   const isAfterBoundary = (value: string | undefined) =>
     value === undefined || value === "/" || value === "\\";
 
@@ -90,7 +92,11 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
 
     const before = input[index - 1];
     const after = input[index + display.home.length];
-    if (isBeforeBoundary(before) && isAfterBoundary(after)) {
+    const afterNext = input[index + display.home.length + 1];
+    if (
+      isBeforeBoundary(before) &&
+      (isAfterBoundary(after) || (isTrailingDelimiter(after) && isTrailingDelimiter(afterNext)))
+    ) {
       output += `${input.slice(cursor, index)}${display.prefix}`;
     } else {
       output += input.slice(cursor, index + display.home.length);
