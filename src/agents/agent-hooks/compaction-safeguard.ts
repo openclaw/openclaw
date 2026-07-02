@@ -952,8 +952,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
-    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
-    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    // Model resolution: compact.ts registers the resolved compaction model in runtime
+    // because extensionRunner.initialize() does not populate ctx.model in that workflow.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const customInstructions = resolveCompactionInstructions(
       eventInstructions,
@@ -1048,7 +1048,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // -----------------------------------------------------------------------
     // LLM path — resolve model + auth, prune, chunk, quality guard.
     // -----------------------------------------------------------------------
-    const model = ctx.model ?? runtime?.model;
+    const model = runtime?.model ?? ctx.model;
     if (!model) {
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);

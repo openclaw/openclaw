@@ -1928,7 +1928,7 @@ describe("doctor health contributions", () => {
         env: {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
         },
-      } as Parameters<(typeof contribution)["run"]>[0]);
+      } as unknown as Parameters<(typeof contribution)["run"]>[0]);
 
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: true,
@@ -1948,7 +1948,7 @@ describe("doctor health contributions", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env: {},
-      } as Parameters<(typeof contribution)["run"]>[0]);
+      } as unknown as Parameters<(typeof contribution)["run"]>[0]);
 
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: false,
