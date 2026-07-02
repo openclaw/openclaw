@@ -20,7 +20,10 @@ const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    // npm global installs on Windows expose .cmd shims but Node's spawn does
+    // not resolve them automatically (only .exe/.com). Keep this list current
+    // so spawned CLI tools work on Windows without shell:true.
+    cmdCommands: ["claude", "gemini", "npm", "pnpm", "yarn", "npx"],
   });
 }
 
