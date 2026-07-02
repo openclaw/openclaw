@@ -10251,7 +10251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 165,
+      "line": 164,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Security notice",
       "surface": "apple",
@@ -10259,7 +10259,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 168,
+      "line": 167,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.",
       "surface": "apple",
@@ -10267,7 +10267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 188,
+      "line": 187,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "\\(self.number).",
       "surface": "apple",
@@ -10275,7 +10275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 204,
+      "line": 203,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "/pair qr",
       "surface": "apple",
@@ -10283,7 +10283,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 220,
+      "line": 219,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Copy pair command",
       "surface": "apple",
@@ -10291,7 +10291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 221,
+      "line": 220,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Copied",
       "surface": "apple",
@@ -10299,7 +10299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 258,
+      "line": 257,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -10307,7 +10307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 259,
+      "line": 258,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Securely connect this iPhone to your gateway.",
       "surface": "apple",
@@ -10315,7 +10315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 266,
+      "line": 265,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect to your gateway",
       "surface": "apple",
@@ -10323,7 +10323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 269,
+      "line": 268,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Choose device permissions",
       "surface": "apple",
@@ -10331,7 +10331,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 272,
+      "line": 271,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Use OpenClaw from your phone",
       "surface": "apple",
@@ -10339,7 +10339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 286,
+      "line": 285,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Continue",
       "surface": "apple",
@@ -10347,7 +10347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 307,
+      "line": 306,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect Gateway",
       "surface": "apple",
@@ -10355,7 +10355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 308,
+      "line": 307,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Run this in OpenClaw, then scan.",
       "surface": "apple",
@@ -10363,7 +10363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 312,
+      "line": 311,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Run this in OpenClaw",
       "surface": "apple",
@@ -10371,7 +10371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 318,
+      "line": 317,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -10379,7 +10379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 326,
+      "line": 325,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -10387,7 +10387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 329,
+      "line": 328,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Open camera",
       "surface": "apple",
@@ -10395,7 +10395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 353,
+      "line": 352,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "QR not working?",
       "surface": "apple",
@@ -10403,7 +10403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 395,
+      "line": 394,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "You're connected",
       "surface": "apple",
@@ -10411,7 +10411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 418,
+      "line": 417,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Get started",
       "surface": "apple",
