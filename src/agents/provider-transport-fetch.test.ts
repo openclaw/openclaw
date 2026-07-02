@@ -1015,6 +1015,46 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
+  it("prunes idle provider rate-limit buckets after their active window", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseModel = {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as const;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 1 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      await (
+        await buildGuardedModelFetch({
+          ...baseModel,
+          id: "gpt-5.4-a",
+        } as unknown as Model<"openai-responses">)("https://api.openai.com/v1/responses", {
+          method: "POST",
+        })
+      ).text();
+      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      await (
+        await buildGuardedModelFetch({
+          ...baseModel,
+          id: "gpt-5.4-b",
+        } as unknown as Model<"openai-responses">)("https://api.openai.com/v1/responses", {
+          method: "POST",
+        })
+      ).text();
+
+      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects provider requests past the configured local queue size", async () => {
     vi.useFakeTimers();
     try {

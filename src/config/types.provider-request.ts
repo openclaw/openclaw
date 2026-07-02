@@ -50,17 +50,15 @@ export type ConfiguredProviderRequest = {
   tls?: ConfiguredProviderRequestTls;
 };
 
-export type ConfiguredModelProviderRateLimit = {
-  /** Maximum provider requests admitted per rolling minute. */
-  requestsPerMinute?: number;
-  /** Minimum delay between admitted requests for this provider/model bucket. */
-  minIntervalMs?: number;
-  /** Maximum locally queued requests waiting for this bucket. Defaults to 64. */
-  maxQueueSize?: number;
-};
-
 /** Model-provider request overrides plus model-transport policy knobs. */
 export type ConfiguredModelProviderRequest = ConfiguredProviderRequest & {
   allowPrivateNetwork?: boolean;
-  rateLimit?: ConfiguredModelProviderRateLimit;
+  rateLimit?: {
+    /** Maximum provider requests admitted per rolling minute. */
+    requestsPerMinute?: number;
+    /** Minimum delay between admitted requests for this provider/model bucket. */
+    minIntervalMs?: number;
+    /** Maximum locally queued requests waiting for this bucket. Defaults to 64. */
+    maxQueueSize?: number;
+  };
 };

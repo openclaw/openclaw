@@ -6,7 +6,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
-  ConfiguredModelProviderRateLimit,
   ConfiguredModelProviderRequest,
   ConfiguredProviderRequest,
 } from "../config/types.provider-request.js";
@@ -73,7 +72,7 @@ export type ProviderRequestTransportOverrides = {
   tls?: ProviderRequestTlsOverride;
 };
 
-type ProviderRequestRateLimitOverride = ConfiguredModelProviderRateLimit;
+type ProviderRequestRateLimitOverride = NonNullable<ConfiguredModelProviderRequest["rateLimit"]>;
 
 /** Model-scoped transport overrides, including private-network policy. */
 export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {

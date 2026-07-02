@@ -556,6 +556,7 @@ type ProviderRequestRateLimitConfig = NonNullable<
 >;
 
 type ProviderRequestRateLimitBucket = {
+  expiresAt: number;
   queue: Promise<void>;
   queued: number;
   requestTimes: number[];
@@ -563,11 +564,34 @@ type ProviderRequestRateLimitBucket = {
 };
 
 const DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE = 64;
+const PROVIDER_RATE_LIMIT_WINDOW_MS = 60_000;
 
 const providerRequestRateLimitBuckets = new Map<string, ProviderRequestRateLimitBucket>();
 
 function resetProviderRequestRateLimitBucketsForTests(): void {
   providerRequestRateLimitBuckets.clear();
+}
+
+function getProviderRequestRateLimitBucketCountForTests(): number {
+  return providerRequestRateLimitBuckets.size;
+}
+
+function pruneProviderRequestRateLimitBuckets(now: number): void {
+  for (const [key, bucket] of providerRequestRateLimitBuckets) {
+    if (bucket.queued === 0 && bucket.expiresAt > 0 && bucket.expiresAt <= now) {
+      providerRequestRateLimitBuckets.delete(key);
+    }
+  }
+}
+
+function recordProviderRequestRateLimitDispatch(
+  bucket: ProviderRequestRateLimitBucket,
+  config: ProviderRequestRateLimitConfig,
+  now = Date.now(),
+): void {
+  bucket.lastDispatchAt = now;
+  bucket.requestTimes.push(now);
+  bucket.expiresAt = now + Math.max(PROVIDER_RATE_LIMIT_WINDOW_MS, config.minIntervalMs ?? 0);
 }
 
 function createProviderRequestRateLimitAbortError(signal?: AbortSignal): Error {
@@ -612,7 +636,9 @@ function resolveProviderRateLimitDelayMs(
   config: ProviderRequestRateLimitConfig,
 ): number {
   const now = Date.now();
-  bucket.requestTimes = bucket.requestTimes.filter((time) => time > now - 60_000);
+  bucket.requestTimes = bucket.requestTimes.filter(
+    (time) => time > now - PROVIDER_RATE_LIMIT_WINDOW_MS,
+  );
   const intervalDelayMs = Math.max(0, (config.minIntervalMs ?? 0) - (now - bucket.lastDispatchAt));
   const oldest = bucket.requestTimes[0];
   const minuteDelayMs =
@@ -652,8 +678,10 @@ async function waitForProviderRequestRateLimit(
   if (!config || (!config.requestsPerMinute && !config.minIntervalMs)) {
     return undefined;
   }
+  pruneProviderRequestRateLimitBuckets(Date.now());
   const key = resolveProviderRateLimitKey(model);
   const bucket = providerRequestRateLimitBuckets.get(key) ?? {
+    expiresAt: 0,
     queue: Promise.resolve(),
     queued: 0,
     requestTimes: [],
@@ -662,8 +690,7 @@ async function waitForProviderRequestRateLimit(
   providerRequestRateLimitBuckets.set(key, bucket);
   const maxQueueSize = config.maxQueueSize ?? DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE;
   if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
-    bucket.lastDispatchAt = Date.now();
-    bucket.requestTimes.push(bucket.lastDispatchAt);
+    recordProviderRequestRateLimitDispatch(bucket, config);
     return undefined;
   }
   if (bucket.queued >= maxQueueSize) {
@@ -675,14 +702,14 @@ async function waitForProviderRequestRateLimit(
     if (delayMs > 0) {
       await sleepForRateLimit(delayMs, signal);
     }
-    bucket.lastDispatchAt = Date.now();
-    bucket.requestTimes.push(bucket.lastDispatchAt);
+    recordProviderRequestRateLimitDispatch(bucket, config);
   });
   bucket.queue = turn.catch(() => undefined);
   try {
     await turn;
   } finally {
     bucket.queued = Math.max(0, bucket.queued - 1);
+    pruneProviderRequestRateLimitBuckets(Date.now());
   }
   return undefined;
 }
@@ -912,6 +939,7 @@ export function resolveProviderTransportSsrFPolicy(params: {
 }
 
 export const testing = {
+  getProviderRequestRateLimitBucketCountForTests,
   resetProviderRequestRateLimitBucketsForTests,
 };
 
