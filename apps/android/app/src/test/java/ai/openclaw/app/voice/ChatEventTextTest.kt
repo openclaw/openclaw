@@ -65,5 +65,23 @@ class ChatEventTextTest {
     assertNull(ChatEventText.assistantTextFromPayload(payload))
   }
 
+  @Test
+  fun ignoresMessagesWithMissingRole() {
+    val payload =
+      payload(
+        """
+        {
+          "message": {
+            "content": [
+              { "type": "text", "text": "do not speak" }
+            ]
+          }
+        }
+        """,
+      )
+
+    assertNull(ChatEventText.assistantTextFromPayload(payload))
+  }
+
   private fun payload(source: String): JsonObject = json.parseToJsonElement(source.trimIndent()) as JsonObject
 }
