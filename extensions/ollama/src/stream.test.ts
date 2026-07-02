@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, createOllamaStreamFn, testing } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -330,6 +330,35 @@ describe("createOllamaStreamFn thinking events", () => {
       timeoutMs: 2500,
       auditContext: "ollama-stream.chat",
     });
+  });
+
+  it("skips unreadable tool descriptors while preserving healthy siblings", () => {
+    const brokenTool = {
+      get name() {
+        throw new Error("ollama tool name getter exploded");
+      },
+      description: "broken",
+      parameters: { type: "object", properties: {} },
+    };
+    const healthyTool = {
+      name: "read_context",
+      description: "Read context",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    };
+
+    expect(testing.buildOllamaToolNameSet([brokenTool, healthyTool] as never)).toEqual(
+      new Set(["read_context"]),
+    );
+    expect(testing.extractOllamaTools([brokenTool, healthyTool] as never)).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read_context",
+          description: "Read context",
+          parameters: { type: "object", properties: { path: { type: "string" } } },
+        },
+      },
+    ]);
   });
 
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {

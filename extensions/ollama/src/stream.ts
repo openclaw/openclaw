@@ -886,11 +886,21 @@ function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> 
   }
   const names = new Set<string>();
   for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
+    const name = readOllamaToolName(tool);
+    if (name) {
+      names.add(name);
     }
   }
   return names.size > 0 ? names : undefined;
+}
+
+function readOllamaToolName(tool: Tool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name.trim() ? name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeOllamaToolCallName(
@@ -978,19 +988,34 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
   }
   const result: OllamaTool[] = [];
   for (const tool of tools) {
-    if (typeof tool.name !== "string" || !tool.name) {
+    const projected = readOllamaTool(tool);
+    if (!projected) {
       continue;
     }
-    result.push({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
-      },
-    });
+    result.push(projected);
   }
   return result;
+}
+
+function readOllamaTool(tool: Tool): OllamaTool | undefined {
+  try {
+    const name = readOllamaToolName(tool);
+    if (!name) {
+      return undefined;
+    }
+    const description = typeof tool.description === "string" ? tool.description : "";
+    const parameters = normalizeOllamaToolSchema(tool.parameters, true);
+    return {
+      type: "function",
+      function: {
+        name,
+        description,
+        parameters,
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function buildAssistantMessage(
@@ -1464,3 +1489,8 @@ export function createConfiguredOllamaStreamFn(params: {
     resolveOllamaModelHeaders(params.model),
   );
 }
+
+export const testing = {
+  buildOllamaToolNameSet,
+  extractOllamaTools,
+};
