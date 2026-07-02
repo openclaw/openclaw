@@ -1248,7 +1248,7 @@ class NodeRuntime(
         return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
       }
       runPreparedTalkPttCommand {
-        val payload = talkMode.beginPushToTalk()
+        val payload = talkMode.beginPushToTalk(allowNewCapture = true)
         GatewaySession.InvokeResult.ok(payload.toJson())
       }
     }

@@ -75,7 +75,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1686,
+      "line": 1695,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -83,7 +83,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1688,
+      "line": 1697,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -91,7 +91,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1690,
+      "line": 1699,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -4931,7 +4931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 336,
+      "line": 342,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -4939,7 +4939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 336,
+      "line": 342,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -4947,7 +4947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1623,
+      "line": 1629,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -4955,7 +4955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1623,
+      "line": 1629,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
