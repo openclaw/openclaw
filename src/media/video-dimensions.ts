@@ -16,7 +16,12 @@ function parsePositiveDimension(value: unknown): number | undefined {
 
 /** Parses ffprobe JSON output, accepting only positive integer first-stream dimensions. */
 export function parseFfprobeVideoDimensions(stdout: string): VideoDimensions | undefined {
-  const parsed = JSON.parse(stdout) as { streams?: Array<{ width?: unknown; height?: unknown }> };
+  let parsed: { streams?: Array<{ width?: unknown; height?: unknown }> };
+  try {
+    parsed = JSON.parse(stdout) as { streams?: Array<{ width?: unknown; height?: unknown }> };
+  } catch {
+    return undefined;
+  }
   const stream = parsed.streams?.[0];
   const width = parsePositiveDimension(stream?.width);
   const height = parsePositiveDimension(stream?.height);
