@@ -146,15 +146,107 @@ function wrapToolPluginResult(result: unknown): AgentToolResult<unknown> {
 }
 
 function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {
-  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) => ({
-    name: definition.name,
-    label: definition.label ?? definition.name,
-    description: definition.description,
-    parameters: definition.parameters,
-    optional: definition.optional === true,
-    execute: definition.execute as DefinedToolPluginTool["execute"],
-    factory: definition.factory as DefinedToolPluginTool["factory"],
-  })) as ToolPluginToolFactory<TConfig>;
+  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) =>
+    normalizeDefinedToolPluginTool(definition)) as ToolPluginToolFactory<TConfig>;
+}
+
+function normalizeDefinedToolPluginTool(tool: unknown): DefinedToolPluginTool {
+  const definition = readToolPluginToolObject(tool);
+  const name = readToolPluginToolName(definition);
+  const label = readOptionalToolPluginToolLabel(definition, name);
+  const description = readToolPluginRequiredString(definition, "description");
+  const parameters = readToolPluginParameters(definition);
+  const optional = readToolPluginOptionalFlag(definition);
+  return {
+    name,
+    label,
+    description,
+    parameters,
+    optional,
+    execute: readToolPluginOptionalFunction(definition, "execute") as
+      | DefinedToolPluginTool["execute"]
+      | undefined,
+    factory: readToolPluginOptionalFunction(definition, "factory") as
+      | DefinedToolPluginTool["factory"]
+      | undefined,
+  };
+}
+
+function readToolPluginToolObject(definition: unknown): object {
+  if (!definition || typeof definition !== "object") {
+    throw new Error("tool plugin tool definition must be an object");
+  }
+  return definition;
+}
+
+function readToolPluginToolName(definition: object): string {
+  let name: unknown;
+  try {
+    name = Reflect.get(definition, "name");
+  } catch (cause) {
+    throw new Error("tool plugin tool name must be readable", { cause });
+  }
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error("tool plugin tool name must be a non-empty string");
+  }
+  return name;
+}
+
+function readOptionalToolPluginToolLabel(definition: object, fallback: string): string {
+  const label = readToolPluginProperty(definition, "label");
+  if (label === undefined) {
+    return fallback;
+  }
+  if (typeof label !== "string") {
+    throw new Error("tool plugin tool label must be a string");
+  }
+  return label;
+}
+
+function readToolPluginRequiredString(definition: object, key: string): string {
+  const value = readToolPluginProperty(definition, key);
+  if (typeof value !== "string") {
+    throw new Error(`tool plugin tool ${key} must be a string`);
+  }
+  return value;
+}
+
+function readToolPluginParameters(definition: object): TSchema {
+  const parameters = readToolPluginProperty(definition, "parameters");
+  if (!parameters || typeof parameters !== "object") {
+    throw new Error("tool plugin tool parameters must be an object");
+  }
+  return parameters as TSchema;
+}
+
+function readToolPluginOptionalFlag(definition: object): boolean {
+  const optional = readToolPluginProperty(definition, "optional");
+  if (optional === undefined) {
+    return false;
+  }
+  if (typeof optional !== "boolean") {
+    throw new Error("tool plugin tool optional flag must be a boolean");
+  }
+  return optional;
+}
+
+function readToolPluginOptionalFunction(definition: object, key: string): unknown {
+  const value = readToolPluginProperty(definition, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "function") {
+    throw new Error(`tool plugin tool ${key} must be a function`);
+  }
+  return value;
+}
+
+function readToolPluginProperty(definition: object, key: string): unknown {
+  try {
+    return Reflect.get(definition, key);
+  } catch (cause) {
+    throw new Error(`tool plugin tool ${key} must be readable`, { cause });
+  }
 }
 
 /** Define a tool-focused plugin entry and register its tools at plugin startup. */
@@ -167,7 +259,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
   const normalizedConfigSchema = pluginConfigSchema.jsonSchema ?? configSchema;
   const tools = [
     ...definition.tools(createToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>()),
-  ];
+  ].map(normalizeDefinedToolPluginTool);
   const activation = definition.activation ?? { onStartup: true };
   const metadata: ToolPluginMetadata = {
     id: definition.id,

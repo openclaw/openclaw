@@ -169,6 +169,64 @@ describe("defineToolPlugin", () => {
     expect(factory({ sandboxed: false })).toMatchObject({ name: "factory_echo" });
   });
 
+  it("rejects tool definitions with non-string names", () => {
+    expect(() =>
+      defineToolPlugin({
+        id: "bad-tool-name",
+        name: "Bad Tool Name",
+        description: "Bad tool name demo.",
+        tools: (tool) => [
+          tool({
+            name: 42,
+            description: "Bad tool.",
+            parameters: Type.Object({}),
+            execute: () => "bad",
+          } as never),
+        ],
+      }),
+    ).toThrow("tool plugin tool name must be a non-empty string");
+  });
+
+  it("wraps unreadable tool name accessors with a registration error", () => {
+    const badTool = {
+      get name(): never {
+        throw new Error("tool name getter exploded");
+      },
+      description: "Bad tool.",
+      parameters: Type.Object({}),
+      execute: () => "bad",
+    };
+
+    expect(() =>
+      defineToolPlugin({
+        id: "unreadable-tool-name",
+        name: "Unreadable Tool Name",
+        description: "Unreadable tool name demo.",
+        tools: (tool) => [tool(badTool)],
+      }),
+    ).toThrow("tool plugin tool name must be readable");
+  });
+
+  it("validates tool names returned directly from the tools callback", () => {
+    expect(() =>
+      defineToolPlugin({
+        id: "direct-bad-tool-name",
+        name: "Direct Bad Tool Name",
+        description: "Direct bad tool name demo.",
+        tools: () =>
+          [
+            {
+              name: 42,
+              label: "Bad Tool",
+              description: "Bad tool.",
+              parameters: Type.Object({}),
+              execute: () => "bad",
+            },
+          ] as never,
+      }),
+    ).toThrow("tool plugin tool name must be a non-empty string");
+  });
+
   it("defaults author config to a strict empty object schema", () => {
     const entry = defineToolPlugin({
       id: "empty-config",
