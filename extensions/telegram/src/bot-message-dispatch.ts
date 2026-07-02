@@ -1046,7 +1046,12 @@ export const dispatchTelegramMessage = async ({
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
     }
-    if (answerLane.hasStreamedMessage) {
+    // Progress mode keeps ONE stationary window: interim answer text never
+    // streams into it (updateDraftFromPartial returns early), so hasStreamedMessage
+    // is only ever set by tool progress on this same message — never rotate here.
+    // The rotate exists for block/partial, where answer text streams first and a
+    // following tool run needs its own message.
+    if (streamMode !== "progress" && answerLane.hasStreamedMessage) {
       await rotateAnswerLaneForNewMessage();
     }
     activeAnswerDraftIsToolProgressOnly = true;
@@ -1263,6 +1268,15 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const prepareAnswerLaneForText = async (): Promise<boolean> => {
+    // Single stationary window in progress mode: interim answer text never
+    // renders into the window (updateDraftFromPartial returns early for the
+    // answer lane), so it must NOT rotate/reposition the tool-progress window
+    // either. The one window message stays put through every lane handover and
+    // is edited into the summary bar at collapse (deliverProgressModeFinalAnswer);
+    // rotating here spawned a fresh bubble per interim answer chunk (churn).
+    if (streamMode === "progress") {
+      return false;
+    }
     if (await rotateAnswerLaneAfterToolProgress()) {
       return true;
     }
@@ -2350,7 +2364,15 @@ export const dispatchTelegramMessage = async ({
                           lanePayload,
                           info.assistantMessageIndex,
                         );
-                        if (shouldRotateQueuedBlock && !preparedAnswerLane) {
+                        // Single stationary window in progress mode: interim answer
+                        // blocks never render into the window, so don't rotate it to
+                        // a fresh bubble for them — the one message stays put until
+                        // collapse. Non-progress modes keep the block rotation.
+                        if (
+                          streamMode !== "progress" &&
+                          shouldRotateQueuedBlock &&
+                          !preparedAnswerLane
+                        ) {
                           await rotateAnswerLaneForNewMessage();
                           rotateAnswerLaneWhenQueuedBlocksSettle = false;
                         }

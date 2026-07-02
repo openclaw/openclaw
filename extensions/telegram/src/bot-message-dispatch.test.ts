@@ -3156,11 +3156,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(texts).toContain("Done");
   });
 
-  it("repositions the tool-progress window (deferred delete) when text follows durable reasoning", async () => {
-    // on-off mid-stream jump: a durable 🧠 posts BELOW the tool-progress window;
-    // when answer text then takes over the lane, the window must reposition
-    // (send-new-first, delete-old-deferred) rather than delete-then-repost,
-    // which scroll-jumps the Telegram client.
+  it("keeps a single stationary window when text follows durable reasoning (no mid-turn rotation)", async () => {
+    // Single-message model (Discord parity): in progress mode the window is ONE
+    // message edited through every lane handover — durable 🧠, interim answer
+    // text — and edited into the bar only at collapse. It must NOT reposition or
+    // rotate mid-turn (no new bubble, no delete), which is what caused the churn
+    // and the on-off jump. Interim answer text does not render into the window.
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -3170,7 +3171,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           { text: "<think>hidden</think>", isReasoning: true },
           { kind: "block" },
         );
-        // Answer text mid-turn takes the lane over from the tool-progress window.
+        // Interim answer text mid-turn: must not spawn a new window bubble.
         await dispatcherOptions.deliver({ text: "Here is the answer" }, { kind: "block" });
         await dispatcherOptions.deliver({ text: "Here is the answer." }, { kind: "final" });
         return { queuedFinal: true };
@@ -3185,11 +3186,59 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // The tool-progress window was repositioned via the deferred-delete path,
-    // never an immediate clear() (which deletes the window above the durable 🧠
-    // and reposts below — the focus-jump).
-    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalled();
+    // The one window message stays put through the whole turn: no mid-turn
+    // reposition and no delete — only the collapse edit into the bar at the end.
+    // (forceNewMessage fires once at collapse to rewind the stream after the bar
+    // edit; that is end-of-turn, not mid-turn churn.)
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    // The bar edit is the only send/edit that finalizes the window (one message).
+    expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses one stationary window message across a multi-boundary turn (commentary→tool→commentary→tool→final)", async () => {
+    // Single-message model (Discord parity): ONE window message id is created
+    // once and edited through every lane handover; it collapses into the bar in
+    // place at the end. Zero deletes in the happy path; the final is posted
+    // before the bar edit (task-9 order).
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onItemEvent?.({ kind: "preamble", itemId: "c1", progressText: "Look" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({ kind: "preamble", itemId: "c2", progressText: "Now" });
+        await replyOptions?.onToolStart?.({ name: "read", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // The SAME window message id is used the whole turn — no new bubble.
+    const windowMessageIds = new Set(
+      answerDraftStream.updatePreview.mock.calls
+        .map(() => answerDraftStream.messageId())
+        .filter((id) => id != null),
+    );
+    expect(windowMessageIds).toEqual(new Set([2001]));
+    // The window was EDITED many times (once per lane change) ...
+    expect(answerDraftStream.updatePreview.mock.calls.length).toBeGreaterThan(1);
+    // ... and NEVER rotated/repositioned/deleted mid-turn.
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    // The bar edit is the single finalize, and it happens AFTER the final send.
+    expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
+    expectWindowCollapsedTo(answerDraftStream, "💬 2 notes · 🛠️ 2 tool calls · ⏱️ 1s");
+    expectDeliveredReply(0, { text: "Final answer" });
+    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
+      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    );
   });
 
   it("posts the collapse bar durably with no delete when the window has no live message", async () => {
