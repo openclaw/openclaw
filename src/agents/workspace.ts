@@ -260,9 +260,21 @@ async function fileContentDiffersFromTemplate(
   }
 }
 
+/**
+ * Check whether the workspace contains user-generated content that
+ * demonstrates active use beyond preseeded operator files.
+ * @param dir - Workspace directory to inspect.
+ * @param opts - Optional overrides.
+ * @param opts.includeGit - If true, .git presence is treated as user
+ *   content evidence. Defaults to false.
+ * @param opts.includeSkills - If false, preseeded workspace skills are not
+ *   treated as user content evidence. Defaults to true. Set to false when
+ *   checking completion evidence in a pending-bootstrap state, so that
+ *   platform-provisioned skills do not count as onboarding proof.
+ */
 async function hasWorkspaceUserContentEvidence(
   dir: string,
-  opts?: { includeGit?: boolean },
+  opts?: { includeGit?: boolean; includeSkills?: boolean },
 ): Promise<boolean> {
   const indicators = [path.join(dir, "memory")];
   if (opts?.includeGit) {
@@ -279,7 +291,10 @@ async function hasWorkspaceUserContentEvidence(
   if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
     return true;
   }
-  return await hasWorkspaceSkillEvidence(dir);
+  if (opts?.includeSkills ?? true) {
+    return await hasWorkspaceSkillEvidence(dir);
+  }
+  return false;
 }
 
 async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
@@ -400,7 +415,22 @@ async function workspaceAttestedGeneratedFilesIntact(
   return true;
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
+async function workspaceHasBootstrapCompletionEvidence(params: {
+  dir: string;
+  bootstrapExists: boolean;
+  state?: { setupCompletedAt?: string };
+}): Promise<boolean> {
+  // In preseeded/managed workspaces, profile file differences alone should not
+  // prove bootstrap completion when BOOTSTRAP.md still exists and setupCompletedAt
+  // is unset — including after restart once bootstrapSeededAt is persisted.
+  // The presence of BOOTSTRAP.md indicates the onboarding flow has not
+  // completed yet.
+  // However, if setupCompletedAt is already set, profile differences are valid
+  // evidence of user customization after onboarding.
+  const hasSetupState = typeof params.state?.setupCompletedAt === "string";
+  if (params.bootstrapExists && !hasSetupState) {
+    return await hasWorkspaceUserContentEvidence(params.dir, { includeSkills: false });
+  }
   return await workspaceProfileLooksConfigured(params);
 }
 
@@ -438,6 +468,8 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     !bootstrapExists ||
     !(await workspaceHasBootstrapCompletionEvidence({
       dir: params.dir,
+      bootstrapExists,
+      state: params.state,
     }))
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
