@@ -597,7 +597,17 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
 }
 
 function isSchemaErrorMessage(raw: string): boolean {
-  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+  // Structured invalid_request bodies classify as "format" so the model fallback
+  // chain advances (#99174), but they must NOT collapse the internal/log formatter
+  // to the generic schema copy — that formatter keeps provider detail for logs while
+  // only the user-facing formatter redacts. Genuine schema/tool-payload rejections
+  // still reach the generic copy via matchesFormatErrorPattern below.
+  if (
+    !raw ||
+    isReplayInvalidErrorMessage(raw) ||
+    isContextOverflowError(raw) ||
+    isStructuredInvalidRequestError(raw)
+  ) {
     return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
@@ -1111,6 +1121,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isJsonApiInternalServerError(raw)) {
     return toReasonClassification("timeout");
+  }
+  if (isStructuredInvalidRequestError(raw)) {
+    return toReasonClassification("format");
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
@@ -1764,6 +1777,11 @@ export function isImageSizeError(errorMessage?: string): boolean {
     return false;
   }
   return Boolean(parseImageSizeError(errorMessage));
+}
+
+function isStructuredInvalidRequestError(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  return Boolean(type && type.includes("invalid_request"));
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {

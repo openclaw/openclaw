@@ -1,6 +1,12 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason, classifyFailoverReasonFromHttpStatus } from "./errors.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import {
+  classifyAssistantFailoverReason,
+  classifyFailoverReason,
+  classifyFailoverReasonFromHttpStatus,
+  isFailoverAssistantError,
+} from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -177,6 +183,40 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("structured invalid request classification (#99174)", () => {
+  it("classifies unprefixed invalid_request_error JSON as format", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+
+    expect(classifyFailoverReason(raw)).toBe("format");
+  });
+
+  it("classifies assistant invalid_request_error stops as failover format", () => {
+    // The runner's empty-error-retry gate keys on classifyAssistantFailoverReason
+    // returning non-null; prove the assistant-stage entry point (not just the raw
+    // string classifier) advances the fallback chain for this exact body.
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    const msg = makeAssistantMessageFixture({ errorMessage: raw });
+
+    expect(classifyAssistantFailoverReason(msg)).toBe("format");
+    expect(isFailoverAssistantError(msg)).toBe(true);
+  });
+
+  it("preserves more specific invalid request classifications", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
+      ),
+    ).toBe("context_overflow");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"message":"Invalid API key provided.","type":"invalid_request_error","code":"invalid_api_key"}}',
+      ),
+    ).toBe("auth");
   });
 });
 
