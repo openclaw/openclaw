@@ -59,8 +59,8 @@ describe("gateway --force helpers", () => {
     expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
   });
 
-  it("skips malformed lsof 'p' lines (non-numeric suffix)", () => {
-    const sample = ["pabc", "cnode", "p456", "cpython", ""].join("\n");
+  it("skips malformed lsof 'p' lines with digit-prefixed garbage", () => {
+    const sample = ["p111abc", "cnode", "p456", "cpython", ""].join("\n");
     const parsed = parseLsofOutput(sample);
     expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
   });

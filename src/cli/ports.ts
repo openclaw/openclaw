@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
@@ -149,8 +150,8 @@ export function parseLsofOutput(output: string): PortProcess[] {
       if (current.pid) {
         results.push(current as PortProcess);
       }
-      const rawPid = Number.parseInt(line.slice(1), 10);
-      current = Number.isFinite(rawPid) && rawPid > 0 ? { pid: rawPid } : {};
+      const rawPid = parseStrictPositiveInteger(line.slice(1));
+      current = rawPid !== undefined ? { pid: rawPid } : {};
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }
