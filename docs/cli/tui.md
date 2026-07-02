@@ -39,6 +39,7 @@ Notes:
 - `chat` and `terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - `tui` resolves configured gateway auth SecretRefs for token/password auth when possible (`env`/`file`/`exec` providers).
+- Without `--url`, `tui` follows the active local Gateway runtime port recorded by the running Gateway, so a Gateway started with `openclaw gateway --port 48789` resolves to `ws://127.0.0.1:48789`.
 - When launched from inside a configured agent workspace directory, TUI auto-selects that agent for the session key default (unless `--session` is explicitly `agent:<id>:...`).
 - To show the Gateway hostname in the footer for non-local URL-backed connections, run `openclaw config set tui.footer.showRemoteHost true`. The host label is off by default and never appears for loopback or embedded local connections.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
