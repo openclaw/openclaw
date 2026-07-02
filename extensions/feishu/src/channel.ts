@@ -74,6 +74,7 @@ import { feishuDoctor } from "./doctor.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import {
   hasExplicitFeishuGroupConfig,
+  normalizeFeishuAllowEntry,
   resolveFeishuGroupConfig,
   resolveFeishuGroupToolPolicy,
 } from "./policy.js";
@@ -653,11 +654,7 @@ function assertFeishuReadTargetAllowed(params: {
     }
     return;
   }
-  if (
-    !chatId ||
-    groupPolicy === "disabled" ||
-    !hasExplicitFeishuGroupConfig({ cfg: params.account.config, groupId: chatId })
-  ) {
+  if (!chatId || groupPolicy === "disabled" || !isFeishuReadGroupAllowlisted(params)) {
     throw new Error("Feishu read target chat is not allowed.");
   }
   if (
@@ -667,6 +664,23 @@ function assertFeishuReadTargetAllowed(params: {
   }
 }
 
+function isFeishuReadGroupAllowlisted(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+}): boolean {
+  if (hasExplicitFeishuGroupConfig({ cfg: params.account.config, groupId: params.chatId })) {
+    return true;
+  }
+  const normalizedChatId = normalizeFeishuAllowEntry(params.chatId);
+  if (!normalizedChatId) {
+    return false;
+  }
+  return (params.account.config.groupAllowFrom ?? []).some((entry) => {
+    const normalizedEntry = normalizeFeishuAllowEntry(String(entry));
+    return normalizedEntry === "*" || normalizedEntry === normalizedChatId;
+  });
+}
+
 function assertFeishuProvidedReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -674,6 +688,9 @@ function assertFeishuProvidedReadTargetAllowed(params: {
 }) {
   const chatId = params.chatId?.trim();
   if (!chatId) {
+    if (shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account })) {
+      throw new Error("Feishu read target chat is not allowed.");
+    }
     return;
   }
   assertFeishuReadTargetAllowed({
