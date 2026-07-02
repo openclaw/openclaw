@@ -1242,9 +1242,15 @@ class NodeRuntime(
   }
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.beginPushToTalk()
-      GatewaySession.InvokeResult.ok(payload.toJson())
+    runTalkPttCommand {
+      if (!_isForeground.value) {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = false)
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      }
+      runPreparedTalkPttCommand {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = true)
+        GatewaySession.InvokeResult.ok(payload.toJson())
+      }
     }
 
   private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
@@ -1288,6 +1294,9 @@ class NodeRuntime(
     }
 
   private suspend fun prepareTalkCapture() {
+    if (!_isForeground.value) {
+      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!hasRecordAudioPermission()) {
       throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
     }
