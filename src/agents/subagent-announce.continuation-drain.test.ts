@@ -239,6 +239,24 @@ vi.mock("../config/sessions/store-load.js", () => ({
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
 }));
 
+// #1144: the settle-time chain-token accumulation persists the child's own run
+// cost into the child entry's durable `continuationChainTokens` via
+// `updateSessionStore` (from the `../config/sessions.js` barrel). Route it
+// through the same in-memory store the drain reads so the persisted post-run
+// cost basis is observable end-to-end. Only the accumulation block calls this,
+// and only when the child spent tokens, so tests without child token data are
+// unaffected.
+vi.mock("../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions.js")>()),
+  updateSessionStore: async <T>(
+    storePath: string,
+    mutator: (store: Record<string, unknown>) => Promise<T> | T,
+  ): Promise<T> => {
+    const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
+    return await mutator(store);
+  },
+}));
+
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent-announce continuation drain (F7)", () => {
@@ -887,30 +905,29 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
-  it("folds the settled child's run tokens into the drain cost basis before dispatch (#1144)", async () => {
+  it("persists the settled child's run tokens into the child's durable chain cost before dispatch (#1144)", async () => {
     // A chain-hop child that spent tokens this turn must have those tokens
-    // reflected in the drain's cost basis BEFORE queued child delegates spawn,
-    // so a child run that pushes the chain over costCapTokens cannot launch
-    // another delegate on stale (pre-accumulation) cost.
-    loadSessionStoreMock.mockImplementation(
-      () =>
-        ({
-          "agent:main:subagent:cost": {
-            sessionId: "session-child",
-            updatedAt: Date.now(),
-            continuationChainCount: 1,
-            continuationChainStartedAt: 1_700_000_000_000,
-            continuationChainTokens: 5_000,
-            // The child's just-completed run cost (input + output).
-            inputTokens: 300_000,
-            outputTokens: 250_000,
-          },
-          "agent:main:main": {
-            sessionId: "session-main",
-            updatedAt: Date.now(),
-          },
-        }) as Record<string, unknown>,
-    );
+    // folded into its OWN durable `continuationChainTokens` BEFORE queued child
+    // delegates spawn — persisted to the child entry, not just held in memory.
+    // The child is the durable owner of any delayed delegate it queues, so
+    // restart recovery re-drives that delegate from this persisted value; a
+    // stale (pre-run) basis would let a child run that already blew past
+    // costCapTokens launch another hop after a restart.
+    const childEntry = {
+      sessionId: "session-child",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1_700_000_000_000,
+      continuationChainTokens: 5_000,
+      // The child's just-completed run cost (input + output).
+      inputTokens: 300_000,
+      outputTokens: 250_000,
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:cost": childEntry,
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:cost",
@@ -927,12 +944,18 @@ describe("subagent-announce continuation drain (F7)", () => {
       roundOneReply: "done",
     });
 
+    // The child's own run cost is folded into the CHILD entry's durable chain
+    // total: 5_000 inherited + (300_000 + 250_000) run = 555_000. Restart
+    // recovery re-drives child-queued delegates from this persisted value.
+    expect(childEntry.continuationChainTokens).toBe(555_000);
+
+    // The live drain reads that same persisted basis (no separate in-memory
+    // fold), so the dispatcher sees 555_000 — over costCapTokens (500_000) — and
+    // the real dispatcher would reject the hop.
     expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
     const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
       chainState?: { accumulatedChainTokens?: number };
     };
-    // 5_000 inherited + (300_000 + 250_000) child run = 555_000 — which exceeds
-    // costCapTokens (500_000), so the real dispatcher would now reject the hop.
     expect(call?.chainState?.accumulatedChainTokens).toBe(555_000);
     expect(call?.chainState?.accumulatedChainTokens).toBeGreaterThan(500_000);
   });

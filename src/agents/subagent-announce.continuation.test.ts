@@ -338,7 +338,7 @@ describe("subagent announce continuation chaining", () => {
     expect(mocked.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("delayed chain-hop timer fires and spawns after the configured delay", async () => {
+  it("routes a delayed chain-hop delegate through the durable pending store, then spawns via the hedge (#1144)", async () => {
     await runContinuationAnnounce({
       childSessionKey: "agent:main:subagent:worker-live-tolerance",
       childTaskPrefix: "[continuation:chain-hop:1]",
@@ -347,19 +347,21 @@ describe("subagent announce continuation chaining", () => {
       maxDelayMs: 10,
     });
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 25);
-    });
-    expect(mocked.registerContinuationTimerHandleMock).toHaveBeenCalledWith(
-      "agent:main:main",
-      expect.any(Object),
+    // The delayed bracket delegate is durably enqueued under the CHILD session
+    // and armed via the shared hedge timer — NOT the old volatile per-requester
+    // continuation timer handle. A restart before the delay elapses recovers it
+    // from the durable store instead of dropping it (#1144).
+    expect(mocked.registerContinuationTimerHandleMock).not.toHaveBeenCalled();
+    expect(mocked.retainContinuationTimerRefMock).not.toHaveBeenCalledWith("agent:main:main");
+
+    // The hedge matures the durable delegate after the (clamped) delay and spawns
+    // the next hop exactly once.
+    await vi.waitFor(
+      () => {
+        expect(mocked.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2_000, interval: 10 },
     );
-    expect(mocked.retainContinuationTimerRefMock).toHaveBeenCalledWith("agent:main:main");
-    expect(mocked.unregisterContinuationTimerHandleMock).toHaveBeenCalledWith(
-      "agent:main:main",
-      expect.any(Object),
-    );
-    expect(mocked.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("makes targeted continuation returns available to the target session's next turn", async () => {

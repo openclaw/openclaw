@@ -12,6 +12,12 @@ let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
+// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// (no explicit chainState survives a restart), so tests inject the persisted
+// store here to prove the cost cap is enforced against the post-run child total.
+const loadSessionStoreForRecoveryMock = vi.fn(
+  (_storePath: string) => ({}) as Record<string, unknown>,
+);
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -32,6 +38,21 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+}));
+
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: (storePath: string) => loadSessionStoreForRecoveryMock(storePath),
+}));
+
+vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/store.js")>()),
+  // Recovery persists advanced chain state after dispatch/rejection; keep it
+  // in-memory so tests exercise the derive-from-store cost basis (#1144) without
+  // touching a real session store on disk.
+  updateSessionStore: async <T>(
+    _storePath: string,
+    mutator: (store: Record<string, unknown>) => Promise<T> | T,
+  ): Promise<T> => await mutator({}),
 }));
 
 vi.mock("../../logging/subsystem.js", () => {
@@ -206,6 +227,7 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
   activeRegistryChildSessionKeys.clear();
@@ -1402,5 +1424,45 @@ describe("recoverPendingContinuationDelegates", () => {
 
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get("flow-1")?.status).toBe("running");
+  });
+
+  it("enforces the cost cap against the persisted child chain cost on recovery (#1144)", async () => {
+    // The finding: a delayed delegate queued under a child session is re-driven
+    // on restart by recoverPendingContinuationDelegates, which derives the chain
+    // cost from the PERSISTED child entry (no in-memory fold survives a restart).
+    // The child's own run cost is folded into the child entry's durable
+    // continuationChainTokens at settle (subagent-announce accumulation), so a
+    // child run that already blew past costCapTokens cannot launch the delayed
+    // hop after a restart. Recovery is invoked WITHOUT an explicit chainState
+    // (as the gateway startup path does), forcing the derive-from-store path.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:cost-recovery";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop after restart" });
+    // Persisted child chain cost already over the cap (post-run accumulation).
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 555_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // Cost cap enforced from the persisted basis → no spawn, delegate failed.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
 });
