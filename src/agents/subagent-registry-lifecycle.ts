@@ -9,6 +9,7 @@ import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -57,6 +58,10 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import {
+  countPendingDescendantRunsFromRuns,
+  listRunsForRequesterFromRuns,
+} from "./subagent-registry-queries.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -517,12 +522,48 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
+  const countActiveRequesterChildRuns = (
+    requesterSessionKey: string,
+    excludeRunId?: string,
+  ): number => {
+    const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+    for (const entry of listRunsForRequesterFromRuns(params.runs, requesterSessionKey)) {
+      if (entry.runId === excludeRunId) {
+        continue;
+      }
+      const existing = latestByChildSessionKey.get(entry.childSessionKey);
+      if (!existing || entry.createdAt > existing.createdAt) {
+        latestByChildSessionKey.set(entry.childSessionKey, entry);
+      }
+    }
+    let count = 0;
+    for (const entry of latestByChildSessionKey.values()) {
+      if (typeof entry.endedAt !== "number" || typeof entry.cleanupCompletedAt !== "number") {
+        count += 1;
+        continue;
+      }
+      if (countPendingDescendantRunsFromRuns(params.runs, entry.childSessionKey) > 0) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  const areRequesterChildrenSettled = (
+    requesterSessionKey: string,
+    excludeRunId?: string,
+  ): boolean =>
+    !isSubagentSessionKey(requesterSessionKey) &&
+    !isCronSessionKey(requesterSessionKey) &&
+    countActiveRequesterChildRuns(requesterSessionKey, excludeRunId) === 0;
+
   const loadPendingFinalDeliveryPayload = (
     entry: SubagentRunRecord,
   ): PendingFinalDeliveryPayload => {
+    const requesterSessionKey =
+      entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey;
     return {
-      requesterSessionKey:
-        entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
+      requesterSessionKey,
       requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
       requesterDisplayKey:
         entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
@@ -1016,6 +1057,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const pendingPayload = loadPendingFinalDeliveryPayload(entry);
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
+    const allRequesterChildrenSettled = areRequesterChildrenSettled(
+      pendingPayload.requesterSessionKey,
+      pendingPayload.childRunId,
+    );
     let latestDeliveryError = getDeliveryLastError(entry);
     const finalizeAnnounceCleanup = async (didAnnounce: boolean) => {
       const shouldCreditPriorDelivery =
@@ -1061,6 +1106,7 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        allRequesterChildrenSettled,
         onDeliveryResult: (delivery) => {
           recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {

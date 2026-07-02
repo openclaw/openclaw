@@ -930,6 +930,11 @@ describe("subagent registry seam flow", () => {
         },
         "refreshed pending delivery outcome",
       );
+      expectRecordFields(
+        announceParams,
+        { allRequesterChildrenSettled: true },
+        "refreshed pending delivery announce",
+      );
     });
   });
 
@@ -3425,6 +3430,150 @@ describe("subagent registry seam flow", () => {
         wakeOnDescendantSettle: true,
       },
       "yielded parent wake announce params",
+    );
+  });
+
+  it("marks final top-level requester child completion when all direct children settled", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:done": {
+        sessionId: "sess-done",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:last": {
+        sessionId: "sess-last",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-already-done",
+      childSessionKey: "agent:main:subagent:done",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already completed sibling",
+      cleanup: "keep",
+      createdAt: Date.parse("2026-06-26T02:17:00Z"),
+      startedAt: Date.parse("2026-06-26T02:18:00Z"),
+      endedAt: Date.parse("2026-06-26T02:19:00Z"),
+      outcome: { status: "ok" },
+      cleanupHandled: true,
+      cleanupCompletedAt: Date.parse("2026-06-26T02:20:00Z"),
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-last-child",
+      childSessionKey: "agent:main:subagent:last",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "last direct child completes",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "last child announce params"),
+      {
+        childRunId: "run-last-child",
+        allRequesterChildrenSettled: true,
+      },
+      "last child announce params",
+    );
+  });
+
+  it("does not mark top-level requester completion while proxy-owned children remain active", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:proxy-active": {
+        sessionId: "sess-proxy-active",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:last": {
+        sessionId: "sess-last",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-proxy-active",
+      childSessionKey: "agent:main:subagent:proxy-active",
+      controllerSessionKey: "agent:main:subagent:proxy-owner",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "proxy-owned sibling still running",
+      cleanup: "keep",
+      createdAt: Date.parse("2026-06-26T02:17:00Z"),
+      startedAt: Date.parse("2026-06-26T02:18:00Z"),
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-last-child-with-proxy-sibling",
+      childSessionKey: "agent:main:subagent:last",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "last non-proxy child completes",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "proxy sibling announce params"),
+      {
+        childRunId: "run-last-child-with-proxy-sibling",
+        allRequesterChildrenSettled: false,
+      },
+      "proxy sibling announce params",
+    );
+  });
+
+  it("does not mark top-level requester completion while child cleanup is still pending", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:cleanup-pending": {
+        sessionId: "sess-cleanup-pending",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:last": {
+        sessionId: "sess-last",
+        updatedAt: 1,
+      },
+    });
+
+    mod.addSubagentRunForTests({
+      runId: "run-cleanup-pending",
+      childSessionKey: "agent:main:subagent:cleanup-pending",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sibling cleanup still pending",
+      cleanup: "keep",
+      createdAt: Date.parse("2026-06-26T02:17:00Z"),
+      startedAt: Date.parse("2026-06-26T02:18:00Z"),
+      endedAt: Date.parse("2026-06-26T02:19:00Z"),
+      cleanupHandled: true,
+      cleanupCompletedAt: undefined,
+      outcome: { status: "ok" },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-last-child-with-cleanup-pending",
+      childSessionKey: "agent:main:subagent:last",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "last child completes while cleanup is pending",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "cleanup pending announce params"),
+      {
+        childRunId: "run-last-child-with-cleanup-pending",
+        allRequesterChildrenSettled: false,
+      },
+      "cleanup pending announce params",
     );
   });
 

@@ -89,9 +89,13 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  allRequesterChildrenSettled?: boolean;
 }): string {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.allRequesterChildrenSettled) {
+    return `All spawned subtasks for this requester have now completed. Review the delivered completion results and synthesize the final answer or next action. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when the final answer or next action is already visible to the user in this same turn.`;
   }
   if (params.expectsCompletionMessage) {
     return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
@@ -258,6 +262,7 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  allRequesterChildrenSettled?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -498,6 +503,7 @@ export async function runSubagentAnnounceFlow(params: {
     const findings = childCompletionFindings || reply || "(no output)";
 
     let requesterIsSubagent = requesterIsInternalSession();
+    let didFallbackRequester = false;
     if (requesterIsSubagent) {
       const {
         isSubagentSessionRunActive,
@@ -518,6 +524,7 @@ export async function runSubagentAnnounceFlow(params: {
             return false;
           }
           targetRequesterSessionKey = fallback.requesterSessionKey;
+          didFallbackRequester = true;
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
           requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
@@ -526,10 +533,23 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    let allRequesterChildrenSettled = params.allRequesterChildrenSettled === true;
+    if (didFallbackRequester && !requesterIsSubagent && subagentRegistryRuntime) {
+      allRequesterChildrenSettled ||=
+        Math.max(
+          0,
+          subagentRegistryRuntime.countPendingDescendantRunsExcludingRun(
+            targetRequesterSessionKey,
+            params.childRunId,
+          ),
+        ) === 0;
+    }
+
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      allRequesterChildrenSettled,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,

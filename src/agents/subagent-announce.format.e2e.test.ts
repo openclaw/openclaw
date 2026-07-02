@@ -546,6 +546,23 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
   });
 
+  it("nudges top-level requesters to synthesize after all child runs settled", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-all-settled",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      allRequesterChildrenSettled: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall() as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("All spawned subtasks for this requester have now completed.");
+    expect(msg).toContain("synthesize the final answer or next action");
+    expect(msg).not.toContain("A completed subagent task is ready for parent review.");
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({
@@ -2957,6 +2974,13 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("whatsapp");
     expect(call?.params?.to).toBe("+1555");
     expect(call?.params?.accountId).toBe("acct-main");
+    expect(subagentRegistryMock.countPendingDescendantRunsExcludingRun).toHaveBeenCalledWith(
+      "agent:main:main",
+      "run-leaf",
+    );
+    const message = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain("All spawned subtasks for this requester have now completed.");
+    expect(message).toContain("synthesize the final answer or next action");
   });
 
   it("keeps announce retryable when missing requester subagent session has no fallback requester", async () => {
