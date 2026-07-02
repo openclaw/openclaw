@@ -32,6 +32,41 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
   } as unknown as Response;
 }
 
+function oversizedJsonSuccessResponse(): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunkSize = 1024 * 1024;
+  const chunkCount = 20;
+  let readCount = 0;
+  let canceled = false;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (readCount >= chunkCount) {
+          controller.close();
+          return;
+        }
+        readCount += 1;
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+      cancel() {
+        canceled = true;
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+  response.json = async () => {
+    throw new Error("unbounded response.json should not be called");
+  };
+  return {
+    response,
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("graph upload helpers", () => {
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "graph-token"),
@@ -141,6 +176,26 @@ describe("graph upload helpers", () => {
     expect(message).toContain("SharePoint upload failed (413): upload-denied");
     expect(message).not.toContain("tail-marker");
     expect(message.length).toBeLessThan(700);
+  });
+
+  it("bounds successful SharePoint upload JSON bodies without using response.json()", async () => {
+    const streamed = oversizedJsonSuccessResponse();
+    const fetchFn = vi.fn(async () => streamed.response);
+
+    const error = await uploadToSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "large.txt",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "SharePoint upload failed: JSON response exceeds 16777216 bytes",
+    );
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });
 
