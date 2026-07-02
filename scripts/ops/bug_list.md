@@ -49,12 +49,12 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-07-01 06:00:11 UTC · hosts:eu us_
+_Last automated scan: 2026-07-02 06:00:11 UTC · hosts:eu us_
 
 | Pri | Host | Agent | Issue               | Detail                                                                 |
 | --- | ---- | ----- | ------------------- | ---------------------------------------------------------------------- |
-| P1  | eu   | -     | Heavy swap usage    | 2560MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
-| P1  | eu   | -     | Low memory headroom | Only 201MiB available (warn<500MiB); OOM risk under load.              |
-| P1  | us   | -     | Heavy swap usage    | 1961MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | eu   | -     | Heavy swap usage    | 2608MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | eu   | -     | Low memory headroom | Only 155MiB available (warn<500MiB); OOM risk under load.              |
+| P1  | us   | -     | Heavy swap usage    | 2154MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
 
 <!-- AUTOSCAN:END -->
