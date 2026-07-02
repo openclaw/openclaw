@@ -268,6 +268,7 @@ final class VoiceWakeManager: NSObject {
             self.statusText = "Listening"
         } catch {
             self.isListening = false
+            self.tearDownRecognitionPipeline()
             self.statusText = "Start failed: \(error.localizedDescription)"
         }
     }
@@ -363,8 +364,9 @@ final class VoiceWakeManager: NSObject {
 
         if self.audioEngine.isRunning {
             self.audioEngine.stop()
-            self.audioEngine.inputNode.removeTap(onBus: 0)
         }
+        // A tap can be installed before AVAudioEngine.start() throws.
+        self.audioEngine.inputNode.removeTap(onBus: 0)
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

@@ -141,7 +141,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.app?.descendants(matching: .any)["diagnostics-voice-wake-status"])
         XCTAssertTrue(voiceWakeStatus.waitForExistence(timeout: 5))
         let resumed = expectation(
-            for: NSPredicate(format: "value != 'Paused' AND value != 'Off'"),
+            for: NSPredicate(
+                format: "value == %@",
+                "Voice Wake isn’t supported on Simulator"),
             evaluatedWith: voiceWakeStatus)
         wait(for: [resumed], timeout: 5)
 
