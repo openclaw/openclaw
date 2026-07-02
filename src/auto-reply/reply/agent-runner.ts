@@ -1487,9 +1487,20 @@ export async function runReplyAgent(params: {
   }
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
+  let postReplyCompletionBarrier: Promise<void> | undefined;
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
+  };
+  const completeOwnedReplyOperation = () => {
+    if (providedReplyOperation) {
+      return;
+    }
+    if (postReplyCompletionBarrier) {
+      replyOperation.completeWithAfterClearBarrier(postReplyCompletionBarrier);
+      return;
+    }
+    replyOperation.complete();
   };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
@@ -2267,7 +2278,11 @@ export async function runReplyAgent(params: {
       prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 
-    if (autoCompactionCount > 0) {
+    const traceAuthorized = followupRun.run.traceAuthorized === true;
+    const traceEnabledForSender =
+      traceAuthorized &&
+      (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
+    const recordPostReplyCompactionAccounting = async (): Promise<number | undefined> => {
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const count = await incrementRunCompactionCount({
         cfg,
@@ -2310,9 +2325,27 @@ export async function runReplyAgent(params: {
           });
       }
 
-      if (verboseEnabled) {
-        const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+      return count;
+    };
+
+    if (autoCompactionCount > 0) {
+      if (!verboseEnabled && !providedReplyOperation && !traceEnabledForSender) {
+        postReplyCompletionBarrier = recordPostReplyCompactionAccounting()
+          .then(() => undefined)
+          .catch((error) => {
+            logVerbose(
+              `postReplyCompaction accounting failed for ${sessionKey ?? "unknown"}: ${String(
+                error,
+              )}`,
+            );
+          });
+      } else {
+        const count = await recordPostReplyCompactionAccounting();
+
+        if (verboseEnabled) {
+          const suffix = typeof count === "number" ? ` (count ${count})` : "";
+          prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        }
       }
     }
     const prefixPayloads = [...prefixNotices];
@@ -2327,7 +2360,6 @@ export async function runReplyAgent(params: {
     const rawAssistantText = isHookBlockedRun
       ? undefined
       : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
-    const traceAuthorized = followupRun.run.traceAuthorized === true;
     const executionTrace = mergeExecutionTrace({
       fallbackAttempts,
       executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
@@ -2414,9 +2446,6 @@ export async function runReplyAgent(params: {
             sessionFile: followupRun.run.sessionFile,
           })
         : undefined;
-    const traceEnabledForSender =
-      traceAuthorized &&
-      (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
     const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
     let trailingPluginStatusPayload: ReplyPayload | undefined;
     if (shouldAppendTracePayload) {
@@ -2621,10 +2650,10 @@ export async function runReplyAgent(params: {
         runFollowup: runFollowupTurn,
       });
       if (!providedReplyOperation) {
-        replyOperation.complete();
+        completeOwnedReplyOperation();
       }
     } else if (!providedReplyOperation) {
-      replyOperation.complete();
+      completeOwnedReplyOperation();
     }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
