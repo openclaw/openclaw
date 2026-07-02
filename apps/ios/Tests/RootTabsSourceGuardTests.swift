@@ -264,6 +264,8 @@ struct RootTabsSourceGuardTests {
         #expect(talkSource.contains("talk-hangup-control"))
         #expect(talkSource.contains("talk-speakerphone-control"))
         #expect(talkSource.contains("showsCallControls"))
+        #expect(talkSource.contains("showsConnectingRetry"))
+        #expect(talkSource.contains("talk-connecting-retry-control"))
         #expect(talkSource.contains("showVoiceSettings"))
         #expect(talkSource.contains("SettingsProTab(directRoute: .voice, ownsNavigationStack: false)"))
         #expect(settingsList.contains("Section(\"Device\")"))

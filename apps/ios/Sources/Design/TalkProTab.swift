@@ -128,7 +128,13 @@ struct TalkProTab: View {
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
                         .padding(.bottom, 40)
                 } else if self.showsCallControls {
-                    self.callControls
+                    VStack(spacing: 12) {
+                        if self.showsConnectingRetry {
+                            self.connectingRetry
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        }
+                        self.callControls
+                    }
                 }
             }
         }
@@ -218,7 +224,23 @@ struct TalkProTab: View {
     }
 
     private var showsCallControls: Bool {
-        self.isInActiveCall && !self.state.isConnecting
+        self.isInActiveCall
+    }
+
+    private var showsConnectingRetry: Bool {
+        self.isInActiveCall && self.state.isConnecting
+    }
+
+    private var connectingRetry: some View {
+        Button(action: self.retryTalkConnection) {
+            Label("Retry", systemImage: "arrow.clockwise")
+                .font(.subheadline.weight(.bold))
+                .frame(minWidth: 140)
+                .frame(height: 44)
+        }
+        .buttonStyle(.bordered)
+        .tint(self.chromeStyle.primary)
+        .accessibilityIdentifier("talk-connecting-retry-control")
     }
 
     private var callControls: some View {
@@ -414,6 +436,12 @@ struct TalkProTab: View {
 
     private func presentVoiceSettings() {
         self.showVoiceSettings = true
+    }
+
+    private func retryTalkConnection() {
+        guard self.isInActiveCall else { return }
+        self.stopTalk()
+        self.startTalk()
     }
 }
 
