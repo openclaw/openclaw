@@ -5,21 +5,32 @@ import UIKit
 struct OpenClawBrandTests {
     @Test func `brand colors meet text contrast in both appearances`() {
         let foregroundColors = [
-            OpenClawBrand.uiAccentForeground,
-            OpenClawBrand.uiAccentHot,
-            OpenClawBrand.uiOK,
-            OpenClawBrand.uiWarn,
-            OpenClawBrand.uiDanger,
-            OpenClawBrand.uiInfo,
+            ("accent", OpenClawBrand.uiAccentForeground),
+            ("accentHot", OpenClawBrand.uiAccentHotForeground),
+            ("ok", OpenClawBrand.uiOK),
+            ("warn", OpenClawBrand.uiWarn),
+            ("danger", OpenClawBrand.uiDanger),
+            ("info", OpenClawBrand.uiInfo),
         ]
         let backgrounds = [UIColor.systemBackground, UIColor.secondarySystemBackground]
 
         for style in [UIUserInterfaceStyle.light, .dark] {
             let traits = UITraitCollection(userInterfaceStyle: style)
-            for color in foregroundColors {
+            for (name, color) in foregroundColors {
                 for background in backgrounds {
-                    #expect(Self.contrastRatio(color, background, traits: traits) >= 4.5)
+                    #expect(
+                        Self.contrastRatio(color, background, traits: traits) >= 4.5,
+                        "\(name) on system background in \(style)")
                 }
+
+                let tintedBackground = Self.composite(
+                    color,
+                    alpha: 0.10,
+                    over: .secondarySystemGroupedBackground,
+                    traits: traits)
+                #expect(
+                    Self.contrastRatio(color, tintedBackground, traits: traits) >= 4.5,
+                    "\(name) on tinted background in \(style)")
             }
 
             let pillBackground = Self.composite(
