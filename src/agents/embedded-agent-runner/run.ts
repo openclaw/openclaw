@@ -3642,19 +3642,18 @@ async function runEmbeddedAgentInternal(
           const promptTimeoutAssistantTextCandidate =
             (finalAssistantVisibleText ?? finalAssistantRawText)?.trim() ||
             (attempt.assistantTexts ?? []).join("\n\n").trim();
+          const promptTimeoutHasActiveCodexItem = attempt.itemLifecycle.activeCount > 0;
+          const promptTimeoutHasTerminalState = hasAttemptTerminalState(attempt);
           const promptTimeoutHadUnsafeActivity =
-            Boolean(
-              attempt.clientToolCalls ||
-                attempt.yieldDetected ||
-                attempt.didSendViaMessagingTool ||
-                attempt.didDeliverSourceReplyViaMessageTool ||
-                attempt.didSendDeterministicApprovalPrompt ||
-                attempt.lastToolError ||
-                attempt.replayMetadata.hadPotentialSideEffects,
-            ) || (attempt.toolMetas?.length ?? 0) > 0;
+            promptTimeoutHasTerminalState ||
+            attempt.didSendViaMessagingTool ||
+            attempt.replayMetadata.hadPotentialSideEffects ||
+            promptTimeoutHasActiveCodexItem ||
+            (attempt.toolMetas?.length ?? 0) > 0;
           const canRecoverCodexCompletionTimeoutAssistantText =
             timedOutDuringPrompt &&
             shouldSurfaceCodexCompletionTimeout &&
+            attempt.codexAppServerFailure?.turnWatchTimeoutKind === "completion" &&
             attempt.codexAppServerFailure?.replayBlockedReason === "assistant_output" &&
             !promptTimeoutHadUnsafeActivity &&
             promptTimeoutAssistantTextCandidate.length > 0;
@@ -3689,11 +3688,8 @@ async function runEmbeddedAgentInternal(
             timedOutDuringPrompt &&
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
             !recoveredFinalAssistantTextAfterPromptTimeout &&
-            !attempt.clientToolCalls &&
-            !attempt.yieldDetected &&
+            !promptTimeoutHasTerminalState &&
             !attempt.didSendViaMessagingTool &&
-            !attempt.didSendDeterministicApprovalPrompt &&
-            !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
