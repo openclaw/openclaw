@@ -179,6 +179,54 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(90_000);
   });
 
+  it("honors timeoutSeconds when timeoutMs is absent in dynamic tool arguments", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-timeout-seconds",
+          namespace: null,
+          tool: "session_send",
+          arguments: { sessionKey: "abc", timeoutSeconds: 120 },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_000);
+  });
+
+  it("prefers timeoutMs over timeoutSeconds when both are present", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-both-timeouts",
+          namespace: null,
+          tool: "session_send",
+          arguments: { sessionKey: "abc", timeoutMs: 45_000, timeoutSeconds: 120 },
+        },
+        config: undefined,
+      }),
+    ).toBe(45_000);
+  });
+
+  it("ignores non-positive timeoutSeconds in dynamic tool arguments", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-negative-timeout-seconds",
+          namespace: null,
+          tool: "session_send",
+          arguments: { sessionKey: "abc", timeoutSeconds: -10 },
+        },
+        config: undefined,
+      }),
+    ).toBe(90_000);
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;

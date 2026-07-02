@@ -443,7 +443,9 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readPositiveFiniteTimeoutMs(value.timeoutMs);
+  return (
+    readPositiveFiniteTimeoutMs(value.timeoutMs) ?? readTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readConfiguredDynamicToolTimeoutMs(
