@@ -2,7 +2,7 @@
   "id": "ollama",
   "icon": "https://cdn.simpleicons.org/ollama",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
   "providers": ["ollama", "ollama-cloud"],
@@ -155,6 +155,7 @@
   },
   "contracts": {
     "memoryEmbeddingProviders": ["ollama"],
+    "tools": ["node_inference"],
     "webSearchProviders": ["ollama"]
   },
   "configSchema": {

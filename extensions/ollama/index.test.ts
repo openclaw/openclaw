@@ -178,6 +178,33 @@ function captureWrappedOllamaPayload(
 }
 
 describe("ollama plugin", () => {
+  it("registers node-local inference commands, policy, and agent tool", () => {
+    const registerNodeInvokePolicy = vi.fn();
+    const registerTool = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "ollama",
+        name: "Ollama",
+        source: "test",
+        registerNodeInvokePolicy,
+        registerTool,
+      }),
+    );
+
+    expect(plugin.nodeHostCommands?.map((entry) => entry.command)).toEqual([
+      "ollama.models",
+      "ollama.chat",
+    ]);
+    expect(registerNodeInvokePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: ["ollama.models", "ollama.chat"],
+        defaultPlatforms: ["macos", "linux", "windows"],
+      }),
+    );
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
+  });
+
   it("does not preselect a default model during provider auth setup", async () => {
     const provider = registerProvider();
 

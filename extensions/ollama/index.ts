@@ -58,6 +58,11 @@ import {
 } from "./src/embedding-provider.js";
 import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
+import {
+  createOllamaNodeHostCommands,
+  createOllamaNodeInferenceTool,
+  createOllamaNodeInvokePolicy,
+} from "./src/node-inference.js";
 import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
@@ -434,12 +439,15 @@ export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
+  nodeHostCommands: createOllamaNodeHostCommands(),
   register(api: OpenClawPluginApi) {
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRisk(api.logger);
     }
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
+    api.registerNodeInvokePolicy(createOllamaNodeInvokePolicy());
+    api.registerTool(createOllamaNodeInferenceTool(api));
     const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
       const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
