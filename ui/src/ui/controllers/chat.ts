@@ -426,6 +426,14 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  // A run still streaming for this session+agent that the gateway reports as
+  // in-flight (already bounded; `text` may be empty when no partial is buffered
+  // or for runtimes that only deliver assistant text at completion). A client
+  // that switched away stopped receiving this run's per-agent-delivered deltas,
+  // so the persisted `messages` above do not include it; the loader re-adopts
+  // the run on switch-back so the partial renders and further deltas continue.
+  // Fixes #90755.
+  inFlightRun?: { runId?: unknown; text?: unknown };
 };
 
 export type ChatMetadataResult = CommandsListResult & {
@@ -673,6 +681,73 @@ function applyChatStartupAgentsList(state: ChatState, agentsList: AgentsListResu
       : (agentsList.agents[0]?.id ?? null);
 }
 
+/**
+ * Adopt an in-flight run reported by the gateway via chat.history / chat.startup
+ * so the Control UI restores the streaming assistant reply on session switch-back.
+ *
+ * Reconciliation: `inFlightRun.text` is the cumulative gateway buffer and may
+ * overlap with the last committed assistant message.  We extract only the suffix
+ * that hasn't been committed yet to avoid duplicating already-persisted text.
+ * Fixes #90755 — mirrors the TUI loader in src/tui/tui-session-actions.ts.
+ */
+function adoptInFlightRunFromChatHistory(
+  state: ChatState,
+  inFlightRun: ChatHistoryResult["inFlightRun"],
+  visibleMessages: Array<unknown>,
+): void {
+  const runId =
+    typeof inFlightRun?.runId === "string" && inFlightRun.runId.trim()
+      ? inFlightRun.runId.trim()
+      : "";
+  if (!runId) {
+    return;
+  }
+  let text = typeof inFlightRun?.text === "string" ? inFlightRun.text : "";
+
+  // Reconcile overlap with the last committed assistant message: if the
+  // cumulative in-flight buffer starts with text already persisted as an
+  // assistant reply, only adopt the new suffix.
+  // Normalize whitespace on both sides before comparing so that small framing
+  // differences (e.g. leading newlines the gateway buffer includes but the
+  // committed message omits) do not silently defeat the dedup and cause
+  // duplicated text to render.
+  if (text && visibleMessages.length > 0) {
+    const lastVisible = visibleMessages[visibleMessages.length - 1];
+    const lastRole =
+      typeof lastVisible === "object" && lastVisible !== null
+        ? (lastVisible as Record<string, unknown>).role
+        : undefined;
+    if (lastRole === "assistant") {
+      const lastText = extractText(lastVisible);
+      if (lastText) {
+        const committedTrimmed = lastText.replace(/^[\s﻿]+|[\s﻿]+$/g, "");
+        const bufferTrimmed = text.replace(/^[\s﻿]+|[\s﻿]+$/g, "");
+        if (committedTrimmed && bufferTrimmed.startsWith(committedTrimmed)) {
+          // Extract only the suffix, preserving the original buffer framing.
+          const overlapIdx = text.indexOf(committedTrimmed);
+          if (overlapIdx >= 0) {
+            text = text.slice(overlapIdx + committedTrimmed.length);
+          } else {
+            // Normalized text matches but framing whitespace differs (e.g.
+            // leading \n in the buffer not present in the committed message).
+            text = text.slice(text.length - (bufferTrimmed.length - committedTrimmed.length));
+          }
+        }
+      }
+    }
+  }
+
+  // Adopt the run: track the run id so live deltas/finals continue, set the
+  // stream text so partial content renders (empty string shows a reading
+  // indicator instead of an idle thread), clear stale errors from the previous
+  // session view, and mark the stream start time.
+  state.chatRunId = runId;
+  state.chatStream = text;
+  state.chatError = null;
+  state.lastError = null;
+  state.chatStreamStartedAt = Date.now();
+}
+
 async function loadChatHistoryUncached(
   state: ChatState,
   client: NonNullable<ChatState["client"]>,
@@ -840,6 +915,15 @@ async function loadChatHistoryUncached(
         }
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
+    }
+    // Restore a run still streaming for this session+agent that the gateway
+    // reports as in-flight. Its live deltas were delivered to a per-agent key
+    // this client stopped watching after switching away, so the persisted
+    // history above does not contain it; re-adopt the run so its partial renders
+    // and further deltas (now that this session is active again) continue it.
+    // Fixes #90755 — mirrors the TUI loader in src/tui/tui-session-actions.ts.
+    if (resetStream && !state.chatRunId) {
+      adoptInFlightRunFromChatHistory(state, res.inFlightRun, visibleMessages);
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
