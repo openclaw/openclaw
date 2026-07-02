@@ -45,7 +45,7 @@ import {
   needsSqliteProjectionBackfill,
 } from "./repair-plan.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
-import { noteCronModelOverrides } from "./warnings.js";
+import { noteCronDeliveryTargetAdvisory, noteCronModelOverrides } from "./warnings.js";
 
 export {
   collectLegacyWhatsAppCrontabHealthWarning,
@@ -402,6 +402,7 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs, storePath });
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {
