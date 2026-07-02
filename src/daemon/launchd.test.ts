@@ -29,6 +29,10 @@ const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  systemPrintOutput: "",
+  systemPrintError: "",
+  systemPrintCode: 113,
+  systemServiceLoaded: false,
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -115,6 +119,22 @@ async function withProcessEnv<T>(
   }
 }
 
+async function withProcessPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+  }
+}
+
 async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
   vi.useFakeTimers();
   try {
@@ -184,6 +204,19 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: state.listOutput, stderr: "", code: 0 };
     }
     if (call[0] === "print") {
+      if (call[1]?.startsWith("system/")) {
+        if (state.systemPrintError) {
+          return { stdout: "", stderr: state.systemPrintError, code: state.systemPrintCode };
+        }
+        if (!state.systemServiceLoaded) {
+          return { stdout: "", stderr: "Could not find service", code: 113 };
+        }
+        return {
+          stdout: state.systemPrintOutput || ["state = running", "pid = 5252"].join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
       if (state.printNotLoadedRemaining > 0) {
         state.printNotLoadedRemaining -= 1;
         return { stdout: "", stderr: "Could not find service", code: 113 };
@@ -333,6 +366,10 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.systemPrintOutput = "";
+  state.systemPrintError = "";
+  state.systemPrintCode = 113;
+  state.systemServiceLoaded = false;
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -806,6 +843,44 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd install", () => {
+  it("refuses to install a gui LaunchAgent over a loaded system LaunchDaemon", async () => {
+    await withProcessPlatform("darwin", async () => {
+      state.systemServiceLoaded = true;
+      const env = createDefaultLaunchdEnv();
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow("Existing system LaunchDaemon system/ai.openclaw.gateway detected");
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
+      expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expect(launchctlCommandNames()).not.toContain("bootstrap");
+    });
+  });
+
+  it("refuses to install a gui LaunchAgent when a same-label system LaunchDaemon plist exists", async () => {
+    await withProcessPlatform("darwin", async () => {
+      const env = createDefaultLaunchdEnv();
+      state.files.set("/Library/LaunchDaemons/ai.openclaw.gateway.plist", "<plist/>");
+
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+        }),
+      ).rejects.toThrow("/Library/LaunchDaemons/ai.openclaw.gateway.plist");
+
+      expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
+      expect(state.launchctlCalls).toContainEqual(["print", "system/ai.openclaw.gateway"]);
+      expect(launchctlCommandNames()).not.toContain("bootstrap");
+    });
+  });
+
   it("enables service before bootstrap without self-restarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
