@@ -3130,6 +3130,59 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("routes direct qmd vsearch through typed query without reranking", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "vsearch",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", '{"results":[]}');
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+
+    await expect(
+      manager.search("sqlite-vec backend health", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toStrictEqual([]);
+
+    const queryCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "query");
+    expect(queryCalls).toEqual([
+      [
+        "query",
+        "vec: sqlite vec backend health",
+        "--json",
+        "-n",
+        String(maxResults),
+        "--no-rerank",
+        "-c",
+        "workspace-main",
+      ],
+    ]);
+    expect(
+      spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "vsearch"),
+    ).toBe(false);
+    await manager.close();
+  });
+
   it("aborts the in-flight qmd search subprocess when the caller signal aborts", async () => {
     cfg = {
       ...cfg,
