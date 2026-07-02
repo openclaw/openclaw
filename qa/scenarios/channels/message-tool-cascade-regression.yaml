@@ -82,10 +82,15 @@ flow:
                 params: [candidate]
                 expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && (candidate.text ?? '').includes(config.expectedMarker2)"
             - expr: liveTurnTimeoutMs(env, 180000)
+        - set: cascadeCursor
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - call: waitForNoOutbound
           args:
             - ref: state
             - 15000
+            - sinceIndex:
+                ref: cascadeCursor
         - set: allOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group')"
