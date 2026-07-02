@@ -49,19 +49,23 @@ export function resetSubagentSessionCleanupForTests(): void {
 export async function deleteSubagentSessionForCleanup(
   params: DeleteSubagentSessionForCleanupParams,
 ): Promise<void> {
-  const [{ hasLiveOrRecentlyDispatchedContinuationWork }, { pendingDelegateCount }] =
+  const [{ hasLiveOrRecentlyDispatchedContinuationWork }, { hasRecoverablePendingDelegate }] =
     await Promise.all([
       import("../auto-reply/continuation/work-store.js"),
       import("../auto-reply/continuation/delegate-store.js"),
     ]);
-  // A continuation_work TaskFlow or a queued continuation delegate owns
+  // A continuation_work TaskFlow or an in-flight continuation delegate owns
   // same-session re-entry. Keep the child session entry until they drain, then
   // retry, so delete-mode child sessions do not leak after cleanup bookkeeping
-  // finishes AND a queued (e.g. delayed bracket/tool) delegate does not lose the
-  // child's chain/requester state to deletion before its hedge fires (#1144).
+  // finishes AND a delayed bracket/tool delegate does not lose the child's
+  // chain/requester state to deletion before it finishes. The delegate gate must
+  // count queued AND `running` (claimed) flows: the dispatcher/hedge claims a
+  // delegate to `running` before `spawnSubagentDirect` completes, so a
+  // queued-only count would drop to 0 mid-dispatch and let this cleanup delete
+  // the child out from under the running delegate (#1144).
   if (
     hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
-    pendingDelegateCount(params.childSessionKey) > 0
+    hasRecoverablePendingDelegate(params.childSessionKey)
   ) {
     scheduleDeferredCleanupRetry(params);
     return;

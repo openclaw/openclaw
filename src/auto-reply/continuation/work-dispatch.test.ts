@@ -708,6 +708,38 @@ describe("durable continuation_work dispatch", () => {
     );
   });
 
+  it("retains a child session while a claimed (running) continuation delegate is dispatching (#1144)", async () => {
+    const childSessionKey = "agent:main:continuation-delegate-running";
+    mockSessionStore[childSessionKey] = { sessionKey: childSessionKey };
+    enqueuePendingDelegate(childSessionKey, { task: "delayed hop", delayMs: 60_000 });
+
+    // The dispatcher/hedge claims the delegate to `running` before
+    // spawnSubagentDirect finishes; pendingDelegateCount (queued-only) drops to 0
+    // here, but the running delegate still depends on the child's chain state.
+    const flow = [...mockFlows.values()].find((entry) => entry.ownerKey === childSessionKey);
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    expect(pendingDelegateCount(childSessionKey)).toBe(0);
+
+    const callGateway = vi.fn();
+    await deleteSubagentSessionForCleanup({
+      callGateway: callGateway as never,
+      childSessionKey,
+      spawnMode: "run",
+    });
+    // Must still defer: a queued-only gate would delete the child out from under
+    // the running delegate (#1144).
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Once the delegate flow reaches a terminal state, the deferred retry deletes.
+    flow!.status = "succeeded";
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+  });
+
   it("re-arms a delayed continue_work election after simulated gateway restart", async () => {
     const sessionKey = "agent:main:main";
     mockSessionStore[sessionKey] = { sessionKey };
