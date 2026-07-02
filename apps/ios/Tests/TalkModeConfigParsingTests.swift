@@ -246,6 +246,32 @@ struct TalkModeManagerTests {
         #expect(manager.gatewayTalkRealtimeVoiceId == "cedar")
     }
 
+    @Test func `open AI selection preserves configured voice for case insensitive provider`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": " OpenAI ",
+                    "voice": "marin",
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                    "brain": "agent-consult",
+                ],
+            ],
+        ]
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .openAIRealtime)
+
+        #expect(manager._test_realtimeProvider() == "openai")
+        #expect(manager.gatewayTalkRealtimeVoiceId == "marin")
+    }
+
     @Test func `builds generic realtime fallback issue for display`() {
         let issue = TalkRuntimeIssue.realtimeUnavailable(
             message: "OpenAI API key rejected with 401",

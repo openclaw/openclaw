@@ -2772,7 +2772,9 @@ extension TalkModeManager {
             defaultRealtimeModelId: Self.defaultRealtimeModelIdFallback)
         let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
             UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-        let parsedRealtimeVoiceId = providerSelection == .openAIRealtime && parsed.realtimeProvider != "openai"
+        let parsedRealtimeProviderIsOpenAI =
+            parsed.realtimeProvider?.caseInsensitiveCompare("openai") == .orderedSame
+        let parsedRealtimeVoiceId = providerSelection == .openAIRealtime && !parsedRealtimeProviderIsOpenAI
             ? nil
             : parsed.realtimeVoiceId
         let realtimeVoiceId = realtimeVoiceOverride ?? parsedRealtimeVoiceId
