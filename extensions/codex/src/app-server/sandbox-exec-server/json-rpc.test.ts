@@ -1,5 +1,7 @@
 // Codex tests cover sandbox exec-server JSON-RPC parser behavior.
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocketServer, type RawData } from "ws";
 import { parseRequest, requireObject, requireString } from "./json-rpc.js";
 
 describe("parseRequest", () => {
@@ -59,5 +61,83 @@ describe("requireString", () => {
 
   it("throws for non-string", () => {
     expect(() => requireString(123 as unknown as string, "param")).toThrow();
+  });
+});
+
+describe("parseRequest WebSocket transport path", () => {
+  // Reproduces the EXACT production code path from sandbox-exec-server.ts:308:
+  //   socket.on("message", (data: RawData) => { parseRequest(data) })
+  // RawData from ws library is Buffer | ArrayBuffer | Buffer[].
+
+  const PORT = 19876;
+  let wss: WebSocketServer;
+  let httpServer: ReturnType<typeof createServer>;
+
+  beforeAll(async () => {
+    httpServer = createServer();
+    wss = new WebSocketServer({ server: httpServer, path: "/exec" });
+    await new Promise<void>((resolve) => httpServer.listen(PORT, "127.0.0.1", resolve));
+  });
+
+  afterAll(async () => {
+    wss.close();
+    await new Promise<void>((resolve, reject) =>
+      httpServer.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it("throws descriptive error on malformed JSON received over WebSocket", async () => {
+    // When a client sends malformed JSON text → server receives RawData →
+    // parseRequest(data) → our new descriptive Error (matching line 308).
+    const { WebSocket } = await import("ws");
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/exec`);
+
+    // Server: when it receives a message, call parseRequest exactly like production
+    const serverReceived = new Promise<{ error: unknown }>((resolve) => {
+      wss.once("connection", (serverWs) => {
+        serverWs.once("message", (data: RawData) => {
+          try {
+            parseRequest(data);
+            resolve({ error: undefined });
+          } catch (err: unknown) {
+            resolve({ error: err });
+          }
+        });
+      });
+    });
+
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    ws.send("NOT JSON {{{");
+    const result = await serverReceived;
+    ws.close();
+
+    expect(result.error).toBeInstanceOf(Error);
+    expect((result.error as Error).message).toContain("not valid JSON");
+  });
+
+  it("parses valid JSON-RPC request received over WebSocket", async () => {
+    const { WebSocket } = await import("ws");
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/exec`);
+
+    const serverReceived = new Promise<{ result: unknown; error: unknown }>((resolve) => {
+      wss.once("connection", (serverWs) => {
+        serverWs.once("message", (data: RawData) => {
+          try {
+            const req = parseRequest(data);
+            resolve({ result: req, error: undefined });
+          } catch (err: unknown) {
+            resolve({ result: undefined, error: err });
+          }
+        });
+      });
+    });
+
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    ws.send(JSON.stringify({ method: "tools/call", params: {}, id: 1 }));
+    const { result, error } = await serverReceived;
+    ws.close();
+
+    expect(error).toBeUndefined();
+    expect((result as Record<string, unknown>)?.method).toBe("tools/call");
   });
 });
