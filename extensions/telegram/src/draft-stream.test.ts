@@ -313,18 +313,27 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("deletes message preview on clear after finalization", async () => {
-    const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
-    stream.update("Hello");
-    await stream.flush();
-    stream.update("Hello again");
-    await stream.stop();
-    await stream.clear();
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.stop();
+      await stream.clear();
 
-    expectPreviewSend(api, "Hello", { message_thread_id: 42 });
-    expectPreviewEdit(api, "Hello again");
-    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+      expectPreviewEdit(api, "Hello again");
+      // The delete is deferred until the preview has been on screen for the
+      // dwell window; advance past it to trigger the detached cleanup.
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates new message after forceNewMessage is called", async () => {
@@ -351,20 +360,50 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("creates new message after cleanup and forceNewMessage", async () => {
-    const { api, stream } = createForceNewMessageHarness();
+    vi.useFakeTimers();
+    try {
+      const { api, stream } = createForceNewMessageHarness();
 
-    stream.update("Stale preview");
-    await stream.flush();
+      stream.update("Stale preview");
+      await stream.flush();
 
-    await stream.clear();
-    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      await stream.clear();
+      // Delete is deferred past the dwell window; advance to trigger it.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
 
-    stream.forceNewMessage();
-    stream.update("Next preview");
-    await stream.flush();
+      stream.forceNewMessage();
+      stream.update("Next preview");
+      await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expectNthPreviewSend(api, 2, "Next preview");
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expectNthPreviewSend(api, 2, "Next preview");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the streaming preview on screen for the dwell window before deleting", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api);
+
+      stream.update("Working");
+      await stream.flush();
+      // Fast turn: the preview has only been visible ~1s when the turn tears down.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stream.clear();
+
+      // Delete is deferred, not synchronous, and does not fire before the 4s dwell.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      // At the dwell boundary (~4s after first appearing) the detached delete runs.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends first update immediately after forceNewMessage within throttle window", async () => {

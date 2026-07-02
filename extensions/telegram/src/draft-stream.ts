@@ -37,6 +37,13 @@ const MAX_CONSECUTIVE_PREVIEW_FAILURES = 3;
 // Flood waits beyond this freeze the preview longer than it is useful; clamp so
 // a large retry_after cannot park the suspension past the run's lifetime.
 const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
+// Minimum time the streaming preview ("gerund" box) stays on screen before it
+// is deleted at teardown, measured from when it first became visible. On fast
+// turns the box otherwise flashed and vanished before it could be read, and the
+// immediate delete could race a just-persisted message (intermittently dropping
+// the first verbose commentary). The delete is scheduled DETACHED so the turn is
+// never stalled waiting on the dwell.
+const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -533,6 +540,8 @@ export function createTelegramDraftStream(params: {
   };
 
   const clear = async () => {
+    // Capture before the stop; takeMessageIdAfterStop resets streamVisibleSinceMs.
+    const visibleSince = streamVisibleSinceMs;
     const messageId = await takeMessageIdAfterStop({
       stopForClear,
       readMessageId: () => streamMessageId,
@@ -541,11 +550,26 @@ export function createTelegramDraftStream(params: {
       },
     });
     if (typeof messageId === "number" && Number.isFinite(messageId)) {
-      try {
-        await params.api.deleteMessage(chatId, messageId);
-        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
-      } catch (err) {
-        params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      const runDelete = async () => {
+        try {
+          await params.api.deleteMessage(chatId, messageId);
+          params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
+        } catch (err) {
+          params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
+        }
+      };
+      // Keep the preview on screen for at least MIN_PREVIEW_DWELL_MS from when it
+      // first appeared, then delete DETACHED (scheduled, not awaited) so teardown
+      // is never stalled waiting for the dwell.
+      const elapsedMs =
+        typeof visibleSince === "number" ? Date.now() - visibleSince : MIN_PREVIEW_DWELL_MS;
+      const remainingMs = Math.max(0, MIN_PREVIEW_DWELL_MS - elapsedMs);
+      if (remainingMs <= 0) {
+        void runDelete();
+      } else {
+        setTimeout(() => {
+          void runDelete();
+        }, remainingMs);
       }
     }
   };
