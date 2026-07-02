@@ -11,7 +11,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasBinary } from "../skills/loading/config.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
+import {
+  classifyGmailWatchStartFailure,
+  type GmailWatchStartAttempt,
+  isAddressInUseError,
+} from "./gmail-watcher-errors.js";
 import {
   buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
@@ -43,7 +47,7 @@ function isGogAvailable(): boolean {
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   options: { signal?: AbortSignal } = {},
-): Promise<boolean> {
+): Promise<GmailWatchStartAttempt> {
   const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
   try {
     const result = await runCommandWithTimeout(args, {
@@ -52,14 +56,17 @@ async function startGmailWatch(
     });
     if (result.code !== 0) {
       const message = result.stderr || result.stdout || "gog watch start failed";
+      const failure = classifyGmailWatchStartFailure(message);
       log.error(`watch start failed: ${message}`);
-      return false;
+      return { ok: false, ...failure };
     }
     log.info(`watch started for ${cfg.account}`);
-    return true;
+    return { ok: true };
   } catch (err) {
-    log.error(`watch start error: ${String(err)}`);
-    return false;
+    const message = String(err);
+    const failure = classifyGmailWatchStartFailure(message);
+    log.error(`watch start error: ${message}`);
+    return { ok: false, ...failure };
   }
 }
 
@@ -246,6 +253,16 @@ function createGmailWatcherCancellation(
   };
 }
 
+async function renewGmailWatch(runtimeConfig: GmailHookRuntimeConfig): Promise<void> {
+  const watchStarted = await startGmailWatch(runtimeConfig);
+  if (watchStarted.ok || !watchStarted.terminal || currentConfig !== runtimeConfig) {
+    return;
+  }
+
+  log.error(`${watchStarted.reason}; stopping gmail watcher`);
+  await stopGmailWatcher({ expectedConfig: runtimeConfig });
+}
+
 /**
  * Start the Gmail watcher service.
  * Called automatically by the gateway if hooks.gmail is configured.
@@ -345,7 +362,13 @@ export async function startGmailWatcher(
   if (cancellation.isCancelled()) {
     return cancelledGmailWatcherStart(runtimeConfig);
   }
-  if (!watchStarted) {
+  if (!watchStarted.ok) {
+    if (watchStarted.terminal) {
+      if (currentConfig === runtimeConfig) {
+        currentConfig = null;
+      }
+      return { started: false, reason: watchStarted.reason };
+    }
     log.warn("gmail watch start failed, but continuing with serve");
   }
 
@@ -360,7 +383,7 @@ export async function startGmailWatcher(
     if (shuttingDown) {
       return;
     }
-    void startGmailWatch(runtimeConfig);
+    void renewGmailWatch(runtimeConfig);
   }, renewMs);
 
   log.info(
@@ -370,10 +393,18 @@ export async function startGmailWatcher(
   return { started: true };
 }
 
+type GmailWatcherStopOptions = {
+  expectedConfig?: GmailHookRuntimeConfig;
+};
+
 /**
  * Stop the Gmail watcher service.
  */
-export async function stopGmailWatcher(): Promise<void> {
+export async function stopGmailWatcher(options: GmailWatcherStopOptions = {}): Promise<void> {
+  if (options.expectedConfig && currentConfig !== options.expectedConfig) {
+    return;
+  }
+
   shuttingDown = true;
 
   if (respawnTimeout) {
@@ -392,6 +423,8 @@ export async function stopGmailWatcher(): Promise<void> {
     await settleProcess(proc);
   }
 
-  currentConfig = null;
+  if (!options.expectedConfig || currentConfig === options.expectedConfig) {
+    currentConfig = null;
+  }
   log.info("gmail watcher stopped");
 }

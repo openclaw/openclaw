@@ -23,6 +23,10 @@ import {
   runGcloud,
 } from "./gmail-setup-utils.js";
 import {
+  classifyGmailWatchStartFailure,
+  type GmailWatchStartAttempt,
+} from "./gmail-watcher-errors.js";
+import {
   buildDefaultHookUrl,
   buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
@@ -315,15 +319,14 @@ export async function runGmailService(opts: GmailRunOptions) {
     });
   }
 
-  await startGmailWatch(runtimeConfig);
+  const initialWatch = await startGmailWatch(runtimeConfig);
+  if (!initialWatch.ok && initialWatch.terminal) {
+    throw new Error(initialWatch.reason);
+  }
 
   let shuttingDown = false;
   let child = spawnGogServe(runtimeConfig);
-
-  const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
-  const renewTimer = setInterval(() => {
-    void startGmailWatch(runtimeConfig);
-  }, renewMs);
+  let renewTimer: ReturnType<typeof setInterval> | null = null;
 
   const detachSignals = () => {
     process.off("SIGINT", shutdown);
@@ -336,9 +339,26 @@ export async function runGmailService(opts: GmailRunOptions) {
     }
     shuttingDown = true;
     detachSignals();
-    clearInterval(renewTimer);
+    if (renewTimer) {
+      clearInterval(renewTimer);
+      renewTimer = null;
+    }
     child.kill("SIGTERM");
   };
+
+  const renewGmailWatch = async () => {
+    const result = await startGmailWatch(runtimeConfig);
+    if (result.ok || !result.terminal || shuttingDown) {
+      return;
+    }
+    defaultRuntime.error(`${result.reason}; stopping gmail watcher`);
+    shutdown();
+  };
+
+  const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
+  renewTimer = setInterval(() => {
+    void renewGmailWatch();
+  }, renewMs);
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
@@ -372,7 +392,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig) {
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   fatal = false,
-) {
+): Promise<GmailWatchStartAttempt> {
   const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
@@ -380,6 +400,9 @@ async function startGmailWatch(
     if (fatal) {
       throw new Error(message);
     }
+    const failure = classifyGmailWatchStartFailure(message);
     defaultRuntime.error(message);
+    return { ok: false, ...failure };
   }
+  return { ok: true };
 }

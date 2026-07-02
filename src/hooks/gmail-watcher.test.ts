@@ -30,8 +30,9 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
+const { GMAIL_WATCH_REAUTH_REASON } = await import("./gmail-watcher-errors.js");
 
-function createGmailConfig(account = "me@example.com") {
+function createGmailConfig(account = "me@example.com", gmail: Record<string, unknown> = {}) {
   return {
     hooks: {
       enabled: true,
@@ -40,6 +41,7 @@ function createGmailConfig(account = "me@example.com") {
         account,
         topic: "projects/demo/topics/gmail",
         pushToken: "push-token",
+        ...gmail,
       },
     },
   } as never;
@@ -153,6 +155,108 @@ describe("startGmailWatcher", () => {
       reason: "startup cancelled",
     });
     expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not spawn gog serve when watch start needs Gmail re-auth", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "invalid_grant: Token has been expired or revoked",
+    });
+
+    await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({
+      started: false,
+      reason: GMAIL_WATCH_REAUTH_REASON,
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("stops gog serve when watch renewal needs Gmail re-auth", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new EventEmitter();
+      const mockedChild = Object.assign(child, {
+        kill: vi.fn(() => {
+          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+          return true;
+        }),
+        killed: false,
+      });
+      mocks.spawn.mockReturnValue(mockedChild);
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({
+          code: 1,
+          stdout: "",
+          stderr: "invalid_grant: Token has been expired or revoked",
+        });
+
+      await expect(
+        startGmailWatcher(createGmailConfig("me@example.com", { renewEveryMinutes: 1 })),
+      ).resolves.toEqual({ started: true });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockedChild.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stale terminal renewal stop clear newer watcher config", async () => {
+    vi.useFakeTimers();
+    try {
+      const spawnedChildren: Array<EventEmitter & { kill: ReturnType<typeof vi.fn> }> = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const childIndex = spawnedChildren.length;
+        const mockedChild = Object.assign(child, {
+          kill: vi.fn(() => {
+            if (childIndex !== 0) {
+              queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            }
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({
+          code: 1,
+          stdout: "",
+          stderr: "invalid_grant: Token has been expired or revoked",
+        })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+      await expect(
+        startGmailWatcher(createGmailConfig("old@example.com", { renewEveryMinutes: 1 })),
+      ).resolves.toEqual({ started: true });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnedChildren[0].kill).toHaveBeenCalledWith("SIGTERM");
+
+      await expect(
+        startGmailWatcher(createGmailConfig("newer@example.com", { renewEveryMinutes: 1 })),
+      ).resolves.toEqual({ started: true });
+      expect(spawnedChildren).toHaveLength(2);
+
+      spawnedChildren[0].emit("exit", null, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(0);
+
+      spawnedChildren[1].emit("exit", 1, null);
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(spawnedChildren).toHaveLength(3);
+      expect(mocks.spawn.mock.calls[2]?.[1]).toContain("newer@example.com");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts tailscale setup and does not spawn gog serve when cancelled in flight", async () => {
