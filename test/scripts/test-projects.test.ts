@@ -1772,10 +1772,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/android-version.ts",
         ["test/scripts/android-version.test.ts", "test/scripts/android-pin-version.test.ts"],
       ],
-      [
-        "scripts/lib/ios-version.ts",
-        ["test/scripts/ios-version.test.ts", "test/scripts/ios-pin-version.test.ts"],
-      ],
+      ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
       [
         ".github/images/live-media-runner/Dockerfile",
         ["test/scripts/package-acceptance-workflow.test.ts"],

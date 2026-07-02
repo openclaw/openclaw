@@ -332,26 +332,26 @@ async function buildPluginPolicyElicitationResponse(params: {
 
 function resolvePluginDestructiveApprovalMode(
   entry: PluginAppPolicyContextEntry,
-): "allow" | "deny" | "auto" | "always" {
+): "allow" | "deny" | "auto" | "ask" {
   return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
 }
 
 function allowedPluginPolicyApprovalDecisions(
-  mode: "allow" | "deny" | "auto" | "always",
+  mode: "allow" | "deny" | "auto" | "ask",
   approvalPrompt: BridgeableApprovalElicitation,
 ): ExecApprovalDecision[] {
   const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
-  if (mode !== "always") {
+  if (mode !== "ask") {
     return allowedDecisions;
   }
   return allowedDecisions.filter((decision) => decision !== "allow-always");
 }
 
 function oneShotPluginPolicyApprovalOutcome(
-  mode: "allow" | "deny" | "auto" | "always",
+  mode: "allow" | "deny" | "auto" | "ask",
   outcome: AppServerApprovalOutcome,
 ): AppServerApprovalOutcome {
-  return mode === "always" && outcome === "approved-session" ? "approved-once" : outcome;
+  return mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome;
 }
 
 function readPluginApprovalElicitation(

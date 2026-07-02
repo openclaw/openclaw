@@ -5,9 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -28,6 +30,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val LIFECYCLE_TEST_TIMEOUT_MS = 8_000L
 private const val LIFECYCLE_CONNECT_CHALLENGE_FRAME =
@@ -79,6 +82,75 @@ private data class ReconnectServer(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
+  @Test
+  fun staleConnectionDrainCannotCancelReplacementRpc() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val firstConnected = CompletableDeferred<Unit>()
+      val secondConnected = CompletableDeferred<Unit>()
+      val replacementRequest = CompletableDeferred<Pair<WebSocket, String>>()
+      val connectionCount = AtomicInteger(0)
+      val firstServer =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val secondServer =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "slow.method" -> replacementRequest.complete(webSocket to id)
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = {
+            when (connectionCount.incrementAndGet()) {
+              1 -> firstConnected.complete(Unit)
+              2 -> secondConnected.complete(Unit)
+            }
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, firstServer.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { firstConnected.await() }
+        val oldConnection = readField<Any>(harness.session, "currentConnection")
+
+        connectNodeSession(harness.session, secondServer.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { secondConnected.await() }
+        val newRequest =
+          async {
+            harness.session.requestDetailed("slow.method", null, timeoutMs = 30_000)
+          }
+        val (replacementSocket, requestId) =
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { replacementRequest.await() }
+
+        val failPending = oldConnection.javaClass.getDeclaredMethod("failPending")
+        failPending.isAccessible = true
+        failPending.invoke(oldConnection)
+
+        assertNull(withTimeoutOrNull(200) { newRequest.await() })
+        replacementSocket.send(
+          """{"type":"res","id":"$requestId","ok":true,"payload":{"connection":2}}""",
+        )
+        val newResult = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { newRequest.await() }
+        assertTrue(newResult.ok)
+        assertEquals("""{"connection":2}""", newResult.payloadJson)
+      } finally {
+        shutdownReconnectHarness(harness, firstServer, secondServer)
+      }
+    }
+
+  @Suppress("UNCHECKED_CAST")
+  private fun <T> readField(
+    target: Any,
+    name: String,
+  ): T {
+    val field = target.javaClass.getDeclaredField(name)
+    field.isAccessible = true
+    return field.get(target) as T
+  }
+
   @Test
   fun connectToNewGatewayClosesActiveConnectionAndStartsReplacement() =
     runBlocking {
@@ -208,6 +280,36 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
+  fun protocolMismatchPausesReconnect() {
+    val error =
+      GatewaySession.ErrorShape(
+        code = "INVALID_REQUEST",
+        message = "protocol mismatch",
+        details =
+          GatewayConnectErrorDetails(
+            code = "PROTOCOL_MISMATCH",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = null,
+            clientMinProtocol = 4,
+            clientMaxProtocol = 4,
+            expectedProtocol = 5,
+            minimumProbeProtocol = 4,
+          ),
+      )
+
+    assertTrue(
+      shouldPauseGatewayReconnectAfterAuthFailure(
+        error = error,
+        hasBootstrapToken = false,
+        role = "node",
+        scopes = emptyList(),
+        deviceTokenRetryBudgetUsed = false,
+        pendingDeviceTokenRetry = false,
+      ),
+    )
+  }
+
+  @Test
   fun bootstrapRoleUpgradeStillPausesReconnect() {
     val error =
       GatewaySession.ErrorShape(
@@ -300,7 +402,43 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @Test
+  fun protocolMismatchFailurePreservesProtocolDetailsAndPausesReconnect() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(
+              """
+              {"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"protocol mismatch","details":{"code":"PROTOCOL_MISMATCH","clientMinProtocol":4,"clientMaxProtocol":4,"expectedProtocol":5,"minimumProbeProtocol":4}}}
+              """.trimIndent(),
+            )
+          }
+        }
+      val harness =
+        createReconnectHarness { error, pauseReconnect ->
+          connectFailure.complete(error to pauseReconnect)
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (error, pauseReconnect) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
+
+        assertEquals("PROTOCOL_MISMATCH", error.details?.code)
+        assertEquals(4, error.details?.clientMinProtocol)
+        assertEquals(4, error.details?.clientMaxProtocol)
+        assertEquals(5, error.details?.expectedProtocol)
+        assertEquals(4, error.details?.minimumProbeProtocol)
+        assertTrue(pauseReconnect)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   private fun createReconnectHarness(
+    onConnected: () -> Unit = {},
     onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
   ): ReconnectHarness {
     val app = RuntimeEnvironment.getApplication()
@@ -310,7 +448,7 @@ class GatewaySessionReconnectTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = ReconnectDeviceAuthStore(),
-        onConnected = {},
+        onConnected = { onConnected() },
         onDisconnected = { _ -> },
         onConnectFailure = onConnectFailure,
         onEvent = { _, _ -> },

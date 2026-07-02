@@ -146,7 +146,13 @@ final class NodeAppModel {
     // multiple pending requests and cause the onboarding UI to "flip-flop".
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
-    private(set) var lastGatewayProblem: GatewayConnectionProblem?
+    // Bumped on every non-nil assignment, including re-reports of an equal problem;
+    // value equality alone cannot tell the UI to re-surface or shake the toast.
+    private(set) var gatewayProblemReportCount = 0
+    private(set) var lastGatewayProblem: GatewayConnectionProblem? {
+        didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }
+    }
+
     private var operatorGatewayProblem: GatewayConnectionProblem?
     var gatewayDisplayStatusText: String {
         self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
@@ -2207,6 +2213,14 @@ extension NodeAppModel {
         self.lastGatewayProblem = nil
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+    }
+
+    func beginGatewayPreconnectVerification(statusText: String) {
+        self.lastGatewayProblem = nil
+        self.operatorGatewayProblem = nil
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.gatewayStatusText = statusText
     }
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {

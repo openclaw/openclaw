@@ -137,7 +137,13 @@ class CameraCaptureManager(
       // Bind only the still capture use case; CameraX owns camera open/close through the lifecycle owner.
       provider.bindToLifecycle(owner, selector, capture)
 
-      val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
+      val (bytes, orientation) =
+        try {
+          capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
+        } finally {
+          // The JPEG bytes are self-contained; release CameraX before decoding and recompressing them.
+          provider.unbind(capture)
+        }
       val decoded =
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
           ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")

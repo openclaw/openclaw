@@ -81,6 +81,7 @@ apps/android/fastlane/README.md
 apps/ios/fastlane/report.xml
 apps/ios/fastlane/Preview.html
 apps/ios/fastlane/screenshots/
+apps/ios/fastlane/metadata/*/release_notes.txt
 apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
 apps/ios/fastlane/.env

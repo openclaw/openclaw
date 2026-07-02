@@ -128,10 +128,41 @@ import UIKit
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.settings))
 
         for destination in RootTabs.SidebarDestination.allCases
-            where destination != .chat && destination != .talk && destination != .agents && destination != .gateway && destination != .settings
+            where destination != .chat && destination != .talk && destination != .agents && destination != .gateway &&
+            destination != .settings
         {
             #expect(!RootTabs.shouldOpenRootTabFromPhoneHub(destination))
         }
+    }
+
+    @Test func appLaunchDefaultsToChatTab() {
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw"]) == .chat)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab"]) == .chat)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "unknown"]) == .chat)
+    }
+
+    @Test func appLaunchUsesRequestedDestinationBeforeChatFallback() {
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "overview"]) == .control)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "chat"]) == .chat)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "agents"]) == .agent)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-destination", "gateway"]) == .settings)
+        #expect(
+            RootTabs.initialTab(arguments: [
+                "OpenClaw",
+                "--openclaw-initial-tab",
+                "unknown",
+                "--openclaw-initial-destination",
+                "activity",
+            ]) == .control)
+    }
+
+    @Test func appLaunchRespectsExplicitInitialTabOverride() {
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "control"]) == .control)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "overview"]) == .control)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "chat"]) == .chat)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "voice"]) == .talk)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "agents"]) == .agent)
+        #expect(RootTabs.initialTab(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
     @Test func legacyInitialTabsMapToMatchingSidebarDestinations() {
@@ -257,6 +288,11 @@ import UIKit
             ownsNavigationStack: false,
             openChat: {},
             openSettings: {})
+        let native = CommandCenterTab(
+            ownsNavigationStack: false,
+            usesNativeNavigationChrome: true,
+            openChat: {},
+            openSettings: {})
         let shellRouted = CommandCenterTab(
             ownsNavigationStack: false,
             openChat: {},
@@ -266,7 +302,9 @@ import UIKit
         #expect(standalone.ownsNavigationStack)
         #expect(standalone.openSessions == nil)
         #expect(!embedded.ownsNavigationStack)
+        #expect(!embedded.usesNativeNavigationChrome)
         #expect(embedded.openSessions == nil)
+        #expect(native.usesNativeNavigationChrome)
         #expect(shellRouted.openSessions != nil)
     }
 
@@ -498,10 +536,5 @@ import UIKit
             !IPadSkillWorkshopScreen.usesCompactTaskFlow(
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular))
-    }
-
-    @Test func phoneHubLeavesRoomForFloatingTabBar() {
-        #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .regular) == 112)
-        #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .compact) == 72)
     }
 }

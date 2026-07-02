@@ -501,8 +501,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/cloudflare-ai-gateway:
     devDependencies:
@@ -513,8 +513,8 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.139.0
-        version: 0.139.0
+        specifier: 0.142.4
+        version: 0.142.4
       typebox:
         specifier: 1.1.39
         version: 1.1.39
@@ -699,8 +699,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/document-extract:
     dependencies:
@@ -752,8 +752,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/file-transfer:
     dependencies:
@@ -826,8 +826,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/googlechat:
     dependencies:
@@ -845,8 +845,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/gradium:
     devDependencies:
@@ -873,6 +873,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/imessage:
+    dependencies:
+      typebox:
+        specifier: 1.1.39
+        version: 1.1.39
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -919,8 +923,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/litellm:
     devDependencies:
@@ -994,8 +998,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/mattermost:
     dependencies:
@@ -1010,8 +1014,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/media-understanding-core:
     devDependencies:
@@ -1035,8 +1039,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-lancedb:
     dependencies:
@@ -1073,8 +1077,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/microsoft:
     dependencies:
@@ -1098,8 +1102,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/migrate-hermes:
     dependencies:
@@ -1111,8 +1115,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/minimax:
     devDependencies:
@@ -1157,8 +1161,8 @@ importers:
         specifier: 6.2.3
         version: 6.2.3
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nextcloud-talk:
     dependencies:
@@ -1170,8 +1174,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nostr:
     dependencies:
@@ -1186,8 +1190,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/novita:
     devDependencies:
@@ -1220,8 +1224,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/ollama:
     dependencies:
@@ -1295,8 +1299,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/policy:
     dependencies:
@@ -1308,8 +1312,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qa-channel:
     dependencies:
@@ -1324,8 +1328,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qa-lab:
     dependencies:
@@ -1346,8 +1350,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@openclaw/crabline':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.6
+        version: 0.1.6
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
@@ -1361,8 +1365,8 @@ importers:
         specifier: workspace:*
         version: link:../whatsapp
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qa-matrix:
     dependencies:
@@ -1377,8 +1381,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qianfan:
     devDependencies:
@@ -1411,8 +1415,8 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qwen:
     devDependencies:
@@ -1430,8 +1434,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/runway:
     devDependencies:
@@ -1492,8 +1496,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/sms:
     dependencies:
@@ -1587,8 +1591,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/together:
     devDependencies:
@@ -1606,8 +1610,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tts-local-cli:
     devDependencies:
@@ -1677,8 +1681,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/volcengine:
     devDependencies:
@@ -1737,8 +1741,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/workboard:
     dependencies:
@@ -1750,8 +1754,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/xai:
     dependencies:
@@ -1788,8 +1792,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   extensions/zalouser:
     dependencies:
@@ -1807,8 +1811,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   packages/acp-core:
     dependencies:
@@ -1902,8 +1906,8 @@ importers:
   packages/speech-core:
     dependencies:
       openclaw:
-        specifier: 2026.5.28
-        version: 2026.5.28
+        specifier: workspace:*
+        version: link:../..
 
   packages/terminal-core:
     dependencies:
@@ -2368,16 +2372,8 @@ packages:
     resolution: {integrity: sha512-fT1qHVGAag4IEkrupZ6lRRbNCs1vS9P01KB/sG8zKgvUztbYtFBtQpjSITNwooDZ83tpsPzP0mRNs1/KVszCRA==}
     engines: {node: '>= 20.12.0'}
 
-  '@clack/core@1.4.1':
-    resolution: {integrity: sha512-FILJa1gGKEFTGZAJE9RpVhrjKz3c3h4ar60dSv6cGuDqufQ84YEIS3GAGvZiN+H6yaLbbvTFNejjCC4tXpZEuw==}
-    engines: {node: '>= 20.12.0'}
-
   '@clack/prompts@1.4.0':
     resolution: {integrity: sha512-S0My7XPGIgpRWMDG8uRqalbgT+a6FmCUdOW+HaIOVVpUPHOb7RrpvjTjiODadKp06fsrVDJZlIzc6yCTp4AnxA==}
-    engines: {node: '>= 20.12.0'}
-
-  '@clack/prompts@1.5.1':
-    resolution: {integrity: sha512-zccHj2z2oCCO4yrDiRSlFOxWerGqRiysP7a5jPK6uoI9URKAquwY42Dd/iUP8JWHxEzdRe4TlbvZCo8z1/mhrw==}
     engines: {node: '>= 20.12.0'}
 
   '@clawdbot/lobster@2026.5.22':
@@ -2486,10 +2482,6 @@ packages:
   '@discordjs/voice@0.19.2':
     resolution: {integrity: sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==}
     engines: {node: '>=22.12.0'}
-
-  '@earendil-works/pi-tui@0.76.0':
-    resolution: {integrity: sha512-TWQEWqc38gVRYr/VTrlfePQPpJk938gNNLL1xuv0M+9cTkVr880/Q3baZQrxKoLrmN/MmVx7TyR8knYZGxTqqg==}
-    engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-tui@0.78.0':
     resolution: {integrity: sha512-3a705FnsVVUhAyceShNB3kS2rpxcxLcx+hqB0u6MMMpHwQGbW+m++MqA6r7eOzq/8FLx5e3vDh38h/SVTk2qzw==}
@@ -2735,15 +2727,6 @@ packages:
   '@github/copilot@1.0.55':
     resolution: {integrity: sha512-wqzI0L7krORW6jDAQPx7VnInka5BYN5yVgu+dpUK4w8xP5RgnOBa6kRoXpydj/9O1ufs0k6RKRtQjsVLp52TRw==}
     hasBin: true
-
-  '@google/genai@2.6.0':
-    resolution: {integrity: sha512-HjoW3mPuEn7pnuKABJl9VbDoWDSF4nbwYKYvYYor7YjPeDxrrBxHzu2d1Prcd+BAuC4w+85UP6y7ZdcrQAoO7g==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@modelcontextprotocol/sdk': ^1.25.2
-    peerDependenciesMeta:
-      '@modelcontextprotocol/sdk':
-        optional: true
 
   '@google/genai@2.7.0':
     resolution: {integrity: sha512-tv0DRtcndt2oEhBYy+5mA0TaXH98+L1Gt0AP9unBfH7DP20KhB7+O3QqAN1Lz+laMARGTHS7BFQSNpLbl4gm1g==}
@@ -3141,49 +3124,49 @@ packages:
     resolution: {integrity: sha512-gOBg5YHMfZy+TfHArfVogwgfBeQnKbbGo3pSUyK/gSI0AVu+pEiDVcKlQb0D8Mg1LNRZILZ6XG8I5dJ4KuAd9Q==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@openai/codex@0.139.0':
-    resolution: {integrity: sha512-wr2fRE+fzW0CjEbfFsLh1ftarVEcw0CMLWS7QyA0nyOz5qacQPVq3cq2+/U7oEbwm1TOqoi0Fm1nxniB5FkpmA==}
+  '@openai/codex@0.142.4':
+    resolution: {integrity: sha512-BW9+3Cs7tChgkc0QhUsZIDm6XgpSDSeJkljRSHhJZqDwlaxDnNVhRP/sZwhgrTn3f2jPn3jc4WTKfLOTk+g5pA==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.139.0-darwin-arm64':
-    resolution: {integrity: sha512-o+0ZKWwgDFMMLO7rwinzO0PQsgK+Vme1pMN2GeAxsX29ZgGZcyPICfpJbeGSUO1mb2a36Skjx6nfdRnxMY0r7w==}
+  '@openai/codex@0.142.4-darwin-arm64':
+    resolution: {integrity: sha512-CfXp5jilBOxD8zLuG6Nk7w5ZPP3roE3s1rsr60za9PQKI7kaJ/5G+oP3Z0N1CoB4mpy+5JHkMLTZAZZPGFlSgQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.139.0-darwin-x64':
-    resolution: {integrity: sha512-9gkBWzu6DB2rqU4DbpxD3DE5bofGpsK46Lp0h0I+bKWc2IIcxvSi8K2utKmBLoJCbKrn4JQu7dFNGRqEfENung==}
+  '@openai/codex@0.142.4-darwin-x64':
+    resolution: {integrity: sha512-H9ia31pkJFtBk+UrREAfJiTUfcvgactKbG4W4SF2LFfJOTRsrsJZGtscHQ8/lLGeKEfOk/psrbSOPDyrZnxvnQ==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.139.0-linux-arm64':
-    resolution: {integrity: sha512-tBQE5lZciRHeWZGuURgjP9S717MvTIpQMc593+DNxY2LQxozkngOkzFSQd1+/UmQKGrCqdFLu5irIwPXpSZyEw==}
+  '@openai/codex@0.142.4-linux-arm64':
+    resolution: {integrity: sha512-/bBcEm+OKmlGHH0c88jrVgYMRyaNC/hGOW/znP/PiHQEeIf4UdsUGQ7x4FAZm648140cgaeKYIBoRBbHizS+5w==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.139.0-linux-x64':
-    resolution: {integrity: sha512-14UgzDS+X4crkvdt6S02A/ZZOrS8ZyWiuTRpguCtnhNamb7unSuDxy86BWgpAl3sqiTaN2CP8VLyp2ohQ8Nbzw==}
+  '@openai/codex@0.142.4-linux-x64':
+    resolution: {integrity: sha512-t3tNOkDdiO5/gRqkTmuMcAj5JjCbeWotOJzxV7pPkD2u2KvzVRrk7jPAjuy+85wPc12lsIupYgxHlK7CkVLOjA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.139.0-win32-arm64':
-    resolution: {integrity: sha512-nlwRjsYotH1Rtqu/Q0VwQbIeO2UX1mkHK84Ov9qn/hl29QqqoBtno0tRyqIPbkXFIVQuWiAYXlV3ugLwH5fTrQ==}
+  '@openai/codex@0.142.4-win32-arm64':
+    resolution: {integrity: sha512-QBGeoYk3pmVscVIxeW21cvPJIjsnmD5dOTqMAzypXGik5soNIKHbps2Kj1LBKOjVbbx5qoDEbTwDfYmnjfqgdQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.139.0-win32-x64':
-    resolution: {integrity: sha512-lQrVLNz+90wdvWVNFDvCkHQRiAK9ZllmkTka3c8eqSDqdJk35Gpgppfv9Xtw5M2ZBtTq0sBdWBiCMyzGDBSpmQ==}
+  '@openai/codex@0.142.4-win32-x64':
+    resolution: {integrity: sha512-W0rSPT0t7FnKlJYNu9/HpHzaSOutuSSYjIVunKorYmrScXk9pQxBEhEuyn16JOtywc/2nX8nHEmWsuj2sd8suw==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.5':
-    resolution: {integrity: sha512-OK1YUdM6GO1qgTEvcHhMl/MQ77yw9MmcM84jB1uPNXutQnIjPbIhRin6MXRSMbuYqH5feu4CmTzAtH5VtHv8gA==}
+  '@openclaw/crabline@0.1.6':
+    resolution: {integrity: sha512-nu/XD7eoly5DJOEG7krCfZY68cDcD/AC31mAMLoP36HzmetNVM17OtfnakpuWyBwdO+c4noF7b2LM4AAKvq9CQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -4581,6 +4564,7 @@ packages:
 
   '@zed-industries/codex-acp@0.15.0':
     resolution: {integrity: sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==}
+    deprecated: This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.
     hasBin: true
 
   abort-controller@3.0.0:
@@ -4934,10 +4918,6 @@ packages:
 
   cjs-module-lexer@2.2.0:
     resolution: {integrity: sha512-4bHTS2YuzUvtoLjdy+98ykbNB5jS0+07EvFNXerqZQJ89F7DI6ET7OQo/HJuW6K0aVsKA9hj9/RVb2kQVOrPDQ==}
-
-  clawpdf@0.2.0:
-    resolution: {integrity: sha512-Za4HD3CMRHNqOXOOyVJiQLnEuezRZR/oXiBzraTwL5XEQZuBwFxnyC1UzN4AjQWV2JrLN3ItbzfPRGE0gGOVwg==}
-    engines: {node: '>=20'}
 
   clawpdf@0.3.0:
     resolution: {integrity: sha512-41+3AnKk9yek2sm+/9XvUlDTN8Wi+ag7fmxZuqw+ySn4lqaf/fCgLeamqPLiXY4gVbizKEHGoTG/JrIIFNE2rw==}
@@ -5624,10 +5604,6 @@ packages:
   hosted-git-info@10.1.1:
     resolution: {integrity: sha512-DeOnSPAvOndYKfw075gt8yZzQ7S2hNztw34zBTfhIzLhmBTswIBg5/y+pqu/VD5cYWm5goAFTusDmUEmKZ0PEQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
-
-  hosted-git-info@9.0.3:
-    resolution: {integrity: sha512-Hc+ghLoSt6QaYZUv0WBiIvmMDZuZZ7oaDvdH8MbfOO4lOsxdXLEvuC6ePoGs9H1X9oCLyq6+NVN0MKqD+ydxyg==}
-    engines: {node: ^20.17.0 || >=22.9.0}
 
   html-encoding-sniffer@6.0.0:
     resolution: {integrity: sha512-CV9TW3Y3f8/wT0BRFc1/KAVQ3TUHiXmaAb6VW9vtiMFf7SLoMd1PdAc4W3KFOFETBJUb90KatHqlsZMWV+R9Gg==}
@@ -6521,18 +6497,6 @@ packages:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
 
-  openai@6.39.0:
-    resolution: {integrity: sha512-O61LIsimY3acVabwvomwFhwrnN36yvHY2quIfy9keEcFytGgWeV35yLHQ6NVMLSBxRpHmcg2yuhCnlu2HT4pLQ==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.18.0
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   openai@6.39.1:
     resolution: {integrity: sha512-z3dO9fEWOXBzlXynVb/xZ/tujzUjFWQWn3C0n0mw6Vo0zJTbEkaN4b2cLWjhJ6haJQx8LlREoafHRl+Gu/Hl+A==}
     hasBin: true
@@ -6544,11 +6508,6 @@ packages:
         optional: true
       zod:
         optional: true
-
-  openclaw@2026.5.28:
-    resolution: {integrity: sha512-p7jGN9wzCrqEvHNI6Y7+eh6DWoYDzJ1iQGKTm8xqQ2uQ9/2mY1CCf87WoZeb0+m3eHKSGchlI3tN33fE1lMtEA==}
-    engines: {node: '>=22.19.0'}
-    hasBin: true
 
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
@@ -6878,10 +6837,6 @@ packages:
   range-parser@1.2.1:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
     engines: {node: '>= 0.6'}
-
-  rastermill@0.3.0:
-    resolution: {integrity: sha512-4g2i0I7M5sba//lFBh19Wi0hDGw8o+isnt/BtEyqQXIZaYclhcNBwL/Fw/6gDCp7aaLwQHADuUvyHCB0Oat5Vw==}
-    engines: {node: '>=20'}
 
   rastermill@0.3.1:
     resolution: {integrity: sha512-CX4nij6+ZLHYIaojJNfLTr7W+AiH/IPJi6E9Aw1br2///1KZL2KBOHd68rkcLedc47MPvb4hhH+fzYeGFa4A/Q==}
@@ -8518,21 +8473,9 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@clack/core@1.4.1':
-    dependencies:
-      fast-wrap-ansi: 0.2.2
-      sisteransi: 1.0.5
-
   '@clack/prompts@1.4.0':
     dependencies:
       '@clack/core': 1.3.1
-      fast-string-width: 3.0.2
-      fast-wrap-ansi: 0.2.2
-      sisteransi: 1.0.5
-
-  '@clack/prompts@1.5.1':
-    dependencies:
-      '@clack/core': 1.4.1
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
@@ -8643,11 +8586,6 @@ snapshots:
       - node-opus
       - opusscript
       - utf-8-validate
-
-  '@earendil-works/pi-tui@0.76.0':
-    dependencies:
-      get-east-asian-width: 1.6.0
-      marked: 15.0.12
 
   '@earendil-works/pi-tui@0.78.0':
     dependencies:
@@ -8798,19 +8736,6 @@ snapshots:
       '@github/copilot-linuxmusl-x64': 1.0.55
       '@github/copilot-win32-arm64': 1.0.55
       '@github/copilot-win32-x64': 1.0.55
-
-  '@google/genai@2.6.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
-    dependencies:
-      google-auth-library: 10.7.0
-      p-retry: 4.6.2
-      protobufjs: 7.6.3
-      ws: 8.21.0
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@google/genai@2.7.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
@@ -9242,34 +9167,34 @@ snapshots:
 
   '@npmcli/redact@4.0.0': {}
 
-  '@openai/codex@0.139.0':
+  '@openai/codex@0.142.4':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.139.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.139.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.139.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.139.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.139.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.139.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.142.4-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.142.4-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.142.4-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.142.4-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.142.4-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.142.4-win32-x64'
 
-  '@openai/codex@0.139.0-darwin-arm64':
+  '@openai/codex@0.142.4-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.139.0-darwin-x64':
+  '@openai/codex@0.142.4-darwin-x64':
     optional: true
 
-  '@openai/codex@0.139.0-linux-arm64':
+  '@openai/codex@0.142.4-linux-arm64':
     optional: true
 
-  '@openai/codex@0.139.0-linux-x64':
+  '@openai/codex@0.142.4-linux-x64':
     optional: true
 
-  '@openai/codex@0.139.0-win32-arm64':
+  '@openai/codex@0.142.4-win32-arm64':
     optional: true
 
-  '@openai/codex@0.139.0-win32-x64':
+  '@openai/codex@0.142.4-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.5':
+  '@openclaw/crabline@0.1.6':
     dependencies:
       commander: 15.0.0
       curve25519-js: 0.0.4
@@ -10987,8 +10912,6 @@ snapshots:
 
   cjs-module-lexer@2.2.0: {}
 
-  clawpdf@0.2.0: {}
-
   clawpdf@0.3.0: {}
 
   cli-cursor@5.0.0:
@@ -11782,10 +11705,6 @@ snapshots:
   hookified@2.2.0: {}
 
   hosted-git-info@10.1.1:
-    dependencies:
-      lru-cache: 11.5.1
-
-  hosted-git-info@9.0.3:
     dependencies:
       lru-cache: 11.5.1
 
@@ -12940,86 +12859,10 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
-  openai@6.39.0(ws@8.21.0)(zod@4.4.3):
-    optionalDependencies:
-      ws: 8.21.0
-      zod: 4.4.3
-
   openai@6.39.1(ws@8.21.0)(zod@4.4.3):
     optionalDependencies:
       ws: 8.21.0
       zod: 4.4.3
-
-  openclaw@2026.5.28:
-    dependencies:
-      '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
-      '@anthropic-ai/sdk': 0.100.1(zod@4.4.3)
-      '@clack/core': 1.3.1
-      '@clack/prompts': 1.4.0
-      '@earendil-works/pi-tui': 0.76.0
-      '@google/genai': 2.6.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
-      '@grammyjs/runner': 2.0.3(grammy@1.43.0)
-      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.43.0)
-      '@homebridge/ciao': 1.3.9
-      '@lydell/node-pty': 1.2.0-beta.12
-      '@mistralai/mistralai': 2.2.5
-      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
-      '@mozilla/readability': 0.6.0
-      '@openclaw/fs-safe': 0.3.0
-      '@openclaw/proxyline': 0.3.3(undici@8.5.0)
-      '@silvia-odwyer/photon-node': 0.3.4
-      chalk: 5.6.2
-      chokidar: 5.0.0
-      clawpdf: 0.2.0
-      commander: 14.0.3
-      croner: 10.0.1
-      cross-spawn: 7.0.6
-      diff: 9.0.0
-      dotenv: 17.4.2
-      express: 5.2.1
-      file-type: 22.0.1
-      glob: 13.0.6
-      grammy: 1.43.0
-      highlight.js: 11.11.1
-      hosted-git-info: 9.0.3
-      ignore: 7.0.5
-      ipaddr.js: 2.4.0
-      jiti: 2.7.0
-      json5: 2.2.3
-      jszip: 3.10.1
-      kysely: 0.29.2
-      linkedom: 0.18.12
-      markdown-it: 14.2.0
-      minimatch: 10.2.5
-      node-edge-tts: 1.2.10
-      openai: 6.39.0(ws@8.21.0)(zod@4.4.3)
-      partial-json: 0.1.7
-      playwright-core: 1.60.0
-      proper-lockfile: 4.1.2
-      qrcode: 1.5.4
-      quickjs-wasi: 3.0.0
-      rastermill: 0.3.0
-      tar: 7.5.16
-      tree-sitter-bash: 0.25.1
-      tslog: 4.10.2
-      typebox: 1.1.39
-      typescript: 6.0.3
-      undici: 8.5.0
-      web-push: 3.6.7
-      web-tree-sitter: 0.26.9
-      ws: 8.21.0
-      yaml: 2.9.0
-      zod: 4.4.3
-    optionalDependencies:
-      sqlite-vec: 0.1.9
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - bufferutil
-      - canvas
-      - encoding
-      - supports-color
-      - tree-sitter
-      - utf-8-validate
 
   opus-decoder@0.7.11:
     dependencies:
@@ -13389,10 +13232,6 @@ snapshots:
   quickjs-wasi@3.0.0: {}
 
   range-parser@1.2.1: {}
-
-  rastermill@0.3.0:
-    dependencies:
-      '@silvia-odwyer/photon-node': 0.3.4
 
   rastermill@0.3.1:
     dependencies:

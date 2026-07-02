@@ -31,6 +31,7 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
@@ -515,6 +516,7 @@ export async function runPreparedReply(
   } = params;
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -605,12 +607,8 @@ export async function runPreparedReply(
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
-        cfg,
-        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
-        silentToken: SILENT_REPLY_TOKEN,
-        silentReplyPolicy: silentReplySettings.policy,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -774,16 +772,21 @@ export async function runPreparedReply(
     sourceReplyDeliveryMode,
   });
   const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
-  let prefixedBodyBase = await applySessionHints({
-    baseBody: effectiveBaseBody,
-    abortedLastRun,
-    sessionEntry,
-    sessionEntryHandle,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
-  });
+  // A commitment-only wake must not consume the one-shot aborted-run hint;
+  // that recovery context belongs to the next normal conversation turn.
+  let prefixedBodyBase =
+    heartbeatRunScope === "commitment-only"
+      ? effectiveBaseBody
+      : await applySessionHints({
+          baseBody: effectiveBaseBody,
+          abortedLastRun,
+          sessionEntry,
+          sessionEntryHandle,
+          sessionStore,
+          sessionKey,
+          storePath,
+          abortKey: command.abortKey,
+        });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -822,7 +825,7 @@ export async function runPreparedReply(
     transcriptCommandBody: string;
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
-    if (!useFastReplyRuntime) {
+    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
         sessionKey,
@@ -1247,6 +1250,7 @@ export async function runPreparedReply(
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
+          senderIsOwner: command.senderIsOwner,
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {

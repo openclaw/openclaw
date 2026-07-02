@@ -12,6 +12,13 @@ import {
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
 import {
+  addSubagentRunForTests,
+  leasePendingAgentSteeringItems,
+  releasePendingAgentSteeringItems,
+  resetSubagentRegistryForTests,
+} from "../../subagent-registry.js";
+import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
@@ -325,6 +332,70 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const availableTools = assembleParams.availableTools;
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
+  it("keeps pending parent steering queued during commitment-only runs", async () => {
+    const childRunId = "queued-child-run";
+    const frozenResultText = "queued child result for the next normal turn";
+    const endedAt = Date.now() - 1_000;
+    const pendingRun: SubagentRunRecord = {
+      runId: childRunId,
+      childSessionKey: `agent:main:subagent:${childRunId}`,
+      requesterSessionKey: sessionKey,
+      requesterDisplayKey: sessionKey,
+      task: "inspect the parent flow",
+      cleanup: "delete",
+      createdAt: endedAt - 1_000,
+      endedAt,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: frozenResultText },
+      delivery: {
+        status: "pending",
+        createdAt: endedAt + 1,
+        payload: {
+          requesterSessionKey: sessionKey,
+          requesterDisplayKey: sessionKey,
+          childSessionKey: `agent:main:subagent:${childRunId}`,
+          childRunId,
+          task: "inspect the parent flow",
+          endedAt,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          frozenResultText,
+        },
+      },
+    };
+    let submittedPrompt = "";
+    resetSubagentRegistryForTests({ persist: false });
+    addSubagentRunForTests(pendingRun);
+
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          bootstrapContextRunKind: "commitment-only",
+          trigger: "heartbeat",
+        },
+        sessionPrompt: async (_session, prompt) => {
+          submittedPrompt = prompt;
+        },
+      });
+
+      expect(submittedPrompt).not.toContain(frozenResultText);
+      const leaseId = "next-normal-turn";
+      const retained = leasePendingAgentSteeringItems({
+        requesterSessionKey: sessionKey,
+        leaseId,
+      });
+      expect(retained?.runIds).toEqual([childRunId]);
+      expect(retained?.prompt).toContain(frozenResultText);
+      releasePendingAgentSteeringItems({ runIds: [childRunId], leaseId });
+    } finally {
+      resetSubagentRegistryForTests({ persist: false });
+    }
   });
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
@@ -1860,7 +1931,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             "visible_reply_contract: message_tool_only",
             "Room context:\n#2001 Alice: lunch at 2?\n#2002 Bob: works",
             "Current event:\n#2003 Bob: hey claw summarize the plan",
-            "Treat this as observed room activity. Decide whether to act.",
+            "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
           ].join("\n\n"),
         },
         suppressNextUserMessagePersistence: true,
