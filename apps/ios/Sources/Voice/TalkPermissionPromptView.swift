@@ -34,7 +34,7 @@ struct TalkPermissionPromptView: View {
         VStack(alignment: .leading, spacing: self.style == .sheet ? 16 : 12) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: self.iconSystemName)
-                    .font(.title3.weight(.semibold))
+                    .font(OpenClawType.title3)
                     .foregroundStyle(self.requestIsPending ? OpenClawBrand.warn : OpenClawBrand.accent)
                     .frame(width: 28, height: 28)
 
@@ -42,7 +42,7 @@ struct TalkPermissionPromptView: View {
                     Text(self.titleText)
                         .font(self.style == .sheet ? .title3.weight(.semibold) : .headline)
                     Text(self.messageText)
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -50,7 +50,7 @@ struct TalkPermissionPromptView: View {
 
             if let failureMessage = self.state.failureMessage {
                 Label(failureMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(OpenClawBrand.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -58,7 +58,7 @@ struct TalkPermissionPromptView: View {
             if let requestId = self.state.requestId {
                 LabeledContent("Request ID") {
                     Text(requestId)
-                        .font(.caption.monospaced())
+                        .font(OpenClawType.monoSmall)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -92,13 +92,13 @@ struct TalkPermissionPromptView: View {
         .padding(self.style == .card || self.style == .sheet ? 16 : 0)
         .background {
             if self.style == .card || self.style == .sheet {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous)
                     .fill(.thinMaterial)
             }
         }
         .overlay {
             if self.style == .card || self.style == .sheet {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous)
                     .stroke(OpenClawBrand.accent.opacity(0.20), lineWidth: 1)
             }
         }

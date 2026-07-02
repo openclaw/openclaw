@@ -19,10 +19,10 @@ struct GatewayDiscoveryDebugLogView: View {
                 ForEach(self.gatewayController.discoveryDebugLog) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.formatTime(entry.ts))
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                         Text(entry.message)
-                            .font(.callout)
+                            .font(OpenClawType.callout)
                             .textSelection(.enabled)
                     }
                     .padding(.vertical, 4)

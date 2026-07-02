@@ -50,14 +50,14 @@ private struct NotificationPermissionGuidanceCard: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Notifications are off")
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 Text(
                     """
                     Exec approvals can only be reviewed while OpenClaw is open and connected.
 
                     Enable Notifications to receive approval notifications while OpenClaw is not open.
                     """)
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
