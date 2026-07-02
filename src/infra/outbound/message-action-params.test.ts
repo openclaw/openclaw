@@ -135,6 +135,19 @@ describe("message action media helpers", () => {
     });
   });
 
+  it("carries containerWorkdir through sandbox media policy", () => {
+    expect(
+      resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+        containerWorkdir: "/sandbox",
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+      containerWorkdir: "/sandbox",
+    });
+  });
+
   maybeIt("normalizes sandbox media lists and dedupes resolved workspace paths", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
     try {
@@ -184,6 +197,33 @@ describe("message action media helpers", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
   });
+
+  maybeIt(
+    "normalizes OpenShell /sandbox media params using configured containerWorkdir",
+    async () => {
+      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-openshell-"));
+      try {
+        const args: Record<string, unknown> = {
+          mediaUrl: " file:///sandbox/output/photo.png ",
+          fileUrl: "/sandbox/output/report.pdf",
+        };
+
+        await normalizeSandboxMediaParams({
+          args,
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot: ` ${sandboxRoot} `,
+            containerWorkdir: "/sandbox",
+          },
+        });
+
+        expect(args.mediaUrl).toBe(path.join(sandboxRoot, "output", "photo.png"));
+        expect(args.fileUrl).toBe(path.join(sandboxRoot, "output", "report.pdf"));
+      } finally {
+        await fs.rm(sandboxRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   maybeIt("normalizes extension event image sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-image-"));
