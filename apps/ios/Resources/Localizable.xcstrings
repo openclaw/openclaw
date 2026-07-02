@@ -817,12 +817,12 @@
         }
       }
     },
-    "Connect": {
+    "Connect to this Gateway": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connect"
+            "value": "Connect to this Gateway"
           }
         },
         "zh-CN": {
@@ -949,142 +949,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Anslut"
-          }
-        }
-      }
-    },
-    "Connect to a Gateway?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connect to a Gateway?"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接到网关？"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "要連線到 Gateway 嗎？"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conectar a um Gateway?"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mit einem Gateway verbinden?"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "¿Conectar a un Gateway?"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ゲートウェイに接続しますか？"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "게이트웨이에 연결할까요?"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se connecter à une passerelle ?"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "किसी गेटवे से कनेक्ट करें?"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "الاتصال ببوابة؟"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connettersi a un Gateway?"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bir Gateway’e bağlanılsın mı?"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Підключитися до шлюзу?"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hubungkan ke Gateway?"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Połączyć z Gateway?"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "เชื่อมต่อกับ Gateway หรือไม่?"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kết nối với Gateway?"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verbinden met een gateway?"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "به یک Gateway متصل شوید؟"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подключиться к шлюзу?"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ansluta till en gateway?"
           }
         }
       }
@@ -1633,12 +1497,12 @@
         }
       }
     },
-    "Don’t show this again": {
+    "Don't show this again": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Don’t show this again"
+            "value": "Don't show this again"
           }
         },
         "zh-CN": {
@@ -2857,142 +2721,6 @@
         }
       }
     },
-    "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled."
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未找到网关。请确保你的网关正在运行，并且已启用 Bonjour 发现。"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未找到任何 gateway。請確認你的 gateway 正在執行，且已啟用 Bonjour 探索。"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhum gateway encontrado ainda. Certifique-se de que seu gateway esteja em execução e que a descoberta Bonjour esteja ativada."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Noch keine Gateways gefunden. Stelle sicher, dass dein Gateway ausgeführt wird und die Bonjour-Erkennung aktiviert ist."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aún no se encontraron gateways. Asegúrate de que tu gateway esté en ejecución y que el descubrimiento Bonjour esté activado."
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ゲートウェイがまだ見つかりません。ゲートウェイが実行中で、Bonjour 検出が有効になっていることを確認してください。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "아직 게이트웨이를 찾을 수 없습니다. 게이트웨이가 실행 중이고 Bonjour 검색이 활성화되어 있는지 확인하세요."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune passerelle trouvée pour le moment. Assurez-vous que votre passerelle est en cours d’exécution et que la découverte Bonjour est activée."
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अभी तक कोई गेटवे नहीं मिला। सुनिश्चित करें कि आपका गेटवे चल रहा है और Bonjour डिस्कवरी सक्षम है।"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "لم يتم العثور على أي بوابات بعد. تأكد من أن بوابتك قيد التشغيل وأن اكتشاف Bonjour ممكّن."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun gateway trovato al momento. Assicurati che il gateway sia in esecuzione e che il rilevamento Bonjour sia abilitato."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Henüz gateway bulunamadı. Gateway’inizin çalıştığından ve Bonjour keşfinin etkin olduğundan emin olun."
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Шлюзів поки не знайдено. Переконайтеся, що ваш шлюз запущено, а виявлення Bonjour увімкнено."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Belum ada gateway yang ditemukan. Pastikan gateway Anda berjalan dan penemuan Bonjour diaktifkan."
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nie znaleziono jeszcze żadnych gatewayów. Upewnij się, że gateway działa i że wykrywanie Bonjour jest włączone."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ยังไม่พบ gateway ตรวจสอบให้แน่ใจว่า gateway ของคุณกำลังทำงานอยู่และเปิดใช้งานการค้นหา Bonjour แล้ว"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chưa tìm thấy gateway nào. Hãy đảm bảo gateway của bạn đang chạy và tính năng khám phá Bonjour được bật."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nog geen gateways gevonden. Zorg ervoor dat je gateway actief is en Bonjour-detectie is ingeschakeld."
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "هنوز هیچ gatewayای پیدا نشده است. مطمئن شوید gateway شما در حال اجراست و Bonjour discovery فعال است."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Шлюзы пока не найдены. Убедитесь, что ваш шлюз запущен и обнаружение Bonjour включено."
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inga gateways hittades ännu. Kontrollera att din gateway körs och att Bonjour-upptäckt är aktiverad."
-          }
-        }
-      }
-    },
     "Not now": {
       "localizations": {
         "en": {
@@ -3941,142 +3669,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Granska igen"
-          }
-        }
-      }
-    },
-    "Save": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "儲存"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Salvar"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Speichern"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Guardar"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "저장"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enregistrer"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "सहेजें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "حفظ"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Salva"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kaydet"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Зберегти"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Simpan"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zapisz"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "บันทึก"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lưu"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opslaan"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ذخیره"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сохранить"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Spara"
           }
         }
       }

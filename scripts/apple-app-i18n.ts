@@ -45,11 +45,9 @@ const CATALOGS = [
       "apps/ios/Sources/Gateway/GatewayProblemView.swift": ["Done"],
       "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
         "Close",
-        "Connect",
-        "Connect to a Gateway?",
+        "Connect to this Gateway",
         "Connecting…",
-        "Don’t show this again",
-        "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
+        "Don't show this again",
         "Not now",
         "Quick Setup",
       ],
@@ -59,7 +57,6 @@ const CATALOGS = [
         "Trust and connect",
         "Trust this gateway?",
       ],
-      "apps/ios/Sources/Onboarding/OnboardingWizardView.swift": ["Save"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
         "Approve",
