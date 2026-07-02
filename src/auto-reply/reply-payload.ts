@@ -2,6 +2,7 @@
 import type { ReplyToMode } from "../config/types.base.js";
 import type {
   InteractiveReply,
+  MessagePresentationBlock,
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
@@ -246,6 +247,16 @@ export type ReplyPayloadMetadata = {
   beforeAgentRunBlocked?: boolean;
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
+  /**
+   * Hidden structured outbound metadata produced by the response path.
+   * Plugins may consume this to render portable presentation controls without
+   * making a second model call or exposing metadata on the channel wire.
+   */
+  outboundMetadata?: ReplyPayloadOutboundMetadata;
+};
+
+export type ReplyPayloadOutboundMetadata = {
+  presentationBlocks?: readonly MessagePresentationBlock[];
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();

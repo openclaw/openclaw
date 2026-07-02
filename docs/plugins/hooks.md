@@ -130,6 +130,7 @@ observation-only.
 - `message_received` — observe inbound content, sender, thread, and metadata
 - **`message_sending`** — rewrite outbound content or cancel delivery
 - **`reply_payload_sending`** — mutate or cancel normalized reply payloads before delivery
+- **`outbound_payload_decorating`** — append portable presentation decorations before channel rendering
 - `message_sent` — observe outbound delivery success or failure
 - **`before_dispatch`** - inspect or rewrite an outbound dispatch before channel handoff
 - **`reply_dispatch`** - participate in the final reply-dispatch pipeline
@@ -466,6 +467,10 @@ Use message hooks for channel-level routing and delivery policy:
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects (including
   `presentation`, `delivery`, media refs, and text) or return `{ cancel: true }`.
+- `outbound_payload_decorating`: append portable `MessagePresentation` blocks to
+  a normalized outbound payload before channel rendering. Use it for additive
+  UI such as suggested actions or reply buttons when existing payload controls
+  must remain authoritative.
 - `message_sent`: observe final success or failure.
 
 For audio-only TTS replies, `content` may contain the hidden spoken transcript
@@ -501,6 +506,13 @@ Decision rules:
 - `reply_payload_sending` payloads do not expose runtime trust markers such as
   `trustedLocalMedia`; plugins can edit payload shape but cannot grant local
   media trust.
+- `outbound_payload_decorating` runs after `message_sending` and before channel
+  presentation rendering. It cannot cancel, rewrite text, replace the payload,
+  or overwrite existing controls; core appends valid portable blocks only when
+  the payload has no existing interactive controls.
+- `outbound_payload_decorating` events include hidden `outboundMetadata`
+  metadata when the response producer attached it to the payload. Plugins can
+  render those structured metadata values without making a second model call.
 - `message_sending` can return `cancelReason` and bounded `metadata` with a
   cancellation. New message lifecycle APIs expose this as a suppressed delivery
   outcome with reason `cancelled_by_message_sending_hook`; legacy direct

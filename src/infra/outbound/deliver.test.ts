@@ -3,6 +3,10 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -43,6 +47,9 @@ const hookMocks = vi.hoisted(() => ({
     ),
     runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
       async (event) => ({ payload: (event as { payload?: unknown }).payload }),
+    ),
+    runOutboundPayloadDecorating: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async () => undefined,
     ),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
@@ -308,6 +315,8 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
       payload: (event as { payload?: unknown }).payload,
     }));
+    hookMocks.runner.runOutboundPayloadDecorating.mockClear();
+    hookMocks.runner.runOutboundPayloadDecorating.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1772,6 +1781,196 @@ describe("deliverOutboundPayloads", () => {
           channel: "matrix",
         }),
       }),
+    );
+  });
+
+  it("runs outbound decorators before channel presentation rendering", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_payload_decorating",
+    );
+    hookMocks.runner.runOutboundPayloadDecorating.mockResolvedValueOnce({
+      decorations: {
+        presentationBlocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Yes", action: { type: "callback", value: "reply:yes" } },
+              { label: "Yes", action: { type: "callback", value: "reply:yes" } },
+              { label: "No", action: { type: "callback", value: "reply:no" } },
+            ],
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Yes", action: { type: "callback", value: "reply:yes" } }],
+          },
+        ],
+      },
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "sent",
+      roomId: "!room",
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "Choose one" }],
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        runId: "run-123",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+      session: { key: "agent:test:session" },
+    });
+
+    expect(hookMocks.runner.runOutboundPayloadDecorating).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "!room",
+        runId: "run-123",
+        sessionKey: "agent:test:session",
+      }),
+      expect.objectContaining({
+        channelId: "matrix",
+        conversationId: "!room",
+        sessionKey: "agent:test:session",
+      }),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("Choose one\n\n- Yes\n- No\n\n- Yes");
+  });
+
+  it("does not append decorator controls when payload already has portable controls", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_payload_decorating",
+    );
+    hookMocks.runner.runOutboundPayloadDecorating.mockResolvedValueOnce({
+      decorations: {
+        presentationBlocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Smart reply", action: { type: "callback", value: "smart" } }],
+          },
+        ],
+      },
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "sent",
+      roomId: "!room",
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "Existing action",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+              },
+            ],
+          },
+        },
+      ],
+      deps: { matrix: sendText },
+    });
+
+    expect(hookMocks.runner.runOutboundPayloadDecorating).toHaveBeenCalledTimes(1);
+    expect(requireMatrixSendCall(sendText)[1]).toBe("Existing action\n\n- Approve");
+  });
+
+  it("passes hidden outbound metadata through message_sending text rewrites", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) =>
+        hookName === "message_sending" || hookName === "outbound_payload_decorating",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValueOnce({ content: "Rewritten" });
+    hookMocks.runner.runOutboundPayloadDecorating.mockImplementationOnce(async (event) => ({
+      decorations: {
+        presentationBlocks: (
+          event as {
+            outboundMetadata?: { presentationBlocks?: unknown[] };
+          }
+        ).outboundMetadata?.presentationBlocks,
+      },
+      outboundMetadata: (
+        event as {
+          outboundMetadata?: { presentationBlocks?: unknown[] };
+        }
+      ).outboundMetadata,
+    }));
+    const afterDeliverPayload = vi.fn();
+    const payload = setReplyPayloadMetadata(
+      { text: "Original" },
+      {
+        beforeAgentRunBlocked: true,
+        outboundMetadata: {
+          presentationBlocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Use this", action: { type: "callback", value: "smart" } }],
+            },
+          ],
+        },
+      },
+    );
+    const sendText = vi.fn(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              afterDeliverPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [payload],
+    });
+
+    expect(hookMocks.runner.runOutboundPayloadDecorating).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outboundMetadata: {
+          presentationBlocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Use this", action: { type: "callback", value: "smart" } }],
+            },
+          ],
+        },
+      }),
+      expect.any(Object),
+    );
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("Rewritten\n\n- Use this");
+    const afterDeliveryPayload = requireMockCallArg(
+      afterDeliverPayload,
+      "afterDeliverPayload",
+    ).payload;
+    expect(getReplyPayloadMetadata(afterDeliveryPayload as object)?.beforeAgentRunBlocked).toBe(
+      true,
     );
   });
 

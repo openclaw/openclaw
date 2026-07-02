@@ -1,8 +1,13 @@
 // Outbound delivery core runs plugin hooks, queue durability, channel adapter
 // sends, commit hooks, diagnostics, transcript mirroring, and payload outcomes.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
   ChannelMessageAdapterShape,
@@ -35,6 +40,8 @@ import {
   hasReplyPayloadContent,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationControlValue,
+  type MessagePresentationBlock,
   type ReplyPayloadDeliveryPin,
 } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -771,10 +778,10 @@ function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload |
       return null;
     }
     if (text) {
-      return {
+      return copyReplyPayloadMetadata(payload, {
         ...payload,
         text: "",
-      };
+      });
     }
   }
   return payload;
@@ -794,15 +801,18 @@ function normalizePayloadsForChannelDelivery(
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
-        sanitizedPayload = {
+        sanitizedPayload = copyReplyPayloadMetadata(sanitizedPayload, {
           ...sanitizedPayload,
           text: handler.sanitizeText(sanitizedPayload),
-        };
+        });
       }
     }
-    const normalizedPayload = handler.normalizePayload
+    const adapterNormalizedPayload = handler.normalizePayload
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
+    const normalizedPayload = adapterNormalizedPayload
+      ? copyReplyPayloadMetadata(sanitizedPayload, adapterNormalizedPayload)
+      : null;
     const normalized = normalizedPayload
       ? normalizeEmptyPayloadForDelivery(
           stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
@@ -848,7 +858,7 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
 function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
   const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
   return stripped && typeof stripped === "object" && !Array.isArray(stripped)
-    ? (stripped as ReplyPayload)
+    ? copyReplyPayloadMetadata(payload, stripped as ReplyPayload)
     : payload;
 }
 
@@ -999,16 +1009,170 @@ async function renderPresentationForDelivery(
     : null;
   if (rendered) {
     const { presentation: _presentation, ...withoutPresentation } = rendered;
-    return withoutPresentation;
+    return copyReplyPayloadMetadata(payload, withoutPresentation);
   }
   const { presentation: _presentation, ...withoutPresentation } = payload;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...withoutPresentation,
     text: renderMessagePresentationFallbackText({
       text: payload.text,
       presentation: adaptedPresentation,
     }),
+  });
+}
+
+function presentationBlockHasControls(block: MessagePresentationBlock): boolean {
+  return block.type === "buttons" || block.type === "select";
+}
+
+function payloadHasExistingInteractiveControls(payload: ReplyPayload): boolean {
+  if (payload.interactive) {
+    return true;
+  }
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  return Boolean(presentation?.blocks.some(presentationBlockHasControls));
+}
+
+function buttonDedupeKey(button: {
+  label: string;
+  value?: string;
+  action?: Parameters<typeof resolveMessagePresentationControlValue>[0]["action"];
+  url?: string;
+  webApp?: { url: string };
+  web_app?: { url: string };
+}): string | undefined {
+  const controlValue = resolveMessagePresentationControlValue(button);
+  const webAppUrl = button.webApp?.url ?? button.web_app?.url;
+  const target = controlValue ?? button.url ?? webAppUrl;
+  return target ? `${button.label}\u0000${target}` : undefined;
+}
+
+function dedupeDecoratorBlocks(
+  blocks: readonly MessagePresentationBlock[],
+): MessagePresentationBlock[] {
+  const deduped: MessagePresentationBlock[] = [];
+  for (const block of blocks) {
+    if (block.type === "buttons") {
+      const seenButtons = new Set<string>();
+      const buttons = block.buttons.filter((button) => {
+        const key = buttonDedupeKey(button);
+        if (!key) {
+          return true;
+        }
+        if (seenButtons.has(key)) {
+          return false;
+        }
+        seenButtons.add(key);
+        return true;
+      });
+      if (buttons.length > 0) {
+        deduped.push({ ...block, buttons });
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      const seenOptions = new Set<string>();
+      const options = block.options.filter((option) => {
+        const value = resolveMessagePresentationControlValue(option);
+        const key = value ? `${option.label}\u0000${value}` : undefined;
+        if (!key) {
+          return true;
+        }
+        if (seenOptions.has(key)) {
+          return false;
+        }
+        seenOptions.add(key);
+        return true;
+      });
+      if (options.length > 0) {
+        deduped.push({ ...block, options });
+      }
+      continue;
+    }
+    deduped.push(block);
+  }
+  return deduped;
+}
+
+function appendOutboundPresentationBlocks(params: {
+  payload: ReplyPayload;
+  blocks: readonly MessagePresentationBlock[] | undefined;
+}): ReplyPayload {
+  if (!params.blocks?.length || payloadHasExistingInteractiveControls(params.payload)) {
+    return params.payload;
+  }
+  const decoration = normalizeMessagePresentation({ blocks: params.blocks });
+  if (!decoration?.blocks.length) {
+    return params.payload;
+  }
+  const blocks = dedupeDecoratorBlocks(decoration.blocks);
+  if (blocks.length === 0) {
+    return params.payload;
+  }
+  const currentPresentation = normalizeMessagePresentation(params.payload.presentation);
+  const nextPayload = {
+    ...params.payload,
+    presentation: {
+      ...(currentPresentation?.title ? { title: currentPresentation.title } : {}),
+      ...(currentPresentation?.tone ? { tone: currentPresentation.tone } : {}),
+      blocks: [...(currentPresentation?.blocks ?? []), ...blocks],
+    },
   };
+  return copyReplyPayloadMetadata(params.payload, nextPayload);
+}
+
+async function applyOutboundPayloadDecoratingHook(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  enabled: boolean;
+  payload: ReplyPayload;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  sessionKey?: string;
+  runId?: string;
+}): Promise<ReplyPayload> {
+  if (!params.enabled) {
+    return params.payload;
+  }
+  try {
+    const outboundMetadata = getReplyPayloadMetadata(params.payload)?.outboundMetadata;
+    const result = await params.hookRunner!.runOutboundPayloadDecorating(
+      {
+        payload: params.payload,
+        channel: params.channel,
+        to: params.to,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        ...(params.replyToId !== undefined ? { replyToId: params.replyToId } : {}),
+        ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        ...(outboundMetadata ? { outboundMetadata } : {}),
+      },
+      {
+        channelId: params.channel,
+        accountId: params.accountId ?? undefined,
+        conversationId: params.to,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      },
+    );
+    const decoratedPayload = appendOutboundPresentationBlocks({
+      payload: params.payload,
+      blocks: result?.decorations?.presentationBlocks,
+    });
+    if (!result?.outboundMetadata) {
+      return decoratedPayload;
+    }
+    const previousMetadata = getReplyPayloadMetadata(decoratedPayload);
+    return setReplyPayloadMetadata(decoratedPayload, {
+      ...previousMetadata,
+      outboundMetadata: result.outboundMetadata,
+    });
+  } catch {
+    // Decorators are additive and fail-open; outbound delivery should proceed.
+    return params.payload;
+  }
 }
 
 function createMessageSentEmitter(params: {
@@ -1146,23 +1310,24 @@ async function applyMessageSendingHook(params: {
     }
     if (params.payloadSummary.hookContent && !params.payloadSummary.text) {
       const spokenText = sendingResult.content;
+      const payload = copyReplyPayloadMetadata(params.payload, {
+        ...params.payload,
+        spokenText,
+      });
       return {
         cancelled: false,
         contentRewritten: true,
-        payload: {
-          ...params.payload,
-          spokenText,
-        },
+        payload,
         payloadSummary: {
           ...params.payloadSummary,
           hookContent: spokenText,
         },
       };
     }
-    const payload = {
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       text: sendingResult.content,
-    };
+    });
     return {
       cancelled: false,
       contentRewritten: true,
@@ -1593,6 +1758,8 @@ async function deliverOutboundPayloadsCore(
     mirrorGroupId,
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasOutboundPayloadDecoratingHooks =
+    hookRunner?.hasHooks("outbound_payload_decorating") ?? false;
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
@@ -1697,6 +1864,18 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       deliveryPayload = hookResult.payload;
+      deliveryPayload = await applyOutboundPayloadDecoratingHook({
+        hookRunner,
+        enabled: hasOutboundPayloadDecoratingHooks,
+        payload: deliveryPayload,
+        channel,
+        to,
+        accountId,
+        replyToId: resolveCurrentReplyTo(deliveryPayload).replyToId,
+        threadId: params.threadId,
+        sessionKey: sessionKeyForInternalHooks,
+        runId: params.replyPayloadSendingHook?.runId,
+      });
       const presentationHandler = await getDeliveryHandler(
         buildPayloadSummary(deliveryPayload).mediaUrls,
       );
