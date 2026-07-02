@@ -998,6 +998,10 @@ function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
+  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
+  if (authProfileFailoverFailure) {
+    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return {
@@ -1011,10 +1015,6 @@ function buildExternalRunFailureReply(
   });
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
-  }
-  const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
-  if (authProfileFailoverFailure) {
-    return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -3215,8 +3215,12 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
+      const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
       const providerRequestError =
-        !isBilling && !oauthRefreshFailure && !shouldSurfaceToControlUi
+        !isBilling &&
+        !oauthRefreshFailure &&
+        !hasAuthProfileFailoverFailure &&
+        !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
       const isTransientHttp = isTransientHttpError(message);

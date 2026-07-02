@@ -231,8 +231,9 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ profileId, credential }) =>
+  readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
+      store,
       profileId,
       credential,
     }),

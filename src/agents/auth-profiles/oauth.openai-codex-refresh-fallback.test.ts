@@ -216,6 +216,46 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fill an explicit empty default profile beside managed OpenAI OAuth", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "",
+            refresh: "",
+            expires: 0,
+          },
+          "openai:user@example.com": {
+            type: "oauth",
+            provider: "openai",
+            access: "managed-access-token",
+            refresh: "managed-refresh-token",
+            expires: Date.now() - 60_000,
+            accountId: "acct-managed",
+          },
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "codex-cli-access-token",
+      refresh: "codex-cli-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-codex",
+    });
+
+    await expect(resolveOpenAICodexProfile({ profileId, agentDir })).resolves.toBeNull();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+  });
+
   it("refreshes near-expiry openai credentials before hard expiry", async () => {
     const profileId = "openai:default";
     saveAuthProfileStore(

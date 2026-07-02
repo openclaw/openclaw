@@ -174,8 +174,21 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+function hasManagedProviderOAuth(
+  store: AuthProfileStore,
+  providerConfig: ExternalCliSyncProvider,
+): boolean {
+  return Object.values(store.profiles).some(
+    (credential) =>
+      credential?.type === "oauth" &&
+      listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
+      hasInlineOAuthTokenMaterial(credential),
+  );
+}
+
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
+  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   allowInlineOAuthTokenMaterial?: boolean;
@@ -183,6 +196,9 @@ export function readExternalCliBootstrapCredential(params: {
 }): OAuthCredential | null {
   const provider = resolveExternalCliSyncProvider(params);
   if (!provider) {
+    return null;
+  }
+  if (provider.bootstrapOnly && hasManagedProviderOAuth(params.store, provider)) {
     return null;
   }
   if (
@@ -258,15 +274,9 @@ function listScopedExternalCliProfileIds(params: {
   options?: ExternalCliAuthProfileOptions;
 }): string[] {
   const { options, providerConfig, store } = params;
-  const hasManagedProviderOAuth = Object.values(store.profiles).some(
-    (credential) =>
-      credential?.type === "oauth" &&
-      listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
-      hasInlineOAuthTokenMaterial(credential),
-  );
   // Bootstrap-only CLI state must not enter any sibling slot once OpenClaw
   // owns OAuth for the provider, regardless of how discovery was scoped.
-  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth) {
+  if (providerConfig.bootstrapOnly && hasManagedProviderOAuth(store, providerConfig)) {
     return [];
   }
 

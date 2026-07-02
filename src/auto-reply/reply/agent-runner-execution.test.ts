@@ -7305,6 +7305,7 @@ describe("runAgentTurnWithFallback", () => {
       new FailoverError("Auth profile failover exhausted for provider openai", {
         reason: "auth",
         provider: "openai",
+        status: 401,
         authProfileFailure: { allInCooldown: true },
         cause: new Error("invalid_grant"),
       }),

@@ -45,6 +45,7 @@ export type OAuthManagerAdapter = {
   ) => Promise<string>;
   refreshCredential: (credential: OAuthCredential) => Promise<OAuthCredentials | null>;
   readBootstrapCredential: (params: {
+    store: AuthProfileStore;
     profileId: string;
     credential: OAuthCredential;
   }) => OAuthCredential | null;
@@ -266,11 +267,13 @@ async function loadFreshStoredOAuthCredential(params: {
 
 /** Select local OAuth unless a safe external bootstrap credential should win. */
 export function resolveEffectiveOAuthCredential(params: {
+  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   readBootstrapCredential: OAuthManagerAdapter["readBootstrapCredential"];
 }): OAuthCredential {
   const imported = params.readBootstrapCredential({
+    store: params.store,
     profileId: params.profileId,
     credential: params.credential,
   });
@@ -534,6 +537,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
 
         const externallyManaged = adapter.readBootstrapCredential({
+          store,
           profileId: params.profileId,
           credential: cred,
         });
@@ -682,6 +686,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         credential: params.credential,
       }) ?? params.credential;
     const effectiveCredential = resolveEffectiveOAuthCredential({
+      store: params.store,
       profileId: params.profileId,
       credential: adoptedCredential,
       readBootstrapCredential: adapter.readBootstrapCredential,

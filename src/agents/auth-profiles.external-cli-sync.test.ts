@@ -300,6 +300,7 @@ describe("external cli oauth resolution", () => {
     );
 
     const credential = readExternalCliBootstrapCredential({
+      store: makeStore(),
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "openai" }),
     });
@@ -437,6 +438,7 @@ describe("external cli oauth resolution", () => {
     );
 
     const credential = readExternalCliBootstrapCredential({
+      store: makeStore(),
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "anthropic" }),
     });
