@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   applyQueryInstructionTemplate: (model: string, queryText: string): string => {
-    const normalizedModel = model.trim().toLowerCase().split("/").filter(Boolean).at(-1) ?? "";
+    const normalizedModel = model.trim().toLowerCase().split("/").findLast(Boolean) ?? "";
     if (
       normalizedModel === "qwen3-embedding" ||
       normalizedModel.startsWith("qwen3-embedding-") ||
