@@ -1,6 +1,5 @@
 // Tests dotenv file loading and environment merge behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
@@ -13,6 +12,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -156,13 +156,14 @@ function createManifestBackedProviderSnapshot(
 }
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
-  const cwdDir = path.join(base, "cwd");
-  const stateDir = path.join(base, "state");
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  await fs.mkdir(cwdDir, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
-  await run({ base, cwdDir, stateDir });
+  await withTempDir("openclaw-dotenv-test-", async (base) => {
+    const cwdDir = path.join(base, "cwd");
+    const stateDir = path.join(base, "state");
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(cwdDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await run({ base, cwdDir, stateDir });
+  });
 }
 
 describe("loadDotEnv", () => {
@@ -738,21 +739,22 @@ describe("loadCliDotEnv", () => {
 
   it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
-      const cwdDir = path.join(base, "cwd");
-      const legacyStateDir = path.join(base, ".clawdbot");
-      setTestEnvValue("HOME", base);
-      deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      delete process.env.OPENCLAW_TEST_FAST;
-      await fs.mkdir(cwdDir, { recursive: true });
-      await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
+      await withTempDir("openclaw-dotenv-legacy-", async (base) => {
+        const cwdDir = path.join(base, "cwd");
+        const legacyStateDir = path.join(base, ".clawdbot");
+        setTestEnvValue("HOME", base);
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+        delete process.env.OPENCLAW_TEST_FAST;
+        await fs.mkdir(cwdDir, { recursive: true });
+        await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
 
-      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-      delete process.env.LEGACY_ONLY;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.LEGACY_ONLY;
 
-      loadCliDotEnv({ quiet: true });
+        loadCliDotEnv({ quiet: true });
 
-      expect(process.env.LEGACY_ONLY).toBe("from-legacy");
+        expect(process.env.LEGACY_ONLY).toBe("from-legacy");
+      });
     });
   });
 

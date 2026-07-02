@@ -1,11 +1,10 @@
 // Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
-import fs from "node:fs/promises";
 import { createServer } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
 async function getFreePort(): Promise<number> {
@@ -30,34 +29,35 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
 
   it("resolves non-secret provider auth profile metadata", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
-    const agentDir = path.join(tempRoot, "agent");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-            accountId: "acct-openai-workspace",
+    await withTempDir("provider-auth-runtime-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agent");
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:chatgpt": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+              accountId: "acct-openai-workspace",
+            },
           },
         },
-      },
-      agentDir,
-    );
-
-    expect(
-      providerAuthRuntime.resolveProviderAuthProfileMetadata({
-        provider: "openai",
-        profileId: "openai:chatgpt",
         agentDir,
-      }),
-    ).toEqual({
-      profileId: "openai:chatgpt",
-      accountId: "acct-openai-workspace",
+      );
+
+      expect(
+        providerAuthRuntime.resolveProviderAuthProfileMetadata({
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          agentDir,
+        }),
+      ).toEqual({
+        profileId: "openai:chatgpt",
+        accountId: "acct-openai-workspace",
+      });
     });
   });
 
