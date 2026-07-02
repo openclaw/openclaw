@@ -1057,35 +1057,51 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
     };
-    assertAuthModeAllowedForModel({
+    const profileAuthAllowed = isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
-      profileId: resolvedProfileId,
       mode: result.mode,
     });
-    // When the resolved key is a provider-owned synthetic profile marker and
-    // the caller has not locked this profile, fall through to env/config
-    // resolution so provider-owned real credentials take precedence. The auth
-    // controller iterates profile candidates and passes each as an explicit
-    // profileId, so we cannot assume explicit === user-locked.
-    if (
-      !params.lockedProfile &&
-      shouldDeferSyntheticProfileAuth({
-        cfg,
+    // When the resolved auth profile is incompatible with the model API and
+    // the caller did not explicitly lock this profile, fall through to the
+    // remaining resolution path (auth.order, env, config) instead of failing
+    // immediately. This lets compaction and other inherited-profile callers
+    // skip incompatible profiles and continue through the configured auth
+    // order. User-locked profiles still fail fast.
+    if (!params.lockedProfile && !profileAuthAllowed) {
+      // fall through — skip this inherited profile and continue to
+      // auth.order iteration / env / config resolution below.
+    } else {
+      assertAuthModeAllowedForModel({
         provider,
-        resolvedApiKey: resolved.apiKey,
         modelApi: params.modelApi,
-      })
-    ) {
-      return resolveApiKeyForProvider({
-        ...params,
-        store,
-        profileId: undefined,
-        lockedProfile: true,
-      }) //
-        .catch(() => result);
+        profileId: resolvedProfileId,
+        mode: result.mode,
+      });
+      // When the resolved key is a provider-owned synthetic profile marker and
+      // the caller has not locked this profile, fall through to env/config
+      // resolution so provider-owned real credentials take precedence. The auth
+      // controller iterates profile candidates and passes each as an explicit
+      // profileId, so we cannot assume explicit === user-locked.
+      if (
+        !params.lockedProfile &&
+        shouldDeferSyntheticProfileAuth({
+          cfg,
+          provider,
+          resolvedApiKey: resolved.apiKey,
+          modelApi: params.modelApi,
+        })
+      ) {
+        return resolveApiKeyForProvider({
+          ...params,
+          store,
+          profileId: undefined,
+          lockedProfile: true,
+        }) //
+          .catch(() => result);
+      }
+      return result;
     }
-    return result;
   }
 
   if (cfg?.auth?.profiles || cfg?.auth?.order) {

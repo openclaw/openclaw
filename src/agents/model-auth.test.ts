@@ -1210,6 +1210,87 @@ describe("resolveApiKeyForProvider", () => {
     });
     expect(resolved.source).toContain("OLLAMA_API_KEY");
   });
+
+  it("falls through to auth.order when inherited token profile is incompatible with model API", async () => {
+    // Simulates compaction inheriting a token-profile (mode "token", not "api-key")
+    // that is incompatible with openai-responses (which requires api-key).
+    // The inherited profile is NOT locked, so the resolver should skip it and
+    // continue to auth.order.
+    const resolved = await withoutEnv("OPENAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "openai",
+        profileId: "openai:token-main",
+        modelApi: "openai-responses",
+        cfg: {
+          auth: {
+            order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+          },
+        },
+        store: {
+          version: 1,
+          order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+          profiles: {
+            "openai:token-main": {
+              type: "token",
+              provider: "openai",
+              token: "incompatible-token", // pragma: allowlist secret
+              expires: Date.now() + 86_400_000,
+            },
+            "openai:api-key-backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-backup-key", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    );
+
+    // Should fall through to the api-key backup profile (compatible with openai-responses)
+    expectAuthFields(resolved, {
+      apiKey: "sk-backup-key",
+      source: "profile:openai:api-key-backup",
+      mode: "api-key",
+    });
+  });
+
+  it("throws when user-locked OAuth profile is incompatible with model API", async () => {
+    // User-locked profiles must fail fast even when incompatible.
+    await expect(
+      withoutEnv("OPENAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:token-main",
+          lockedProfile: true,
+          modelApi: "openai-responses",
+          cfg: {
+            auth: {
+              order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+            },
+          },
+          store: {
+            version: 1,
+            order: { openai: ["openai:token-main", "openai:api-key-backup"] },
+            profiles: {
+              "openai:token-main": {
+                type: "token",
+                provider: "openai",
+                token: "incompatible-token", // pragma: allowlist secret
+                expires: Date.now() + 86_400_000,
+              },
+              "openai:api-key-backup": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-backup-key", // pragma: allowlist secret
+              },
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Auth profile "openai:token-main" uses token auth, but openai/openai-responses requires an OpenAI API key profile.',
+    );
+  });
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
