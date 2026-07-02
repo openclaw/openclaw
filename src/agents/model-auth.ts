@@ -44,6 +44,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -1236,6 +1237,7 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
   });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
+  let firstOAuthRefreshFailure: OAuthRefreshFailureError | null = null;
   for (const candidate of order) {
     try {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
@@ -1288,6 +1290,9 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (err instanceof OAuthRefreshFailureError) {
+        firstOAuthRefreshFailure ??= err;
+      }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
@@ -1330,6 +1335,10 @@ export async function resolveApiKeyForProvider(params: {
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
+  }
+
+  if (firstOAuthRefreshFailure) {
+    throw firstOAuthRefreshFailure;
   }
 
   const hasInlineConfiguredModels =

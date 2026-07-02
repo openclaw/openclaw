@@ -58,7 +58,7 @@ export type ResolvedOAuthAccess = {
 
 /** Refresh failure that preserves a redacted refreshed store and credential. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
-  readonly profileId: string;
+  override readonly profileId: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
@@ -88,6 +88,7 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
     super({
       provider: params.credential.provider,
+      profileId: params.profileId,
       message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
       cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
     });

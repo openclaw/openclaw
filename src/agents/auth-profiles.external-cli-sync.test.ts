@@ -333,6 +333,38 @@ describe("external cli oauth resolution", () => {
     );
   });
 
+  it("does not synthesize default Codex CLI auth beside a named local OpenAI OAuth profile", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(
+        "openai:user@example.com",
+        makeOAuthCredential({
+          provider: "openai",
+          access: "local-managed-access",
+          refresh: "local-managed-refresh",
+          expires: Date.now() - 5_000,
+          accountId: "acct-codex",
+          email: "user@example.com",
+        }),
+      ),
+      {
+        providerIds: ["openai"],
+      },
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({

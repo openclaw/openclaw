@@ -18,18 +18,21 @@ export type OAuthRefreshFailureReason =
 type OAuthRefreshFailure = {
   provider: string | null;
   reason: OAuthRefreshFailureReason | null;
+  profileId?: string | null;
 };
 
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
   readonly reason: OAuthRefreshFailureReason | null;
+  readonly profileId?: string;
 
-  constructor(params: { provider: string; message: string; cause?: unknown }) {
+  constructor(params: { provider: string; message: string; cause?: unknown; profileId?: string }) {
     super(params.message, { cause: params.cause });
     this.name = "OAuthRefreshFailureError";
     this.provider = params.provider;
     this.reason = classifyOAuthRefreshFailureReason(params.message);
+    this.profileId = params.profileId;
   }
 }
 
@@ -110,9 +113,12 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   if (!(err instanceof OAuthRefreshFailureError)) {
     return null;
   }
+  const provider = sanitizeOAuthRefreshFailureProvider(err.provider);
+  const profileId = provider ? sanitizeOAuthRefreshFailureProfileId(err.profileId, provider) : null;
   return {
-    provider: sanitizeOAuthRefreshFailureProvider(err.provider),
+    provider,
     reason: err.reason,
+    ...(profileId ? { profileId } : {}),
   };
 }
 

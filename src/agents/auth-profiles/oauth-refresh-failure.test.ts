@@ -46,6 +46,22 @@ describe("oauth refresh failure hints", () => {
     });
   });
 
+  it("retains a safe profile id from typed refresh failures", () => {
+    expect(
+      classifyOAuthRefreshFailureError(
+        new OAuthRefreshFailureError({
+          provider: "openai",
+          profileId: "openai:user@example.com",
+          message: "invalid_grant",
+        }),
+      ),
+    ).toEqual({
+      provider: "openai",
+      reason: "invalid_grant",
+      profileId: "openai:user@example.com",
+    });
+  });
+
   it("classifies token invalidation refresh failures", () => {
     expect(
       classifyOAuthRefreshFailure(

@@ -168,9 +168,9 @@ At runtime:
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
   `openai:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical. If the local Codex refresh fails and Codex CLI has a
-  usable token for the same account, OpenClaw may use that token for the current
-  runtime request without writing it back to `auth-profiles.json`.
+  profile canonical. If the local Codex refresh fails, OpenClaw reports that
+  the profile needs reauth instead of using an external CLI token for the
+  current runtime request.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

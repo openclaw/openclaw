@@ -578,6 +578,51 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
   });
 
+  it("does not fail over from a named managed OpenAI profile to runtime Codex CLI default auth", async () => {
+    const profileId = "openai:user@example.com";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "expired-managed-access-token",
+            refresh: "managed-refresh-token",
+            expires: Date.now() - 60_000,
+            accountId: "acct-shared",
+            email: "user@example.com",
+          },
+        },
+      },
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "codex-cli-access-token",
+      refresh: "codex-cli-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-shared",
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
+      );
+    });
+
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "openai",
+        agentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai/);
+
+    const persisted = await readPersistedStore(agentDir);
+    expect(JSON.stringify(persisted)).not.toContain("codex-cli-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
+  });
+
   it("does not use same-account Codex CLI credentials for named Codex profiles after forced local refresh fails", async () => {
     const profileId = "openai:user@example.com";
     saveAuthProfileStore(

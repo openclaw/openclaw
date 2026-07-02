@@ -988,7 +988,9 @@ function buildExternalRunFailureReply(
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
+      profileId: oauthRefreshFailure.profileId,
+    });
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
     const channelLoginHint = supportsCodexLogin

@@ -7126,6 +7126,26 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("includes the affected OAuth profile in typed gateway reauth guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "openai",
+        profileId: "openai:user@example.com",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai --profile-id openai:user@example.com` in a terminal, then try again.",
+      );
+    }
+  });
+
   it("keeps non-OpenAI OAuth refresh failures on provider-specific terminal guidance", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({
