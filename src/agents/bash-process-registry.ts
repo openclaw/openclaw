@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
@@ -270,7 +271,7 @@ export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return text.slice(text.length - max);
+  return sliceUtf16Safe(text, text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {
