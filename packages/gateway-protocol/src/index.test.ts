@@ -211,7 +211,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at root: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at root: unexpected property "token"');
   });
 
   it("formats additionalProperties with instancePath", () => {
@@ -221,7 +221,7 @@ describe("formatValidationErrors", () => {
       params: { additionalProperty: "token" },
     });
 
-    expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
+    expect(formatValidationErrors([err])).toBe('at /auth: unexpected property "token"');
   });
 
   it("formats message with path for other errors", () => {
@@ -232,6 +232,16 @@ describe("formatValidationErrors", () => {
     });
 
     expect(formatValidationErrors([err])).toBe("at /auth: must have required property 'token'");
+  });
+
+  it("formats required-property misses with JSON-compatible double quotes", () => {
+    const err = makeError({
+      keyword: "required",
+      instancePath: "/auth",
+      params: { missingProperty: "token" },
+    });
+
+    expect(formatValidationErrors([err])).toBe('at /auth: must have required property "token"');
   });
 
   it("de-dupes repeated entries", () => {
@@ -352,7 +362,7 @@ describe("validateTalkClientCreateParams", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
-      "unexpected property 'instructions'",
+      'unexpected property "instructions"',
     );
   });
 });
@@ -487,7 +497,7 @@ describe("validateTalkSession", () => {
       }),
     ).toBe(false);
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
-      "unexpected property 'instructionsOverride'",
+      'unexpected property "instructionsOverride"',
     );
   });
 

@@ -433,6 +433,7 @@ export type PluginHookAfterCompactionEvent = {
   tokenCount?: number;
   compactedCount: number;
   sessionFile?: string;
+  reason?: string;
 };
 
 export type PluginHookInboundClaimResult = {

@@ -131,6 +131,7 @@ type CompactionHookRunner = {
       tokenCount?: number;
       compactedCount: number;
       sessionFile: string;
+      reason?: string;
     },
     context: {
       sessionId: string;
@@ -296,6 +297,7 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  reason?: string;
   onHookMessages?: (payload: {
     phase: "after";
     messages: string[];
@@ -314,6 +316,7 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      ...(params.reason !== undefined ? { reason: params.reason } : {}),
     });
     await triggerInternalHook(hookEvent);
     if (hookEvent.messages.length > 0) {
@@ -338,6 +341,7 @@ export async function runAfterCompactionHooks(params: {
           tokenCount: params.tokensAfter,
           compactedCount: params.compactedCount,
           sessionFile: params.sessionFile,
+          ...(params.reason !== undefined ? { reason: params.reason } : {}),
         },
         {
           sessionId: params.sessionId,
