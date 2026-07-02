@@ -668,18 +668,6 @@ function parseSessionTimestampMs(
   return 0;
 }
 
-function parseRecordTimestampMs(record: unknown): number {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return 0;
-  }
-  const candidate = record as { message?: unknown; timestamp?: unknown };
-  const message =
-    candidate.message && typeof candidate.message === "object" && !Array.isArray(candidate.message)
-      ? (candidate.message as { timestamp?: unknown })
-      : {};
-  return parseSessionTimestampMs(candidate, message);
-}
-
 function serializeTranscriptEvent(record: unknown): string | null {
   const serialized = JSON.stringify(record);
   return typeof serialized === "string" ? serialized : null;
@@ -690,14 +678,6 @@ function serializeTranscriptEvents(records: readonly unknown[]): string {
     .map(serializeTranscriptEvent)
     .filter((line): line is string => line !== null)
     .join("\n");
-}
-
-function resolveMaxRecordTimestampMs(records: readonly unknown[]): number {
-  let max = 0;
-  for (const record of records) {
-    max = Math.max(max, parseRecordTimestampMs(record));
-  }
-  return max;
 }
 
 function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): number {

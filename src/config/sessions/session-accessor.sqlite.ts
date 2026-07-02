@@ -972,6 +972,11 @@ function loadSqliteTranscriptEventsFromDatabase(
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
+function sqliteTranscriptJsonlByteSize() {
+  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
+    + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
+}
+
 /** Reads transcript freshness and byte size without materializing event rows. */
 export function readSqliteTranscriptStatsSync(
   scope: SessionTranscriptReadScope,
@@ -986,8 +991,7 @@ export function readSqliteTranscriptStatsSync(
       .select((eb) => [
         eb.fn.count<number>("seq").as("event_count"),
         eb.fn.max<number>("seq").as("max_seq"),
-        sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
-          + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes"),
+        sqliteTranscriptJsonlByteSize(),
       ])
       .where("session_id", "=", resolved.sessionId),
   );
@@ -1993,6 +1997,14 @@ function sumTranscriptEventJsonBytes() {
   );
 }
 
+function sumSessionEntryJsonBytes() {
+  return (
+    // kysely-allow-raw: SQLite byte accounting needs LENGTH(CAST(... AS BLOB)),
+    // which Kysely does not expose as a typed aggregate helper.
+    sql<number | bigint>`COALESCE(SUM(length(CAST(entry_json AS BLOB))), 0)`.as("entry_json_bytes")
+  );
+}
+
 function readSqliteSessionRowBytes(database: OpenClawAgentDatabase): {
   entryBytesByKey: Map<string, number>;
   transcriptBytesBySessionId: Map<string, number>;
@@ -2024,6 +2036,27 @@ function readSqliteSessionRowBytes(database: OpenClawAgentDatabase): {
 
 function getSqliteSessionEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
+}
+
+function hasSqliteSessionDiskBudgetOverflow(
+  database: OpenClawAgentDatabase,
+  maintenance: ResolvedSessionMaintenanceConfig,
+): boolean {
+  if (maintenance.maxDiskBytes == null || maintenance.highWaterBytes == null) {
+    return false;
+  }
+  const db = getSessionKysely(database.db);
+  const entryRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("session_entries").select(sumSessionEntryJsonBytes()),
+  );
+  const transcriptRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("transcript_events").select(sumTranscriptEventJsonBytes()),
+  );
+  const entryBytes = normalizeSqliteNumber(entryRow?.entry_json_bytes ?? 0);
+  const transcriptBytes = normalizeSqliteNumber(transcriptRow?.event_json_bytes ?? 0);
+  return entryBytes + transcriptBytes > maintenance.maxDiskBytes;
 }
 
 function applySqliteSessionDiskBudget(params: {
@@ -2277,10 +2310,12 @@ function applySqliteSessionEntryMaintenance(
     maintenance.pruneAfterMs,
     preserveCandidateKeys,
   );
+  const hasDiskBudgetOverflow = hasSqliteSessionDiskBudgetOverflow(database, maintenance);
   const shouldLoadStore =
     params.forceMaintenance === true ||
     entryCount > maintenance.maxEntries ||
     hasStaleCandidate ||
+    hasDiskBudgetOverflow ||
     shouldRunModelRunPrune({
       maintenance,
       entryCount,
