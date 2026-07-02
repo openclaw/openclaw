@@ -48,5 +48,5 @@ export function renderIMessagePollBody(poll: IMessagePoll): string | null {
     })
     .join("  ");
   const question = poll.question?.trim();
-  return `\u{1F4CA} Poll${question ? `: ${question}` : ""} — options: ${optionList}. Cast your vote with the poll-vote action (pollOptionIndex = the option number); do not answer in a text reply.`;
+  return `\u{1F4CA} Poll${question ? `: ${question}` : ""} — options: ${optionList}. Cast your vote on this poll with the poll-vote action (pollOptionIndex = the option number); do not answer in a text reply.`;
 }
