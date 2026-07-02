@@ -191,11 +191,12 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
       maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
       scopeKey: "",
       cleanupSource: "rename",
-      cleanupWhenEmpty: true,
       readEntries: () => {
         const store = readLegacyThreadBindingsStore(threadBindingsSourcePath);
         if (!store) {
-          // Malformed or shape-incompatible legacy store; skip rather than block doctor.
+          // Malformed or shape-incompatible legacy store; skip rather than block
+          // doctor. cleanupWhenEmpty is false so the source file is left in place
+          // instead of being renamed away with no data migrated.
           return [];
         }
         if (store.version !== 1 || !store.bindings || typeof store.bindings !== "object") {

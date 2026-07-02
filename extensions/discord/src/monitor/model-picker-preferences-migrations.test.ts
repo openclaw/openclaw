@@ -281,7 +281,7 @@ describe("Discord model picker preference migration", () => {
     if (plan?.kind !== "plugin-state-import") {
       throw new Error("expected plugin-state import plan");
     }
-    expect(plan.cleanupWhenEmpty).toBe(true);
+    expect(plan.cleanupWhenEmpty).toBeFalsy();
     expect(plan.readEntries()).toEqual([]);
   });
 
