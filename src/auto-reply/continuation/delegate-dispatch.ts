@@ -102,6 +102,7 @@ function armHedgeTimer(
     maxChainLength: number;
     config?: ContinuationRuntimeConfig;
     loadFreshChainState?: () => ChainState;
+    applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
   },
 ): void {
@@ -135,6 +136,11 @@ function armHedgeTimer(
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
       loadFreshChainState: params.loadFreshChainState,
+      // Carry the recovery fold flag across the hedge: a recovered delayed
+      // delegate annotated with `chainTokensFold` after a child chain-cost
+      // persist failure must still be checked against the folded (not stale)
+      // basis when its delay elapses and the hedge re-dispatches it (#1144).
+      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
     })
       .then(async (result) => {
@@ -270,6 +276,7 @@ export async function dispatchToolDelegates(params: {
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
       loadFreshChainState: params.loadFreshChainState,
+      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
     });
   } else {

@@ -590,6 +590,42 @@ describe("hedge timer ref/handle cleanup", () => {
       }),
     );
   });
+
+  it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate (#1144)", async () => {
+    const sessionKey = "session-hedge-fold";
+    // A delayed delegate annotated with a durable fold after a child chain-cost
+    // persist failure, recovered as not-yet-due so it arms the hedge.
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop",
+      delayMs: 60_000,
+      chainTokensFold: 250_000,
+    });
+
+    const armed = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 300_000,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig({ costCapTokens: 500_000 }),
+      recoverRunningDelegates: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+      applyDelegateChainTokensFold: true,
+    });
+    expect(armed.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // When the hedge fires, the fold flag is carried through: 300_000 (stale
+    // basis) + 250_000 (durable fold) = 550_000 > costCapTokens (500_000) →
+    // rejected. Without forwarding the flag the hedge would check 300_000 and
+    // wrongly launch the over-budget hop.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("tool delegate dispatch contract", () => {
