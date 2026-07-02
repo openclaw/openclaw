@@ -1,4 +1,5 @@
 // Control UI module implements main behavior.
+import "./array-copy-method-polyfills.ts";
 import "./styles.css";
 import "./ui/app.ts";
 import { inferControlUiPublicAssetPath } from "./ui/public-assets.ts";
