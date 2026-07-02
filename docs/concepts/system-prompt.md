@@ -185,13 +185,12 @@ Codex developer instructions. The compact OpenClaw skills list is also forwarded
 as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
 not injected; heartbeat turns get a collaboration-mode note pointing to the file
 when it exists and is non-empty. `MEMORY.md` content from the configured agent
-workspace is not pasted into every native Codex turn; when memory tools are
-available for that workspace, Codex turns get a small workspace-memory note in
-turn-scoped collaboration developer instructions and should use `memory_search`
-or `memory_get` when durable memory is relevant. If tools are disabled, memory
-search is unavailable, or the active workspace differs from the agent memory
-workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
-`BOOTSTRAP.md` content keeps the normal turn-context role for now.
+workspace uses the normal bounded turn-context path for native Codex turns, even
+when memory tools are available for that workspace. The injected root memory is
+intended for sparse bootstrap facts; Codex should still use `memory_search` or
+`memory_get` when durable memory is relevant beyond that bounded bootstrap
+context. Active `BOOTSTRAP.md` content keeps the normal turn-context role for
+now.
 
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
@@ -217,12 +216,10 @@ default: `always`). Detailed raw/injected counts stay in diagnostics such as
 `/context`, `/status`, doctor, and logs.
 
 For memory files, truncation is not data loss: the file remains intact on disk.
-On native Codex, `MEMORY.md` is read on demand through memory tools when
-available, with bounded prompt fallback when tools cannot run. On other
-harnesses, the model only sees the shortened injected copy until it reads or
-searches memory directly. If `MEMORY.md` is repeatedly truncated there, distill
-it into a shorter durable summary and move detailed history into `memory/*.md`,
-or intentionally raise the bootstrap limits.
+Native Codex and other harnesses see the shortened injected root `MEMORY.md`
+copy until they read or search memory directly. If `MEMORY.md` is repeatedly
+truncated, distill it into a shorter durable summary and move detailed history
+into `memory/*.md`, or intentionally raise the bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).
