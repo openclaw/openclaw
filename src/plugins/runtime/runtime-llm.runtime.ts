@@ -6,6 +6,7 @@ import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -215,6 +216,54 @@ function buildUsage(params: {
     ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
+}
+
+function hasDiagnosticUsage(usage: LlmCompleteUsage): boolean {
+  return Boolean(
+    usage.inputTokens ||
+    usage.outputTokens ||
+    usage.cacheReadTokens ||
+    usage.cacheWriteTokens ||
+    usage.totalTokens ||
+    usage.costUsd,
+  );
+}
+
+function emitLlmCompleteUsageDiagnostic(params: {
+  cfg: OpenClawConfig;
+  usage: LlmCompleteUsage;
+  sessionKey?: string;
+  agentId: string;
+  pluginId?: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+}) {
+  if (!isDiagnosticsEnabled(params.cfg) || !hasDiagnosticUsage(params.usage)) {
+    return;
+  }
+  const promptTokens =
+    (params.usage.inputTokens ?? 0) +
+    (params.usage.cacheReadTokens ?? 0) +
+    (params.usage.cacheWriteTokens ?? 0);
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    agentId: params.agentId,
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    provider: params.provider,
+    model: params.model,
+    usage: {
+      input: params.usage.inputTokens ?? 0,
+      output: params.usage.outputTokens ?? 0,
+      cacheRead: params.usage.cacheReadTokens ?? 0,
+      cacheWrite: params.usage.cacheWriteTokens ?? 0,
+      promptTokens,
+      total: params.usage.totalTokens ?? promptTokens + (params.usage.outputTokens ?? 0),
+    },
+    ...(params.usage.costUsd !== undefined ? { costUsd: params.usage.costUsd } : {}),
+    durationMs: params.durationMs,
+  });
 }
 
 function finiteOption(value: number | undefined): number | undefined {
@@ -441,6 +490,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         }),
       };
 
+      const completionStartedAt = Date.now();
       const result = await completeWithPreparedSimpleCompletionModel({
         model: prepared.model,
         auth: prepared.auth,
@@ -474,6 +524,16 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
         usage,
+      });
+      emitLlmCompleteUsageDiagnostic({
+        cfg,
+        usage,
+        sessionKey: options.authority?.sessionKey,
+        agentId,
+        pluginId: pluginPolicyId,
+        provider: prepared.selection.provider,
+        model: prepared.selection.modelId,
+        durationMs: Date.now() - completionStartedAt,
       });
 
       return {

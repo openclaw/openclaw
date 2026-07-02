@@ -361,7 +361,7 @@ describe("diagnostics-prometheus service", () => {
     const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
-      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",plugin="none",provider="openai",token_type="input"} 12',
     );
     expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
   });
@@ -700,6 +700,7 @@ describe("diagnostics-prometheus service", () => {
       {
         ...baseEvent(),
         type: "model.usage",
+        pluginId: "lossless-claw",
         provider: "openai",
         model: "gpt-5.4",
         usage: { input: 12, output: 3, total: 15 },
@@ -718,7 +719,7 @@ describe("diagnostics-prometheus service", () => {
       },
     ]);
     expect(exporter.render()).toContain(
-      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",plugin="lossless-claw",provider="openai",token_type="input"} 12',
     );
 
     exporter.service.stop?.();

@@ -1,7 +1,12 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
@@ -142,10 +147,16 @@ function primeCompletionMocks() {
 
 describe("runtime.llm.complete", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
     primeCompletionMocks();
+  });
+
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
+    vi.restoreAllMocks();
   });
 
   it("binds context-engine completions to the active session agent", async () => {
@@ -456,6 +467,39 @@ describe("runtime.llm.complete", () => {
     });
   });
 
+  it("attributes context-engine usage diagnostics to the owning plugin policy", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event, metadata) => {
+      if (metadata.trusted && event.type === "model.usage") {
+        events.push(event);
+      }
+    });
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    try {
+      await runtimeContext.llm!.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      });
+    } finally {
+      stop();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "model.usage",
+      sessionKey: "agent:main:session:abc",
+      agentId: "main",
+      pluginId: "lossless-claw",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+  });
+
   it("allows the bound context-engine agent and denies cross-agent overrides", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,
@@ -639,6 +683,86 @@ describe("runtime.llm.complete", () => {
       caller: { kind: "plugin", id: "trusted-plugin" },
       purpose: "identity-test",
     });
+  });
+
+  it("emits model usage diagnostics for scoped plugin completions", async () => {
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(900)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_250);
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event, metadata) => {
+      if (metadata.trusted && event.type === "model.usage") {
+        events.push(event);
+      }
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+        sessionKey: "agent:main:session:abc",
+      },
+    });
+
+    try {
+      await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      );
+    } finally {
+      stop();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "model.usage",
+      sessionKey: "agent:main:session:abc",
+      agentId: "main",
+      pluginId: "trusted-plugin",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        promptTokens: 18,
+        total: 25,
+      },
+      costUsd: 0.0042,
+      durationMs: 250,
+    });
+  });
+
+  it("honors disabled diagnostics config for plugin completion usage", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event, metadata) => {
+      if (metadata.trusted && event.type === "model.usage") {
+        events.push(event);
+      }
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        diagnostics: { enabled: false },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    try {
+      await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      );
+    } finally {
+      stop();
+    }
+
+    expect(events).toHaveLength(0);
   });
 
   it("denies plugin model overrides by default", async () => {
