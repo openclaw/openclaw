@@ -8,6 +8,8 @@ import {
   type GatewayClientName,
 } from "../../utils/message-channel.js";
 
+export const DEFAULT_OUTBOUND_MESSAGE_GATEWAY_TIMEOUT_MS = 75_000;
+
 /** Raw gateway options accepted by outbound message senders. */
 export type OutboundMessageGatewayOptionsInput = {
   url?: string;
@@ -30,7 +32,10 @@ export function resolveOutboundMessageGatewayOptions(gateway?: OutboundMessageGa
   return {
     url,
     token: gateway?.token,
-    timeoutMs: resolveTimerTimeoutMs(gateway?.timeoutMs, 10_000),
+    timeoutMs: resolveTimerTimeoutMs(
+      gateway?.timeoutMs,
+      DEFAULT_OUTBOUND_MESSAGE_GATEWAY_TIMEOUT_MS,
+    ),
     clientName,
     clientDisplayName: gateway?.clientDisplayName,
     mode,
