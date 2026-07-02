@@ -61,7 +61,7 @@ type DiscordSendOpts = {
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 
-const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 25;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
 

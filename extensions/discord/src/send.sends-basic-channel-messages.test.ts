@@ -590,7 +590,7 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expectBodyFileName(requireRestBody(postMock), "photo.jpg");
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
-      maxBytes: 100 * 1024 * 1024,
+      maxBytes: 25 * 1024 * 1024,
     });
   });
 
@@ -712,6 +712,41 @@ describe("sendMessageDiscord", () => {
     });
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");
+  });
+
+  it("falls back to text-only when Discord returns 413 for oversized media", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(Object.assign(new Error("Request entity too large"), { status: 413 }))
+      .mockResolvedValueOnce({ id: "msg", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/large.bin",
+    });
+    expect(res.messageId).toBe("msg");
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const fallbackBody = requireRestBody(postMock, 1);
+    expect(fallbackBody.content).toContain("hello");
+    expect(fallbackBody.content).toContain("exceeds Discord's upload size limit");
+    expect(fallbackBody).not.toHaveProperty("files");
+  });
+
+  it("re-throws non-413 media send errors without fallback", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockRejectedValueOnce(Object.assign(new Error("Bad Request"), { status: 400 }));
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/large.bin",
+      }),
+    ).rejects.toThrow("Bad Request");
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 });
 

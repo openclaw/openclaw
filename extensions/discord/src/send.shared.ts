@@ -420,10 +420,33 @@ async function sendDiscordMedia(
       },
     ],
   });
-  const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
-    "media",
-  )) as { id: string; channel_id: string };
+  let res: { id: string; channel_id: string };
+  try {
+    res = (await request(
+      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      "media",
+    )) as { id: string; channel_id: string };
+  } catch (err) {
+    if (getDiscordErrorStatus(err) === 413) {
+      const sizeNote = "⚠️ Attachment could not be delivered — it exceeds Discord's upload size limit.";
+      const fallbackText = text ? `${text}\n\n${sizeNote}` : sizeNote;
+      return sendDiscordText(
+        rest,
+        channelId,
+        fallbackText,
+        replyTo,
+        request,
+        maxLinesPerMessage,
+        components,
+        embeds,
+        chunkMode,
+        silent,
+        suppressEmbeds,
+        maxChars,
+      );
+    }
+    throw err;
+  }
   await onResult?.(res, "media");
   const platformMessageIds = res.id ? [res.id] : [];
   for (const chunk of chunks.slice(1)) {
