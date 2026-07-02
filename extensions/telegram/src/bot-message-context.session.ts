@@ -20,7 +20,11 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildHistoryContextFromEntries,
+  createChannelHistoryWindow,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -52,10 +56,9 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
-  type TelegramGroupHistoryContextMode,
-  includesRecentTelegramGroupHistoryContext,
-  resolveTelegramGroupHistoryContextModeForAccount,
-} from "./group-history-context.js";
+  recordTelegramGroupHistoryEntry,
+  selectTelegramGroupHistoryAfterLastSelf,
+} from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
@@ -170,6 +173,23 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
+function formatTelegramGroupHistoryEntry(params: {
+  entry: HistoryEntry;
+  groupLabel: string;
+  chatId: number | string;
+  envelopeOptions: ReturnType<typeof resolveEnvelopeFormatOptions>;
+}): string {
+  return formatInboundEnvelope({
+    channel: "Telegram",
+    from: params.groupLabel,
+    timestamp: params.entry.timestamp,
+    body: `${params.entry.body} [id:${params.entry.messageId ?? "unknown"} chat:${params.chatId}]`,
+    chatType: "group",
+    senderLabel: params.entry.sender,
+    envelope: params.envelopeOptions,
+  });
+}
+
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
@@ -192,7 +212,6 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
@@ -243,7 +262,6 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
@@ -408,31 +426,50 @@ export async function buildTelegramInboundContextPayload(params: {
     envelope: envelopeOptions,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
-  const includeRecentGroupHistoryContext =
-    isGroup &&
-    includesRecentTelegramGroupHistoryContext(
-      groupHistoryContextMode ??
-        resolveTelegramGroupHistoryContextModeForAccount({
-          cfg,
-          accountId: route.accountId,
-        }),
-    );
+  const hasGroupHistoryContext = isGroup;
+  const commandBody = normalizeCommandBody(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
+  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
+    cfg,
+    agentId: route.agentId,
+  });
+  const hasAbortRequest = isAbortRequestText(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
+  const conversationKind = isGroup ? "group" : "direct";
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: conversationKind },
+    unmentionedGroupPolicy,
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand,
+    hasAbortRequest,
+    commandSource,
+  });
   let combinedBody = body;
-  if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
-    combinedBody = channelHistory.buildPendingContext({
-      historyKey,
-      limit: historyLimit,
+  let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
+  if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
+    const fullGroupHistoryEntries = (groupHistories.get(historyKey) ?? []).slice(-historyLimit);
+    watermarkedGroupHistoryEntries =
+      selectTelegramGroupHistoryAfterLastSelf(fullGroupHistoryEntries).slice(-historyLimit);
+    // User-request turns use a non-destructive self-entry watermark. Room events
+    // are not session-persisted, so clearing this window loses ambient context.
+    const bodyHistoryEntries =
+      inboundEventKind === "room_event" ? fullGroupHistoryEntries : watermarkedGroupHistoryEntries;
+    combinedBody = buildHistoryContextFromEntries({
+      entries: bodyHistoryEntries,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatInboundEnvelope({
-          channel: "Telegram",
-          from: groupLabel ?? `group:${chatId}`,
-          timestamp: entry.timestamp,
-          body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
-          chatType: "group",
-          senderLabel: entry.sender,
-          envelope: envelopeOptions,
+        formatTelegramGroupHistoryEntry({
+          entry,
+          groupLabel: groupLabel ?? `group:${chatId}`,
+          chatId,
+          envelopeOptions,
         }),
+      excludeLast: false,
     });
   }
 
@@ -440,16 +477,6 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
   });
-  const commandBody = normalizeCommandBody(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
-  const inboundHistory =
-    includeRecentGroupHistoryContext && historyKey && historyLimit > 0
-      ? channelHistory.buildInboundHistory({
-          historyKey,
-          limit: historyLimit,
-        })
-      : undefined;
   const replyHead = visibleReplyChain[0];
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     path: media.path,
@@ -473,25 +500,17 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
-  const commandSource =
-    options?.commandSource ??
-    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
-  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
-    cfg,
-    agentId: route.agentId,
-  });
-  const hasAbortRequest = isAbortRequestText(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
-  const conversationKind = isGroup ? "group" : "direct";
-  const inboundEventKind = classifyChannelInboundEvent({
-    conversation: { kind: conversationKind },
-    unmentionedGroupPolicy,
-    wasMentioned: effectiveWasMentioned,
-    hasControlCommand,
-    hasAbortRequest,
-    commandSource,
-  });
+  const inboundHistory =
+    hasGroupHistoryContext && historyKey && historyLimit > 0
+      ? inboundEventKind === "room_event"
+        ? channelHistory.buildInboundHistory({
+            historyKey,
+            limit: historyLimit,
+          })
+        : watermarkedGroupHistoryEntries && watermarkedGroupHistoryEntries.length > 0
+          ? watermarkedGroupHistoryEntries
+          : undefined
+      : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     resolveSupplementalMedia: true,
@@ -610,8 +629,9 @@ export async function buildTelegramInboundContextPayload(params: {
       TopicName: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
-  if (inboundEventKind === "room_event" && historyKey) {
-    channelHistory.record({
+  if (isGroup && historyKey) {
+    recordTelegramGroupHistoryEntry({
+      historyMap: groupHistories,
       historyKey,
       limit: historyLimit,
       entry: {
