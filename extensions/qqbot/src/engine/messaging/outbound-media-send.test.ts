@@ -56,7 +56,10 @@ vi.mock("./sender.js", () => ({
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
-import { resolveOutboundMediaLocalRoots } from "./outbound-media-path.js";
+import {
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspaceScopedLocalRoots,
+} from "./outbound-media-path.js";
 import {
   resolveOutboundMediaPath,
   sendDocument,
@@ -182,6 +185,15 @@ describe("resolveOutboundMediaPath", () => {
         mediaLocalRoots: ["/tmp/openclaw-sandbox"],
       }),
     ).toEqual(["/tmp/openclaw-sandbox"]);
+  });
+
+  it("maps only authorized virtual workspace roots for host-read loading", () => {
+    expect(
+      resolveWorkspaceScopedLocalRoots(
+        ["/workspace/attachments", "/tmp/openclaw-sandbox", "/workspace/../media"],
+        "/tmp/agent-workspace",
+      ),
+    ).toEqual(["/tmp/agent-workspace/attachments", "/tmp/openclaw-sandbox"]);
   });
 
   it.each(["/workspace/../media/secret.pdf", "../media/secret.pdf"])(
@@ -485,10 +497,48 @@ describe("trySendViaHostRead error handling", () => {
       "/tmp/agent-workspace/attachments/report.docx",
       expect.objectContaining({
         mediaAccess: expect.objectContaining({
-          localRoots: ["/workspace/attachments"],
+          localRoots: ["/tmp/agent-workspace/attachments"],
           workspaceDir: "/tmp/agent-workspace",
         }),
         workspaceDir: "/tmp/agent-workspace",
+      }),
+    );
+  });
+
+  it("loads virtual-root workspace media through the real outbound loader", async () => {
+    const actualOutboundMedia = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/outbound-media")
+    >("openclaw/plugin-sdk/outbound-media");
+    mockedLoadOutboundMediaFromUrl.mockImplementation(actualOutboundMedia.loadOutboundMediaFromUrl);
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+    const workspaceDir = path.join(openclawHome, "agent-workspace");
+    const reportPath = path.join(workspaceDir, "attachments", "report.txt");
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.writeFile(reportPath, "hello");
+    const readFile = async (filePath: string) => await fs.readFile(filePath);
+
+    const result = await sendDocument(
+      {
+        ...makeCtx(),
+        mediaAccess: {
+          localRoots: ["/workspace/attachments"],
+          workspaceDir,
+          readFile,
+        },
+        mediaLocalRoots: ["/workspace/attachments"],
+        mediaReadFile: readFile,
+      },
+      "/workspace/attachments/report.txt",
+    );
+
+    expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
+    expect(mockedSenderSendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "file",
+        source: expect.objectContaining({
+          buffer: Buffer.from("hello"),
+          fileName: "report.txt",
+        }),
       }),
     );
   });

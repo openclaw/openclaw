@@ -38,6 +38,7 @@ import {
   resolveOutboundMediaLocalRoots,
   resolveWorkspacePathCandidate,
   resolveWorkspacePathCandidates,
+  resolveWorkspaceScopedLocalRoots,
 } from "./outbound-media-path.js";
 import {
   buildDailyLimitExceededResult,
@@ -175,12 +176,16 @@ function resolveOutboundMediaReadFile(ctx: OutboundMediaAccessContext) {
 function resolveHostReadMediaAccess(
   ctx: OutboundMediaAccessContext,
 ): OutboundMediaAccessContext["mediaAccess"] | undefined {
-  const mediaLocalRoots = resolveOutboundMediaLocalRoots(ctx);
+  const mediaLocalRoots = resolveWorkspaceScopedLocalRoots(
+    resolveOutboundMediaLocalRoots(ctx),
+    ctx.mediaAccess?.workspaceDir,
+  );
   if (!ctx.mediaAccess && !mediaLocalRoots) {
     return undefined;
   }
+  const { localRoots: _localRoots, ...mediaAccessWithoutRoots } = ctx.mediaAccess ?? {};
   return {
-    ...ctx.mediaAccess,
+    ...mediaAccessWithoutRoots,
     ...(mediaLocalRoots ? { localRoots: mediaLocalRoots } : {}),
   };
 }

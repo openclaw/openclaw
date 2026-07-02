@@ -40,6 +40,25 @@ function isVirtualWorkspacePath(normalizedPath: string): boolean {
   return normalizedPath === "/workspace" || normalizedPath.startsWith("/workspace/");
 }
 
+export function resolveWorkspaceScopedLocalRoots(
+  roots: readonly string[] | undefined,
+  workspaceDir?: string,
+): string[] | undefined {
+  if (!roots?.length) {
+    return undefined;
+  }
+  const scopedRoots = roots
+    .map((root) => root.trim())
+    .filter(Boolean)
+    .map((root) =>
+      workspaceDir && isVirtualWorkspacePath(root)
+        ? resolveWorkspacePathCandidate(root, workspaceDir)
+        : root,
+    )
+    .filter((root): root is string => Boolean(root));
+  return scopedRoots.length > 0 ? Array.from(new Set(scopedRoots)) : undefined;
+}
+
 export function resolveWorkspacePathCandidate(
   normalizedPath: string,
   workspaceDir?: string,
