@@ -1,8 +1,8 @@
 import Testing
 @testable import OpenClaw
 
-@Suite struct TalkProStateTests {
-    @Test func disabledTalkWithoutLoadedConfigCanStartAndRetryLoad() {
+struct TalkProStateTests {
+    @Test func `disabled talk without loaded config can start and retry load`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -12,6 +12,7 @@ import Testing
             isListening: false,
             isSpeaking: false,
             isUserSpeechDetected: false,
+            isInputMuted: false,
             permissionState: .unknown)
 
         #expect(state.title == "Voice config unavailable")
@@ -21,7 +22,7 @@ import Testing
         #expect(state.waveformMode(micLevel: 0.8) == .still)
     }
 
-    @Test func enabledTalkWithoutLoadedConfigCanBeStopped() {
+    @Test func `enabled talk without loaded config can be stopped`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -31,6 +32,7 @@ import Testing
             isListening: false,
             isSpeaking: false,
             isUserSpeechDetected: false,
+            isInputMuted: false,
             permissionState: .unknown)
 
         #expect(state.title == "Voice config unavailable")
@@ -40,7 +42,7 @@ import Testing
         #expect(state.waveformMode(micLevel: 0.8) == .still)
     }
 
-    @Test func enabledTalkWithLoadedConfigCanBeStopped() {
+    @Test func `enabled talk with loaded config can be stopped`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -50,6 +52,7 @@ import Testing
             isListening: false,
             isSpeaking: false,
             isUserSpeechDetected: false,
+            isInputMuted: false,
             permissionState: .ready)
 
         #expect(state.title == "Ready to talk")
@@ -57,7 +60,7 @@ import Testing
         #expect(state.primaryAction == .stop)
     }
 
-    @Test func missingScopeTakesPriorityOverUnloadedConfig() {
+    @Test func `missing scope takes priority over unloaded config`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -67,6 +70,7 @@ import Testing
             isListening: false,
             isSpeaking: false,
             isUserSpeechDetected: false,
+            isInputMuted: false,
             permissionState: .missingScope("operator.talk.secrets"))
 
         #expect(state.title == "Gateway permission required")
@@ -75,7 +79,24 @@ import Testing
         #expect(state.primaryButtonTitle == "Enable Talk")
     }
 
-    @Test func demoModeKeepsTalkDisabled() {
+    @Test func `connecting status is detected from status text`() {
+        let state = TalkProState(
+            gatewayConnected: true,
+            isDemoMode: false,
+            isEnabled: true,
+            statusText: "Connecting realtime…",
+            isConfigLoaded: true,
+            isListening: false,
+            isSpeaking: false,
+            isUserSpeechDetected: false,
+            isInputMuted: false,
+            permissionState: .ready)
+
+        #expect(state.isConnecting)
+        #expect(state.title == "Connecting")
+    }
+
+    @Test func `demo mode keeps talk disabled`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: true,
@@ -85,6 +106,7 @@ import Testing
             isListening: true,
             isSpeaking: true,
             isUserSpeechDetected: true,
+            isInputMuted: false,
             permissionState: .ready)
 
         #expect(state.title == "Demo mode only")

@@ -47,8 +47,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     weak var appModel: NodeAppModel? {
         didSet {
-            guard let model = self.resolvedAppModel() else { return }
-            if let token = self.pendingAPNsDeviceToken {
+            guard let model = resolvedAppModel() else { return }
+            if let token = pendingAPNsDeviceToken {
                 self.pendingAPNsDeviceToken = nil
                 Task { @MainActor in
                     model.updateAPNsDeviceToken(token)
@@ -113,7 +113,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
+        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
     {
         GatewayDiagnostics.log("app delegate: didFinishLaunching")
         if self.appModel == nil {
@@ -147,8 +147,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         }
     }
 
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        if let appModel = self.resolvedAppModel() {
+    func application(_: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        if let appModel = resolvedAppModel() {
             Task { @MainActor in
                 appModel.updateAPNsDeviceToken(deviceToken)
             }
@@ -158,12 +158,12 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.pendingAPNsDeviceToken = deviceToken
     }
 
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+    func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func application(
-        _ application: UIApplication,
+        _: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
@@ -334,7 +334,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func routeWatchPromptAction(_ action: PendingWatchPromptAction) async {
-        guard let appModel = self.resolvedAppModel() else {
+        guard let appModel = resolvedAppModel() else {
             self.pendingWatchPromptActions.append(action)
             return
         }
@@ -347,7 +347,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func routeExecApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
-        guard let appModel = self.resolvedAppModel() else {
+        guard let appModel = resolvedAppModel() else {
             self.pendingExecApprovalPrompts.append(prompt)
             return
         }
@@ -357,7 +357,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
     {
@@ -372,7 +372,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void)
     {
@@ -442,18 +442,18 @@ enum WatchPromptNotificationBridge {
         let center = UNUserNotificationCenter.current()
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
-            let categoryID = "\(self.categoryPrefix)\(invokeID)"
+            let categoryID = "\(categoryPrefix)\(invokeID)"
             let category = UNNotificationCategory(
                 identifier: categoryID,
-                actions: self.categoryActions(displayedActions),
+                actions: categoryActions(displayedActions),
                 intentIdentifiers: [],
                 options: [])
-            await self.upsertNotificationCategory(category, center: center)
+            await upsertNotificationCategory(category, center: center)
             categoryIdentifier = categoryID
         }
 
         var userInfo: [AnyHashable: Any] = [
-            self.typeKey: self.typeValue,
+            typeKey: typeValue,
         ]
         if let promptId = params.promptId?.trimmingCharacters(in: .whitespacesAndNewlines), !promptId.isEmpty {
             userInfo[self.promptIDKey] = promptId
@@ -496,7 +496,7 @@ enum WatchPromptNotificationBridge {
             identifier: "watch.prompt.\(invokeID)",
             content: content,
             trigger: nil)
-        try? await self.addNotificationRequest(request, center: center)
+        try? await addNotificationRequest(request, center: center)
     }
 
     static func actionIDKey(index: Int) -> String {
@@ -538,7 +538,7 @@ enum WatchPromptNotificationBridge {
 
     private static func isNotificationAuthorizationAllowed() async -> Bool {
         let center = UNUserNotificationCenter.current()
-        let status = await self.notificationAuthorizationStatus(center: center)
+        let status = await notificationAuthorizationStatus(center: center)
         return self.isAuthorizationStatusAllowed(status)
     }
 
@@ -612,7 +612,7 @@ extension NodeAppModel {
             note: "source=ios.notification",
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")
-        await self._bridgeConsumeMirroredWatchReply(event)
+        await _bridgeConsumeMirroredWatchReply(event)
     }
 }
 
@@ -622,6 +622,8 @@ struct OpenClawApp: App {
     @State private var gatewayController: GatewayConnectionController
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
+    @AppStorage(AppAccentColorPreference.storageKey) private var accentColorPreferenceRaw: String =
+        AppAccentColorPreference.coral.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -657,27 +659,30 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
-                .tint(OpenClawBrand.accent)
+                .tint(self.accentColorPreference.color)
                 .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
-                    self.applyAppearancePreference()
+                    self.applyWindowChrome()
                     self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onOpenURL { url in
                     Task { await self.handleOpenURL(url) }
                 }
                 .onChange(of: self.appearancePreferenceRaw) { _, _ in
-                    self.applyAppearancePreference()
+                    self.applyWindowChrome()
+                }
+                .onChange(of: self.accentColorPreferenceRaw) { _, _ in
+                    self.applyWindowChrome()
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
-                    self.applyAppearancePreference()
+                    self.applyWindowChrome()
                 }
         }
     }
@@ -686,6 +691,10 @@ struct OpenClawApp: App {
         AppAppearancePreference.launchArgumentPreference
             ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
             ?? .system
+    }
+
+    private var accentColorPreference: AppAccentColorPreference {
+        AppAccentColorPreference(rawValue: self.accentColorPreferenceRaw) ?? .coral
     }
 
     private static var screenshotModeEnabled: Bool {
@@ -705,15 +714,8 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func applyAppearancePreference() {
-        let style = self.appearancePreference.userInterfaceStyle
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .forEach { window in
-                window.overrideUserInterfaceStyle = style
-                window.tintColor = OpenClawBrand.uiAccent
-            }
+    private func applyWindowChrome() {
+        OpenClawBrand.applyWindowChrome(appearance: self.appearancePreference)
     }
 }
 

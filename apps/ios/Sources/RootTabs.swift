@@ -22,7 +22,10 @@ struct RootTabs: View {
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
+    @AppStorage(AppAccentColorPreference.storageKey) private var accentColorPreferenceRaw: String =
+        AppAccentColorPreference.coral.rawValue
     @State private var selectedTab: AppTab = Self.initialTab
+    @State private var presentChatTalk = Self.shouldPresentTalkOnLaunch(arguments: ProcessInfo.processInfo.arguments)
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
@@ -65,7 +68,7 @@ struct RootTabs: View {
         case "chat":
             return .chat
         case "talk", "voice":
-            return .talk
+            return .chat
         case "agent", "agents":
             return .agent
         case "settings":
@@ -81,9 +84,9 @@ struct RootTabs: View {
 
     private static var initialSidebarDestination: SidebarDestination {
         if let requested = requestedInitialSidebarDestination {
-            return requested
+            return normalizedSidebarDestination(requested)
         }
-        return Self.defaultSidebarDestination(for: initialTab)
+        return Self.normalizedSidebarDestination(Self.defaultSidebarDestination(for: initialTab))
     }
 
     private static var requestedInitialSidebarDestination: SidebarDestination? {
@@ -137,7 +140,7 @@ struct RootTabs: View {
             self.rootLifecycle(
                 self.rootOverlays(
                     self.tabContent
-                        .tint(OpenClawBrand.accent))))
+                        .tint(self.accentColorPreference.color))))
     }
 
     @ViewBuilder
@@ -154,24 +157,11 @@ struct RootTabs: View {
             PhoneTabSettingsHost { openSettingsRoute in
                 ChatProTab(
                     ownsNavigationStack: false,
-                    openSettings: { openSettingsRoute(.gateway) })
+                    openSettings: { openSettingsRoute(.gateway) },
+                    presentTalk: self.$presentChatTalk)
             }
             .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
             .tag(AppTab.chat)
-
-            PhoneTabSettingsHost { openSettingsRoute in
-                TalkProTab(
-                    ownsNavigationStack: false,
-                    openSettings: { openSettingsRoute(.gateway) },
-                    openVoiceSettings: { openSettingsRoute(.voice) })
-            }
-            .tabItem {
-                Label(
-                    "Talk",
-                    systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
-            }
-            .tag(AppTab.talk)
-
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
                 initialDestination: Self.requestedInitialSidebarDestination,
@@ -348,7 +338,7 @@ struct RootTabs: View {
             }
         }
         .listStyle(.sidebar)
-        .tint(OpenClawBrand.accent)
+        .tint(self.accentColorPreference.color)
         .scrollContentBackground(.hidden)
         .background(Color(uiColor: .systemBackground))
     }
@@ -406,19 +396,15 @@ struct RootTabs: View {
     @ViewBuilder
     private var sidebarDetail: some View {
         switch self.selectedSidebarDestination {
-        case .chat:
+        case .chat, .talk:
             ChatProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Chat",
                 showsAgentBadge: false,
                 ownsNavigationStack: false,
-                openSettings: { self.selectSidebarDestination(.gateway) })
-        case .talk:
-            TalkProTab(
-                headerLeadingAction: self.sidebarHeaderLeadingAction,
-                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) },
-                openVoiceSettings: { self.selectSettingsRoute(.voice) })
+                openVoiceSettings: { self.selectSettingsRoute(.voice) },
+                presentTalk: self.$presentChatTalk)
         case .overview:
             CommandCenterTab(
                 ownsNavigationStack: false,
@@ -491,22 +477,22 @@ struct RootTabs: View {
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
-                navigateToRoute: self.pushSidebarSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                navigateToRoute: pushSidebarSettingsRoute,
+                onRouteChange: handleSettingsRouteChange)
         }
     }
 
@@ -823,6 +809,10 @@ struct RootTabs: View {
             ?? .system
     }
 
+    private var accentColorPreference: AppAccentColorPreference {
+        AppAccentColorPreference(rawValue: self.accentColorPreferenceRaw) ?? .coral
+    }
+
     private var gatewayStatus: GatewayDisplayState {
         GatewayStatusBuilder.build(appModel: self.appModel)
     }
@@ -857,8 +847,8 @@ struct RootTabs: View {
     }
 
     private func makeHomeCanvasPayload() -> RootTabsHomeCanvasPayload {
-        let gatewayName = self.normalized(self.appModel.gatewayServerName)
-        let gatewayAddress = self.normalized(self.appModel.gatewayRemoteAddress)
+        let gatewayName = normalized(appModel.gatewayServerName)
+        let gatewayAddress = normalized(appModel.gatewayRemoteAddress)
         let gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway"
         let activeAgentID = self.resolveActiveAgentID()
         let agents = self.homeCanvasAgents(activeAgentID: activeAgentID)
@@ -911,7 +901,7 @@ struct RootTabs: View {
     }
 
     private func resolveActiveAgentID() -> String {
-        let selected = self.normalized(self.appModel.selectedAgentId) ?? ""
+        let selected = normalized(appModel.selectedAgentId) ?? ""
         if !selected.isEmpty {
             return selected
         }
@@ -919,7 +909,7 @@ struct RootTabs: View {
     }
 
     private func resolveDefaultAgentID() -> String {
-        self.normalized(self.appModel.gatewayDefaultAgentId) ?? ""
+        normalized(self.appModel.gatewayDefaultAgentId) ?? ""
     }
 
     private func homeCanvasAgents(activeAgentID: String) -> [RootTabsHomeCanvasAgentCard] {
@@ -944,7 +934,7 @@ struct RootTabs: View {
     }
 
     private func homeCanvasName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
+        normalized(agent.name) ?? agent.id
     }
 }
 
@@ -954,7 +944,10 @@ extension RootTabs {
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
-        self.selectedSidebarDestination = destination
+        if destination == .talk {
+            self.presentChatTalk = true
+        }
+        self.selectedSidebarDestination = Self.normalizedSidebarDestination(destination)
         self.selectedSettingsRoute = destination.settingsRoute
         self.selectedTab = destination.appTab
         guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }

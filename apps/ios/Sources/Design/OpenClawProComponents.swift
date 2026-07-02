@@ -8,6 +8,11 @@ enum OpenClawProMetric {
     static let bottomScrollInset: CGFloat = 96
 }
 
+enum OpenClawProFont {
+    /// Minimum readable UI text size (13pt, SF Footnote).
+    static let minimum: Font = .footnote
+}
+
 struct OpenClawProBackground: View {
     var body: some View {
         Color(uiColor: .systemGroupedBackground)

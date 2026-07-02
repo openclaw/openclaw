@@ -3,6 +3,13 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawBrandTests {
+    @Test func `accent palette includes seven choices with coral default`() {
+        #expect(AppAccentColorPreference.allCases.count == 7)
+        #expect(AppAccentColorPreference.coral.label == "Coral")
+        #expect(AppAccentColorPreference.blue.label == "Blue")
+        #expect(AppAccentColorPreference(rawValue: "unknown") == nil)
+    }
+
     @Test func `brand colors meet text contrast in both appearances`() {
         let foregroundColors = [
             ("accent", OpenClawBrand.uiAccentForeground),

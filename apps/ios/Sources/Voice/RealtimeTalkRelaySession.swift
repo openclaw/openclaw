@@ -225,6 +225,16 @@ final class RealtimeTalkRelaySession {
         self.close(sendClose: true)
     }
 
+    func pauseMicrophoneCapture() {
+        guard !self.isClosed else { return }
+        self.stopMicrophonePump()
+    }
+
+    func resumeMicrophoneCapture() throws {
+        guard !self.isClosed else { return }
+        try self.startMicrophonePump()
+    }
+
     private func close(sendClose: Bool) {
         guard !self.isClosed else { return }
         self.isClosed = true

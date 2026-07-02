@@ -3,11 +3,12 @@ import SwiftUI
 struct TalkProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
-    @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
-        TalkDefaults.speakerphoneEnabledByDefault
-    @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
+    @AppStorage(TalkDefaults.wallpaperSelectionKey) private var wallpaperSelectionRaw =
+        TalkWallpaperSelection.default.rawValue
+    @Environment(\.dismiss) private var dismiss
     @State private var showPermissionPrompt = false
     @State private var showTalkIssueDetails = false
+    @State private var callStartedAt: Date?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     var openSettings: () -> Void
@@ -35,6 +36,7 @@ struct TalkProTab: View {
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
             isUserSpeechDetected: self.appModel.talkMode.isUserSpeechDetected,
+            isInputMuted: self.appModel.talkMode.isInputMuted,
             permissionState: self.appModel.talkMode.gatewayTalkPermissionState)
     }
 
@@ -77,134 +79,170 @@ struct TalkProTab: View {
                     .openClawSheetChrome()
             }
         }
-        .onAppear { self.alignPersistedTalkState() }
+        .onAppear {
+            self.alignPersistedTalkState()
+            self.syncCallStartedAt()
+            self.autoStartIfNeeded()
+        }
+        .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in
+            self.syncCallStartedAt()
+        }
+        .onChange(of: self.wallpaperSelectionRaw) { _, _ in }
+        .onDisappear {
+            self.stopTalk()
+        }
+        .toolbar(.hidden, for: .tabBar)
+    }
+
+    private var chromeStyle: TalkProChromeStyle {
+        TalkProChromeStyle(usesImageWallpaper: TalkWallpaperStore.usesImageWallpaper())
     }
 
     private var content: some View {
         ZStack {
-            CommandControlBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    self.header
-                    if let fallbackIssue = self.fallbackIssue {
-                        TalkRuntimeIssueBanner(
-                            issue: fallbackIssue,
-                            onOpenSettings: self.openVoiceSettings,
-                            onShowDetails: {
-                                self.showTalkIssueDetails = true
-                            })
-                            .padding(.horizontal, OpenClawProMetric.pagePadding)
-                    }
-                    self.voiceHeroCard
-                    self.controlBar
+            TalkWallpaperBackground()
+            VStack(spacing: 0) {
+                if let fallbackIssue = self.fallbackIssue {
+                    TalkRuntimeIssueBanner(
+                        issue: fallbackIssue,
+                        onOpenSettings: self.openVoiceSettings,
+                        onShowDetails: {
+                            self.showTalkIssueDetails = true
+                        })
+                        .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        .padding(.top, 8)
                 }
-                .padding(.top, 16)
-                .padding(.bottom, 18)
+
+                Spacer(minLength: 0)
+
+                self.talkCenter
+
+                Spacer(minLength: 0)
+
+                if self.showsOfflineReconnect {
+                    self.offlineReconnect
+                        .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        .padding(.bottom, 40)
+                } else if self.showsBlockingAction {
+                    self.blockingAction
+                        .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        .padding(.bottom, 40)
+                }
             }
         }
-        .navigationBarHidden(true)
+        .modifier(TalkProNavigationChrome(
+            ownsNavigationStack: self.ownsNavigationStack,
+            chromeStyle: self.chromeStyle,
+            openVoiceSettings: self.openVoiceSettings))
     }
 
-    private var header: some View {
-        OpenClawAdaptiveHeaderRow(
-            title: "Talk",
-            subtitle: self.headerSubtitle,
-            titleFont: .system(size: 30, weight: .bold),
-            subtitleFont: .caption.weight(.medium),
-            subtitleLineLimit: 1)
-        {
-            if let headerLeadingAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-            }
-        } accessory: {
-            EmptyView()
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    private var voiceHeroCard: some View {
-        CommandPanel(isProminent: true, padding: 16) {
-            VStack(alignment: .center, spacing: 14) {
-                TalkProOrb(
+    private var talkCenter: some View {
+        VStack(spacing: 8) {
+            if self.showsWaveform {
+                TalkProWaveform(
                     mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel),
-                    color: self.state.color,
-                    systemImage: self.state.icon)
-                    .frame(height: 132)
-                    .accessibilityHidden(true)
+                    tint: self.state.color,
+                    barCount: 5)
+                    .frame(height: 36)
+                    .padding(.bottom, 4)
+            }
 
-                VStack(spacing: 5) {
-                    Text(self.state.title)
-                        .font(.title3.weight(.bold))
-                        .multilineTextAlignment(.center)
-                    Text(self.heroSubtitle)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
+            if self.showsAgentName {
+                Text(self.appModel.chatAgentName)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(self.chromeStyle.primary)
+                    .multilineTextAlignment(.center)
+            }
 
-                Button(action: self.handlePrimaryAction) {
-                    Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .font(.subheadline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                }
-                .buttonBorderShape(.capsule)
-                .openClawGlassButton(prominent: true, tint: self.state.primaryButtonFill)
-                .disabled(self.state.primaryAction == .waiting)
+            if self.showsCallDuration, let callStartedAt = self.callStartedAt {
+                Text(callStartedAt, style: .timer)
+                    .font(OpenClawProFont.minimum.weight(.medium))
+                    .foregroundStyle(self.chromeStyle.secondary)
+                    .monospacedDigit()
+            }
+
+            if self.showsCenterStatus {
+                Text(self.centerStatusText)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(self.centerStatusColor)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, OpenClawProMetric.pagePadding)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var controlBar: some View {
-        OpenClawGlassControlGroup {
-            HStack(spacing: 12) {
-                self.iconToggle(
-                    title: "Speakerphone",
-                    systemImage: self.talkSpeakerphoneEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                    isOn: self.talkSpeakerphoneBinding,
-                    accessibilityIdentifier: "talk-speakerphone-control")
-                self.iconToggle(
-                    title: "Background listening",
-                    systemImage: self.talkBackgroundEnabled ? "waveform" : "waveform.slash",
-                    isOn: self.$talkBackgroundEnabled,
-                    accessibilityIdentifier: "talk-background-listening-control")
-                Button(action: self.openVoiceSettings) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 44, height: 44)
-                }
-                .buttonBorderShape(.circle)
-                .openClawGlassButton()
-                .accessibilityLabel("Voice & Talk settings")
-                .accessibilityIdentifier("talk-voice-settings-control")
+    private var offlineReconnect: some View {
+        VStack(spacing: 12) {
+            Button(action: self.handlePrimaryAction) {
+                Label("Reconnect", systemImage: "arrow.clockwise")
+                    .font(.subheadline.weight(.bold))
+                    .frame(minWidth: 140)
+                    .frame(height: 44)
             }
+            .buttonStyle(.bordered)
+            .tint(self.chromeStyle.primary)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private func iconToggle(
-        title: String,
-        systemImage: String,
-        isOn: Binding<Bool>,
-        accessibilityIdentifier: String) -> some View
-    {
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 44, height: 44)
+    private var blockingAction: some View {
+        Button(action: self.handlePrimaryAction) {
+            Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
+                .font(.subheadline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
         }
-        .buttonBorderShape(.circle)
-        .openClawGlassButton(
-            prominent: isOn.wrappedValue,
-            tint: isOn.wrappedValue ? OpenClawBrand.accent : nil)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-        .accessibilityIdentifier(accessibilityIdentifier)
+        .buttonStyle(.borderedProminent)
+        .tint(self.state.primaryButtonFill)
+        .disabled(self.state.primaryAction == .waiting)
+    }
+
+    private var isInActiveCall: Bool {
+        self.state.isEnabled && self.gatewayConnected && !self.state.isDemoMode && self.state
+            .primaryAction != .enablePermission
+    }
+
+    private var showsOfflineReconnect: Bool {
+        !self.gatewayConnected
+    }
+
+    private var showsBlockingAction: Bool {
+        !self.isInActiveCall && !self.showsOfflineReconnect &&
+            (self.state.primaryAction == .enablePermission || self.state.primaryAction == .waiting || self.state
+                .primaryAction == .openSettings)
+    }
+
+    private var showsWaveform: Bool {
+        self.isInActiveCall && (self.state.isSpeaking || self.state.isListening)
+    }
+
+    private var showsAgentName: Bool {
+        !self.state.isConnecting
+    }
+
+    private var showsCallDuration: Bool {
+        self.isInActiveCall && !self.state.isConnecting
+    }
+
+    private var showsCenterStatus: Bool {
+        guard !self.state.isConnecting else { return false }
+        return !self.isInActiveCall && !self.centerStatusText.isEmpty
+    }
+
+    private var centerStatusText: String {
+        if !self.gatewayConnected { return "Cannot connect" }
+        if self.state.isDemoMode { return self.state.title }
+        if self.state.primaryAction == .enablePermission { return self.state.title }
+        if self.state.primaryAction == .waiting { return self.state.title }
+        if !self.state.isConfigLoaded || self.state.primaryAction == .openSettings {
+            return self.state.title
+        }
+        return ""
+    }
+
+    private var centerStatusColor: Color {
+        if !self.gatewayConnected { return OpenClawBrand.danger }
+        return self.chromeStyle.secondary
     }
 
     private var gatewayConnected: Bool {
@@ -215,28 +253,6 @@ struct TalkProTab: View {
     private var fallbackIssue: TalkRuntimeIssue? {
         guard self.gatewayConnected else { return nil }
         return self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
-    }
-
-    private var headerSubtitle: String {
-        let mode = self.appModel.talkMode.gatewayTalkVoiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let agent = self.appModel.chatAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if mode.isEmpty || mode == "Not loaded" { return agent.isEmpty ? "Realtime voice" : agent }
-        if agent.isEmpty { return mode }
-        return "\(agent) • \(mode)"
-    }
-
-    private var heroSubtitle: String {
-        if self.state
-            .prefersPermissionCopy { return "Gateway approval is required before this phone can capture voice." }
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Voice is disabled in Apple Review demo mode." }
-        if !self.gatewayConnected { return "Connect to your gateway to start a voice conversation." }
-        if !self.appModel.talkMode.gatewayTalkConfigLoaded {
-            return "Open Voice settings after the gateway loads Talk configuration."
-        }
-        let subtitle = (self.appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !subtitle.isEmpty { return subtitle }
-        return "Routes voice to \(self.appModel.chatAgentName)."
     }
 
     private func alignPersistedTalkState() {
@@ -253,21 +269,12 @@ struct TalkProTab: View {
         }
     }
 
-    private var talkSpeakerphoneBinding: Binding<Bool> {
-        Binding(
-            get: { self.talkSpeakerphoneEnabled },
-            set: { enabled in
-                self.talkSpeakerphoneEnabled = enabled
-                self.appModel.setTalkSpeakerphoneEnabled(enabled)
-            })
-    }
-
     private func handlePrimaryAction() {
         switch self.state.primaryAction {
         case .start:
             self.startTalk()
         case .stop:
-            self.stopTalk()
+            self.handleHangUp()
         case .enablePermission:
             self.stopTalk()
             self.showPermissionPrompt = true
@@ -275,6 +282,30 @@ struct TalkProTab: View {
             self.openPrimarySettings()
         case .waiting:
             break
+        }
+    }
+
+    private func handleHangUp() {
+        self.stopTalk()
+        if !self.ownsNavigationStack {
+            self.dismiss()
+        }
+    }
+
+    private func autoStartIfNeeded() {
+        guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
+        guard self.gatewayConnected else { return }
+        guard self.state.primaryAction == .start else { return }
+        self.startTalk()
+    }
+
+    private func syncCallStartedAt() {
+        if self.appModel.talkMode.isEnabled || self.talkEnabled {
+            if self.callStartedAt == nil {
+                self.callStartedAt = Date()
+            }
+        } else {
+            self.callStartedAt = nil
         }
     }
 
@@ -295,6 +326,35 @@ struct TalkProTab: View {
             self.openVoiceSettings()
         } else {
             self.openSettings()
+        }
+    }
+}
+
+private struct TalkProNavigationChrome: ViewModifier {
+    let ownsNavigationStack: Bool
+    let chromeStyle: TalkProChromeStyle
+    let openVoiceSettings: () -> Void
+
+    func body(content: Content) -> some View {
+        if self.ownsNavigationStack {
+            content.navigationBarHidden(true)
+        } else {
+            content
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarBackButtonHidden(false)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: self.openVoiceSettings) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(self.chromeStyle.primary)
+                        }
+                        .accessibilityLabel("Voice & Talk settings")
+                        .accessibilityIdentifier("talk-voice-settings-control")
+                    }
+                }
+                .toolbarColorScheme(self.chromeStyle.usesImageWallpaper ? .dark : .light, for: .navigationBar)
         }
     }
 }
@@ -324,10 +384,15 @@ struct TalkProState: Equatable {
     let isListening: Bool
     let isSpeaking: Bool
     let isUserSpeechDetected: Bool
+    let isInputMuted: Bool
     let permissionState: TalkGatewayPermissionState
 
     private var normalizedStatus: String {
         self.statusText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var isConnecting: Bool {
+        self.normalizedStatus.contains("connecting")
     }
 
     var title: String {
@@ -348,6 +413,7 @@ struct TalkProState: Equatable {
             break
         }
         if !self.isConfigLoaded { return "Voice config unavailable" }
+        if self.isInputMuted { return "Mic muted" }
         if self.isSpeaking { return "Speaking" }
         if self.isListening { return "Listening" }
         if self.normalizedStatus.contains("connecting") { return "Connecting" }
@@ -372,6 +438,7 @@ struct TalkProState: Equatable {
             break
         }
         if !self.isConfigLoaded { return "Config" }
+        if self.isInputMuted { return "Muted" }
         if self.isSpeaking { return "Speaking" }
         if self.isListening { return "Listening" }
         if self.isEnabled { return "Ready" }
@@ -394,6 +461,7 @@ struct TalkProState: Equatable {
             break
         }
         if !self.isConfigLoaded { return "exclamationmark.triangle.fill" }
+        if self.isInputMuted { return "mic.slash.fill" }
         if self.isSpeaking { return "speaker.wave.2.fill" }
         if self.isListening { return "mic.fill" }
         if self.normalizedStatus.contains("thinking") { return "sparkles" }
@@ -435,7 +503,7 @@ struct TalkProState: Equatable {
         case .start: "Start Talk"
         case .stop: "Stop Talk"
         case .enablePermission: "Enable Talk"
-        case .openSettings: self.gatewayConnected ? "Open Voice Settings" : "Open Gateway Settings"
+        case .openSettings: self.gatewayConnected ? "Open Voice Settings" : "Reconnect"
         case .waiting: self.isDemoMode ? "Demo Mode Only" : "Waiting for Approval"
         }
     }
@@ -445,7 +513,7 @@ struct TalkProState: Equatable {
         case .start: "play.fill"
         case .stop: "stop.fill"
         case .enablePermission: "key.fill"
-        case .openSettings: "gearshape.fill"
+        case .openSettings: self.gatewayConnected ? "gearshape.fill" : "checkmark"
         case .waiting: self.isDemoMode ? "lock.fill" : "hourglass"
         }
     }
@@ -492,68 +560,7 @@ struct TalkProState: Equatable {
     }
 }
 
-private struct TalkProOrb: View {
-    let mode: TalkProWaveformMode
-    let color: Color
-    let systemImage: String
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
-            ZStack {
-                ForEach(0..<self.ringCount, id: \.self) { ring in
-                    Circle()
-                        .strokeBorder(self.color.opacity(self.ringOpacity(ring)), lineWidth: 1.4)
-                        .scaleEffect(self.ringScale(ring, date: timeline.date))
-                }
-                Circle()
-                    .fill(self.color.opacity(0.13))
-                    .frame(width: 104, height: 104)
-                    .overlay {
-                        Circle()
-                            .strokeBorder(self.color.opacity(0.30), lineWidth: 1)
-                    }
-                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 12)
-                    .frame(width: 92, height: 44)
-                    .opacity(self.showsWaveform ? 1 : 0)
-                Image(systemName: self.systemImage)
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(self.color)
-                    .opacity(self.showsWaveform ? 0.20 : 1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-        }
-    }
-
-    private var ringCount: Int {
-        self.mode == .still ? 0 : 3
-    }
-
-    private var showsWaveform: Bool {
-        self.systemImage == "waveform" || self.systemImage == "mic.fill"
-    }
-
-    private func ringScale(_ ring: Int, date: Date) -> CGFloat {
-        guard !self.reduceMotion else { return CGFloat(1.0 + (Double(ring) * 0.12)) }
-        let base = 0.88 + (Double(ring) * 0.18)
-        let speed = self.mode == .still ? 0.8 : 1.8
-        let phase = date.timeIntervalSinceReferenceDate * speed + Double(ring) * 0.9
-        return CGFloat(base + (sin(phase) * 0.035))
-    }
-
-    private func ringOpacity(_ ring: Int) -> Double {
-        switch self.mode {
-        case .still:
-            0.10 - (Double(ring) * 0.018)
-        default:
-            0.24 - (Double(ring) * 0.045)
-        }
-    }
-}
-
-private struct TalkProWaveform: View {
+struct TalkProWaveform: View {
     let mode: TalkProWaveformMode
     let tint: Color
     let barCount: Int

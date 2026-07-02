@@ -214,7 +214,7 @@ struct RootTabsPhoneControlHub: View {
 
     private var sidebarActiveAgentTitle: String {
         let selectedID = self.normalized(self.appModel.selectedAgentId) ?? self.resolveDefaultAgentID()
-        if let agent = self.appModel.gatewayAgents.first(where: { $0.id == selectedID }) {
+        if let agent = appModel.gatewayAgents.first(where: { $0.id == selectedID }) {
             return self.agentTitle(for: agent)
         }
         return self.normalized(self.appModel.activeAgentName) ?? "Default Agent"

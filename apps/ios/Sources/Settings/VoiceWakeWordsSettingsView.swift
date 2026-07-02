@@ -42,6 +42,7 @@ struct VoiceWakeWordsSettingsView: View {
         }
         .navigationTitle("Wake Words")
         .toolbar { EditButton() }
+        .toolbar(.hidden, for: .tabBar)
         .onAppear {
             if self.triggerWords.isEmpty {
                 self.triggerWords = VoiceWakePreferences.defaultTriggerWords

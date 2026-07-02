@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>OpenClaw Talk — WeChat Call Style Demo</title>
+  <style>
+    :root {
+      --font-min: 0.8125rem; /* 13px — minimum UI text */
+      --bg-default: #f8f8f7;
+      --talk-text: #111827;
+      --talk-text-dim: #6b7280;
+      --text: #f4f6f8;
+      --text-dim: rgba(244, 246, 248, 0.55);
+      --accent-soft: rgba(232, 92, 86, 0.18);
+      --ok: #22c55e;
+      --danger: #ef4444;
+      --danger-deep: #dc2626;
+      --phone-w: 390px;
+      --phone-h: 844px;
+      --radius-phone: 44px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      background: var(--bg-default);
+      color: var(--talk-text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 40px;
+      gap: 20px;
+    }
+
+    .page-header {
+      text-align: center;
+      max-width: 520px;
+    }
+
+    .page-header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .page-header p {
+      margin-top: 6px;
+      font-size: 0.875rem;
+      color: var(--talk-text-dim);
+      line-height: 1.5;
+    }
+
+    .state-picker {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      max-width: 640px;
+    }
+
+    .state-picker button {
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      background: #ffffff;
+      color: var(--talk-text-dim);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+
+    .state-picker button:hover {
+      background: rgba(0, 0, 0, 0.04);
+      color: var(--talk-text);
+    }
+
+    .state-picker button.active {
+      background: rgba(37, 99, 235, 0.1);
+      border-color: rgba(37, 99, 235, 0.35);
+      color: #1d4ed8;
+    }
+
+    .phone-shell {
+      width: var(--phone-w);
+      height: var(--phone-h);
+      border-radius: var(--radius-phone);
+      border: 3px solid rgba(0, 0, 0, 0.08);
+      overflow: hidden;
+      position: relative;
+      background: var(--bg-default);
+    }
+
+    .phone-notch {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 126px;
+      height: 34px;
+      background: #000;
+      border-radius: 20px;
+      z-index: 20;
+    }
+
+    .screen-layer {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .screen-layer.hidden {
+      display: none;
+    }
+
+    .screen {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-default);
+      color: var(--talk-text);
+      position: relative;
+    }
+
+    .screen-settings {
+      background: var(--bg-default);
+      color: #111827;
+    }
+
+    .screen.has-image {
+      color: var(--text);
+    }
+
+    .screen.has-image::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.28);
+      pointer-events: none;
+    }
+
+    .screen > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .nav-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 54px 20px 12px;
+      flex-shrink: 0;
+    }
+
+    .nav-back,
+    .nav-settings {
+      display: grid;
+      place-items: center;
+      color: var(--talk-text);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+
+    .screen.has-image .nav-back,
+    .screen.has-image .nav-settings {
+      color: var(--text);
+    }
+
+    .nav-back svg { width: 22px; height: 22px; }
+
+    .nav-settings {
+      width: 40px;
+      height: 40px;
+      color: var(--talk-text-dim);
+      border-radius: 50%;
+    }
+
+    .screen.has-image .nav-settings {
+      color: var(--text-dim);
+    }
+
+    .nav-settings:hover { color: var(--talk-text); background: rgba(0, 0, 0, 0.05); }
+    .screen.has-image .nav-settings:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+
+    .hero {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 0 32px 24px;
+      text-align: center;
+      gap: 0;
+    }
+
+    .waveform {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 36px;
+      margin-bottom: 16px;
+    }
+
+    .waveform span {
+      display: block;
+      width: 4px;
+      border-radius: 2px;
+      background: var(--ok);
+      animation: wave 1.1s ease-in-out infinite;
+    }
+
+    .waveform span:nth-child(1) { animation-delay: 0s; height: 12px; }
+    .waveform span:nth-child(2) { animation-delay: 0.1s; height: 22px; }
+    .waveform span:nth-child(3) { animation-delay: 0.2s; height: 30px; }
+    .waveform span:nth-child(4) { animation-delay: 0.15s; height: 18px; }
+    .waveform span:nth-child(5) { animation-delay: 0.05s; height: 26px; }
+
+    @keyframes wave {
+      0%, 100% { transform: scaleY(0.45); opacity: 0.5; }
+      50% { transform: scaleY(1); opacity: 1; }
+    }
+
+    .agent-name {
+      font-size: 1.375rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    .status-line {
+      font-size: 0.9375rem;
+      color: var(--talk-text-dim);
+      line-height: 1.4;
+      min-height: 1.4em;
+    }
+
+    .screen.has-image .status-line { color: var(--text-dim); }
+
+    .status-line.active { color: var(--talk-text); }
+    .screen.has-image .status-line.active { color: rgba(244, 246, 248, 0.78); }
+    .status-line.error { color: #dc2626; }
+    .screen.has-image .status-line.error { color: #fca5a5; }
+
+    .duration {
+      margin-top: 6px;
+      font-size: var(--font-min);
+      color: rgba(17, 24, 39, 0.45);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .screen.has-image .duration {
+      color: rgba(244, 246, 248, 0.38);
+    }
+
+    .primary-zone {
+      margin-top: 36px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn-retry {
+      min-width: 140px;
+      height: 44px;
+      padding: 0 24px;
+      border-radius: 22px;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      background: rgba(0, 0, 0, 0.04);
+      color: var(--talk-text);
+      font-size: 0.9375rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background 0.15s;
+    }
+
+    .btn-retry:hover { background: rgba(0, 0, 0, 0.08); }
+
+    .screen.has-image .btn-retry {
+      border-color: rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+    }
+
+    .screen.has-image .btn-retry:hover { background: rgba(255, 255, 255, 0.14); }
+
+    .dock {
+      flex-shrink: 0;
+      padding: 20px 28px 44px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 36px;
+    }
+
+    .dock-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      width: 72px;
+    }
+
+    .dock-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: none;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.12s;
+    }
+
+    .dock-btn:active { transform: scale(0.94); }
+    .dock-btn svg { width: 28px; height: 28px; }
+
+    .dock-btn.mic {
+      background: #ffffff;
+      color: #1a1a1a;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .dock-btn.mic.on {
+      background: #ffffff;
+      color: #1a1a1a;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .dock-btn.hangup {
+      background: var(--danger-deep);
+      color: #fff;
+    }
+
+    .dock-btn.speaker {
+      background: rgba(0, 0, 0, 0.42);
+      color: #fff;
+    }
+
+    .dock-btn.speaker.on {
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+    }
+
+    .dock-btn:disabled {
+      opacity: 0.28;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .dock-label {
+      font-size: var(--font-min);
+      color: var(--talk-text-dim);
+      font-weight: 500;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .screen.has-image .dock-label {
+      color: #ffffff;
+    }
+
+    .hidden { display: none !important; }
+
+    .legend {
+      max-width: 520px;
+      font-size: 0.8125rem;
+      color: var(--talk-text-dim);
+      line-height: 1.6;
+      text-align: center;
+      padding: 0 12px;
+    }
+
+    .legend strong { color: var(--talk-text); font-weight: 600; }
+
+    .settings-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 54px 16px 12px;
+      flex-shrink: 0;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .settings-nav button {
+      border: none;
+      background: none;
+      color: #2563eb;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+
+    .settings-nav h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .settings-nav .spacer {
+      width: 48px;
+    }
+
+    .settings-content {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .settings-card {
+      background: #fff;
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .settings-row {
+      width: 100%;
+      border: none;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      font-size: 0.9375rem;
+      color: #111827;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .settings-row + .settings-row {
+      border-top: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .settings-row .value {
+      color: #6b7280;
+      font-size: 0.875rem;
+    }
+
+    .settings-copy {
+      font-size: var(--font-min);
+      color: #6b7280;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+
+    .bg-options {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .bg-option {
+      border: 2px solid transparent;
+      border-radius: 12px;
+      overflow: hidden;
+      cursor: pointer;
+      background: none;
+      padding: 0;
+      text-align: left;
+    }
+
+    .bg-option.active {
+      border-color: #60a5fa;
+    }
+
+    .bg-swatch {
+      height: 72px;
+      width: 100%;
+    }
+
+    .bg-swatch.default {
+      background: var(--bg-default);
+    }
+
+    .bg-swatch.ocean {
+      background: url("assets/background-ocean.jpg") center / cover no-repeat;
+    }
+
+    .bg-swatch.custom {
+      background: rgba(255, 255, 255, 0.08);
+      display: grid;
+      place-items: center;
+      color: var(--text-dim);
+      font-size: 1.25rem;
+    }
+
+    .bg-option span {
+      display: block;
+      padding: 8px 6px 0;
+      font-size: var(--font-min);
+      font-weight: 600;
+      color: #6b7280;
+    }
+
+    .settings-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .settings-actions button,
+    .settings-actions label {
+      flex: 1;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font-size: var(--font-min);
+      font-weight: 600;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+    }
+
+    .settings-actions label input {
+      display: none;
+    }
+
+    .settings-actions button,
+    .settings-actions label {
+      color: #111827;
+      background: #fff;
+      border-color: rgba(0, 0, 0, 0.12);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page-header">
+    <h1>Talk Page · WeChat Call Style Demo</h1>
+    <p>Talk auto-starts on enter. Open Voice &amp; Talk settings to configure call background. Preview wallpaper with “In Call · Wallpaper”.</p>
+  </div>
+
+  <div class="state-picker" id="statePicker">
+    <button type="button" data-state="offline">Gateway Offline</button>
+    <button type="button" data-state="incall" class="active">In Call</button>
+    <button type="button" data-state="incall-wallpaper">In Call · Wallpaper</button>
+    <button type="button" data-state="muted">Muted</button>
+    <button type="button" data-state="speaking">Agent Speaking</button>
+    <button type="button" data-state="connecting">Connecting</button>
+  </div>
+
+  <div class="phone-shell">
+    <div class="phone-notch" aria-hidden="true"></div>
+
+    <div class="screen-layer" id="talkLayer">
+    <div class="screen" id="screen">
+
+      <header class="nav-bar">
+        <button type="button" class="nav-back" aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
+        <button type="button" class="nav-settings" id="btnSettings" aria-label="Voice settings">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+            <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+            <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+          </svg>
+        </button>
+      </header>
+
+      <main class="hero">
+        <div class="waveform hidden" id="waveform" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="agent-name" id="agentName">main</div>
+        <div class="status-line" id="statusLine">Cannot connect</div>
+        <div class="duration hidden" id="duration">00:00</div>
+
+        <div class="primary-zone" id="primaryZone">
+          <button type="button" class="btn-retry" id="btnRetry">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Reconnect
+          </button>
+        </div>
+      </main>
+
+      <footer class="dock hidden" id="dock">
+        <div class="dock-item">
+          <button type="button" class="dock-btn mic" id="btnMute" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+            </svg>
+          </button>
+          <span class="dock-label" id="muteLabel">Mic on</span>
+        </div>
+        <div class="dock-item">
+          <button type="button" class="dock-btn hangup" id="btnHangup" aria-label="Hang up">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.57 3.58a1 1 0 0 1-.25 1.01l-2.2 2.2z" transform="rotate(135 12 12)"/>
+            </svg>
+          </button>
+          <span class="dock-label">Hang up</span>
+        </div>
+        <div class="dock-item">
+          <button type="button" class="dock-btn speaker on" id="btnSpeaker" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+          </button>
+          <span class="dock-label" id="speakerLabel">Speaker on</span>
+        </div>
+      </footer>
+
+    </div>
+    </div>
+
+    <div class="screen-layer screen-settings hidden" id="voiceSettingsLayer">
+      <header class="settings-nav">
+        <button type="button" id="btnVoiceSettingsBack">Back</button>
+        <h2>Voice &amp; Talk</h2>
+        <span class="spacer" aria-hidden="true"></span>
+      </header>
+      <div class="settings-content">
+        <div class="settings-card">
+          <button type="button" class="settings-row" id="btnOpenBackgroundSettings">
+            <span>Call Background</span>
+            <span class="value" id="backgroundSettingValue">Default gray</span>
+          </button>
+          <button type="button" class="settings-row" disabled style="opacity:0.55;cursor:default;">
+            <span>Speakerphone</span>
+            <span class="value">On</span>
+          </button>
+          <button type="button" class="settings-row" disabled style="opacity:0.55;cursor:default;">
+            <span>Background Listening</span>
+            <span class="value">Off</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="screen-layer screen-settings hidden" id="backgroundSettingsLayer">
+      <header class="settings-nav">
+        <button type="button" id="btnBackgroundSettingsBack">Back</button>
+        <h2>Call Background</h2>
+        <span class="spacer" aria-hidden="true"></span>
+      </header>
+      <div class="settings-content">
+        <p class="settings-copy">Choose a wallpaper for the Talk screen. Default gray matches the app background.</p>
+        <div class="settings-card" style="padding:16px;">
+          <div class="bg-options" id="bgOptions">
+            <button type="button" class="bg-option active" data-bg="default">
+              <div class="bg-swatch default"></div>
+              <span>Default gray</span>
+            </button>
+            <button type="button" class="bg-option" data-bg="ocean">
+              <div class="bg-swatch ocean"></div>
+              <span>Ocean</span>
+            </button>
+            <button type="button" class="bg-option" data-bg="custom" id="bgCustomOption">
+              <div class="bg-swatch custom" id="customSwatch">+</div>
+              <span>Your photo</span>
+            </button>
+          </div>
+          <div class="settings-actions" style="margin-top:14px;">
+            <label for="bgFileInput">Choose from album
+              <input type="file" id="bgFileInput" accept="image/*" />
+            </label>
+            <button type="button" id="btnResetBackground">Reset to default</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="legend">
+    <strong>Offline</strong>: status + Reconnect ·
+    <strong>In call</strong>: agent name + timer, no dock ·
+    <strong>Connecting</strong>: empty center, no agent name or status ·
+    Mic, speaker, and hang-up live in settings or system chrome
+  </p>
+
+  <script>
+    const BG_STORAGE_KEY = "openclaw.talk.background";
+
+    const states = {
+      offline: {
+        showWave: false,
+        showStatus: true,
+        status: "Cannot connect",
+        statusClass: "error",
+        sub: "",
+        showDuration: false,
+        primary: "retry",
+        showDock: false,
+      },
+      incall: {
+        showWave: true,
+        showStatus: false,
+        status: "",
+        statusClass: "active",
+        sub: "",
+        showDuration: true,
+        primary: "none",
+        showDock: false,
+        mute: false,
+        speaker: true,
+      },
+      muted: {
+        showWave: false,
+        showStatus: false,
+        status: "",
+        statusClass: "active",
+        sub: "",
+        showDuration: true,
+        primary: "none",
+        showDock: false,
+        mute: true,
+        speaker: true,
+      },
+      speaking: {
+        showWave: true,
+        showStatus: false,
+        status: "",
+        statusClass: "active",
+        sub: "",
+        showDuration: true,
+        primary: "none",
+        showDock: false,
+        mute: false,
+        speaker: true,
+      },
+      connecting: {
+        showWave: false,
+        showAgentName: false,
+        showStatus: false,
+        status: "",
+        statusClass: "active",
+        sub: "",
+        showDuration: false,
+        primary: "none",
+        showDock: false,
+        mute: true,
+        speaker: true,
+        dockDisabled: true,
+      },
+    };
+
+    let timer = null;
+    let seconds = 42;
+    let currentBackground = { type: "default", customDataUrl: null };
+
+    function formatDuration(s) {
+      const m = Math.floor(s / 60).toString().padStart(2, "0");
+      const sec = (s % 60).toString().padStart(2, "0");
+      return `${m}:${sec}`;
+    }
+
+    function updateDockLabels(muteOn, speakerOn) {
+      document.getElementById("muteLabel").textContent = muteOn ? "Mic off" : "Mic on";
+      document.getElementById("speakerLabel").textContent = speakerOn ? "Speaker on" : "Speaker off";
+    }
+
+    const backgroundLabels = {
+      default: "Default gray",
+      ocean: "Ocean",
+      custom: "Your photo",
+    };
+
+    function updateBackgroundSettingValue() {
+      document.getElementById("backgroundSettingValue").textContent =
+        backgroundLabels[currentBackground.type] || "Default gray";
+    }
+
+    function applyBackground() {
+      const screen = document.getElementById("screen");
+      screen.classList.remove("has-image");
+
+      if (currentBackground.type === "default") {
+        screen.style.background = "var(--bg-default)";
+      } else if (currentBackground.type === "ocean") {
+        screen.style.background = 'url("assets/background-ocean.jpg") center / cover no-repeat';
+        screen.classList.add("has-image");
+      } else if (currentBackground.type === "custom" && currentBackground.customDataUrl) {
+        screen.style.background = `url("${currentBackground.customDataUrl}") center / cover no-repeat`;
+        screen.classList.add("has-image");
+        const swatch = document.getElementById("customSwatch");
+        swatch.textContent = "";
+        swatch.style.background = `url("${currentBackground.customDataUrl}") center / cover no-repeat`;
+      }
+
+      document.querySelectorAll(".bg-option").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.bg === currentBackground.type);
+      });
+      updateBackgroundSettingValue();
+    }
+
+    function showTalkScreen() {
+      document.getElementById("talkLayer").classList.remove("hidden");
+      document.getElementById("voiceSettingsLayer").classList.add("hidden");
+      document.getElementById("backgroundSettingsLayer").classList.add("hidden");
+    }
+
+    function showVoiceSettingsScreen() {
+      document.getElementById("talkLayer").classList.add("hidden");
+      document.getElementById("voiceSettingsLayer").classList.remove("hidden");
+      document.getElementById("backgroundSettingsLayer").classList.add("hidden");
+    }
+
+    function showBackgroundSettingsScreen() {
+      document.getElementById("talkLayer").classList.add("hidden");
+      document.getElementById("voiceSettingsLayer").classList.add("hidden");
+      document.getElementById("backgroundSettingsLayer").classList.remove("hidden");
+    }
+
+    function saveBackground() {
+      const payload = {
+        type: currentBackground.type,
+        customDataUrl: currentBackground.type === "custom" ? currentBackground.customDataUrl : null,
+      };
+      try {
+        localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(payload));
+      } catch (_) {
+        /* ignore quota errors in demo */
+      }
+    }
+
+    function loadBackground() {
+      try {
+        const raw = localStorage.getItem(BG_STORAGE_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (saved?.type) {
+          currentBackground.type = saved.type;
+          currentBackground.customDataUrl = saved.customDataUrl || null;
+        }
+      } catch (_) {
+        currentBackground = { type: "default", customDataUrl: null };
+      }
+    }
+
+    function setBackground(type, customDataUrl = null) {
+      currentBackground = { type, customDataUrl };
+      applyBackground();
+      saveBackground();
+    }
+
+    function applyState(name) {
+      const cfg = states[name];
+      const waveform = document.getElementById("waveform");
+      const agentName = document.getElementById("agentName");
+      const statusLine = document.getElementById("statusLine");
+      const duration = document.getElementById("duration");
+      const primaryZone = document.getElementById("primaryZone");
+      const btnRetry = document.getElementById("btnRetry");
+      const dock = document.getElementById("dock");
+      const btnMute = document.getElementById("btnMute");
+      const btnSpeaker = document.getElementById("btnSpeaker");
+
+      waveform.classList.toggle("hidden", !cfg.showWave);
+
+      const showAgentName = cfg.showAgentName !== false;
+      agentName.classList.toggle("hidden", !showAgentName);
+
+      const showStatus = cfg.showStatus !== false;
+      statusLine.classList.toggle("hidden", !showStatus);
+      if (showStatus) {
+        statusLine.textContent = cfg.status + (cfg.sub ? " · " + cfg.sub : "");
+        statusLine.className = "status-line" + (cfg.statusClass ? " " + cfg.statusClass : "");
+      }
+
+      duration.classList.toggle("hidden", !cfg.showDuration);
+      if (cfg.showDuration) duration.textContent = formatDuration(seconds);
+
+      primaryZone.classList.toggle("hidden", cfg.primary === "none");
+      btnRetry.classList.toggle("hidden", cfg.primary !== "retry");
+
+      dock.classList.toggle("hidden", !cfg.showDock);
+
+      if (cfg.showDock) {
+        btnMute.classList.toggle("on", !!cfg.mute);
+        btnMute.setAttribute("aria-pressed", cfg.mute ? "true" : "false");
+        btnSpeaker.classList.toggle("on", !!cfg.speaker);
+        btnSpeaker.setAttribute("aria-pressed", cfg.speaker ? "true" : "false");
+        updateDockLabels(!!cfg.mute, !!cfg.speaker);
+        const disabled = !!cfg.dockDisabled;
+        btnMute.disabled = disabled;
+        btnSpeaker.disabled = disabled;
+        document.getElementById("btnHangup").disabled = disabled;
+      }
+
+      clearInterval(timer);
+      if (cfg.showDuration && (name === "incall" || name === "incall-wallpaper")) {
+        timer = setInterval(() => {
+          seconds += 1;
+          duration.textContent = formatDuration(seconds);
+        }, 1000);
+      }
+    }
+
+    document.getElementById("statePicker").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-state]");
+      if (!btn) return;
+      document.querySelectorAll("#statePicker button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      showTalkScreen();
+      if (btn.dataset.state === "incall" || btn.dataset.state === "incall-wallpaper") seconds = 42;
+      if (btn.dataset.state === "incall-wallpaper") {
+        setBackground("ocean");
+        applyState("incall");
+        return;
+      }
+      applyState(btn.dataset.state);
+    });
+
+    document.getElementById("btnMute").addEventListener("click", function () {
+      const on = !this.classList.contains("on");
+      this.classList.toggle("on", on);
+      this.setAttribute("aria-pressed", on ? "true" : "false");
+      updateDockLabels(on, document.getElementById("btnSpeaker").classList.contains("on"));
+    });
+
+    document.getElementById("btnSpeaker").addEventListener("click", function () {
+      const on = !this.classList.contains("on");
+      this.classList.toggle("on", on);
+      this.setAttribute("aria-pressed", on ? "true" : "false");
+      updateDockLabels(document.getElementById("btnMute").classList.contains("on"), on);
+    });
+
+    document.getElementById("btnHangup").addEventListener("click", () => {
+      clearInterval(timer);
+      document.getElementById("dock").classList.add("hidden");
+      document.getElementById("waveform").classList.add("hidden");
+      document.getElementById("duration").classList.add("hidden");
+      document.getElementById("primaryZone").classList.add("hidden");
+      const statusLine = document.getElementById("statusLine");
+      statusLine.classList.remove("hidden");
+      statusLine.textContent = "Call ended";
+      statusLine.className = "status-line active";
+      document.querySelectorAll("#statePicker button").forEach((b) => b.classList.remove("active"));
+    });
+
+    document.getElementById("btnSettings").addEventListener("click", showVoiceSettingsScreen);
+    document.getElementById("btnVoiceSettingsBack").addEventListener("click", showTalkScreen);
+    document.getElementById("btnOpenBackgroundSettings").addEventListener("click", showBackgroundSettingsScreen);
+    document.getElementById("btnBackgroundSettingsBack").addEventListener("click", showVoiceSettingsScreen);
+
+    document.getElementById("bgOptions").addEventListener("click", (e) => {
+      const btn = e.target.closest(".bg-option");
+      if (!btn) return;
+      const type = btn.dataset.bg;
+      if (type === "custom") {
+        if (currentBackground.customDataUrl) {
+          setBackground("custom", currentBackground.customDataUrl);
+        } else {
+          document.getElementById("bgFileInput").click();
+        }
+        return;
+      }
+      setBackground(type);
+    });
+
+    document.getElementById("bgFileInput").addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        setBackground("custom", reader.result);
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    });
+
+    document.getElementById("btnResetBackground").addEventListener("click", () => {
+      const swatch = document.getElementById("customSwatch");
+      swatch.textContent = "+";
+      swatch.style.background = "";
+      setBackground("default");
+      showVoiceSettingsScreen();
+    });
+
+    loadBackground();
+    applyBackground();
+    applyState("incall");
+  </script>
+</body>
+</html>

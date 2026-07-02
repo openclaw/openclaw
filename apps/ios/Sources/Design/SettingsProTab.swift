@@ -8,6 +8,8 @@ struct SettingsProTab: View {
     @Environment(\.scenePhase) var scenePhase
     @AppStorage(AppAppearancePreference.storageKey) var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
+    @AppStorage(AppAccentColorPreference.storageKey) var accentColorPreferenceRaw: String =
+        AppAccentColorPreference.coral.rawValue
     @AppStorage("node.displayName") var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") var cameraEnabled: Bool = true
@@ -92,7 +94,7 @@ struct SettingsProTab: View {
     @ViewBuilder
     private var settingsContent: some View {
         if let directRoute {
-            self.destination(for: directRoute)
+            destination(for: directRoute)
         } else {
             if self.ownsNavigationStack {
                 self.settingsNavigationStack

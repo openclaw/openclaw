@@ -7,12 +7,15 @@ struct ChatProTab: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: OpenClawChatViewModel?
     @State private var viewModelTransportModeID = ""
+    @State private var showTalk = false
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let headerSubtitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
+    let openVoiceSettings: (() -> Void)?
+    let presentTalk: Binding<Bool>?
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
@@ -20,7 +23,9 @@ struct ChatProTab: View {
         headerSubtitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
-        openSettings: (() -> Void)? = nil)
+        openSettings: (() -> Void)? = nil,
+        openVoiceSettings: (() -> Void)? = nil,
+        presentTalk: Binding<Bool>? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
@@ -28,17 +33,19 @@ struct ChatProTab: View {
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
+        self.openVoiceSettings = openVoiceSettings
+        self.presentTalk = presentTalk
     }
 
     var body: some View {
-        Group {
-            if self.ownsNavigationStack {
-                NavigationStack {
-                    self.content
+        NavigationStack {
+            self.content
+                .navigationDestination(isPresented: self.talkDestinationBinding) {
+                    TalkProTab(
+                        ownsNavigationStack: false,
+                        openSettings: { self.openSettings?() },
+                        openVoiceSettings: { self.openVoiceSettings?() ?? self.openSettings?() })
                 }
-            } else {
-                self.content
-            }
         }
         .task {
             self.syncChatViewModel()
@@ -119,7 +126,10 @@ struct ChatProTab: View {
                 self.headerIdentityBadge
             }
         } accessory: {
-            self.connectionStatusButton
+            HStack(spacing: 8) {
+                self.connectionStatusButton
+                self.talkHeaderButton
+            }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
         .padding(.bottom, 2)
@@ -193,6 +203,36 @@ struct ChatProTab: View {
     private var activeAgentID: String {
         self.normalized(self.appModel.chatAgentId)
             ?? "main"
+    }
+
+    private var talkDestinationBinding: Binding<Bool> {
+        Binding(
+            get: {
+                self.showTalk || (self.presentTalk?.wrappedValue ?? false)
+            },
+            set: { newValue in
+                self.showTalk = newValue
+                self.presentTalk?.wrappedValue = newValue
+            })
+    }
+
+    private var talkHeaderButton: some View {
+        Button {
+            self.showTalk = true
+        } label: {
+            Image(systemName: self.talkHeaderIcon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(self.appModel.talkMode.isEnabled ? OpenClawBrand.accent : .secondary)
+                .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Talk")
+        .accessibilityHint("Opens the Talk voice screen")
+        .accessibilityIdentifier("chat-talk-header-button")
+    }
+
+    private var talkHeaderIcon: String {
+        self.appModel.talkMode.isEnabled ? "phone.fill" : "phone"
     }
 
     @ViewBuilder
@@ -303,9 +343,9 @@ struct ChatProTab: View {
     }
 
     private var agentBadge: String {
-        if let identity = self.activeAgent?.identity,
+        if let identity = activeAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
+           let normalizedEmoji = normalized(emoji)
         {
             return normalizedEmoji
         }

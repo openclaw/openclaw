@@ -16,7 +16,6 @@ extension RootTabs {
     enum AppTab: Hashable {
         case control
         case chat
-        case talk
         case agent
         case settings
     }
@@ -91,10 +90,8 @@ extension RootTabs {
 
         var appTab: AppTab {
             switch self {
-            case .chat:
+            case .chat, .talk:
                 .chat
-            case .talk:
-                .talk
             case .agents:
                 .agent
             case .settings, .gateway:
@@ -179,9 +176,9 @@ extension RootTabs {
 
     static func shouldOpenRootTabFromPhoneHub(_ destination: SidebarDestination) -> Bool {
         switch destination {
-        case .chat, .talk, .agents, .gateway, .settings:
+        case .chat, .agents, .gateway, .settings:
             true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+        case .talk, .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
              .usage,
              .cron, .docs:
             false
@@ -194,8 +191,6 @@ extension RootTabs {
             .overview
         case .chat:
             .chat
-        case .talk:
-            .talk
         case .agent:
             .agents
         case .settings:
@@ -254,7 +249,7 @@ extension RootTabs {
     }
 
     static let sidebarGroups: [SidebarGroup] = [
-        SidebarGroup(title: "CHAT", destinations: [.chat, .talk]),
+        SidebarGroup(title: "CHAT", destinations: [.chat]),
         SidebarGroup(
             title: "CONTROL",
             destinations: [
@@ -276,12 +271,33 @@ extension RootTabs {
     ]
 
     static var phoneControlGroups: [SidebarGroup] {
-        self.sidebarGroups
+        sidebarGroups
             .map { group in
                 SidebarGroup(
                     title: group.title,
                     destinations: group.destinations.filter { $0 != .agents })
             }
             .filter { !$0.destinations.isEmpty }
+    }
+
+    static func shouldPresentTalkOnLaunch(arguments: [String]) -> Bool {
+        if requestedInitialSidebarDestination(arguments: arguments) == .talk {
+            return true
+        }
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else {
+            return false
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return false }
+        switch arguments[valueIndex].lowercased() {
+        case "talk", "voice":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func normalizedSidebarDestination(_ destination: SidebarDestination) -> SidebarDestination {
+        destination == .talk ? .chat : destination
     }
 }

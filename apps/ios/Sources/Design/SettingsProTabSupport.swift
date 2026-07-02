@@ -18,6 +18,8 @@ enum SettingsRoute: Hashable {
 enum SettingsLayout {
     static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
     static let rowHeight: CGFloat = 58
+    /// Shared height for toggles, navigation rows, pickers, and detail rows inside grouped settings cards.
+    static let groupedRowHeight: CGFloat = 48
 }
 
 struct SettingsApprovalItem: Identifiable {

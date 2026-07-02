@@ -773,6 +773,10 @@ final class NodeAppModel {
         self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
+    func setTalkInputMuted(_ muted: Bool) {
+        self.talkMode.setInputMuted(muted)
+    }
+
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = await self.locationService.ensureAuthorization(mode: mode)

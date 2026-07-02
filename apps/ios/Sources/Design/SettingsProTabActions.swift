@@ -18,7 +18,7 @@ extension SettingsProTab {
                     Text(title)
                         .font(.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawProFont.minimum)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -98,7 +98,7 @@ extension SettingsProTab {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawProFont.minimum)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -110,25 +110,84 @@ extension SettingsProTab {
     }
 
     func detailListCard(@ViewBuilder content: () -> some View) -> some View {
+        self.settingsGroupedCard(content: content)
+    }
+
+    func settingsDestinationSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View) -> some View
+    {
+        VStack(alignment: .leading, spacing: 8) {
+            ProSectionHeader(title: title)
+            content()
+        }
+    }
+
+    func settingsGroupedCard(@ViewBuilder content: () -> some View) -> some View {
         ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
             VStack(spacing: 0, content: content)
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    func settingsGroupedDivider() -> some View {
+        Divider().padding(.leading, 14)
+    }
+
+    func settingsGroupedRowPadding(@ViewBuilder content: () -> some View) -> some View {
+        HStack(alignment: .center) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: SettingsLayout.groupedRowHeight)
+    }
+
+    func settingsGroupedPickerRow(
+        label: String,
+        selection: Binding<some Hashable>,
+        @ViewBuilder content: () -> some View) -> some View
+    {
+        self.settingsGroupedRowPadding {
+            HStack(alignment: .center, spacing: 8) {
+                Text(label)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Picker("", selection: selection, content: content)
+                    .labelsHidden()
+            }
+            .font(.body)
+        }
+    }
+
+    func settingsNavigationLinkRow(
+        title: String,
+        value: String,
+        @ViewBuilder destination: () -> some View) -> some View
+    {
+        NavigationLink {
+            destination()
+        } label: {
+            self.settingsGroupedRowPadding {
+                self.simpleSettingsRow(title: title, value: value)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     func detailRow(_ label: String, value: String) -> some View {
-        HStack {
+        HStack(alignment: .center) {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+        .font(.body)
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: SettingsLayout.groupedRowHeight)
     }
 
     func reconnectGateway() async {
@@ -762,11 +821,26 @@ extension SettingsProTab {
         ]
     }
 
+    var voiceStatusDetail: String {
+        if !self.gatewayConnected { return "Connect a gateway to use Talk voice features." }
+        let mode = self.appModel.talkMode.gatewayTalkVoiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !mode.isEmpty { return mode }
+        return "Configure voice routing and Talk behavior."
+    }
+
     var voiceDetail: String {
         if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
         if self.talkEnabled { return "Talk on" }
         if self.voiceWakeEnabled { return "Wake on" }
         return "Off"
+    }
+
+    var talkInputMutedBinding: Binding<Bool> {
+        Binding(
+            get: { self.appModel.talkMode.isInputMuted },
+            set: { muted in
+                self.appModel.setTalkInputMuted(muted)
+            })
     }
 
     var diagnosticsDetail: String {

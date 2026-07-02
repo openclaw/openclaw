@@ -75,16 +75,15 @@ struct RootTabsSourceGuardTests {
             to: "private var sidebarSplitContent: some View")
 
         let chatRange = try #require(phoneTabContent.range(of: "ChatProTab("))
-        let talkRange = try #require(phoneTabContent.range(of: "TalkProTab("))
         let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
         let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
         let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
 
-        #expect(chatRange.lowerBound < talkRange.lowerBound)
-        #expect(talkRange.lowerBound < controlRange.lowerBound)
+        #expect(!phoneTabContent.contains("TalkProTab("))
+        #expect(chatRange.lowerBound < controlRange.lowerBound)
         #expect(controlRange.lowerBound < agentRange.lowerBound)
         #expect(agentRange.lowerBound < settingsRange.lowerBound)
-        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost \{/).count == 3)
+        #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost \{/).count == 2)
     }
 
     @Test func `sidebar keeps navigation model destination only`() throws {
@@ -121,7 +120,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("if self.isSidebarDrawerLayout {"))
         #expect(!source.contains("private var sidebarFooter: some View"))
         #expect(!source.contains("LabeledContent(\"Version\""))
-        #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat, .talk])"))
+        #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat])"))
         #expect(!navigationSource.contains("title: \"AGENT\""))
         #expect(navigationSource.contains("case settings"))
         #expect(!navigationSource.contains("case settingsChannels"))
@@ -255,11 +254,19 @@ struct RootTabsSourceGuardTests {
         #expect(!talkSource.contains("conversationCard"))
         #expect(!talkSource.contains("voiceModeCard"))
         #expect(!talkSource.contains("statusChip"))
+        #expect(!talkSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(!talkSource.contains("CommandPanel("))
+        #expect(talkSource.contains("TalkProNavigationChrome"))
+        #expect(!talkSource.contains("TalkProDock("))
+        #expect(talkSource.contains("placement: .topBarTrailing"))
+        #expect(talkSource.contains("talk-voice-settings-control"))
         #expect(settingsList.contains("Section(\"Device\")"))
         #expect(!settingsList.contains("ProCard("))
         #expect(settingsRow.contains("NavigationLink(value: route)"))
         #expect(!settingsRow.contains("chevron.right"))
         #expect(settingsSource.contains("settings-appearance-menu"))
+        #expect(settingsSource.contains("settings-accent-color-picker"))
+        #expect(settingsSource.contains("AppAccentColorPreference.allCases"))
         #expect(!settingsSource.contains(".pickerStyle(.segmented)"))
         #expect(!overviewSource.contains("ProCapsule("))
         #expect(overviewSource.contains("value: self.gatewayConnectionText"))
@@ -292,6 +299,9 @@ struct RootTabsSourceGuardTests {
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
         #expect(chatSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(chatSource.contains("chat-talk-header-button"))
+        #expect(chatSource.contains("phone.fill"))
+        #expect(chatSource.contains("phone\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
     }
@@ -656,7 +666,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("case .settings:"))
         #expect(rootSource
             .matches(
-                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: self\.handleSettingsRouteChange/)
+                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: handleSettingsRouteChange/)
             .count >= 1)
         #expect(rootSource
             .contains(
@@ -678,8 +688,8 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.selectedSettingsRoute = nil"))
         #expect(rootSource.contains("self.selectedSidebarDestination = .settings"))
         #expect(rootSource.contains("self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId"))
-        #expect(rootSource.contains("onRouteChange: self.handleSettingsRouteChange"))
-        #expect(rootSource.contains("navigateToRoute: self.pushSidebarSettingsRoute"))
+        #expect(rootSource.contains("onRouteChange: handleSettingsRouteChange"))
+        #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
         #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))

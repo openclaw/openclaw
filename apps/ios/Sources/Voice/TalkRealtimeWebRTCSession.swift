@@ -38,6 +38,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private var factory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
+    private var localAudioTrack: RTCAudioTrack?
     private var dataChannel: RTCDataChannel?
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
@@ -138,6 +139,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
         let audioSource = factory.audioSource(with: constraints)
         let audioTrack = factory.audioTrack(with: audioSource, trackId: Self.audioTrackID)
+        self.localAudioTrack = audioTrack
         peer.add(audioTrack, streamIds: [Self.mediaStreamID])
 
         let channelConfig = RTCDataChannelConfiguration()
@@ -161,9 +163,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
     }
 
+    func setMicrophoneEnabled(_ enabled: Bool) {
+        self.localAudioTrack?.isEnabled = enabled
+        guard !self.stopped else { return }
+        self.delegate?.realtimeSession(self, didChangeStatus: enabled ? "Listening" : "Mic muted")
+    }
+
     func stop() {
         let shouldNotify = !self.stopped
         self.stopped = true
+        self.localAudioTrack = nil
         self.cancelActiveToolCalls()
         self.toolBuffers.removeAll()
         self.dataChannel?.close()

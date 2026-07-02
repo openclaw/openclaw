@@ -43,6 +43,7 @@ final class TalkModeManager: NSObject {
     var isSpeaking: Bool = false
     var isUserSpeechDetected: Bool = false
     var isPushToTalkActive: Bool = false
+    var isInputMuted: Bool = false
     var statusText: String = "Off"
     /// 0..1-ish (not calibrated). Intended for UI feedback only.
     var micLevel: Double = 0
@@ -269,6 +270,16 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    func setInputMuted(_ muted: Bool) {
+        guard self.isInputMuted != muted else { return }
+        self.isInputMuted = muted
+        if muted {
+            self.applyInputMutedState()
+        } else {
+            Task { await self.resumeInputCapture() }
+        }
+    }
+
     func applyProviderSelectionChanged() {
         let shouldRestart = self.isEnabled
         if shouldRestart {
@@ -298,6 +309,10 @@ final class TalkModeManager: NSObject {
             "talk.timeline manager start enter enabled=\(self.isEnabled) "
                 + "listening=\(self.isListening) gatewayConnected=\(self.gatewayConnected)")
         guard self.isEnabled else { return }
+        guard !self.isInputMuted else {
+            self.statusText = "Mic muted"
+            return
+        }
         guard self.captureMode != .pushToTalk else { return }
         guard self.foregroundAudioCaptureAllowed else {
             self.statusText = "Paused"
@@ -426,6 +441,7 @@ final class TalkModeManager: NSObject {
 
     func stop() {
         self.isEnabled = false
+        self.isInputMuted = false
         self.cancelPendingStart()
         self.isListening = false
         self.isUserSpeechDetected = false
@@ -871,6 +887,48 @@ final class TalkModeManager: NSObject {
             let msg = error.localizedDescription
             GatewayDiagnostics.log("talk speech: restart failed error=\(msg)")
         }
+    }
+
+    private func applyInputMutedState() {
+        guard self.isEnabled else { return }
+        self.isListening = false
+        self.isUserSpeechDetected = false
+        self.micLevel = 0
+        self.silenceTask?.cancel()
+        self.silenceTask = nil
+        self.lastTranscript = ""
+        self.lastHeard = nil
+        self.stopRecognition()
+        self.realtimeRelaySession?.pauseMicrophoneCapture()
+        self.realtimeSession?.setMicrophoneEnabled(false)
+        self.statusText = "Mic muted"
+        self.gatewayTalkActiveModeTitle = "Mic muted"
+        self.gatewayTalkActiveModeSubtitle = "Tap mic to resume listening"
+    }
+
+    private func resumeInputCapture() async {
+        guard self.isEnabled, !self.isInputMuted else { return }
+        if self.realtimeRelaySession != nil {
+            do {
+                try self.realtimeRelaySession?.resumeMicrophoneCapture()
+                self.isListening = true
+                self.statusText = "Listening"
+                self.gatewayTalkActiveModeTitle = "Listening"
+                self.gatewayTalkActiveModeSubtitle = nil
+            } catch {
+                self.statusText = "Mic resume failed: \(error.localizedDescription)"
+            }
+            return
+        }
+        if self.realtimeSession != nil {
+            self.realtimeSession?.setMicrophoneEnabled(true)
+            self.isListening = true
+            self.statusText = "Listening"
+            self.gatewayTalkActiveModeTitle = "Listening"
+            self.gatewayTalkActiveModeSubtitle = nil
+            return
+        }
+        await self.start()
     }
 
     private func stopRecognition() {

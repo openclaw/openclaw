@@ -2,6 +2,72 @@ import OpenClawKit
 import SwiftUI
 
 extension SettingsProTab {
+    private var accentColorPreference: AppAccentColorPreference {
+        AppAccentColorPreference(rawValue: accentColorPreferenceRaw) ?? .coral
+    }
+
+    var accentColorPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ProIconBadge(systemName: "paintpalette.fill", color: self.accentColorPreference.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Accent Color")
+                        .font(.subheadline.weight(.semibold))
+                    Text(self.accentColorPreference.label)
+                        .font(OpenClawProFont.minimum)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                ForEach(AppAccentColorPreference.allCases) { preference in
+                    self.accentColorOption(preference)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-accent-color-picker")
+    }
+
+    private func accentColorOption(_ preference: AppAccentColorPreference) -> some View {
+        let isSelected = self.accentColorPreference == preference
+        return Button {
+            self.accentColorPreferenceRaw = preference.rawValue
+            OpenClawBrand.applyWindowChrome(appearance: self.appearancePreference)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(preference.color)
+                    .frame(width: 34, height: 34)
+                if isSelected {
+                    Circle()
+                        .strokeBorder(.white, lineWidth: 2)
+                        .frame(width: 34, height: 34)
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .overlay {
+                Circle()
+                    .strokeBorder(
+                        isSelected ? preference.color : Color.primary.opacity(0.12),
+                        lineWidth: isSelected ? 2 : 1)
+                    .frame(width: 38, height: 38)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preference.label)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var appearancePreference: AppAppearancePreference {
+        AppAppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
+    }
+
     var appearanceMenu: some View {
         Menu {
             Picker("Appearance", selection: self.$appearancePreferenceRaw) {
@@ -50,9 +116,9 @@ extension SettingsProTab {
     }
 
     var gatewaySummaryDetail: String {
-        let agentCount = self.appModel.gatewayAgents.count
+        let agentCount = appModel.gatewayAgents.count
         let agents = agentCount == 1 ? "1 agent" : "\(agentCount) agents"
-        return "\(self.gatewayStatusDetail) • \(agents)"
+        return "\(gatewayStatusDetail) • \(agents)"
     }
 
     var gatewayActions: some View {
@@ -102,6 +168,10 @@ extension SettingsProTab {
                 title: "Voice & Talk",
                 detail: self.voiceDetail,
                 route: .voice)
+        }
+
+        Section("Theme") {
+            self.accentColorPicker
         }
 
         Section("Device") {
@@ -187,7 +257,7 @@ extension SettingsProTab {
                 .padding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
         }
-        .navigationTitle(self.title(for: route))
+        .navigationTitle(title(for: route))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let headerLeadingAction {
@@ -196,6 +266,7 @@ extension SettingsProTab {
                 }
             }
         }
+        .toolbar(route == .voice ? .hidden : .visible, for: .tabBar)
     }
 
     var gatewayDestination: some View {
@@ -383,17 +454,25 @@ extension SettingsProTab {
     }
 
     var voiceDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 28) {
             self.detailStatusCard(
                 icon: "waveform",
                 title: "Voice & Talk",
-                detail: self.appModel.talkMode.gatewayTalkVoiceModeTitle,
+                detail: self.voiceStatusDetail,
                 value: self.voiceDetail,
                 color: self.talkEnabled || self.voiceWakeEnabled ? OpenClawBrand.accent : .secondary)
 
-            self.voiceFeatureCard
-            self.talkVoiceSettingsCard
-            self.shareSettingsCard
+            self.settingsDestinationSection("Voice Wake") {
+                self.voiceWakeSettingsCard
+            }
+
+            self.settingsDestinationSection("Talk") {
+                self.talkExperienceSettingsCard
+            }
+
+            self.settingsDestinationSection("Gateway Voice") {
+                self.talkGatewayVoiceSettingsCard
+            }
         }
     }
 
@@ -431,6 +510,10 @@ extension SettingsProTab {
             }
 
             self.diagnosticsAdvancedCard
+
+            self.settingsDestinationSection("Share") {
+                self.shareSettingsCard
+            }
         }
     }
 
@@ -784,41 +867,63 @@ extension SettingsProTab {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    var voiceFeatureCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
-                    self.appModel.setVoiceWakeEnabled(enabled)
-                }
-                self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
-                    guard !self.appModel.isAppleReviewDemoModeEnabled else {
-                        self.talkEnabled = false
-                        return
+    var voiceWakeSettingsCard: some View {
+        settingsGroupedCard {
+            self.settingsGroupedRowPadding {
+                Toggle("Voice Wake", isOn: self.$voiceWakeEnabled)
+                    .onChange(of: self.voiceWakeEnabled) { _, enabled in
+                        self.appModel.setVoiceWakeEnabled(enabled)
                     }
-                    self.appModel.setTalkEnabled(enabled)
-                }
-                .disabled(self.appModel.isAppleReviewDemoModeEnabled)
-                Picker("Speech Language", selection: self.$talkSpeechLocale) {
-                    ForEach(TalkSpeechLocale.supportedOptions()) { option in
-                        Text(option.label).tag(option.id)
+            }
+            self.settingsGroupedDivider()
+            self.settingsNavigationLinkRow(
+                title: "Wake Words",
+                value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+            {
+                VoiceWakeWordsSettingsView()
+            }
+        }
+    }
+
+    var talkExperienceSettingsCard: some View {
+        settingsGroupedCard {
+            self.settingsGroupedRowPadding {
+                Toggle("Talk Mode", isOn: self.$talkEnabled)
+                    .disabled(self.appModel.isAppleReviewDemoModeEnabled)
+                    .onChange(of: self.talkEnabled) { _, enabled in
+                        guard !self.appModel.isAppleReviewDemoModeEnabled else {
+                            self.talkEnabled = false
+                            return
+                        }
+                        self.appModel.setTalkEnabled(enabled)
                     }
-                }
-                self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
-                self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-                NavigationLink {
-                    VoiceWakeWordsSettingsView()
-                } label: {
-                    self.simpleSettingsRow(
-                        title: "Wake Words",
-                        value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+            }
+            self.settingsGroupedDivider()
+            self.settingsNavigationLinkRow(
+                title: "Call Background",
+                value: TalkWallpaperStore.selection().label)
+            {
+                TalkBackgroundSettingsView()
+            }
+            self.settingsGroupedDivider()
+            self.settingsGroupedRowPadding {
+                Toggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
+            }
+            self.settingsGroupedDivider()
+            self.settingsGroupedRowPadding {
+                Toggle("Mute Microphone", isOn: self.talkInputMutedBinding)
+            }
+            self.settingsGroupedDivider()
+            self.settingsGroupedPickerRow(label: "Languages", selection: self.$talkSpeechLocale) {
+                ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                    Text(option.label).tag(option.id)
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    var talkVoiceSettingsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    var talkGatewayVoiceSettingsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if self.gatewayConnected,
                let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
             {
@@ -828,56 +933,68 @@ extension SettingsProTab {
                     onShowDetails: {
                         self.showTalkIssueDetails = true
                     })
+                    .padding(.horizontal, OpenClawProMetric.pagePadding)
             }
-            ProCard(radius: SettingsLayout.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
+
+            self.settingsGroupedCard {
+                self.settingsGroupedRowPadding {
                     Picker("Provider", selection: self.talkProviderSelectionBinding) {
                         ForEach(TalkModeProviderSelection.allCases) { option in
                             Text(option.label).tag(option.rawValue)
                         }
                     }
-                    if self.shouldShowRealtimeVoicePicker {
-                        Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
-                            Text("Gateway Default").tag("")
-                            ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
-                                Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
-                            }
+                }
+                if self.shouldShowRealtimeVoicePicker {
+                    self.settingsGroupedDivider()
+                    self.settingsGroupedPickerRow(
+                        label: "Gateway",
+                        selection: self.talkRealtimeVoiceSelectionBinding)
+                    {
+                        Text("Default").tag("")
+                        ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
                         }
                     }
-                    self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                    Divider()
-                    self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
-                    if let issue = self.gatewayTalkLastIssueDetail {
-                        Divider()
-                        self.detailRow("Last Voice Issue", value: issue)
-                    }
-                    Divider()
-                    self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
-                    Divider()
-                    self.detailRow("API Key", value: self.talkApiKeyStatus)
                 }
+                self.settingsGroupedDivider()
+                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                self.settingsGroupedDivider()
+                self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
+                if let issue = self.gatewayTalkLastIssueDetail {
+                    self.settingsGroupedDivider()
+                    self.detailRow("Last Voice Issue", value: issue)
+                }
+                self.settingsGroupedDivider()
+                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                self.settingsGroupedDivider()
+                self.detailRow("API Key", value: self.talkApiKeyStatus)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var shareSettingsCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 Toggle("Show Talk Control", isOn: self.$talkButtonEnabled)
-                TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
-                    .lineLimit(2...5)
-                    .textInputAutocapitalization(.sentences)
-                    .textFieldStyle(.roundedBorder)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Default Share Instruction")
+                        .font(.subheadline.weight(.semibold))
+                    TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                        .lineLimit(2...5)
+                        .textInputAutocapitalization(.sentences)
+                        .textFieldStyle(.roundedBorder)
+                }
                 Button {
                     Task { await self.appModel.runSharePipelineSelfTest() }
                 } label: {
                     Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 Text(self.appModel.lastShareEventText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -897,10 +1014,11 @@ extension SettingsProTab {
                     self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
                 }
                 self.settingsButtonToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
-                NavigationLink {
+                self.settingsNavigationLinkRow(
+                    title: "Discovery Logs",
+                    value: self.gatewayController.discoveryStatusText)
+                {
                     GatewayDiscoveryDebugLogView()
-                } label: {
-                    self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
                 }
             }
         }
@@ -983,8 +1101,9 @@ extension SettingsProTab {
     }
 
     func simpleSettingsRow(title: String, value: String) -> some View {
-        HStack {
+        HStack(alignment: .center, spacing: 8) {
             Text(title)
+                .foregroundStyle(.primary)
             Spacer(minLength: 8)
             Text(value)
                 .foregroundStyle(.secondary)
@@ -992,8 +1111,8 @@ extension SettingsProTab {
                 .truncationMode(.middle)
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
         }
-        .font(.subheadline)
+        .font(.body)
     }
 }

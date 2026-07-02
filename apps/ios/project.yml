@@ -62,6 +62,7 @@ targets:
       - path: Sources
     resources:
       - path: Resources/Localizable.xcstrings
+      - path: Resources/TalkWallpapers
     dependencies:
       - target: OpenClawShareExtension
         embed: true
