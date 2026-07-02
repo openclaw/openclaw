@@ -122,7 +122,7 @@ export function renderChatSessionSelect(
         surface,
         selectedSessionLabel,
         pickerOpen,
-        disabled: !state.connected || !state.client,
+        disabled: !state.connected || !state.client || state.tab !== "chat",
         compact,
       })}
       ${modelSelect} ${quotaPill}
@@ -825,7 +825,7 @@ function renderChatAgentSelect(
         aria-label=${t("chat.selectors.agentFilter")}
         title=${selectedLabel}
         .value=${activeAgentId}
-        ?disabled=${!state.connected}
+        ?disabled=${!state.connected || state.tab !== "chat"}
         @change=${(e: Event) => {
           const nextAgentId = normalizeAgentId((e.target as HTMLSelectElement).value);
           if (nextAgentId === activeAgentId) {
