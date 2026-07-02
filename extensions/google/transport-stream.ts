@@ -41,6 +41,7 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { buildGoogleFunctionDeclarations } from "./tool-schema.js";
 import {
   isGoogleVertexCredentialsMarker,
   resolveGoogleVertexAuthorizedUserHeaders,
@@ -305,6 +306,12 @@ function mapToolChoice(
     default:
       return { mode: "AUTO" };
   }
+}
+
+function getForcedToolChoiceName(choice: GoogleTransportOptions["toolChoice"]): string | undefined {
+  return typeof choice === "object" && choice.type === "function"
+    ? choice.function.name
+    : undefined;
 }
 
 function mapStopReasonString(reason: string): "stop" | "length" | "error" {
@@ -698,21 +705,6 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   return contents;
 }
 
-function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
-  }
-  return [
-    {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
-    },
-  ];
-}
-
 export function buildGoogleGenerativeAiParams(
   model: GoogleTransportModel,
   context: Context,
@@ -753,8 +745,16 @@ export function buildGoogleGenerativeAiParams(
       ],
     };
   }
-  if (!cachedContent && context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
+  const functionDeclarations = !cachedContent ? buildGoogleFunctionDeclarations(context.tools) : [];
+  const availableToolNames = new Set(functionDeclarations.map((tool) => tool.name));
+  const forcedToolChoiceName = !cachedContent
+    ? getForcedToolChoiceName(options?.toolChoice)
+    : undefined;
+  if (forcedToolChoiceName && !availableToolNames.has(forcedToolChoiceName)) {
+    throw new Error(`forced Google tool choice "${forcedToolChoiceName}" is unavailable`);
+  }
+  if (functionDeclarations.length > 0) {
+    params.tools = [{ functionDeclarations }];
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
       params.toolConfig = {

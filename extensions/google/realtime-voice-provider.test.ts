@@ -302,6 +302,140 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
   });
 
+  it("quarantines invalid realtime tools before connecting Google Live", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const unreadable = { type: "function", name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+      },
+      instructions: "Speak briefly.",
+      tools: [
+        unreadable,
+        {
+          type: "function",
+          name: "dynamic_schema",
+          description: "dynamic",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { $dynamicRef: "#target" },
+            },
+          },
+        },
+        {
+          type: "function",
+          name: "openclaw_agent_consult",
+          description: "Ask OpenClaw",
+          parameters: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+            },
+            required: ["question"],
+          },
+        },
+      ] as never,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const config = lastConnectParams().config as {
+      tools?: Array<{
+        functionDeclarations?: Array<{
+          behavior?: string;
+          description?: string;
+          name?: string;
+          parametersJsonSchema?: unknown;
+        }>;
+      }>;
+    };
+    expect(config.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "openclaw_agent_consult",
+            description: "Ask OpenClaw",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                question: { type: "string" },
+              },
+              required: ["question"],
+            },
+            behavior: "NON_BLOCKING",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("omits realtime tools when the tool list length is unreadable", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const tools = new Proxy([] as unknown[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length getter exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+      },
+      tools: tools as never,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("tools");
+  });
+
+  it("keeps parameter-free realtime tools", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+      },
+      tools: [
+        {
+          type: "function",
+          name: "ping",
+          description: "Ping",
+        },
+      ] as never,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const config = lastConnectParams().config as {
+      tools?: Array<{ functionDeclarations?: Array<Record<string, unknown>> }>;
+    };
+    expect(config.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "ping",
+            description: "Ping",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("omits zero temperature for native audio responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
