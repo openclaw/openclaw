@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeAnthropicSchema } from "./anthropic-schema-normalizer.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 type AnthropicToolDescriptor = {
@@ -81,15 +82,21 @@ export function projectAnthropicTools(
         // Description is optional; keep the usable tool schema.
       }
       const wireName = toWireName(name);
+      const inputSchema = {
+        type: "object" as const,
+        properties: (properties ?? {}) as Record<string, unknown>,
+        required: (required ?? []) as string[],
+        additionalProperties: false as const,
+      };
       projectedTool = {
         originalName: name,
         wireName,
         ...(description ? { description } : {}),
-        inputSchema: {
-          type: "object",
-          properties: (properties ?? {}) as Record<string, unknown>,
-          required: (required ?? []) as string[],
-          additionalProperties: false,
+        inputSchema: normalizeAnthropicSchema(inputSchema) as {
+          type: "object";
+          properties: Record<string, unknown>;
+          required: string[];
+          additionalProperties: false;
         },
       };
     } catch {
