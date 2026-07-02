@@ -284,7 +284,7 @@ enum TalkModeRoutingResolver {
             realtimeModelId = defaultRealtimeModelId
             // Provider selection can replace provider details, but an explicit Gateway-owned
             // realtime route must remain on the Gateway (for example, Azure-backed OpenAI).
-            route = parsed.usesExplicitGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
+            route = parsed.requiresGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
         }
 
         return TalkModeResolvedRouting(
@@ -342,7 +342,7 @@ struct TalkModeGatewayConfigState {
     let normalizedPayload: Bool
     let missingResolvedPayload: Bool
     let executionMode: TalkModeExecutionMode
-    let usesExplicitGatewayRealtimeTransport: Bool
+    let requiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
     let configuredModelId: String?
@@ -403,7 +403,12 @@ enum TalkModeGatewayConfigParser {
         let realtimeVoiceId = Self.firstString(realtime, keys: ["voice"])
             ?? Self.firstString(realtimeProviderConfig, keys: ["voice"])
         let realtimeTransport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
-        let executionMode = Self.resolvedExecutionMode(realtime)
+        let requiresGatewayRealtimeTransport = realtimeTransport == "gateway-relay"
+            || realtimeTransport == "provider-websocket"
+            || Self.usesAzureOpenAI(provider: realtimeProvider, config: realtimeProviderConfig)
+        let executionMode = Self.resolvedExecutionMode(
+            realtime,
+            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport)
         let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let interruptOnSpeech = talk?["interruptOnSpeech"]?.boolValue
         let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
@@ -416,8 +421,7 @@ enum TalkModeGatewayConfigParser {
             normalizedPayload: selection?.normalizedPayload == true,
             missingResolvedPayload: talk != nil && selection == nil,
             executionMode: executionMode,
-            usesExplicitGatewayRealtimeTransport: realtimeTransport == "gateway-relay"
-                || realtimeTransport == "provider-websocket",
+            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
             configuredModelId: model,
@@ -443,7 +447,10 @@ enum TalkModeGatewayConfigParser {
         return nil
     }
 
-    private static func resolvedExecutionMode(_ realtime: [String: AnyCodable]?) -> TalkModeExecutionMode {
+    private static func resolvedExecutionMode(
+        _ realtime: [String: AnyCodable]?,
+        requiresGatewayRealtimeTransport: Bool) -> TalkModeExecutionMode
+    {
         guard let realtime else { return .native }
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
@@ -455,6 +462,9 @@ enum TalkModeGatewayConfigParser {
         }
         if brain != nil, brain != "agent-consult" {
             return .native
+        }
+        if requiresGatewayRealtimeTransport {
+            return .realtimeRelay
         }
         switch transport {
         case "managed-room":
@@ -475,6 +485,14 @@ enum TalkModeGatewayConfigParser {
             return .realtimeRelay
         }
         return .realtimeWebRTC
+    }
+
+    private static func usesAzureOpenAI(
+        provider: String?,
+        config: [String: AnyCodable]?) -> Bool
+    {
+        guard provider?.caseInsensitiveCompare("openai") == .orderedSame else { return false }
+        return self.firstString(config, keys: ["azureEndpoint", "azureDeployment"]) != nil
     }
 
     private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {

@@ -420,6 +420,39 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeWebRTC)
     }
 
+    @Test func `keeps Azure open AI realtime on gateway relay`() {
+        for providerConfig in [
+            ["azureEndpoint": "https://example.openai.azure.com"],
+            ["azureDeployment": "realtime-prod"],
+        ] {
+            let config: [String: Any] = [
+                "talk": [
+                    "realtime": [
+                        "provider": "openai",
+                        "providers": ["openai": providerConfig],
+                        "mode": "realtime",
+                        "transport": "webrtc",
+                        "brain": "agent-consult",
+                    ],
+                ],
+            ]
+            let parsed = TalkModeGatewayConfigParser.parse(
+                config: config,
+                defaultProvider: "elevenlabs",
+                defaultModelIdFallback: "eleven_v3",
+                defaultRealtimeModelIdFallback: "gpt-realtime-2",
+                defaultSilenceTimeoutMs: 900)
+            let routing = TalkModeRoutingResolver.resolve(
+                parsed: parsed,
+                providerSelection: .openAIRealtime,
+                defaultProvider: "elevenlabs",
+                defaultRealtimeModelId: "gpt-realtime-2")
+
+            #expect(parsed.executionMode == .realtimeRelay)
+            #expect(routing.route == .realtimeRelay)
+        }
+    }
+
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
         let config: [String: Any] = [
             "talk": [
