@@ -108,7 +108,8 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 10;
+const DEFAULT_MAX_INPUT_IMAGES = 10;
+const MAX_REFERENCE_IMAGE_INPUTS = 14;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -156,7 +157,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Reference images for edit or style reference; max ${MAX_INPUT_IMAGES}.`,
+      description: `Reference images for edit or style reference; max ${MAX_REFERENCE_IMAGE_INPUTS}.`,
     }),
   ),
   model: Type.Optional(
@@ -424,7 +425,7 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     args,
     singularKey: "image",
     pluralKey: "images",
-    maxCount: MAX_INPUT_IMAGES,
+    maxCount: MAX_REFERENCE_IMAGE_INPUTS,
     label: "reference images",
   });
 }
@@ -520,7 +521,6 @@ function validateImageGenerationCapabilities(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
-  inferredResolution?: ImageGenerationResolution;
   explicitResolution?: boolean;
 }) {
   const provider = params.provider;
@@ -540,7 +540,7 @@ function validateImageGenerationCapabilities(params: {
     if (!provider.capabilities.edit.enabled) {
       throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
     }
-    const maxInputImages = provider.capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
+    const maxInputImages = provider.capabilities.edit.maxInputImages ?? DEFAULT_MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,

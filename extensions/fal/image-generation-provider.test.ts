@@ -46,6 +46,7 @@ describe("fal image-generation provider", () => {
 
   it("publishes model-specific Grok and Nano Banana 2 Lite geometry", () => {
     const geometry = buildFalImageGenerationProvider().capabilities.geometry;
+    const edit = buildFalImageGenerationProvider().capabilities.edit;
     const grokRatios = geometry?.aspectRatiosByModel?.["xai/grok-imagine-image"];
     const grokResolutions = geometry?.resolutionsByModel?.["xai/grok-imagine-image"];
     const nanoResolutions = geometry?.resolutionsByModel?.["google/nano-banana-2-lite"];
@@ -59,6 +60,7 @@ describe("fal image-generation provider", () => {
     );
     expect(nanoResolutions).toEqual([]);
     expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
+    expect(edit.maxInputImages).toBe(14);
   });
 
   it("generates image buffers from the fal sync API", async () => {

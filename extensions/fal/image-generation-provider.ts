@@ -625,7 +625,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       edit: {
         enabled: true,
         maxCount: 4,
-        maxInputImages: GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
+        maxInputImages: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
