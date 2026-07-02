@@ -656,6 +656,22 @@ function assertFeishuReadTargetAllowed(params: {
   }
 }
 
+function assertFeishuProvidedReadTargetAllowed(params: {
+  cfg: ClawdbotConfig;
+  account: ResolvedFeishuAccount;
+  chatId?: string | null;
+}) {
+  const chatId = params.chatId?.trim();
+  if (!chatId) {
+    return;
+  }
+  assertFeishuReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    chatId,
+  });
+}
+
 function assertFeishuMessageReadTargetAllowed(params: {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
@@ -676,6 +692,7 @@ async function assertFeishuMessageIdReadTargetAllowed(params: {
   account: ResolvedFeishuAccount;
   accountId?: string;
   messageId: string;
+  requestedChatId?: string;
   getMessageFeishu: (args: {
     cfg: ClawdbotConfig;
     messageId: string;
@@ -685,6 +702,11 @@ async function assertFeishuMessageIdReadTargetAllowed(params: {
   if (!shouldEnforceFeishuReadTarget({ cfg: params.cfg, account: params.account })) {
     return;
   }
+  assertFeishuProvidedReadTargetAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: params.requestedChatId,
+  });
   const message = await params.getMessageFeishu({
     cfg: params.cfg,
     messageId: params.messageId,
@@ -942,6 +964,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const messageId = resolveFeishuMessageId(ctx.params);
             if (!messageId) {
               throw new Error("Feishu read requires messageId.");
+            }
+            if (shouldEnforceFeishuReadTarget({ cfg: ctx.cfg, account })) {
+              assertFeishuProvidedReadTargetAllowed({
+                cfg: ctx.cfg,
+                account,
+                chatId: resolveFeishuChatId(ctx),
+              });
             }
             const { getMessageFeishu } = await loadFeishuChannelRuntime();
             const message = await getMessageFeishu({
@@ -1215,6 +1244,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 account,
                 messageId,
                 accountId: ctx.accountId ?? undefined,
+                requestedChatId: resolveFeishuChatId(ctx),
                 getMessageFeishu,
               });
               const matches = await listReactionsFeishu({
@@ -1248,6 +1278,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 account,
                 messageId,
                 accountId: ctx.accountId ?? undefined,
+                requestedChatId: resolveFeishuChatId(ctx),
                 getMessageFeishu,
               });
               const reactions = await listReactionsFeishu({
@@ -1288,6 +1319,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               account,
               messageId,
               accountId: ctx.accountId ?? undefined,
+              requestedChatId: resolveFeishuChatId(ctx),
               getMessageFeishu,
             });
             const reactions = await listReactionsFeishu({
