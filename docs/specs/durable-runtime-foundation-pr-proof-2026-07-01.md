@@ -31,6 +31,24 @@ is intentionally a local-first, opt-in runtime substrate:
 
 Focused validation observed on the PR2 branch:
 
+- Latest reviewer recheck proof, rerun on 2026-07-02 against commit
+  `46970927b04906d984e371ea510998ab723ffc7b`:
+  - Disabled CLI inspection:
+    `disabled-cli {"logs":["Durable runtime is disabled. Set OPENCLAW_DURABLE_RUNTIME=1 to inspect durable runtime state."],"errors":[],"exitCode":null,"files":[]}`
+    The empty `files` array proves the disabled CLI path did not create or
+    migrate `state/openclaw.sqlite`, WAL, or SHM files.
+  - Enabled CLI inspection:
+    `enabled-cli {"logs":["Durable runtime store: <temp>/state/openclaw.sqlite\nruns=0 open=0 steps=0 events=0"],"errors":[],"exitCode":null,"files":["state/openclaw.sqlite"]}`
+    This proves enabled inspection creates and opens the shared state DB as the
+    opt-in path.
+  - Disabled Gateway inspection:
+    `disabled-gateway {"ok":false,"code":"INVALID_REQUEST","message":"Durable runtime is disabled.","hasResult":false,"files":[]}`
+    The empty `files` array proves the disabled Gateway path rejects before
+    opening or migrating durable runtime state.
+  - Enabled Gateway inspection:
+    `enabled-gateway {"ok":true,"hasResult":true,"runtimeRunId":"run_gateway_proof_20260702","files":["state/openclaw.sqlite"]}`
+    This proves the enabled Gateway path reads a real durable projection from
+    the opt-in shared state DB.
 - Disabled CLI mutation guard:
   - Command:
     `OPENCLAW_STATE_DIR=<temp> node --import tsx --input-type=module -e 'import { durableCommand } from "./src/commands/durable.ts"; await durableCommand({ action: "stats", env: process.env }, { log: console.log, error: console.error, exit: (code) => { process.exitCode = code; } });'`
