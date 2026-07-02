@@ -11347,7 +11347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2864,
+      "line": 2866,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -11355,7 +11355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2864,
+      "line": 2866,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -11363,7 +11363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3183,
+      "line": 3174,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -11371,7 +11371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3183,
+      "line": 3174,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -11475,7 +11475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 503,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Asking OpenClaw",
       "surface": "apple",
@@ -11483,7 +11483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 503,
       "path": "apps/ios/Sources/Voice/TalkRealtimeWebRTCSession.swift",
       "source": "Updating OpenClaw",
       "surface": "apple",
