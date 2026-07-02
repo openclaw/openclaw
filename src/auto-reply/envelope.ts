@@ -43,6 +43,15 @@ export type EnvelopeFormatOptions = {
    * Optional user timezone used when timezone="user".
    */
   userTimezone?: string;
+  /**
+   * Override whether "Conversation info" and "Sender" metadata blocks are
+   * injected into the inbound user-role message prefix.
+   * When undefined, the default heuristic applies (included for group chats
+   * and non-webchat direct channels, omitted for plain webchat DMs).
+   * Set to false to suppress both blocks unconditionally (improves KV-cache
+   * hit rates on providers that use exact-prefix matching, such as DeepSeek).
+   */
+  includeConversationInfo?: boolean;
 };
 
 type NormalizedEnvelopeOptions = {
@@ -76,6 +85,12 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
     includeTimestamp: defaults?.envelopeTimestamp !== "off",
     includeElapsed: defaults?.envelopeElapsed !== "off",
     userTimezone: defaults?.userTimezone,
+    includeConversationInfo:
+      defaults?.shouldIncludeConversationInfo === "off"
+        ? false
+        : defaults?.shouldIncludeConversationInfo === "on"
+          ? true
+          : undefined,
   };
 }
 
