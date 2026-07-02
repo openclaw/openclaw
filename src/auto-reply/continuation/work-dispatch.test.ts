@@ -2661,6 +2661,29 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     ]);
   });
 
+  it("arms active-captured delayed work at the persisted recovery hedge, not the tool-call-relative due", async () => {
+    const sessionKey = "agent:main:active-delay-hedge";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+
+    await scheduleContinuationWork({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      request: { delaySeconds: 20, reason: "do not fire at tool-call plus delay" },
+      config: immediateConfig,
+    });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await flushAsyncWork();
+
+    expect(turnGrants).toHaveLength(0);
+    expect(activeQueueDeliveries).toHaveLength(0);
+    expect([...mockFlows.values()][0]?.stateJson).toMatchObject({
+      anchorPending: true,
+      dueAt: 1_060_000,
+    });
+  });
+
   it("coalesces repeated hold/ack/wait elections across turns into the newest, bounded and fired once (no accumulation, no hedge loop)", async () => {
     const sessionKey = "agent:main:coalesce";
     mockSessionStore[sessionKey] = { sessionKey };

@@ -1124,11 +1124,11 @@ export async function scheduleContinuationWork(params: {
     );
     // Wake on the end-of-turn event; keep only a slow hedge as the lost-event net.
     registerIdleRetry(params.sessionKey, { kind: "reply-run-ended" });
-    armNextWorkTimer(params.sessionKey, recoveryHedgeAt);
+    armNextWorkTimer(params.sessionKey, enqueued.dueAt);
   } else {
     // Let callers persist the advanced chain state before even zero-delay work
     // can start the next turn; the timer fires on the next event-loop tick.
-    armNextWorkTimer(params.sessionKey, dueAt);
+    armNextWorkTimer(params.sessionKey, enqueued.dueAt);
   }
   return { scheduled: true, capped: false, chainState: nextState };
 }
