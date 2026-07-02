@@ -9926,14 +9926,14 @@ snapshots:
 
   '@slack/logger@4.0.1':
     dependencies:
-      '@types/node': 25.9.1
+      '@types/node': 25.9.2
 
   '@slack/oauth@3.0.5':
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/web-api': 7.16.0
       '@types/jsonwebtoken': 9.0.10
-      '@types/node': 25.9.1
+      '@types/node': 25.9.2
       jsonwebtoken: 9.0.3
     transitivePeerDependencies:
       - debug
@@ -9942,7 +9942,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/web-api': 7.16.0
-      '@types/node': 25.9.1
+      '@types/node': 25.9.2
       '@types/ws': 8.18.1
       eventemitter3: 5.0.4
       ws: 8.21.0
