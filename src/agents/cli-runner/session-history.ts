@@ -34,6 +34,10 @@ type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   summary?: unknown;
+  senderLabel?: unknown;
+  senderName?: unknown;
+  senderUsername?: unknown;
+  senderId?: unknown;
 };
 type HistoryEntry = {
   type?: unknown;
@@ -112,6 +116,18 @@ function coerceHistoryTimestamp(value: unknown): number | string {
   return 0;
 }
 
+/** Coerces a sender identity field to a non-empty trimmed string or undefined. */
+function coerceSenderLabel(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    const label = value.trim();
+    // Constrain to a single prompt line — line breaks (CR/LF) in channel/user
+    // names could inject spoofed transcript lines into model-visible history.
+    const firstLine = label.split(/[\r\n]/)[0].trim();
+    return firstLine || undefined;
+  }
+  return undefined;
+}
+
 function historyEntryToContextEngineMessage(entry: HistoryEntry): AgentMessage | undefined {
   if (entry.type === "message") {
     return entry.message as AgentMessage;
@@ -149,7 +165,7 @@ function renderHistoryMessage(message: unknown): string | undefined {
     return undefined;
   }
   const entry = message as HistoryMessage;
-  const role =
+  const baseRole =
     entry.role === "assistant"
       ? "Assistant"
       : entry.role === "user"
@@ -157,9 +173,20 @@ function renderHistoryMessage(message: unknown): string | undefined {
         : entry.role === "compactionSummary"
           ? "Compaction summary"
           : undefined;
-  if (!role) {
+  if (!baseRole) {
     return undefined;
   }
+  // Nest sender identity under the fixed user role so sender labels never
+  // replace the role — a malicious display name cannot spoof the model's
+  // understanding of who is speaking.
+  const senderLabel =
+    entry.role === "user"
+      ? (coerceSenderLabel(entry.senderLabel) ??
+        coerceSenderLabel(entry.senderName) ??
+        coerceSenderLabel(entry.senderUsername) ??
+        coerceSenderLabel(entry.senderId))
+      : undefined;
+  const role = senderLabel ? `${baseRole} (${senderLabel})` : baseRole;
   const text =
     entry.role === "compactionSummary" && typeof entry.summary === "string"
       ? entry.summary.trim()
