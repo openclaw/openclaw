@@ -1,9 +1,6 @@
 // Irc tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  startLoopbackIrcServer,
-  type LoopbackIrcServer,
-} from "../../../test/helpers/irc-loopback-server.js";
+import { startLoopbackIrcServer, type LoopbackIrcServer } from "../test-support.js";
 import { buildFallbackNick, buildIrcNickServCommands, connectIrcClient } from "./client.js";
 
 describe("irc client nickserv", () => {
@@ -82,7 +79,11 @@ describe("irc client fallback nick", () => {
   });
 });
 
-async function collectPrivmsgBodies(server: LoopbackIrcServer, text: string): Promise<string[]> {
+async function collectPrivmsgBodies(
+  server: LoopbackIrcServer,
+  text: string,
+  messageChunkMaxChars?: number,
+): Promise<string[]> {
   const client = await connectIrcClient({
     host: "127.0.0.1",
     port: server.port,
@@ -91,6 +92,7 @@ async function collectPrivmsgBodies(server: LoopbackIrcServer, text: string): Pr
     username: "bot",
     realname: "OpenClaw Bot",
     connectTimeoutMs: 5000,
+    messageChunkMaxChars,
   });
   const receivedBodies = () =>
     server.lines
@@ -153,6 +155,30 @@ describe("irc client privmsg byte-limit chunking", () => {
       const text = "a".repeat(900);
       const bodies = await collectPrivmsgBodies(server, text);
       expect(bodies.map((body) => body.length)).toEqual([350, 350, 200]);
+      expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("honors a low character cap for multibyte text without shrinking chunks to the byte budget", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = "漢".repeat(250);
+      const bodies = await collectPrivmsgBodies(server, text, 100);
+      expect(bodies.map((body) => body.length)).toEqual([100, 100, 50]);
+      expect(bodies.join("")).toBe(text);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("still advances when the character cap is smaller than one multibyte code point's bytes", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = "漢".repeat(10);
+      const bodies = await collectPrivmsgBodies(server, text, 2);
+      expect(bodies.map((body) => body.length)).toEqual([2, 2, 2, 2, 2]);
       expect(bodies.join("")).toBe(text);
     } finally {
       await server.close();

@@ -246,7 +246,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
-    const maxChunkBytes = Math.min(messageChunkMaxChars, IRC_MAX_LINE_BYTES - lineOverheadBytes);
+    const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     let remaining = cleaned;
     while (remaining.length > 0) {
       let chunk = remaining;
