@@ -749,6 +749,64 @@ describe("anthropic transport stream", () => {
     },
   );
 
+  it("normalizes sensitive stop reason through the refusal path", async () => {
+    buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_sensitive", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "sensitive" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+        }),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    expect(result.errorCode).toBe("provider_refusal");
+    expect(result.errorMessage).not.toMatch(/^an unknown error occurred\.?$/i);
+    expect(result.errorMessage).toMatch(/Anthropic refusal/i);
+    expect(result.usage).toMatchObject({ input: 3, output: 2 });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_refusal",
+        details: {
+          provider: "anthropic",
+          category: null,
+          explanation: null,
+        },
+      }),
+    ]);
+  });
+
   it("discards buffered Fable output when the transport ends before terminal status", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

@@ -1,5 +1,4 @@
 import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 /**
  * Embedded-mode Gateway method stub.
  *

@@ -3114,6 +3114,9 @@ async function processOpenAICompletionsStream(
       if (finishReasonResult.errorMessage) {
         output.errorMessage = finishReasonResult.errorMessage;
       }
+      if (finishReasonResult.errorCode) {
+        output.errorCode = finishReasonResult.errorCode;
+      }
     }
     const choiceDelta =
       choice.delta ??

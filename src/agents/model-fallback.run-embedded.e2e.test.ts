@@ -616,6 +616,70 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
+  it("falls back across providers after an Anthropic content-filter refusal", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess("Anthropic refusal (category: bio): unsafe content");
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:refusal-fallback",
+        runId: "run:refusal-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("refusal");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
+      expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
+  it("surfaces refusal reason when fallback chain is exhausted", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as { provider: string; modelId: string };
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            provider: attemptParams.provider,
+            model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
+            stopReason: "error",
+            errorMessage: "Anthropic refusal (category: legal): policy violation",
+            errorCode: "provider_refusal",
+          }),
+        });
+      });
+
+      let thrown: unknown;
+      try {
+        await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: "agent:test:refusal-exhausted",
+          runId: "run:refusal-exhausted",
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/^All models failed \(2\): /);
+      expect((thrown as Error).message).toMatch(
+        /openai\/mock-1: .* \(refusal\) \| groq\/mock-2: .* \(refusal\)/,
+      );
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("falls back across providers after a bare leading 402 quota-refresh assistant error", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

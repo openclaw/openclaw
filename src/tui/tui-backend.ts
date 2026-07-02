@@ -1,5 +1,4 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines the TUI backend contract and backend event shapes.
 import type {
   CommandEntry,

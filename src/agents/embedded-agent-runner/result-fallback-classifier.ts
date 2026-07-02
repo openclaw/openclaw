@@ -150,7 +150,10 @@ function classifyHarnessResult(params: {
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
   provider: string,
-): Extract<FailoverReason, "auth" | "auth_permanent" | "billing" | "rate_limit"> | null {
+): Extract<
+  FailoverReason,
+  "auth" | "auth_permanent" | "billing" | "rate_limit" | "refusal"
+> | null {
   if (!errorText.trim()) {
     return null;
   }
@@ -160,6 +163,7 @@ function classifyBusinessDenialErrorPayloadReason(
     case "auth_permanent":
     case "billing":
     case "rate_limit":
+    case "refusal":
       return failoverReason;
     default:
       return null;
@@ -257,8 +261,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
       reason: failoverReason,
-      code: "embedded_error_payload",
+      code: failoverReason === "refusal" ? "provider_refusal" : "embedded_error_payload",
       rawError: errorText,
+      ...(failoverReason === "refusal"
+        ? { preserveResultOnExhaustion: true, preserveResultPriority: 0 }
+        : {}),
     };
   }
 

@@ -6,6 +6,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isRefusalErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
@@ -114,6 +115,47 @@ describe("Chinese provider overload messages", () => {
   it("does not misclassify the GLM overload body as rate limit or auth", () => {
     expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
     expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
+describe("refusal patterns (#98976)", () => {
+  it("classifies Anthropic refusal text as refusal", () => {
+    expect(isRefusalErrorMessage("Anthropic refusal (category: bio): unsafe content")).toBe(true);
+  });
+
+  it("classifies bare Anthropic refusal text as refusal", () => {
+    expect(isRefusalErrorMessage("Anthropic refusal.")).toBe(true);
+  });
+
+  it("classifies OpenAI content_filter finish_reason text as refusal", () => {
+    expect(isRefusalErrorMessage("Provider finish_reason: content_filter")).toBe(true);
+  });
+
+  it("does not misclassify generic content text as refusal", () => {
+    expect(isRefusalErrorMessage("This is my refusal to answer")).toBe(false);
+    expect(isRefusalErrorMessage("content filter triggered by proxy")).toBe(false);
+  });
+
+  it("does not misclassify refusal as transient failover", () => {
+    const raw = "Anthropic refusal (category: legal): policy violation";
+    expect(isRateLimitErrorMessage(raw)).toBe(false);
+    expect(isTimeoutErrorMessage(raw)).toBe(false);
+    expect(isServerErrorMessage(raw)).toBe(false);
+  });
+
+  it("gives refusal precedence over rate_limit for mixed signals (#94430 boundary)", () => {
+    const raw =
+      "Anthropic refusal (category: legal): rate limit exceeded; request was rate limited";
+    expect(classifyFailoverReason(raw)).toBe("refusal");
+    expect(isRateLimitErrorMessage(raw)).toBe(true);
+  });
+
+  it("keeps existing failover patterns unaffected", () => {
+    expect(isRateLimitErrorMessage("rate limit exceeded")).toBe(true);
+    expect(isServerErrorMessage("status: internal server error")).toBe(true);
+    expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
+    expect(isBillingErrorMessage("insufficient credits")).toBe(true);
+    expect(isRefusalErrorMessage("Anthropic refusal (category: bio): unsafe content")).toBe(true);
   });
 });
 

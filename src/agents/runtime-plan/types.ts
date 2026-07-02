@@ -46,7 +46,8 @@ export type AgentRuntimeFailoverReason =
   | "empty_response"
   | "no_error_details"
   | "unclassified"
-  | "unknown";
+  | "unknown"
+  | "refusal";
 
 /** Provider/runtime config object passed through plugin boundaries. */
 export type AgentRuntimeConfig = unknown;

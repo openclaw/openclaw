@@ -1,5 +1,4 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";

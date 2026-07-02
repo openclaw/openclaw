@@ -67,6 +67,7 @@ type AssistantDecisionParams = {
   timedOutDuringToolExecution: boolean;
   harnessOwnsTransport?: boolean;
   profileRotated: boolean;
+  hasVisibleOutput?: boolean;
 };
 
 type RunFailoverDecisionParams =
@@ -117,6 +118,10 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
+    return false;
+  }
+  // Refusals are content-scoped, not profile-scoped; never rotate auth profiles.
+  if (params.failoverReason === "refusal") {
     return false;
   }
   const timeoutFailure = isAssistantTimeoutFailure(params);
@@ -212,6 +217,27 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     return {
       action: "surface_error",
       reason: params.failoverReason,
+    };
+  }
+  // Refusals are content-scoped failures: never rotate auth profiles, never
+  // consume cooldown probe budget. Fall back to the next model candidate when
+  // configured, but surface the refusal if the user already saw partial output.
+  if (params.failoverReason === "refusal") {
+    if (params.hasVisibleOutput) {
+      return {
+        action: "surface_error",
+        reason: "refusal",
+      };
+    }
+    if (params.fallbackConfigured) {
+      return {
+        action: "fallback_model",
+        reason: "refusal",
+      };
+    }
+    return {
+      action: "surface_error",
+      reason: "refusal",
     };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);

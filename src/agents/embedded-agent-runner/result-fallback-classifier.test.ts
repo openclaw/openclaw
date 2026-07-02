@@ -103,6 +103,79 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies provider refusal error payloads as fallback-worthy", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "Anthropic refusal (category: bio): unsafe content",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message:
+        "anthropic/claude-sonnet-4-6 ended with a provider error: Anthropic refusal (category: bio): unsafe content",
+      reason: "refusal",
+      code: "provider_refusal",
+      rawError: "Anthropic refusal (category: bio): unsafe content",
+      preserveResultOnExhaustion: true,
+      preserveResultPriority: 0,
+    });
+  });
+
+  it("returns null when a refusal error payload is accompanied by visible assistant output", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          { text: "Anthropic refusal (category: bio): unsafe content", isError: true },
+          { text: "Here is the requested answer." },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not classify a generic non-refusal error payload as a refusal", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "Something went wrong internally.",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    // Design T10.3: a generic error payload is either left unclassified (null)
+    // or classified with a non-refusal reason. It must never map to refusal.
+    if (result && "message" in result) {
+      expect(result.reason).not.toBe("refusal");
+      expect(result.code).not.toBe("provider_refusal");
+    } else {
+      expect(result ?? null).toBeNull();
+    }
+  });
+
   it("does not classify normal visible assistant output as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

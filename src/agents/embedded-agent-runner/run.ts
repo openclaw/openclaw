@@ -3376,6 +3376,9 @@ async function runEmbeddedAgentInternal(
             );
           }
 
+          const assistantVisibleText = resolveFinalAssistantVisibleText(assistantForFailover);
+          const assistantHasVisibleOutput =
+            typeof assistantVisibleText === "string" && assistantVisibleText.length > 0;
           const assistantFailoverDecision = resolveRunFailoverDecision({
             stage: "assistant",
             allowFormatRetry: cloudCodeAssistFormatError,
@@ -3390,6 +3393,7 @@ async function runEmbeddedAgentInternal(
             timedOutDuringToolExecution,
             harnessOwnsTransport: pluginHarnessOwnsTransport,
             profileRotated: false,
+            hasVisibleOutput: assistantHasVisibleOutput,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
             initialDecision: assistantFailoverDecision,

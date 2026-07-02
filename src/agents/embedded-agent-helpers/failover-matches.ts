@@ -256,6 +256,10 @@ const ERROR_PATTERNS = {
     // instead of "unknown" (#91710).
     /agent harness .* does not support .*provider is not one of/i,
   ],
+  refusal: [
+    /\banthropic refusal\b/i,
+    /\bfinish_reason:\s*content_filter\b/i,
+  ],
 } as const;
 
 const BILLING_ERROR_HEAD_RE =
@@ -356,4 +360,8 @@ export function isServerErrorMessage(raw: string): boolean {
     return true;
   }
   return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+}
+
+export function isRefusalErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.refusal);
 }
