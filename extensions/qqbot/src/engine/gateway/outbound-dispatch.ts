@@ -700,10 +700,20 @@ export async function dispatchOutbound(
 
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
-  } catch {
+  } catch (err) {
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (!hasResponse && errMsg !== undefined) {
+      let userText: string;
+      if (errMsg.includes("timeout") || errMsg === "Response timeout") {
+        userText = "⏱️ 响应超时，请重新发送";
+      } else {
+        userText = "❌ 处理失败，请稍后重试";
+      }
+      await sendErrorMessage(userText);
     }
   } finally {
     if (timeoutId) {
