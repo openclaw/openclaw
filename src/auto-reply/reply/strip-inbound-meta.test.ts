@@ -58,6 +58,11 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(text)).toBe(text);
   });
 
+  it("preserves bare ambient envelope rows", () => {
+    const text = "#35676 Keśava: No wtf";
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
   it("fast-path: returns empty string unchanged", () => {
     expect(stripInboundMetadata("")).toBe("");
   });

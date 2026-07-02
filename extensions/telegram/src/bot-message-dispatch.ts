@@ -104,6 +104,7 @@ import {
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
+  isTelegramHistoryEntryAfterAmbientWatermark,
   mergeTelegramGroupHistoryPromptContext,
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
@@ -599,6 +600,8 @@ function migrateRecoveredTelegramGroupHistory(params: {
   ) {
     return;
   }
+  // Topic recovery mutates the raw in-memory buffer before any prompt is built;
+  // prompt readers apply the ambient transcript watermark after recovery.
   const originalEntries = params.context.groupHistories.get(originalHistoryKey);
   if (!originalEntries?.length) {
     return;
@@ -658,35 +661,43 @@ function resolveDispatchTelegramContext(params: {
     : params.context.historyKey;
   const recoveredHistoryEntries =
     recoveredHistoryKey && params.context.historyLimit > 0
-      ? (params.context.groupHistories.get(recoveredHistoryKey) ?? []).slice(
-          -params.context.historyLimit,
-        )
+      ? (params.context.groupHistories.get(recoveredHistoryKey) ?? [])
+          .filter((entry) =>
+            isTelegramHistoryEntryAfterAmbientWatermark(
+              entry,
+              params.context.ctxPayload.AmbientTranscriptPreviousMessageId
+                ? {
+                    messageId: params.context.ctxPayload.AmbientTranscriptPreviousMessageId,
+                    ...(params.context.ctxPayload.AmbientTranscriptPreviousTimestampMs !== undefined
+                      ? {
+                          timestampMs:
+                            params.context.ctxPayload.AmbientTranscriptPreviousTimestampMs,
+                        }
+                      : {}),
+                  }
+                : undefined,
+            ),
+          )
+          .slice(-params.context.historyLimit)
       : [];
   const recoveredWatermarkedHistoryEntries = selectTelegramGroupHistoryAfterLastSelf(
     recoveredHistoryEntries,
   ).slice(-params.context.historyLimit);
-  const recoveredInboundHistory =
-    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
-      ? params.context.ctxPayload.InboundEventKind === "room_event"
-        ? createChannelHistoryWindow({
-            historyMap: params.context.groupHistories,
-          }).buildInboundHistory({
-            historyKey: recoveredHistoryKey,
-            limit: params.context.historyLimit,
-          })
-        : recoveredWatermarkedHistoryEntries.length > 0
-          ? recoveredWatermarkedHistoryEntries
-          : undefined
-      : params.context.ctxPayload.InboundHistory;
-  const recoveredBodyForAgent = extractCurrentTelegramBody(
-    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
-  );
   const recoveredPromptHistoryEntries =
     params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
       ? params.context.ctxPayload.InboundEventKind === "room_event"
         ? recoveredHistoryEntries
         : recoveredWatermarkedHistoryEntries
       : [];
+  const recoveredInboundHistory =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? recoveredPromptHistoryEntries.length > 0
+        ? recoveredPromptHistoryEntries
+        : undefined
+      : params.context.ctxPayload.InboundHistory;
+  const recoveredBodyForAgent = extractCurrentTelegramBody(
+    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
+  );
   const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
     promptContext: params.context.ctxPayload.UntrustedStructuredContext ?? [],
     entries: recoveredPromptHistoryEntries,

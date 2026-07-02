@@ -7,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildInboundUserContextPrefix } from "../../../src/auto-reply/reply/inbound-meta.js";
+import { buildReplyPromptEnvelopeBase } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -26,6 +28,8 @@ import type { TelegramRuntime } from "./runtime.types.js";
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
+type RoomEventPromptContext = Parameters<typeof buildInboundUserContextPrefix>[0] &
+  Parameters<typeof buildReplyPromptEnvelopeBase>[0]["ctx"];
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
@@ -421,6 +425,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(calls.length).toBeGreaterThan(0);
     const preview = calls[calls.length - 1][0] as { text?: string };
     expect(preview.text).toBe(barText);
+  }
+
+  function renderRoomEventPromptText(ctx: RoomEventPromptContext): string {
+    const inboundUserContext = buildInboundUserContextPrefix(ctx);
+    return (
+      buildReplyPromptEnvelopeBase({
+        ctx,
+        sessionCtx: ctx,
+        baseBody: ctx.BodyForAgent ?? ctx.Body ?? ctx.RawBody ?? "",
+        hasUserBody: true,
+        inboundUserContext,
+        isBareSessionReset: false,
+        startupAction: "new",
+        inboundEventKind: "room_event",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }).currentInboundContext?.text ?? ""
+    );
   }
 
   function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
@@ -1186,6 +1207,80 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({ body: "recovered topic context" }),
       expect.objectContaining({ body: "ambient leak", messageId: "27787" }),
     ]);
+  });
+
+  it("omits transcript-owned ambient rows from recovered room-event prompt text", async () => {
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [
+        oldHistoryKey,
+        [{ sender: "Cara", body: "ambient current", timestamp: 3, messageId: "27787" }],
+      ],
+      [
+        recoveredHistoryKey,
+        [
+          {
+            sender: "Alice",
+            body: "persisted recovered ambient one",
+            timestamp: 1,
+            messageId: "199",
+          },
+          {
+            sender: "Bob",
+            body: "persisted recovered ambient two",
+            timestamp: 2,
+            messageId: "200",
+          },
+        ],
+      ],
+    ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          InboundEventKind: "room_event",
+          BodyForAgent: "ambient current",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageSid: "27787",
+          MessageThreadId: 1,
+          RawBody: "ambient current",
+          SenderName: "Cara",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          TransportThreadId: 1,
+          AmbientTranscriptPreviousMessageId: "200",
+          AmbientTranscriptPreviousTimestampMs: 2,
+        } as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+        } as TelegramMessageContext["msg"],
+        chatId: -1003774691294,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const dispatchParams = mockCallArg(
+      dispatchReplyWithBufferedBlockDispatcher,
+    ) as DispatchReplyWithBufferedBlockDispatcherArgs;
+    const promptText = renderRoomEventPromptText(dispatchParams.ctx as RoomEventPromptContext);
+    expect(promptText).toContain("[OpenClaw room event]");
+    expect(promptText).toContain("Current event:\n#27787 Cara: ambient current");
+    expect(promptText).not.toContain("persisted recovered ambient");
+    expect(promptText).not.toContain("Chat history since last reply");
+    expect(dispatchParams.ctx.InboundHistory).toBeUndefined();
   });
 
   it("moves recovered user-request history out of the original topic", async () => {
@@ -3446,14 +3541,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
     // Only the cosmetic bar send throws; the real final "Done" still delivers.
-    deliverReplies.mockImplementation(
-      async (params: { replies?: Array<{ text?: string }> }) => {
-        if (params.replies?.some((reply) => reply.text?.includes("⏱️"))) {
-          throw new Error("Too Many Requests: retry after 5");
-        }
-        return { delivered: true };
-      },
-    );
+    deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
+      if (params.replies?.some((reply) => reply.text?.includes("⏱️"))) {
+        throw new Error("Too Many Requests: retry after 5");
+      }
+      return { delivered: true };
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
@@ -4580,9 +4673,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith(
-      "🧠 _Reading_\n\n_Checking_",
-    );
+    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith("🧠 _Reading_\n\n_Checking_");
     const updates = reasoningDraftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("CheckingReading");
   });

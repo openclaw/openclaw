@@ -20,7 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -52,6 +52,7 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
+  isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramChatWindowPromptContext,
   mergeTelegramGroupHistoryPromptContext,
   recordTelegramGroupHistoryEntry,
@@ -76,8 +77,10 @@ type TelegramMessageContextSessionRuntime =
 
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
+  "readAmbientTranscriptWatermark",
   "readSessionUpdatedAt",
   "recordInboundSession",
+  "resolveAmbientTranscriptWatermarkKey",
   "resolveInboundLastRouteSessionKey",
   "resolvePinnedMainDmOwnerFromAllowlist",
   "resolveStorePath",
@@ -377,6 +380,22 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const ambientTranscriptWatermarkKey =
+    isGroup && historyKey
+      ? sessionRuntime.resolveAmbientTranscriptWatermarkKey({
+          channel: "telegram",
+          accountId: route.accountId,
+          conversationId: String(chatId),
+          ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+        })
+      : undefined;
+  const ambientTranscriptWatermark = ambientTranscriptWatermarkKey
+    ? sessionRuntime.readAmbientTranscriptWatermark({
+        storePath,
+        sessionKey: route.sessionKey,
+        key: ambientTranscriptWatermarkKey,
+      })
+    : undefined;
   const shouldSuppressPersistedDmChatWindowContext =
     !isGroup &&
     previousTimestamp !== undefined &&
@@ -402,7 +421,6 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
-  const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
   const hasGroupHistoryContext = isGroup;
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
@@ -429,7 +447,11 @@ export async function buildTelegramInboundContextPayload(params: {
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
   let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
-    const fullGroupHistoryEntries = (groupHistories.get(historyKey) ?? []).slice(-historyLimit);
+    const fullGroupHistoryEntries = (groupHistories.get(historyKey) ?? [])
+      .filter((entry) =>
+        isTelegramHistoryEntryAfterAmbientWatermark(entry, ambientTranscriptWatermark),
+      )
+      .slice(-historyLimit);
     watermarkedGroupHistoryEntries =
       selectTelegramGroupHistoryAfterLastSelf(fullGroupHistoryEntries).slice(-historyLimit);
     groupHistoryPromptEntries =
@@ -469,14 +491,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const inboundHistory =
     hasGroupHistoryContext && historyKey && historyLimit > 0
-      ? inboundEventKind === "room_event"
-        ? channelHistory.buildInboundHistory({
-            historyKey,
-            limit: historyLimit,
-          })
-        : watermarkedGroupHistoryEntries && watermarkedGroupHistoryEntries.length > 0
-          ? watermarkedGroupHistoryEntries
-          : undefined
+      ? groupHistoryPromptEntries.length > 0
+        ? groupHistoryPromptEntries
+        : undefined
       : undefined;
   const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
@@ -566,6 +583,18 @@ export async function buildTelegramInboundContextPayload(params: {
     contextVisibility: contextVisibilityMode,
     extra: {
       BotUsername: primaryCtx.me?.username ?? undefined,
+      AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,
+      AmbientTranscriptBody: options?.ambientTranscriptBody,
+      AmbientTranscriptMessageId: ambientTranscriptWatermarkKey
+        ? (options?.messageIdOverride ?? String(msg.message_id))
+        : undefined,
+      AmbientTranscriptTimestampMs: ambientTranscriptWatermarkKey
+        ? msg.date
+          ? msg.date * 1000
+          : undefined
+        : undefined,
+      AmbientTranscriptPreviousMessageId: ambientTranscriptWatermark?.messageId,
+      AmbientTranscriptPreviousTimestampMs: ambientTranscriptWatermark?.timestampMs,
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
       ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
       ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,

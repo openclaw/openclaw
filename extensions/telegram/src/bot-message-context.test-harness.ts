@@ -56,8 +56,16 @@ function createTelegramMessageContextSessionRuntimeForTest(
 ): TelegramTestSessionRuntime {
   return {
     buildChannelInboundEventContext,
+    readAmbientTranscriptWatermark: () => undefined,
     readSessionUpdatedAt: () => undefined,
     recordInboundSession: async () => undefined,
+    resolveAmbientTranscriptWatermarkKey: ({ channel, accountId, conversationId, threadId }) =>
+      JSON.stringify([
+        channel,
+        accountId ?? "",
+        conversationId,
+        threadId === undefined ? "" : String(threadId),
+      ]),
     resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
       route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
     resolvePinnedMainDmOwnerFromAllowlist: () => null,
