@@ -77,6 +77,7 @@ async function main() {
   if (!prepared?.env?.GEMINI_CLI_HOME) {
     throw new Error("Gemini CLI OAuth preparation did not produce an isolated auth home");
   }
+  await prepared.beforeExecution?.();
   const geminiHome = prepared.env.GEMINI_CLI_HOME;
   const oauthCredsPath = path.join(geminiHome, ".gemini", "oauth_creds.json");
   const oauthCredsRaw = await fs.readFile(oauthCredsPath, "utf8");

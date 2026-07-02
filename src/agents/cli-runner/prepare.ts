@@ -350,29 +350,38 @@ export async function prepareCliRunContext(
       authCredential = authStore.profiles[effectiveAuthProfileId];
     }
   }
-  if (
-    effectiveAuthProfileId &&
-    shouldForwardAuthCredentialToCliBackend({
-      backend: backendResolved,
-      authProfileId: effectiveAuthProfileId,
-      authCredential,
-    })
-  ) {
+  if (effectiveAuthProfileId) {
     const authProfileId = effectiveAuthProfileId;
-    const selectedProviderId = resolveForwardedCredentialProviderId(authCredential);
-    if (selectedProviderId) {
-      const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
-      const resolvedGoogleCredential = await prepareDeps.resolveGoogleAuthCredential({
-        cfg: params.config,
-        store: writableAuthStore,
-        providerId: selectedProviderId,
-        profileId: authProfileId,
-        agentDir,
-      });
-      if (resolvedGoogleCredential) {
-        effectiveAuthProfileId = resolvedGoogleCredential.profileId;
-        authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
-        authCredential = resolvedGoogleCredential;
+    const shouldForwardAuthCredential = shouldForwardAuthCredentialToCliBackend({
+      backend: backendResolved,
+      authProfileId,
+      authCredential,
+    });
+    if (shouldForwardAuthCredential) {
+      const selectedProviderId = resolveForwardedCredentialProviderId(authCredential);
+
+      // Fail closed at the public Plugin SDK boundary. Never pass the raw
+      // persisted auth-profile object into prepareExecution; only a typed,
+      // resolver-produced credential may cross into backend code.
+      authCredential = undefined;
+
+      if (selectedProviderId) {
+        const writableAuthStore = loadScopedAuthStore({
+          profileId: authProfileId,
+          readOnly: false,
+        });
+        const resolvedGoogleCredential = await prepareDeps.resolveGoogleAuthCredential({
+          cfg: params.config,
+          store: writableAuthStore,
+          providerId: selectedProviderId,
+          profileId: authProfileId,
+          agentDir,
+        });
+        if (resolvedGoogleCredential) {
+          effectiveAuthProfileId = resolvedGoogleCredential.profileId;
+          authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
+          authCredential = resolvedGoogleCredential;
+        }
       }
     }
   }
