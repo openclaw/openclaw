@@ -196,6 +196,17 @@ function filterPrivateQaItems<T>(
   return items.filter((item) => getName(item) !== "qa");
 }
 
+/** Canonical root description for one sub-CLI command; shared by fast-path registrations. */
+export function subCliCommandDescription(
+  name: (typeof subCliCommandCatalog.descriptors)[number]["name"],
+): string {
+  const descriptor = subCliCommandCatalog.descriptors.find((entry) => entry.name === name);
+  if (!descriptor) {
+    throw new Error(`Unknown sub-CLI command descriptor: ${name}`);
+  }
+  return descriptor.description;
+}
+
 /** Visible sub-CLI descriptors after private QA gating. */
 export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
   subCliCommandCatalog.descriptors,

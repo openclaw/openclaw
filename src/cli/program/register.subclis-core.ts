@@ -22,6 +22,7 @@ import {
 import {
   getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
+  subCliCommandDescription,
   type SubCliDescriptor,
 } from "./subcli-descriptors.js";
 
@@ -58,7 +59,7 @@ async function registerGatewayRunOnly(program: Command): Promise<void> {
   const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(
-    program.command("gateway").description("Run, inspect, and query the OpenClaw Gateway"),
+    program.command("gateway").description(subCliCommandDescription("gateway")),
   );
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),

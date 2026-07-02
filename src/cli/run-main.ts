@@ -36,7 +36,7 @@ import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
-import { getSubCliEntries } from "./program/subcli-descriptors.js";
+import { getSubCliEntries, subCliCommandDescription } from "./program/subcli-descriptors.js";
 import {
   resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
@@ -219,7 +219,7 @@ async function tryRunGatewayRunFastPath(
     });
   };
   const gateway = addGatewayRunCommand(
-    program.command("gateway").description("Run, inspect, and query the OpenClaw Gateway"),
+    program.command("gateway").description(subCliCommandDescription("gateway")),
     { beforeRun },
   );
   addGatewayRunCommand(
