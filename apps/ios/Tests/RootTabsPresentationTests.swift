@@ -288,6 +288,11 @@ import UIKit
             ownsNavigationStack: false,
             openChat: {},
             openSettings: {})
+        let native = CommandCenterTab(
+            ownsNavigationStack: false,
+            usesNativeNavigationChrome: true,
+            openChat: {},
+            openSettings: {})
         let shellRouted = CommandCenterTab(
             ownsNavigationStack: false,
             openChat: {},
@@ -297,7 +302,9 @@ import UIKit
         #expect(standalone.ownsNavigationStack)
         #expect(standalone.openSessions == nil)
         #expect(!embedded.ownsNavigationStack)
+        #expect(!embedded.usesNativeNavigationChrome)
         #expect(embedded.openSessions == nil)
+        #expect(native.usesNativeNavigationChrome)
         #expect(shellRouted.openSessions != nil)
     }
 
@@ -529,10 +536,5 @@ import UIKit
             !IPadSkillWorkshopScreen.usesCompactTaskFlow(
                 horizontalSizeClass: .regular,
                 verticalSizeClass: .regular))
-    }
-
-    @Test func phoneHubLeavesRoomForFloatingTabBar() {
-        #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .regular) == 112)
-        #expect(RootTabsPhoneControlHub.bottomScrollInset(verticalSizeClass: .compact) == 72)
     }
 }

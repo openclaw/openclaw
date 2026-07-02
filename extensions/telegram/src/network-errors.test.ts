@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
+  isRetryableTelegramApiError,
   isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
@@ -319,6 +320,19 @@ describe("isTelegramRateLimitError", () => {
       response: { parameters: { retry_after: 1 } },
     };
     expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+});
+
+describe("isRetryableTelegramApiError", () => {
+  it.each([
+    ["Too Many Requests", 429, true],
+    ["Internal Server Error", 500, true],
+    ["Bad Gateway", 502, true],
+    ["Conflict", 409, false],
+    ["Unauthorized", 401, false],
+    ["Not Found", 404, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isRetryableTelegramApiError(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
 });
 
