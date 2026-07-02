@@ -147,6 +147,7 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
   }),
   COPILOT_INTEGRATION_ID: "vscode-chat",
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
+  resolveGithubCopilotDomain: () => "github.com",
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -1461,6 +1462,7 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      githubDomain: "github.com",
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
@@ -1527,7 +1529,10 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({ githubToken: sourceSecret });
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      githubDomain: "github.com",
+    });
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
     expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");

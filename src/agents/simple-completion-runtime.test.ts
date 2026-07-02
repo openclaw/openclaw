@@ -48,6 +48,7 @@ vi.mock("./model-auth.js", () => ({
 
 vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
+  resolveGithubCopilotDomain: () => "github.com",
 }));
 
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
@@ -246,6 +247,7 @@ describe("prepareSimpleCompletionModel", () => {
 
     expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "ghu_test",
+      githubDomain: "github.com",
     });
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
       "github-copilot",
@@ -309,7 +311,10 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "gpt-4.1",
     });
 
-    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({ githubToken: sourceSecret });
+    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      githubDomain: "github.com",
+    });
     expectPreparedModelResult(result);
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
     expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");

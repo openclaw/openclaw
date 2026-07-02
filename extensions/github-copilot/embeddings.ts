@@ -6,7 +6,10 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import {
+  buildCopilotIdeHeaders,
+  resolveGithubCopilotDomain,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -58,6 +61,7 @@ type GitHubCopilotEmbeddingClient = {
   headers?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  githubDomain?: string;
 };
 
 function isCopilotSetupError(err: unknown): boolean {
@@ -206,6 +210,7 @@ async function resolveGitHubCopilotEmbeddingSession(client: GitHubCopilotEmbeddi
     githubToken: client.githubToken,
     env: client.env,
     fetchImpl: client.fetchImpl,
+    githubDomain: client.githubDomain,
   });
   const baseUrl = client.baseUrl?.trim() || token.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
   return {
@@ -295,9 +300,14 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
+    const githubDomain = resolveGithubCopilotDomain({
+      env: process.env,
+      config: options.config,
+    });
     const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
       githubToken,
       env: process.env,
+      githubDomain,
     });
     const baseUrl =
       options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
@@ -321,6 +331,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       env: process.env,
       fetchImpl: fetch,
       githubToken,
+      githubDomain,
       headers: options.remote?.headers,
       model,
     });

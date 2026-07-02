@@ -29,6 +29,7 @@ import {
   buildCopilotIdeHeaders,
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
+  resolveGithubCopilotDomain,
 } from "../plugin-sdk/provider-auth.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
@@ -260,6 +261,7 @@ async function prepareResolvedImageRuntime(
         apiKey,
         "GitHub Copilot image-auth exchange",
       ),
+      githubDomain: resolveGithubCopilotDomain({ env: process.env, config: params.cfg }),
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
       sourceApiKey: apiKey,
