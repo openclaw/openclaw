@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  classifyAssistantFailoverReason,
+  classifyFailoverReason,
+  formatAssistantErrorText,
+  isLikelyContextOverflowError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -95,6 +100,69 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
         sandboxMode: "non-main",
       },
     );
+  });
+});
+
+describe("refusal classification (#98976)", () => {
+  it("classifies provider_refusal errorCode as refusal", () => {
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({
+          stopReason: "error",
+          errorCode: "provider_refusal",
+          errorMessage: "Anthropic refusal",
+        }),
+      ),
+    ).toBe("refusal");
+  });
+
+  it("classifies Anthropic refusal text as refusal", () => {
+    expect(classifyFailoverReason("Anthropic refusal (category: bio): unsafe content")).toBe(
+      "refusal",
+    );
+  });
+
+  it("classifies OpenAI content_filter finish reason as refusal", () => {
+    expect(classifyFailoverReason("Provider finish_reason: content_filter")).toBe("refusal");
+  });
+
+  it("returns stable user-facing refusal copy", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorCode: "provider_refusal",
+      errorMessage: "Anthropic refusal (category: bio): unsafe content",
+    });
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The model declined to generate this response. Try rephrasing your request, or switch to a different model.",
+    );
+  });
+
+  it("classifies refusal from text when errorCode is absent", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "Anthropic refusal (category: legal): policy violation",
+    });
+    expect(classifyAssistantFailoverReason(msg)).toBe("refusal");
+  });
+
+  it("classifies Anthropic sensitive-stop refusal text as refusal, not timeout", () => {
+    expect(classifyFailoverReason("Anthropic refusal.")).toBe("refusal");
+  });
+
+  it("returns null when stopReason is not error even if errorMessage resembles refusal", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: "Anthropic refusal (category: bio): unsafe content",
+    });
+    expect(classifyAssistantFailoverReason(msg)).toBeNull();
+  });
+
+  it("does not rewrite generic non-refusal error text", () => {
+    const msg = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "Something went wrong internally.",
+    });
+    expect(formatAssistantErrorText(msg)).toBe("Something went wrong internally.");
   });
 });
 

@@ -540,6 +540,63 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it.each([
+    ["anthropic", "sk-ant-provider"],
+    ["anthropic-vertex", "vertex-token"],
+  ])(
+    "normalizes sensitive stop reason through the refusal path for %s",
+    async (provider, apiKey) => {
+      const client = {
+        messages: {
+          create: vi.fn(() => ({
+            asResponse: () =>
+              Promise.resolve(
+                createSseResponse([
+                  {
+                    type: "message_start",
+                    message: { id: "msg_sensitive", usage: { input_tokens: 3, output_tokens: 0 } },
+                  },
+                  {
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  },
+                  { type: "content_block_stop", index: 0 },
+                  {
+                    type: "message_delta",
+                    delta: { stop_reason: "sensitive" },
+                    usage: { input_tokens: 3, output_tokens: 2 },
+                  },
+                  { type: "message_stop" },
+                ]),
+              ),
+          })),
+        },
+      };
+
+      const stream = streamAnthropic(
+        makeAnthropicModel({
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider,
+        }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { apiKey, client: client as never },
+      );
+      const eventTypes: string[] = [];
+      for await (const event of stream) {
+        eventTypes.push(event.type);
+      }
+      const result = await stream.result();
+
+      expect(eventTypes).toEqual(["error"]);
+      expect(result.stopReason).toBe("error");
+      expect(result.errorCode).toBe("provider_refusal");
+      expect(result.errorMessage).not.toMatch(/^an unknown error occurred\.?$/i);
+      expect(result.errorMessage).toMatch(/Anthropic refusal/i);
+    },
+  );
+
   it("sends server-side fallback params for direct Fable API-key requests", async () => {
     let capturedPayload: unknown;
     const stream = streamAnthropic(

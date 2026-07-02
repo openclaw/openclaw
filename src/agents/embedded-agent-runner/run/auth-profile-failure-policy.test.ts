@@ -126,4 +126,19 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not persist content-filter refusals as auth-profile health (#98976)", () => {
+    // Refusals are content-scoped provider decisions, not credential health.
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "refusal",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "refusal",
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
 });

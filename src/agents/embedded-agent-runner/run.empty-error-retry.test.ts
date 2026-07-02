@@ -229,6 +229,37 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces refusal errors that already produced visible output instead of retrying (#98976)", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("refusal");
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      errorCode: "provider_refusal",
+      errorMessage: "Anthropic refusal (category: bio): unsafe content",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      content: [{ type: "text", text: "I can discuss biology generally." }],
+      usage: { input: 100, output: 12, totalTokens: 112 },
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["I can discuss biology generally."],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      runId: "run-refusal-partial-output",
+    });
+
+    // The partial-output refusal guard must not schedule a retry/fallback.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry when stopReason=stop and output=0 (out of scope)", async () => {
     // Clean stop with no output is a legitimate silent reply (e.g. NO_REPLY
     // token path), not a crash. Use a plain provider/model so this test stays

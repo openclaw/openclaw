@@ -115,6 +115,7 @@ describe("cron protocol conformance", () => {
       "no_error_details",
       "unclassified",
       "unknown",
+      "refusal",
     ];
 
     const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};

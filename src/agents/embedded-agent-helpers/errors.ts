@@ -34,6 +34,7 @@ import {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
+  isRefusalErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
@@ -70,6 +71,7 @@ export {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isRefusalErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
@@ -928,6 +930,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
+    case "PROVIDER_REFUSAL":
+      return "refusal";
     default:
       return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
   }
@@ -1049,6 +1053,16 @@ function classifyFailoverClassificationFromMessage(
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
+  }
+  // NOTE: Upstream PR #94430 classifies some moderation/content-policy text
+  // as 'rate_limit'. This branch intentionally runs first so that explicit
+  // refusal signals (provider_refusal errorCode, Anthropic refusal text, or
+  // OpenAI content_filter finish reason) map to the dedicated 'refusal' reason
+  // instead. When both changes are present, refusal takes precedence; if a
+  // provider's moderation text is not caught here it can still fall through to
+  // the rate_limit bucket added by #94430.
+  if (isRefusalErrorMessage(raw)) {
+    return toReasonClassification("refusal");
   }
   if (
     isOpenRouterKeyLimitExceededError(raw, provider) ||
@@ -1418,6 +1432,13 @@ export function formatAssistantErrorText(
   const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
   if (diskSpaceCopy) {
     return diskSpaceCopy;
+  }
+
+  // Provider content-filter / refusal failures are terminal for this model but
+  // recoverable on another model candidate. Give the user stable guidance
+  // instead of the raw provider diagnostic.
+  if (msg.errorCode === "provider_refusal" || classifyAssistantFailoverReason(msg) === "refusal") {
+    return "The model declined to generate this response. Try rephrasing your request, or switch to a different model.";
   }
 
   if (providerRuntimeFailureKind === "auth_refresh") {

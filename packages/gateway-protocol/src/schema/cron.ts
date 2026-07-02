@@ -132,6 +132,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("no_error_details"),
   Type.Literal("unclassified"),
   Type.Literal("unknown"),
+  Type.Literal("refusal"),
 ]);
 const CronRunDiagnosticSeveritySchema = Type.Union([
   Type.Literal("info"),
