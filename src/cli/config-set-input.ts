@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 
-export const MAX_BATCH_FILE_BYTES = 1_048_576; // 1 MB
+export const MAX_BATCH_FILE_BYTES = 52_428_800; // 50 MB
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -157,7 +157,7 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   }
   if (bytesRead > MAX_BATCH_FILE_BYTES) {
     throw new Error(
-      `Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES.toLocaleString("en-US")} bytes / 1 MB)`,
+      `Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES.toLocaleString("en-US")} bytes / 50 MB)`,
     );
   }
   const raw = buf.toString("utf8", 0, bytesRead);
