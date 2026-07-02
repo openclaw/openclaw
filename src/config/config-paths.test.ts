@@ -2,7 +2,7 @@
 // preventing prototype-named keys (toString, constructor, valueOf) from being falsely
 // reported as "found and deleted" when they don't exist as own properties.
 import { describe, expect, it } from "vitest";
-import { setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { unsetConfigValueAtPath } from "./config-paths.js";
 
 describe("unsetConfigValueAtPath — prototype pollution", () => {
   const PROTOTYPE_KEYS = ["toString", "constructor", "valueOf", "hasOwnProperty"];
