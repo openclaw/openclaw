@@ -1,8 +1,11 @@
 // LLM Runtime tests cover api registry behavior.
-import { createAssistantMessageEventStream, type Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
-import { createApiRegistry } from "./api-registry.js";
-import { createLlmRuntime } from "./stream.js";
+import {
+  createApiRegistry,
+  createAssistantMessageEventStream,
+  createLlmRuntime,
+  type Model,
+} from "./index.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";
 const emptyStream = () => createAssistantMessageEventStream();

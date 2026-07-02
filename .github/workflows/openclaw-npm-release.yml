@@ -156,22 +156,19 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Pack AI runtime dependencies
+      - name: Pack AI runtime package
         id: ai_runtime_tarballs
         run: |
           set -euo pipefail
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          for package_dir in packages/llm-core packages/ai; do
-            package_version="$(node -p "require('./${package_dir}/package.json').version")"
-            if [[ "$package_version" != "$PACKAGE_VERSION" ]]; then
-              echo "${package_dir} version ${package_version} does not match openclaw ${PACKAGE_VERSION}." >&2
-              exit 1
-            fi
-          done
+          package_version="$(node -p "require('./packages/ai/package.json').version")"
+          if [[ "$package_version" != "$PACKAGE_VERSION" ]]; then
+            echo "packages/ai version ${package_version} does not match openclaw ${PACKAGE_VERSION}." >&2
+            exit 1
+          fi
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-ai-runtime-packages"
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
-          pnpm --dir packages/llm-core pack --pack-destination "$ARTIFACT_DIR"
           pnpm --dir packages/ai pack --pack-destination "$ARTIFACT_DIR"
           (cd "$ARTIFACT_DIR" && sha256sum ./*.tgz > SHA256SUMS)
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
@@ -376,10 +373,9 @@ jobs:
             exit 1
           fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          LLM_CORE_TARBALL="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-llm-core-*.tgz' -print | head -n 1)"
           AI_TARBALL="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
-            "$TARBALL_PATH" "$PACKAGE_VERSION" "$LLM_CORE_TARBALL" "$AI_TARBALL"
+            "$TARBALL_PATH" "$PACKAGE_VERSION" "$AI_TARBALL"
 
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -785,6 +781,5 @@ jobs:
             fi
             bash scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
           }
-          publish_if_missing "@openclaw/llm-core" "$(find preflight-tarball -type f -name 'openclaw-llm-core-*.tgz' -print | head -n 1)"
           publish_if_missing "@openclaw/ai" "$(find preflight-tarball -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"

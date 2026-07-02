@@ -21,6 +21,7 @@ const targets = [
   "skills",
   "openclaw.mjs",
   "config/knip.config.ts",
+  "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
 ];

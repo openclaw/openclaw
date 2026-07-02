@@ -6,8 +6,8 @@ const externalDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
   "@mistralai/mistralai",
-  "@openclaw/llm-core",
   "openai",
+  "typebox",
 ] as const;
 
 export default defineConfig({
@@ -16,6 +16,10 @@ export default defineConfig({
   entry: {
     index: "packages/ai/src/index.ts",
     providers: "packages/ai/src/providers.ts",
+    diagnostics: "packages/ai/src/utils/diagnostics.ts",
+    "event-stream": "packages/ai/src/utils/event-stream.ts",
+    types: "packages/ai/src/types.ts",
+    validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",

@@ -1,4 +1,5 @@
 // Agent Core tests cover agent loop behavior.
+import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
@@ -77,6 +78,7 @@ describe("agentLoop EventStream failures", () => {
       undefined,
       failingStreamFn,
     );
+    expect(stream).toBeInstanceOf(EventStream);
 
     const events = await collectEvents(stream);
     const result = await stream.result();

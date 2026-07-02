@@ -12,5 +12,10 @@ const runtime = createLlmRuntime();
 registerBuiltInApiProviders(runtime.registry);
 ```
 
+Provider-neutral contracts, validation, diagnostics, and event streams are
+available from the package root and focused subpaths such as
+`@openclaw/ai/event-stream` and `@openclaw/ai/validation`. No second OpenClaw
+runtime package is required.
+
 Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.

@@ -40,6 +40,26 @@
       "import": "./dist/providers.mjs",
       "default": "./dist/providers.mjs"
     },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.mts",
+      "import": "./dist/diagnostics.mjs",
+      "default": "./dist/diagnostics.mjs"
+    },
+    "./event-stream": {
+      "types": "./dist/event-stream.d.mts",
+      "import": "./dist/event-stream.mjs",
+      "default": "./dist/event-stream.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.mts",
+      "import": "./dist/validation.mjs",
+      "default": "./dist/validation.mjs"
+    },
     "./internal/*": {
       "types": "./dist/internal/*.d.mts",
       "import": "./dist/internal/*.mjs",
@@ -50,8 +70,16 @@
     "@anthropic-ai/sdk": "0.100.1",
     "@google/genai": "2.7.0",
     "@mistralai/mistralai": "2.2.5",
-    "@openclaw/llm-core": "workspace:*",
-    "openai": "6.39.1"
+    "@openclaw/fs-safe": "0.3.0",
+    "@openclaw/proxyline": "0.3.3",
+    "chalk": "5.6.2",
+    "json5": "2.2.3",
+    "kysely": "0.29.2",
+    "openai": "6.39.1",
+    "partial-json": "0.1.7",
+    "tslog": "4.10.2",
+    "typebox": "1.1.39",
+    "zod": "4.4.3"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -350,10 +350,9 @@ function buildPluginSdkAliasMap(useDist) {
     }
   }
 
-  // Agent-core intentionally imports @openclaw/llm-core by package name so built
-  // package entrypoints share constructor identity. In source-checkout live
-  // tests, keep that package specifier on the same source graph instead of
-  // falling through to pnpm's package export and requiring a prebuilt dist.
+  // Internal source still imports private workspace packages by package name.
+  // Keep live source-checkout tests on the same source graph instead of
+  // requiring prebuilt package dist files.
   for (const entry of workspacePackageAliases) {
     const alias = entry.subpath ? `${entry.name}/${entry.subpath}` : entry.name;
     const preferred = path.join(

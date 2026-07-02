@@ -95,7 +95,7 @@
     }
   },
   "dependencies": {
-    "@openclaw/llm-core": "workspace:*",
+    "@openclaw/ai": "workspace:*",
     "typebox": "1.1.39"
   }
 }

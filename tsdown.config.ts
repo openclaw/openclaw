@@ -556,6 +556,8 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
 
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/ai" ||
+    id.startsWith("@openclaw/ai/") ||
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||

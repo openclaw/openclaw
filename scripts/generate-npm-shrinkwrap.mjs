@@ -382,6 +382,17 @@ function readShrinkwrapOverrides() {
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   const normalized = { ...packageJson };
   delete normalized.devDependencies;
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = normalized[field];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+    normalized[field] = Object.fromEntries(
+      Object.entries(dependencies).filter(
+        ([, spec]) => typeof spec !== "string" || !spec.startsWith("workspace:"),
+      ),
+    );
+  }
   normalized.overrides = mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {});
   return normalized;
 }

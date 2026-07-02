@@ -1,17 +1,9 @@
 {
   "name": "@openclaw/llm-core",
-  "version": "2026.6.11",
-  "description": "Model, message, tool, and streaming contracts for OpenClaw AI runtimes",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git",
-    "directory": "packages/llm-core"
-  },
+  "version": "0.0.0-private",
+  "private": true,
   "files": [
-    "dist",
-    "LICENSE",
-    "README.md"
+    "dist"
   ],
   "type": "module",
   "main": "./dist/index.mjs",
@@ -45,11 +37,5 @@
   },
   "dependencies": {
     "typebox": "1.1.39"
-  },
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }
