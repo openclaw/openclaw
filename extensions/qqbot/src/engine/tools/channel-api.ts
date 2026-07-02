@@ -36,6 +36,8 @@ export interface ChannelApiParams {
   path: string;
   body?: Record<string, unknown>;
   query?: Record<string, string>;
+  confirmed?: boolean;
+  bulkConfirmed?: boolean;
 }
 
 /**
@@ -47,7 +49,9 @@ export const ChannelApiSchema = {
   properties: {
     method: {
       type: "string",
-      description: "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE.",
+      description:
+        "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE. " +
+        "Use DELETE and other mutating methods only after explicit user intent and target confirmation.",
       enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     },
     path: {
@@ -59,7 +63,8 @@ export const ChannelApiSchema = {
     body: {
       type: "object",
       description:
-        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it.",
+        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it. " +
+        "For write requests, include only fields the user explicitly asked to change.",
     },
     query: {
       type: "object",
@@ -67,6 +72,16 @@ export const ChannelApiSchema = {
         "URL query parameters as key/value pairs appended to the path. " +
         'For example, { "limit": "100", "after": "0" } becomes ?limit=100&after=0.',
       additionalProperties: { type: "string" },
+    },
+    confirmed: {
+      type: "boolean",
+      description:
+        "Required true for DELETE requests after the user confirms the exact QQ resource to delete.",
+    },
+    bulkConfirmed: {
+      type: "boolean",
+      description:
+        "Required true in addition to confirmed for bulk DELETE requests such as deleting all announcements.",
     },
   },
   required: ["method", "path"],
@@ -106,6 +121,56 @@ function validatePath(path: string): string | null {
   }
   if (!/^\/[a-zA-Z0-9\-._~:@!$&'()*+,;=/%]+$/.test(path) && path !== "/") {
     return "path contains unsupported characters";
+  }
+  for (const segment of path.split("/").slice(1)) {
+    let decodedSegment: string;
+    try {
+      decodedSegment = decodeURIComponent(segment);
+    } catch {
+      return "path contains invalid percent encoding";
+    }
+    if (decodedSegment.includes("/") || decodedSegment.includes("\\")) {
+      return "path contains encoded path separators";
+    }
+    if (decodedSegment === "." || decodedSegment === "..") {
+      return "path must not contain . or .. segments";
+    }
+  }
+  return null;
+}
+
+function decodePathSegments(path: string): string[] | null {
+  try {
+    return path
+      .replace(/\/+$/, "")
+      .split("/")
+      .slice(1)
+      .map((segment) => decodeURIComponent(segment));
+  } catch {
+    return null;
+  }
+}
+
+function isBulkAnnouncementDeletePath(path: string): boolean {
+  const segments = decodePathSegments(path);
+  return Boolean(
+    segments &&
+    segments.length === 4 &&
+    segments[0]?.toLowerCase() === "guilds" &&
+    segments[2]?.toLowerCase() === "announces" &&
+    segments[3]?.toLowerCase() === "all",
+  );
+}
+
+function validateDeleteConfirmation(params: ChannelApiParams): string | null {
+  if (params.method.toUpperCase() !== "DELETE") {
+    return null;
+  }
+  if (!params.confirmed) {
+    return "DELETE requests require confirmed=true after the user confirms the exact QQ resource.";
+  }
+  if (isBulkAnnouncementDeletePath(params.path) && !params.bulkConfirmed) {
+    return "Deleting all announcements requires bulkConfirmed=true after a separate bulk-delete confirmation.";
   }
   return null;
 }
@@ -154,6 +219,11 @@ export async function executeChannelApi(
   const pathError = validatePath(params.path);
   if (pathError) {
     return json({ error: pathError });
+  }
+
+  const confirmationError = validateDeleteConfirmation({ ...params, method });
+  if (confirmationError) {
+    return json({ error: confirmationError, path: params.path });
   }
 
   if (

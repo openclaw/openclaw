@@ -9,7 +9,6 @@ const VERSION_ONLY_TEXT_PATHS = new Set([
   "apps/android/Config/Version.properties",
   "apps/android/version.json",
   "apps/ios/Config/Version.xcconfig",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
 ]);
 

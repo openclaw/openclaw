@@ -5,6 +5,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
     let title: String
     let subtitle: String
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
     @ViewBuilder var content: Content
 
@@ -12,12 +13,14 @@ struct IPadSidebarScreenChrome<Content: View>: View {
         title: String,
         subtitle: String,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
         gatewayAction: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content)
     {
         self.title = title
         self.subtitle = subtitle
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
         self.content = content()
     }
@@ -27,24 +30,39 @@ struct IPadSidebarScreenChrome<Content: View>: View {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: self.isCompactHeight ? 10 : 16) {
-                    OpenClawAdaptiveHeaderRow(
-                        title: self.title,
-                        subtitle: self.subtitle,
-                        titleFont: self.isCompactHeight ? .headline.weight(.semibold) : .title2.weight(.semibold),
-                        subtitleLineLimit: self.isCompactHeight ? 1 : 2)
-                    {
-                        if let headerLeadingAction {
-                            OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                    if !self.usesNativeNavigationChrome {
+                        OpenClawAdaptiveHeaderRow(
+                            title: self.title,
+                            subtitle: self.subtitle,
+                            titleFont: self.isCompactHeight ? .headline.weight(.semibold) : .title2.weight(.semibold),
+                            subtitleLineLimit: self.isCompactHeight ? 1 : 2)
+                        {
+                            if let headerLeadingAction {
+                                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                            }
+                        } accessory: {
+                            self.gatewayPill
                         }
-                    } accessory: {
-                        self.gatewayPill
+                        .padding(.horizontal, OpenClawProMetric.pagePadding)
                     }
-                    .padding(.horizontal, OpenClawProMetric.pagePadding)
                     self.content
                 }
                 .padding(.vertical, self.isCompactHeight ? 10 : 18)
             }
             .safeAreaPadding(.bottom, self.bottomScrollInset)
+        }
+        .navigationTitle(self.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome, let gatewayAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: gatewayAction) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
         }
     }
 
@@ -58,7 +76,8 @@ struct IPadSidebarScreenChrome<Content: View>: View {
             Button(action: gatewayAction) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()

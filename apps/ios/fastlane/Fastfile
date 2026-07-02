@@ -521,6 +521,18 @@ def preserve_local_signing
   end
 end
 
+def without_xcode_xcconfig_file
+  existing = ENV["XCODE_XCCONFIG_FILE"]
+  ENV.delete("XCODE_XCCONFIG_FILE")
+  yield
+ensure
+  if env_present?(existing)
+    ENV["XCODE_XCCONFIG_FILE"] = existing
+  else
+    ENV.delete("XCODE_XCCONFIG_FILE")
+  end
+end
+
 def app_store_signing_manifest
   JSON.parse(File.read(File.join(ios_root, "Config", "AppStoreSigning.json")))
 end
@@ -728,7 +740,7 @@ end
 
 def release_notes_metadata_path
   source = release_notes_path
-  UI.user_error!("Missing release notes at #{source}. Run `pnpm ios:version:sync`.") unless File.exist?(source)
+  UI.user_error!("Missing release notes at #{source}. Run `pnpm ios:version:sync -- --version <release-version>`.") unless File.exist?(source)
 
   temp_root = Dir.mktmpdir("openclaw-release-notes")
   target_dir = File.join(temp_root, "en-US")
@@ -1034,14 +1046,18 @@ def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, sh
   UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
 end
 
-def read_ios_version_metadata
+def read_ios_version_metadata(release_version: nil)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
-  stdout, stderr, status = Open3.capture3(
+  args = [
     "node",
     "--import",
     "tsx",
     script_path,
     "--json",
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
     chdir: repo_root
   )
 
@@ -1066,21 +1082,26 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS version helper: #{e.message}")
 end
 
-def sync_ios_versioning!
+def sync_ios_versioning!(release_version: nil)
   script_path = File.join(repo_root, "scripts", "ios-sync-versioning.ts")
-  stdout, stderr, status = Open3.capture3(
+  args = [
     "node",
     "--import",
     "tsx",
     script_path,
     "--check",
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
     chdir: repo_root
   )
   return if status.success?
 
   detail = stderr.to_s.strip
   detail = stdout.to_s.strip if detail.empty?
-  UI.user_error!("iOS versioning artifacts are stale. Run `pnpm ios:version:sync`.\n#{detail}")
+  sync_command = env_present?(release_version) ? "pnpm ios:version:sync -- --version #{release_version}" : "pnpm ios:version:sync"
+  UI.user_error!("iOS versioning artifacts are stale. Run `#{sync_command}`.\n#{detail}")
 end
 
 def shell_join(parts)
@@ -1092,8 +1113,8 @@ def xcodebuild_shell_join(parts)
   shell_join(["env", "PATH=#{xcode_path}", *parts])
 end
 
-def resolve_release_build_number(api_key:, short_version:)
-  explicit = ENV["IOS_RELEASE_BUILD_NUMBER"]
+def resolve_release_build_number(api_key:, short_version:, explicit_build_number: nil)
+  explicit = explicit_build_number.to_s.strip
   if env_present?(explicit)
     UI.user_error!("Invalid iOS release build number '#{explicit}'. Expected digits only.") unless explicit.match?(/\A\d+\z/)
     UI.message("Using explicit iOS release build number #{explicit}.")
@@ -1111,15 +1132,15 @@ def resolve_release_build_number(api_key:, short_version:)
   next_build.to_s
 end
 
-def release_build_number_needs_app_store_connect_auth?
-  explicit = ENV["IOS_RELEASE_BUILD_NUMBER"]
+def release_build_number_needs_app_store_connect_auth?(explicit_build_number: nil)
+  explicit = explicit_build_number.to_s.strip
   !env_present?(explicit)
 end
 
 def prepare_app_store_release!(version:, build_number:)
   script_path = File.join(repo_root, "scripts", "ios-release-prepare.sh")
   UI.message("Preparing iOS App Store release #{version} (build #{build_number}).")
-  sh(shell_join(["bash", script_path, "--build-number", build_number]))
+  sh(shell_join(["bash", script_path, "--version", version, "--build-number", build_number]))
 
   release_xcconfig = File.join(ios_root, "build", "AppStoreRelease.xcconfig")
   UI.user_error!("Missing App Store release xcconfig at #{release_xcconfig}.") unless File.exist?(release_xcconfig)
@@ -1296,13 +1317,22 @@ end
 platform :ios do
   private_lane :prepare_app_store_context do |options|
     require_api_key = options[:require_api_key] == true
-    needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?
+    release_version = options[:release_version].to_s.strip
+    explicit_build_number = options[:build_number].to_s.strip
+    needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?(explicit_build_number: explicit_build_number)
     api_key = needs_api_key ? app_store_connect_api_key_config : nil
-    sync_ios_versioning!
-    version_metadata = read_ios_version_metadata
+    if release_version.empty?
+      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or pass `release_version:YYYY.M.D` to the Fastlane lane.")
+    end
+    sync_ios_versioning!(release_version: release_version)
+    version_metadata = read_ios_version_metadata(release_version: release_version)
     version = version_metadata[:version]
     short_version = version_metadata[:short_version]
-    build_number = resolve_release_build_number(api_key: api_key, short_version: short_version)
+    build_number = resolve_release_build_number(
+      api_key: api_key,
+      short_version: short_version,
+      explicit_build_number: explicit_build_number
+    )
     release_xcconfig = prepare_app_store_release!(version: version, build_number: build_number)
 
     {
@@ -1346,8 +1376,12 @@ platform :ios do
   end
 
   desc "Build an App Store distribution archive locally without uploading"
-  lane :app_store_archive do
-    context = prepare_app_store_context(require_api_key: false)
+  lane :app_store_archive do |options|
+    context = prepare_app_store_context(
+      require_api_key: false,
+      release_version: options[:release_version],
+      build_number: options[:build_number]
+    )
     build = build_app_store_release(context)
     UI.success("Built iOS App Store archive: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
     build
@@ -1356,26 +1390,32 @@ platform :ios do
   end
 
   desc "Generate screenshots, update App Store metadata and review attachment, then upload an App Store build"
-  lane :release_upload do
+  lane :release_upload do |options|
     unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
     end
 
     release_sha = release_git_sha
     release_signing_check!
-    preserve_local_signing do
-      screenshots
-    end
-    context = prepare_app_store_context(require_api_key: true)
+    context = prepare_app_store_context(
+      require_api_key: true,
+      release_version: options[:release_version],
+      build_number: options[:build_number]
+    )
     ensure_mobile_release_ref_available!(
       platform: "ios",
       version: context[:short_version],
       build: context[:build_number],
       sha: release_sha
     )
+    without_xcode_xcconfig_file do
+      preserve_local_signing do
+        screenshots(release_version: context[:version], build_number: context[:build_number])
+      end
+    end
     ENV["DELIVER_SCREENSHOTS"] = "1"
     ENV["DELIVER_RELEASE_NOTES"] = "1"
-    metadata
+    metadata(release_version: context[:short_version])
 
     build = build_app_store_release(context)
 
@@ -1399,10 +1439,14 @@ platform :ios do
   end
 
   desc "Upload App Store metadata, App Review PDF attachment, and optionally screenshots"
-  lane :metadata do
+  lane :metadata do |options|
     install_ready_for_review_edit_state_lookup!
-    sync_ios_versioning!
-    version_metadata = read_ios_version_metadata
+    release_version = options[:release_version].to_s.strip
+    if release_version.empty?
+      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or `fastlane ios metadata release_version:YYYY.M.D`.")
+    end
+    sync_ios_versioning!(release_version: release_version)
+    version_metadata = read_ios_version_metadata(release_version: release_version)
     api_key = app_store_connect_api_key_config
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
@@ -1464,9 +1508,15 @@ platform :ios do
   end
 
   desc "Generate deterministic iOS screenshots for App Store metadata"
-  lane :screenshots do
+  lane :screenshots do |options|
+    version_args = []
+    release_version = options[:release_version].to_s.strip
+    build_number = options[:build_number].to_s.strip
+    version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--build-number", build_number] unless build_number.empty?
+
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
 
     capture_ios_screenshots(
@@ -1486,13 +1536,19 @@ platform :ios do
       xcargs: "-allowProvisioningUpdates"
     )
 
-    watch_screenshot
+    watch_screenshot(release_version: release_version, build_number: build_number)
   end
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"
-  lane :watch_screenshot do
+  lane :watch_screenshot do |options|
+    version_args = []
+    release_version = options[:release_version].to_s.strip
+    build_number = options[:build_number].to_s.strip
+    version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--build-number", build_number] unless build_number.empty?
+
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh")]))
+    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
     capture_watch_screenshot
   end

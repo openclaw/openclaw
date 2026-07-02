@@ -44,7 +44,7 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -131,7 +131,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (amount <= 0) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
-  } else {
+  } else if (form.scheduleKind === "cron") {
     if (!form.cronExpr.trim()) {
       errors.cronExpr = "cron.errors.cronExprRequired";
     }
@@ -412,9 +412,14 @@ export function getVisibleCronJobs(
   });
 }
 
-function resolveCronJobScheduleKind(job: CronJob): CronJob["schedule"]["kind"] | null {
+function resolveCronJobScheduleKind(job: CronJob): string | null {
   const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
-  if (scheduleKind === "at" || scheduleKind === "every" || scheduleKind === "cron") {
+  if (
+    scheduleKind === "at" ||
+    scheduleKind === "every" ||
+    scheduleKind === "cron" ||
+    scheduleKind === "on-exit"
+  ) {
     return scheduleKind;
   }
   return null;
@@ -568,7 +573,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     const parsed = parseEverySchedule(job.schedule.everyMs);
     next.everyAmount = parsed.everyAmount;
     next.everyUnit = parsed.everyUnit;
-  } else {
+  } else if (job.schedule.kind === "cron") {
     next.cronExpr = job.schedule.expr;
     next.cronTz = job.schedule.tz ?? "";
     const staggerFields = parseStaggerSchedule(job.schedule.staggerMs);
@@ -576,6 +581,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;
   }
+  // Other schedule kinds (e.g. on-exit) are shown read-only in the list and have no
+  // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
   return normalizeCronFormState(next);
 }
@@ -631,8 +638,8 @@ function buildCronPayload(form: CronFormState) {
   const payload: {
     kind: "agentTurn";
     message: string;
-    model?: string;
-    thinking?: string;
+    model?: string | null;
+    thinking?: string | null;
     timeoutSeconds?: number;
     lightContext?: boolean;
   } = { kind: "agentTurn", message };
@@ -712,23 +719,38 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       return;
     }
 
-    const schedule = buildCronSchedule(form);
     const editingJob = state.cronEditingJobId
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
+    // Preserve on-exit only while the edit form still points at on-exit; if the
+    // user selects an editable schedule kind, the update must apply it.
+    const preserveSchedule = Boolean(
+      state.cronEditingJobId &&
+      (editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" &&
+      form.scheduleKind === "on-exit",
+    );
+    const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
       state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
     );
     const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
-    if (payload?.kind === "agentTurn") {
-      const existingLightContext =
-        editingPayload?.kind === "agentTurn" ? editingPayload.lightContext : undefined;
-      if (
-        !form.payloadLightContext &&
-        state.cronEditingJobId &&
-        existingLightContext !== undefined
-      ) {
+    if (
+      payload?.kind === "agentTurn" &&
+      state.cronEditingJobId &&
+      editingPayload?.kind === "agentTurn"
+    ) {
+      // When editing, a blanked field that previously held a stored override must
+      // send an explicit clear; an omitted key means "leave unchanged" on merge.
+      // The form only shows stored overrides (not inherited defaults), so a blank
+      // input with a stored value is an intentional clear.
+      if (!form.payloadModel.trim() && editingPayload.model !== undefined) {
+        payload.model = null;
+      }
+      if (!form.payloadThinking.trim() && editingPayload.thinking !== undefined) {
+        payload.thinking = null;
+      }
+      if (!form.payloadLightContext && editingPayload.lightContext !== undefined) {
         payload.lightContext = false;
       }
     }
@@ -767,12 +789,14 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       sessionKey,
       enabled: form.enabled,
       deleteAfterRun: form.deleteAfterRun,
-      schedule,
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       delivery,
       failureAlert,
     };
+    if (schedule) {
+      job.schedule = schedule;
+    }
     if (payload) {
       job.payload = payload;
     }

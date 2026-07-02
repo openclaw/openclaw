@@ -634,7 +634,8 @@ Telegram emits the observation-only `message_pre_auth` plugin hook and `message:
     Telegram `web_app` buttons work only in private chats between a user and the
     bot.
 
-    Callback clicks are passed to the agent as text:
+    Callback clicks that are not claimed by a registered plugin interactive
+    handler are passed to the agent as text:
     `callback_data: <value>`
 
   </Accordion>

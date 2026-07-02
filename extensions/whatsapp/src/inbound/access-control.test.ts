@@ -1,4 +1,7 @@
 // Whatsapp tests cover access control plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
@@ -761,6 +764,54 @@ describe("WhatsApp dmPolicy precedence", () => {
 
     expect(result.allowed).toBe(false);
     expect(result.isSelfChat).toBe(false);
+  });
+
+  it("authorizes group commands when owner sender is a LID JID with authDir (issue #77755)", async () => {
+    const lidDigits = "9876543210";
+    const ownerE164 = "+15550001111";
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-77755-"));
+    try {
+      // Write reverse LID mapping so the LID JID resolves to the owner's phone
+      fs.writeFileSync(
+        path.join(authDir, `lid-mapping-${lidDigits}_reverse.json`),
+        JSON.stringify(ownerE164),
+      );
+
+      const cfg = {
+        channels: {
+          whatsapp: {
+            dmPolicy: "allowlist",
+            allowFrom: [ownerE164],
+          },
+        },
+      };
+      setAccessControlTestConfig(cfg);
+
+      const result = await resolveWhatsAppCommandAuthorized({
+        cfg: cfg as never,
+        msg: createTestWebInboundMessage({
+          event: { id: "cmd-group-lid" },
+          payload: { body: "/status" },
+          platform: {
+            chatJid: "120363401234567890@g.us",
+            recipientJid: "+15550009999",
+            senderJid: `${lidDigits}@lid`,
+            selfE164: "+15550009999",
+          },
+          admission: {
+            conversation: {
+              id: "120363401234567890@g.us",
+              kind: "group",
+            },
+          },
+        }) as never,
+        authDir,
+      });
+
+      expect(result).toBe(true);
+    } finally {
+      fs.rmSync(authDir, { recursive: true, force: true });
+    }
   });
 
   it("treats same-phone DMs as self-chat only when explicitly configured", async () => {

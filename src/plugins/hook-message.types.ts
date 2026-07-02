@@ -93,6 +93,7 @@ export type PluginHookInboundClaimEvent = {
   parentSpanId?: string;
   isGroup: boolean;
   commandAuthorized?: boolean;
+  senderIsOwner?: boolean;
   wasMentioned?: boolean;
   metadata?: Record<string, unknown>;
 };
