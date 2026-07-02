@@ -1512,12 +1512,18 @@ export async function sendMessageTelegram(
       opts.verbose,
       allowThreadlessFallback,
       async (effectiveParams, retryLabel) => {
-        const threadlessPlainMediaParams = removeMessageThreadIdParam(plainMediaParams);
+        // Keep message_thread_id on the caption parse fallback so topic-scoped
+        // media stays in the forum topic. withTelegramThreadFallback already
+        // strips the thread for the thread-not-found retry via effectiveParams;
+        // mirror that state onto the plain-caption fallback.
+        const effectivePlainMediaParams = hasMessageThreadIdParam(effectiveParams)
+          ? plainMediaParams
+          : removeMessageThreadIdParam(plainMediaParams);
         return await sendMedia(
           retryLabel,
           mediaSender.sender,
           effectiveParams,
-          threadlessPlainMediaParams,
+          effectivePlainMediaParams,
         );
       },
     );

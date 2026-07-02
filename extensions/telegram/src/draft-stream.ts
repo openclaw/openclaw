@@ -685,7 +685,11 @@ export function createTelegramDraftStream(params: {
     // Rewind WITHOUT deleting; the old id is captured above.
     resetStreamToNewMessage();
     if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
-      scheduleDetachedDelete(supersededMessageId, supersededVisibleSince, REPOSITION_DELETE_DELAY_MS);
+      scheduleDetachedDelete(
+        supersededMessageId,
+        supersededVisibleSince,
+        REPOSITION_DELETE_DELAY_MS,
+      );
       return supersededMessageId;
     }
     return undefined;
@@ -704,9 +708,7 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
-  const finalizeToPreview = async (
-    preview: TelegramDraftPreview,
-  ): Promise<number | undefined> => {
+  const finalizeToPreview = async (preview: TelegramDraftPreview): Promise<number | undefined> => {
     const text = preview.text.trimEnd();
     if (!text) {
       return undefined;

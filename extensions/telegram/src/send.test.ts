@@ -1969,6 +1969,56 @@ describe("sendMessageTelegram", () => {
     expect(result).toEqual({ messageId: "91", chatId });
   });
 
+  it("keeps message_thread_id on plain caption fallback for forum topic media sends", async () => {
+    const chatId = "-100123";
+    const caption = "hi **boss**";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 92,
+        chat: { id: chatId },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const result = await sendMessageTelegram(chatId, caption, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      messageThreadId: 271,
+    });
+
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "first send photo call"),
+      "send photo call",
+      chatId,
+      {
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      },
+    );
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "plain caption retry call"),
+      "plain caption retry call",
+      chatId,
+      {
+        caption,
+        message_thread_id: 271,
+      },
+    );
+    expect(result).toEqual({ messageId: "92", chatId });
+  });
+
   it("sends video notes when requested and regular videos otherwise", async () => {
     const chatId = "123";
 
@@ -3135,6 +3185,7 @@ describe("sendMessageTelegram", () => {
     await expect(
       sendMessageTelegram(chatId, "photo", {
         token: "tok",
+        cfg: TELEGRAM_TEST_CFG,
         api,
         mediaUrl: "https://example.com/photo.jpg",
         messageThreadId: 271,
@@ -3543,6 +3594,7 @@ describe("sendStickerTelegram", () => {
     await expect(
       sendStickerTelegram(chatId, "fileId123", {
         token: "tok",
+        cfg: TELEGRAM_TEST_CFG,
         api,
         messageThreadId: 271,
       }),
