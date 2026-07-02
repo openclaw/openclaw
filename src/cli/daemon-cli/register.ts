@@ -8,7 +8,7 @@ import { addGatewayServiceCommands } from "./register-service-commands.js";
 export function registerDaemonCli(program: Command) {
   const daemon = program
     .command("daemon")
-    .description("Manage the Gateway service (launchd/systemd/schtasks)")
+    .description("Manage the Gateway service (legacy alias)")
     .addHelpText(
       "after",
       () =>

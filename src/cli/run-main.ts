@@ -219,7 +219,7 @@ async function tryRunGatewayRunFastPath(
     });
   };
   const gateway = addGatewayRunCommand(
-    program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+    program.command("gateway").description("Run, inspect, and query the OpenClaw Gateway"),
     { beforeRun },
   );
   addGatewayRunCommand(

@@ -7,7 +7,7 @@ title: "Agents"
 
 # `openclaw agents`
 
-Manage isolated agents (workspaces + auth + routing).
+Manage isolated agents (workspaces, auth, routing).
 
 Related:
 

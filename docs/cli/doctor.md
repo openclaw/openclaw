@@ -8,7 +8,7 @@ title: "Doctor"
 
 # `openclaw doctor`
 
-Health checks + quick fixes for the gateway and channels.
+Diagnose and repair config, Gateway, plugin, and channel problems.
 
 Related:
 

@@ -89,7 +89,7 @@ const loadPluginsAuthoringCommands = createModuleLoader(
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
-    .description("Manage OpenClaw plugins and extensions")
+    .description("Install, enable, disable, and inspect plugins")
     .addHelpText(
       "after",
       () =>

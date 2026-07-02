@@ -501,7 +501,7 @@ export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
-      .description("Run, inspect, and query the WebSocket Gateway")
+      .description("Run, inspect, and query the OpenClaw Gateway")
       .addHelpText(
         "after",
         () =>

@@ -2159,7 +2159,7 @@ export function registerCapabilityCli(program: Command) {
   const capability = program
     .command("infer")
     .alias("capability")
-    .description("Run provider-backed inference commands through a stable CLI surface")
+    .description("Run provider-backed model, media, search, and embedding commands")
     .addHelpText(
       "after",
       () =>

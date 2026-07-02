@@ -94,7 +94,7 @@ function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOption
 export function registerQrCli(program: Command) {
   program
     .command("qr")
-    .description("Generate a mobile pairing QR code and setup code")
+    .description("Generate mobile pairing QR/setup code")
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,

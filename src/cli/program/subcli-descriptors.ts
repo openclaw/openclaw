@@ -7,7 +7,7 @@ import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandCatalog = defineCommandDescriptorCatalog([
-  { name: "acp", description: "Run and manage ACP-backed coding agents", hasSubcommands: true },
+  { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
     name: "gateway",
     description: "Run, inspect, and query the OpenClaw Gateway",
@@ -52,7 +52,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "nodes",
-    description: "Pair nodes and run node-host commands through the Gateway",
+    description: "Manage gateway-owned nodes (pairing, status, invoke, and media)",
     hasSubcommands: true,
   },
   {
@@ -68,7 +68,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "sandbox",
-    description: "Manage sandbox containers for agent isolation",
+    description: "Manage sandbox containers (Docker-based agent isolation)",
     hasSubcommands: true,
   },
   {
@@ -161,7 +161,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "security",
-    description: "Security tools and local config audits",
+    description: "Audit local config and state for common security foot-guns",
     hasSubcommands: true,
   },
   {

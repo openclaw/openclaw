@@ -532,7 +532,7 @@ async function emitGatewayError(
 export function registerLogsCli(program: Command) {
   const logs = program
     .command("logs")
-    .description("Tail gateway file logs via RPC")
+    .description("Tail Gateway logs locally or via RPC")
     .option("--limit <n>", "Max lines to return", "200")
     .option("--max-bytes <n>", "Max bytes to read", "250000")
     .option("--follow", "Follow log output", false)

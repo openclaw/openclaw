@@ -9,7 +9,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 export function registerMaintenanceCommands(program: Command) {
   program
     .command("doctor")
-    .description("Health checks + quick fixes for the gateway and channels")
+    .description("Diagnose and repair config, Gateway, plugin, and channel problems")
     .addHelpText(
       "after",
       () =>

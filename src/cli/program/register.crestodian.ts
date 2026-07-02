@@ -10,7 +10,7 @@ import { formatHelpExamples } from "../help-format.js";
 export function registerCrestodianCommand(program: Command) {
   program
     .command("crestodian")
-    .description("Open the ring-zero setup and repair helper")
+    .description("Open the interactive setup and repair assistant")
     .option("-m, --message <text>", "Run one Crestodian request")
     .option("--yes", "Approve persistent config writes for this request", false)
     .option("--json", "Output startup overview as JSON", false)

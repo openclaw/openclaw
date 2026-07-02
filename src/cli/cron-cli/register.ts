@@ -14,7 +14,7 @@ import { registerCronSimpleCommands } from "./register.cron-simple.js";
 export function registerCronCli(program: Command) {
   const cron = program
     .command("cron")
-    .description("Manage cron jobs (via Gateway)")
+    .description("Schedule and inspect Gateway background jobs")
     .addHelpText(
       "after",
       () =>

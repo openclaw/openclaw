@@ -40,7 +40,7 @@ const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     .option("--json", "Output JSON", false);
 
 export function registerDevicesCli(program: Command) {
-  const devices = program.command("devices").description("Device pairing and auth tokens");
+  const devices = program.command("devices").description("Device pairing + token management");
 
   devicesCallOpts(
     devices

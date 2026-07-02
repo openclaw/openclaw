@@ -74,7 +74,7 @@ async function runAgentsCommandAction(
 export function registerAgentsCommands(program: Command): void {
   const agents = program
     .command("agents")
-    .description("Manage isolated agents (workspaces + auth + routing)")
+    .description("Manage isolated agents (workspaces, auth, routing)")
     .addHelpText(
       "after",
       () =>

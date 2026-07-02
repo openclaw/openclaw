@@ -97,7 +97,7 @@ export async function registerChannelsCli(
   const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
-    .description("Manage connected chat channels and accounts")
+    .description("Add, remove, login, and inspect messaging channels")
     .addHelpText(
       "after",
       () =>

@@ -8,7 +8,7 @@ title: "Models"
 
 # `openclaw models`
 
-Model discovery, scanning, and configuration (default model, fallbacks, auth profiles).
+List, scan, and set model providers (default model, fallbacks, auth profiles).
 
 Related:
 

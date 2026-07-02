@@ -50,7 +50,7 @@ async function runSystemGatewayCommand(
 export function registerSystemCli(program: Command) {
   const system = program
     .command("system")
-    .description("System tools (events, heartbeat, presence)")
+    .description("System events, heartbeat, and presence")
     .addHelpText(
       "after",
       () =>

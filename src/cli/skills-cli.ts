@@ -309,7 +309,7 @@ async function readSkillProposalInput(options: {
 export function registerSkillsCli(program: Command) {
   const skills = program
     .command("skills")
-    .description("List and inspect available skills")
+    .description("List, inspect, and install agent skills")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .addHelpText(
       "after",

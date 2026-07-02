@@ -65,7 +65,7 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
 export function registerSecretsCli(program: Command): void {
   const secrets = program
     .command("secrets")
-    .description("Secrets runtime controls")
+    .description("Audit, apply, and reload SecretRef-backed credentials")
     .addHelpText(
       "after",
       () =>
