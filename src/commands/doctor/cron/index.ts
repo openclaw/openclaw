@@ -1,4 +1,5 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import path from "node:path";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -13,7 +14,7 @@ import {
   saveCronJobsStoreWithMetadata,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
-import type { HealthFinding } from "../../../flows/health-checks.js";
+import type { HealthFinding, HealthRepairEffect } from "../../../flows/health-checks.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import {
@@ -118,6 +119,10 @@ function legacyCronStoreFinding(params: {
       params.fixHint ??
       `Run ${formatCliCommand("openclaw doctor --fix")} to normalize legacy cron storage.`,
   };
+}
+
+function cloneCronJobRecords(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return structuredClone(jobs);
 }
 
 async function loadLegacyCronRepairState(params: {
@@ -433,6 +438,97 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
 
   return findings;
+}
+
+export async function collectLegacyCronStoreRepairEffects(params: {
+  cfg: OpenClawConfig;
+}): Promise<readonly HealthRepairEffect[]> {
+  let state: LegacyCronRepairState | null;
+  try {
+    state = await loadLegacyCronRepairState({ cfg: params.cfg });
+  } catch {
+    return [];
+  }
+  if (!state) {
+    return [];
+  }
+
+  const effects: HealthRepairEffect[] = [];
+  if (state.legacyStoreDetected) {
+    effects.push({
+      kind: "state",
+      action: state.legacyMigrationAlreadyImported
+        ? "would-archive-legacy-cron-store"
+        : "would-migrate-legacy-cron-store",
+      target: state.storePath,
+      dryRunSafe: false,
+    });
+  }
+  if (state.legacyRunLogDetected) {
+    effects.push({
+      kind: "state",
+      action: "would-import-legacy-cron-run-logs",
+      target: path.join(path.dirname(state.storePath), "runs"),
+      dryRunSafe: false,
+    });
+  }
+  if (state.rawJobs.length === 0) {
+    return effects;
+  }
+
+  const normalizedPreviewJobs = cloneCronJobRecords(state.rawJobs);
+  const normalized = normalizeStoredCronJobs(normalizedPreviewJobs);
+  if (normalized.removedJobs.length > 0) {
+    effects.push({
+      kind: "state",
+      action: "would-quarantine-invalid-cron-jobs",
+      target: state.quarantinePath,
+      dryRunSafe: false,
+    });
+  }
+  if (normalized.mutated) {
+    effects.push({
+      kind: "state",
+      action: "would-normalize-cron-store",
+      target: state.storePath,
+      dryRunSafe: false,
+    });
+  }
+  if (state.sqliteProjectionBackfillCount > 0) {
+    effects.push({
+      kind: "state",
+      action: "would-backfill-cron-sqlite-projection",
+      target: state.storePath,
+      dryRunSafe: false,
+    });
+  }
+
+  const notifyPreviewJobs = cloneCronJobRecords(state.rawJobs);
+  const notifyMigration = migrateLegacyNotifyFallback({
+    jobs: notifyPreviewJobs,
+    legacyWebhook: normalizeOptionalString(params.cfg.cron?.webhook),
+  });
+  if (notifyMigration.changed) {
+    effects.push({
+      kind: "state",
+      action: "would-migrate-legacy-cron-notify-fallback",
+      target: state.storePath,
+      dryRunSafe: false,
+    });
+  }
+
+  const dreamingPreviewJobs = cloneCronJobRecords(state.rawJobs);
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(dreamingPreviewJobs);
+  if (dreamingMigration.changed) {
+    effects.push({
+      kind: "state",
+      action: "would-rewrite-legacy-dreaming-cron-payload",
+      target: state.storePath,
+      dryRunSafe: false,
+    });
+  }
+
+  return effects;
 }
 
 export async function repairLegacyCronStoreWithoutPrompt(params: {

@@ -17,6 +17,7 @@ import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyCronStoreHealthFindings,
+  collectLegacyCronStoreRepairEffects,
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
@@ -295,6 +296,115 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 
     await expect(
       collectLegacyCronStoreHealthFindings({ cfg: createCronConfig(storePath) }),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe("collectLegacyCronStoreRepairEffects", () => {
+  it("previews legacy cron store repair effects without mutating files", async () => {
+    const storePath = await makeTempStorePath();
+    await writeLegacyCronArrayStore(storePath, [
+      createLegacyCronJob({
+        jobId: "legacy-notify",
+        payload: {
+          kind: "systemEvent",
+          text: "Morning brief",
+        },
+      }),
+    ]);
+    const runLogPath = path.join(path.dirname(storePath), "runs", "legacy-notify.jsonl");
+    await fs.mkdir(path.dirname(runLogPath), { recursive: true });
+    await fs.writeFile(runLogPath, "", "utf-8");
+
+    const effects = await collectLegacyCronStoreRepairEffects({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(effects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "state",
+          action: "would-migrate-legacy-cron-store",
+          target: storePath,
+          dryRunSafe: false,
+        }),
+        expect.objectContaining({
+          kind: "state",
+          action: "would-import-legacy-cron-run-logs",
+          target: path.join(path.dirname(storePath), "runs"),
+          dryRunSafe: false,
+        }),
+        expect.objectContaining({
+          kind: "state",
+          action: "would-normalize-cron-store",
+          target: storePath,
+          dryRunSafe: false,
+        }),
+        expect.objectContaining({
+          kind: "state",
+          action: "would-migrate-legacy-cron-notify-fallback",
+          target: storePath,
+          dryRunSafe: false,
+        }),
+      ]),
+    );
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("legacy-notify");
+    await expect(fs.stat(runLogPath)).resolves.toBeDefined();
+  });
+
+  it("previews quarantine and dreaming payload rewrite effects", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      { id: "invalid-cron", name: "Invalid cron", payload: { kind: "systemEvent" } },
+      {
+        id: "memory-dreaming",
+        name: "Memory Dreaming Promotion",
+        description:
+          "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls.",
+        enabled: true,
+        createdAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: {
+          kind: "systemEvent",
+          text: "__openclaw_memory_core_short_term_promotion_dream__",
+        },
+        state: {},
+      },
+    ]);
+
+    const effects = await collectLegacyCronStoreRepairEffects({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(effects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "would-quarantine-invalid-cron-jobs",
+          target: resolveCronQuarantinePath(storePath),
+        }),
+        expect.objectContaining({
+          action: "would-normalize-cron-store",
+          target: storePath,
+        }),
+        expect.objectContaining({
+          action: "would-rewrite-legacy-dreaming-cron-payload",
+          target: storePath,
+        }),
+      ]),
+    );
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("invalid-cron");
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("memory-dreaming");
+  });
+
+  it("returns no repair effects for an already-normalized empty cron store", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+
+    await expect(
+      collectLegacyCronStoreRepairEffects({ cfg: createCronConfig(storePath) }),
     ).resolves.toEqual([]);
   });
 });

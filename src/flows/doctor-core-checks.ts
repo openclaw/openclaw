@@ -689,6 +689,20 @@ const legacyCronStoreCheck: HealthCheck = {
       await import("../commands/doctor/cron/index.js");
     return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
   },
+  async repair(ctx) {
+    const { collectLegacyCronStoreRepairEffects } =
+      await import("../commands/doctor/cron/index.js");
+    const effects = await collectLegacyCronStoreRepairEffects({ cfg: ctx.cfg });
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor cron contribution owns real cron store repair",
+      changes: [],
+      effects,
+    };
+  },
 };
 
 const codexSessionRoutesCheck: HealthCheck = {
