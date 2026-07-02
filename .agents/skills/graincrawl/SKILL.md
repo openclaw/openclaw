@@ -41,4 +41,4 @@ graincrawl panels get <id>
 graincrawl --json sql "select count(*) as notes from notes;"
 ```
 
-Report absolute date spans, note titles, source gaps, and transcript/panel availability. Use read-only SQL for exact counts/rankings. Before encrypted source debugging, run explicit unlock/secrets checks; do not surprise-prompt Keychain.
+Report absolute date spans, note titles, source gaps, and transcript/panel availability. Use read-only SQL for exact counts/rankings. Before encrypted source debugging, run explicit unlock/readiness checks; do not trigger OS approval prompts unexpectedly.

@@ -75,9 +75,9 @@ If an action fails with a missing or stale ref:
 
 ## Existing User Browser
 
-Use `profile="user"` only when existing cookies/login matter. This attaches to the user's running Chromium-based browser.
+Use `profile="user"` only when the user explicitly wants an existing authenticated browser session. This attaches to the user's running Chromium-based browser.
 
-For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
+For `profile="user"` and other existing-session modes, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
 
 ## Google Meet Notes
 
