@@ -165,7 +165,7 @@ export async function prepareLineInboundRoute(params: {
   commandAuthorized: boolean;
 }): Promise<LineInboundRoute> {
   const state = lookupLineInboundRoute(params);
-  const { userId, groupId, roomId, isGroup, peerId, route } = state;
+  const { userId, isGroup, peerId, route } = state;
 
   const identityDecision = resolveConversationIdentityAdmission({
     cfg: params.cfg,

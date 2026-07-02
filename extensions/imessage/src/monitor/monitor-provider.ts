@@ -1017,7 +1017,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    touchRuntimeConversationBindingRoute({ bindingRecord: decision.runtimeBinding });
+    touchRuntimeConversationBindingRoute({ bindingRecord: decision.runtimeBinding ?? null });
 
     if (decision.kind === "pairing") {
       const sender = (message.sender ?? "").trim();

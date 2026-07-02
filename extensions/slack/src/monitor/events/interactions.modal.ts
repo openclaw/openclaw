@@ -338,13 +338,6 @@ async function emitSlackModalLifecycleEvent(params: {
     );
   }
 
-  if (expectedUserId && !unresolvedSessionRouting) {
-    params.ctx.runtime.log?.(
-      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-live-audience`,
-    );
-    return;
-  }
-
   if (!expectedUserId) {
     if (pluginInteractiveData) {
       try {
@@ -366,6 +359,12 @@ async function emitSlackModalLifecycleEvent(params: {
     }
     params.ctx.runtime.log?.(
       `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-expected-user`,
+    );
+    return;
+  }
+  if (!unresolvedSessionRouting) {
+    params.ctx.runtime.log?.(
+      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-live-audience`,
     );
     return;
   }

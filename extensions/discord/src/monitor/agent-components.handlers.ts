@@ -241,8 +241,7 @@ async function handleDiscordModalTrigger(params: {
   if (!authorized) {
     return;
   }
-  const { interactionCtx, channelCtx, user, replyOpts, allowNameMatching, admittedRoute } =
-    authorized;
+  const { user, replyOpts, allowNameMatching, admittedRoute } = authorized;
 
   const entry = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,

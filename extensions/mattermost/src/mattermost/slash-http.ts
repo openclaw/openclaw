@@ -794,7 +794,6 @@ async function handleSlashCommandAsync(params: {
     channelId,
     senderId,
     senderName,
-    teamId,
     route,
     kind,
     chatType,
