@@ -202,9 +202,11 @@ describe("parseRedirectUri port bounds", () => {
     expect(() => parseRedirectUri("http://127.0.0.1:0/callback")).toThrow("port must be 1-65535");
   });
 
-  it("defaults stripped invalid port to 80", () => {
-    // Ports > 65535 are stripped by the WHATWG URL parser
-    const result = parseRedirectUri("http://127.0.0.1:65536/callback");
-    expect(result.port).toBe(80);
+  it("rejects port above 65535", () => {
+    // The WHATWG URL parser does NOT strip ports > 65535 in Node.js —
+    // they pass through and our explicit bounds check catches them.
+    expect(() => parseRedirectUri("http://127.0.0.1:65536/callback")).toThrow(
+      "port must be 1-65535",
+    );
   });
 });
