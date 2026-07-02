@@ -14,6 +14,7 @@ import {
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
+import type { CodexPluginListCache, CodexPluginListRequest } from "./plugin-list-cache.js";
 import type { v2 } from "./protocol.js";
 
 const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
@@ -83,9 +84,12 @@ export type ReadCodexPluginInventoryParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  pluginListCache?: CodexPluginListCache;
+  pluginListCacheKey?: string;
   nowMs?: number;
   readPluginDetails?: boolean;
   suppressAppInventoryRefresh?: boolean;
+  forcePluginListRefetch?: boolean;
 };
 
 /** Reads configured Codex plugin state and maps owned apps to readiness diagnostics. */
@@ -107,9 +111,7 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
+  const listed = await readPluginList(params);
   const marketplaceEntry = listed.marketplaces.find(isOpenAiCuratedMarketplace);
   if (!marketplaceEntry) {
     return {
@@ -258,6 +260,25 @@ function readCachedAppInventory(
     nowMs: params.nowMs,
     suppressRefresh: params.suppressAppInventoryRefresh,
   });
+}
+
+async function readPluginList(
+  params: ReadCodexPluginInventoryParams,
+): Promise<v2.PluginListResponse> {
+  if (params.pluginListCache && params.pluginListCacheKey) {
+    const request: CodexPluginListRequest = async (method, requestParams) =>
+      (await params.request(method, requestParams)) as v2.PluginListResponse;
+    const snapshot = await params.pluginListCache.readOrRefresh({
+      key: params.pluginListCacheKey,
+      request,
+      nowMs: params.nowMs,
+      forceRefetch: params.forcePluginListRefetch,
+    });
+    return snapshot.response;
+  }
+  return (await params.request("plugin/list", {
+    cwds: [],
+  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
 }
 
 async function readPluginDetail(

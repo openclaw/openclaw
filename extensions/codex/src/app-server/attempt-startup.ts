@@ -35,6 +35,7 @@ import {
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
 } from "./plugin-app-cache-key.js";
+import { defaultCodexPluginListCache, type CodexPluginListCache } from "./plugin-list-cache.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
@@ -349,6 +350,8 @@ export async function startCodexAttemptThread(params: {
                           configCwd: startupExecutionCwd,
                           appCache: defaultCodexAppInventoryCache,
                           appCacheKey: pluginAppCacheKey,
+                          pluginListCache: defaultCodexPluginListCache,
+                          pluginListCacheKey: pluginAppCacheKey,
                         }),
                     }
                   : undefined,

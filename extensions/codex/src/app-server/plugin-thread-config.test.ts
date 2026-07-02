@@ -1,7 +1,8 @@
 // Codex tests cover plugin thread config plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
+import { defaultCodexPluginListCache } from "./plugin-list-cache.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -13,6 +14,9 @@ import {
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin thread config", () => {
+  beforeEach(() => {
+    defaultCodexPluginListCache.clear();
+  });
   it("defaults destructive app access on for accessible migrated plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

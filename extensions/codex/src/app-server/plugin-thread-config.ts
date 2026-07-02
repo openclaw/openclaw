@@ -29,6 +29,7 @@ import {
   type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
+import { defaultCodexPluginListCache, type CodexPluginListCache } from "./plugin-list-cache.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
@@ -75,6 +76,8 @@ export type BuildCodexPluginThreadConfigParams = {
   configCwd?: string;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
+  pluginListCache?: CodexPluginListCache;
+  pluginListCacheKey?: string;
   nowMs?: number;
 };
 
@@ -104,6 +107,7 @@ export async function buildCodexPluginThreadConfig(
   params: BuildCodexPluginThreadConfigParams,
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
+  const pluginListCache = params.pluginListCache ?? defaultCodexPluginListCache;
   let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     pluginConfig: params.pluginConfig,
     appCacheKey: params.appCacheKey,
@@ -123,6 +127,8 @@ export async function buildCodexPluginThreadConfig(
     request: params.request,
     appCache,
     appCacheKey: params.appCacheKey,
+    pluginListCache,
+    pluginListCacheKey: params.pluginListCacheKey ?? params.appCacheKey,
     nowMs: params.nowMs,
     suppressAppInventoryRefresh: true,
   });
@@ -144,6 +150,8 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      pluginListCache,
+      pluginListCacheKey: params.pluginListCacheKey ?? params.appCacheKey,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
@@ -162,6 +170,8 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      pluginListCache,
+      pluginListCacheKey: params.pluginListCacheKey ?? params.appCacheKey,
       targetAppIds: record.ownedAppIds,
     });
     activationResults.push(activation);
@@ -194,6 +204,8 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      pluginListCache,
+      pluginListCacheKey: params.pluginListCacheKey ?? params.appCacheKey,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
@@ -213,6 +225,8 @@ export async function buildCodexPluginThreadConfig(
       request: params.request,
       appCache,
       appCacheKey: params.appCacheKey,
+      pluginListCache,
+      pluginListCacheKey: params.pluginListCacheKey ?? params.appCacheKey,
       nowMs: params.nowMs,
     });
     inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
 import { findOpenAiCuratedPluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
+import { CodexPluginListCache } from "./plugin-list-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin inventory", () => {
@@ -349,6 +350,143 @@ describe("Codex plugin inventory", () => {
     expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
       "app_inventory_missing",
     ]);
+  });
+
+  it("uses the plugin list cache to avoid repeated plugin/list calls", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const pluginListCache = new CodexPluginListCache({ ttlMs: 1_000 });
+    const calls: string[] = [];
+    const request = async (method: string, params?: unknown) => {
+      calls.push(method);
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    };
+
+    // First call populates the plugin list cache.
+    await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      pluginListCache,
+      pluginListCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+    const firstCallCount = calls.length;
+    expect(calls.filter((c) => c === "plugin/list")).toHaveLength(1);
+
+    // Second call should use the cached plugin/list — no new plugin/list call.
+    await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      pluginListCache,
+      pluginListCacheKey: "runtime",
+      nowMs: 2,
+      request,
+    });
+    expect(calls.filter((c) => c === "plugin/list")).toHaveLength(1);
+    expect(calls.length).toBe(firstCallCount + 1); // only plugin/read is added
+  });
+
+  it("forces a plugin list refetch when forcePluginListRefetch is true", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const pluginListCache = new CodexPluginListCache({ ttlMs: 1_000 });
+    let pluginListCalls = 0;
+    const request = async (method: string) => {
+      if (method === "plugin/list") {
+        pluginListCalls += 1;
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    };
+
+    await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      pluginListCache,
+      pluginListCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+    expect(pluginListCalls).toBe(1);
+
+    await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      pluginListCache,
+      pluginListCacheKey: "runtime",
+      nowMs: 2,
+      forcePluginListRefetch: true,
+      request,
+    });
+    expect(pluginListCalls).toBe(2);
   });
 });
 

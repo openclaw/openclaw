@@ -12,6 +12,7 @@ import {
   type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
+import type { CodexPluginListCache } from "./plugin-list-cache.js";
 import type { v2 } from "./protocol.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
@@ -46,6 +47,8 @@ export type EnsureCodexPluginActivationParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  pluginListCache?: CodexPluginListCache;
+  pluginListCacheKey?: string;
   installEvenIfActive?: boolean;
   targetAppIds?: readonly string[];
 };
@@ -65,6 +68,11 @@ export async function ensureCodexPluginActivation(
     });
   }
 
+  const pluginListCache = params.pluginListCache;
+  const pluginListCacheKey = params.pluginListCacheKey;
+  // Activation needs fresh plugin/list state to check current install/enable
+  // status. Do not use the cache here — the cache is invalidated below after
+  // install, and the initial pre-install read must see the latest server state.
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
@@ -103,6 +111,10 @@ export async function ensureCodexPluginActivation(
         : params.identity.pluginName,
     ) satisfies v2.PluginInstallParams,
   )) as v2.PluginInstallResponse;
+  // Invalidate the plugin list cache so the next read sees the new install state.
+  if (pluginListCache && pluginListCacheKey) {
+    pluginListCache.invalidate(pluginListCacheKey, "plugin installed");
+  }
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
@@ -110,6 +122,8 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      pluginListCache,
+      pluginListCacheKey,
       targetAppIds: params.targetAppIds,
     });
     refreshDiagnostics.push(...refreshResult.diagnostics);
@@ -149,9 +163,16 @@ export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  pluginListCache?: CodexPluginListCache;
+  pluginListCacheKey?: string;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
+  // Invalidate plugin list cache before reloading so the next read picks up
+  // any install/enable state changes from the plugin/install call.
+  if (params.pluginListCache && params.pluginListCacheKey) {
+    params.pluginListCache.invalidate(params.pluginListCacheKey, "plugin runtime refresh");
+  }
   await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams);
