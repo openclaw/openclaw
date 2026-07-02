@@ -1,9 +1,9 @@
 // Sandbox security validation tests cover bind, network, seccomp, and AppArmor
 // hardening rules before Docker runtimes are created.
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
@@ -14,6 +14,20 @@ import {
   validateApparmorProfile,
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-sandbox-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("case");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 function expectBindMountsToThrow(binds: string[], expected: RegExp, label: string) {
   expect(() => validateBindMounts(binds), label).toThrow(expected);
@@ -89,14 +103,14 @@ describe("getBlockedBindReason", () => {
     });
   });
 
-  it("blocks canonical OS-home aliases for credential paths", () => {
+  it("blocks canonical OS-home aliases for credential paths", async () => {
     // Credential blocking uses canonical home aliases so a symlinked HOME cannot
     // hide sensitive host paths.
     if (process.platform === "win32") {
       return;
     }
 
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const dir = await makeTempDir();
     const realHome = join(dir, "real-home");
     const aliasHome = join(dir, "alias-home");
     mkdirSync(join(realHome, ".ssh"), { recursive: true });
@@ -109,8 +123,8 @@ describe("getBlockedBindReason", () => {
 });
 
 describe("validateBindMounts", () => {
-  it("allows legitimate project directory mounts", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-"));
+  it("allows legitimate project directory mounts", async () => {
+    const projectRoot = await makeTempDir();
     expect(
       validateBindMounts([
         `${join(projectRoot, "source")}:/source:rw`,
@@ -229,12 +243,12 @@ describe("validateBindMounts", () => {
     ).toThrow(/outside allowed roots/);
   });
 
-  it("blocks credential binds through canonical home aliases", () => {
+  it("blocks credential binds through canonical home aliases", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const dir = await makeTempDir();
     const realHome = join(dir, "real-home");
     const aliasHome = join(dir, "alias-home");
     mkdirSync(join(realHome, ".docker"), { recursive: true });
@@ -246,27 +260,27 @@ describe("validateBindMounts", () => {
     });
   });
 
-  it("blocks symlink escapes into blocked directories", () => {
+  it("blocks symlink escapes into blocked directories", async () => {
     if (process.platform === "win32") {
       // Symlink setup for blocked POSIX targets like /etc is POSIX-only.
       return;
     }
 
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const dir = await makeTempDir();
     const link = join(dir, "etc-link");
     symlinkSync("/etc", link);
     const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
     expect(run).toThrow(/blocked path/);
   });
 
-  it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
+  it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", async () => {
     // Docker may create the final leaf; validate the existing ancestor so
     // symlink parents cannot escape an allowed root.
     if (process.platform === "win32") {
       // Windows symlink semantics differ; POSIX symlink escape coverage runs on POSIX hosts.
       return;
     }
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const dir = await makeTempDir();
     const workspace = join(dir, "workspace");
     const outside = join(dir, "outside");
     mkdirSync(workspace, { recursive: true });
@@ -281,12 +295,12 @@ describe("validateBindMounts", () => {
     ).toThrow(/outside allowed roots/);
   });
 
-  it("blocks symlink-parent escapes into blocked paths when leaf does not exist", () => {
+  it("blocks symlink-parent escapes into blocked paths when leaf does not exist", async () => {
     if (process.platform === "win32") {
       // Symlink setup for blocked POSIX targets like /var/run is POSIX-only.
       return;
     }
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const dir = await makeTempDir();
     const workspace = join(dir, "workspace");
     mkdirSync(workspace, { recursive: true });
     const link = join(workspace, "run-link");
@@ -306,9 +320,9 @@ describe("validateBindMounts", () => {
     }
   });
 
-  it("blocks bind sources outside allowed roots when allowlist is configured", () => {
-    const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-root-"));
-    const externalRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-external-"));
+  it("blocks bind sources outside allowed roots when allowlist is configured", async () => {
+    const allowedRoot = await makeTempDir();
+    const externalRoot = await makeTempDir();
     expect(() =>
       validateBindMounts([`${externalRoot}:/data:ro`], {
         allowedSourceRoots: [allowedRoot],
@@ -316,8 +330,8 @@ describe("validateBindMounts", () => {
     ).toThrow(/outside allowed roots/);
   });
 
-  it("allows bind sources in allowed roots when allowlist is configured", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-"));
+  it("allows bind sources in allowed roots when allowlist is configured", async () => {
+    const projectRoot = await makeTempDir();
     expect(
       validateBindMounts([`${join(projectRoot, "cache")}:/data:ro`], {
         allowedSourceRoots: [projectRoot],
@@ -325,9 +339,9 @@ describe("validateBindMounts", () => {
     ).toBeUndefined();
   });
 
-  it("allows bind sources outside allowed roots with explicit dangerous override", () => {
-    const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-root-"));
-    const externalRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-external-"));
+  it("allows bind sources outside allowed roots with explicit dangerous override", async () => {
+    const allowedRoot = await makeTempDir();
+    const externalRoot = await makeTempDir();
     expect(
       validateBindMounts([`${externalRoot}:/data:ro`], {
         allowedSourceRoots: [allowedRoot],
@@ -336,15 +350,15 @@ describe("validateBindMounts", () => {
     ).toBeUndefined();
   });
 
-  it("blocks reserved container target paths by default", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-default-"));
+  it("blocks reserved container target paths by default", async () => {
+    const projectRoot = await makeTempDir();
     expect(() =>
       validateBindMounts([`${projectRoot}:/workspace:rw`, `${projectRoot}:/agent/cache:rw`]),
     ).toThrow(/reserved container path/);
   });
 
-  it("allows reserved container target paths with explicit dangerous override", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-"));
+  it("allows reserved container target paths with explicit dangerous override", async () => {
+    const projectRoot = await makeTempDir();
     expect(
       validateBindMounts([`${projectRoot}:/workspace:rw`], {
         allowReservedContainerTargets: true,
@@ -433,8 +447,8 @@ describe("profile hardening", () => {
 });
 
 describe("validateSandboxSecurity", () => {
-  it("passes with safe config", () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-config-"));
+  it("passes with safe config", async () => {
+    const projectRoot = await makeTempDir();
     expect(
       validateSandboxSecurity({
         binds: [`${projectRoot}:/src:rw`],

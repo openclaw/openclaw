@@ -1,15 +1,29 @@
 // Sandbox host path tests cover cross-platform path normalization and symlink
 // resolution used before Docker bind mounts are constructed.
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   getSandboxHostPathPolicyKey,
   isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
+
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-host-paths-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("case");
+}
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 describe("normalizeSandboxHostPath", () => {
   it("normalizes dot segments and strips trailing slash", () => {
@@ -61,14 +75,14 @@ describe("resolveSandboxHostPathViaExistingAncestor", () => {
     );
   });
 
-  it("resolves symlink parents when the final leaf does not exist", () => {
+  it("resolves symlink parents when the final leaf does not exist", async () => {
     // Mount checks need the real parent path even when Docker will create the
     // final missing leaf later.
     if (process.platform === "win32") {
       return;
     }
 
-    const root = mkdtempSync(join(tmpdir(), "openclaw-host-paths-"));
+    const root = await makeTempDir();
     const workspace = join(root, "workspace");
     const outside = join(root, "outside");
     mkdirSync(workspace, { recursive: true });
