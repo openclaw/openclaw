@@ -377,10 +377,11 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
-  it("closes handle and removes partial lock on writeFile failure after open", async () => {
+  it("closes handle and removes lock file on writeFile rejection after open", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    const lockPath = path.join(resolveTestLockDir(), "gateway.lock");
+    const { lockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
     let closeCalled = false;
     const fakeHandle = {
@@ -394,7 +395,6 @@ describe("gateway lock", () => {
 
     await expect(acquireForTest(env)).rejects.toThrow("failed to acquire gateway lock");
     expect(closeCalled).toBe(true);
-    // Partial lock file cleaned up — should not exist on disk.
     await expect(fs.access(lockPath)).rejects.toThrow();
 
     openSpy.mockRestore();
