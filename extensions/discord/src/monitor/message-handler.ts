@@ -173,7 +173,7 @@ export function createDiscordMessageHandler(
       return `discord:${params.accountId}:${channelId}:${authorId}`;
     },
     shouldDebounce: (entry) => {
-      const message = entry.data.message;
+      const message = entry.data?.message;
       if (!message) {
         return false;
       }
@@ -317,6 +317,13 @@ export function createDiscordMessageHandler(
   const handler: DiscordMessageHandlerWithLifecycle = async (data, client, options) => {
     try {
       if (options?.abortSignal?.aborted) {
+        return;
+      }
+      // Malformed MESSAGE_CREATE guard: skip dispatches missing essential message data.
+      // The gateway mapper always produces message data for MESSAGE_CREATE events, so
+      // a missing message.id means the raw dispatch was malformed. Without this guard,
+      // malformed entries would still reach the debouncer and crash shouldDebounce.
+      if (!data.message?.id) {
         return;
       }
       // Filter bot-own messages before they enter the debounce queue.

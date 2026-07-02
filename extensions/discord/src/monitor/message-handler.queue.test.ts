@@ -819,4 +819,34 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
     expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
+
+  it("handles malformed MESSAGE_CREATE data without blocking subsequent valid messages", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+    const handler = createHandlerWithDefaultPreflight();
+
+    // Malformed gateway dispatch with no message data
+    const malformedData = { channel_id: "ch-1" };
+
+    await expect(handler(malformedData as never, {} as never)).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    // Malformed data should not reach preflight or processing
+    expect(preflightDiscordMessageMock).not.toHaveBeenCalled();
+    expect(processDiscordMessageMock).not.toHaveBeenCalled();
+
+    // Valid message after a malformed dispatch should process normally
+    await expect(
+      handler(createMessageData("m-after") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
 });
