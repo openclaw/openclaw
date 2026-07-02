@@ -365,6 +365,37 @@ describe("gateway lock", () => {
     }
   });
 
+  it("closes the file handle when payload write fails after lock acquisition", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+
+    let closeCalled = false;
+    const mockHandle = {
+      writeFile: vi.fn().mockRejectedValue(Object.assign(new Error("ENOSPC"), { code: "ENOSPC" })),
+      close: vi.fn().mockImplementation(async () => {
+        closeCalled = true;
+      }),
+    };
+
+    const openSpy = vi.spyOn(fs, "open").mockResolvedValue(mockHandle as never);
+
+    await expect(
+      acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 30,
+        pollIntervalMs: 2,
+        now: Date.now.bind(Date),
+        sleep: async (ms) => {},
+        lockDir: resolveTestLockDir(),
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(closeCalled).toBe(true);
+    expect(mockHandle.close).toHaveBeenCalledOnce();
+    openSpy.mockRestore();
+  });
+
   it("wraps unexpected fs errors as GatewayLockError", async () => {
     const env = await makeEnv();
     const openSpy = vi.spyOn(fs, "open").mockRejectedValueOnce(

@@ -36,6 +36,9 @@ function formatAccuracy(accuracy?: number): string {
 }
 
 function formatCoords(latitude: number, longitude: number): string {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return "unknown";
+  }
   return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 }
 

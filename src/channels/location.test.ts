@@ -86,4 +86,21 @@ describe("provider location helpers", () => {
     });
     expect(text).toBe("📍 1.000000, 2.000000");
   });
+
+  it("guards against NaN coordinates in formatCoords", () => {
+    const text = formatLocationText({
+      latitude: NaN,
+      longitude: NaN,
+      accuracy: 12,
+    });
+    expect(text).toBe("📍 unknown ±12m");
+  });
+
+  it("guards against Infinity coordinates in formatCoords", () => {
+    const text = formatLocationText({
+      latitude: Infinity,
+      longitude: -Infinity,
+    });
+    expect(text).toBe("📍 unknown");
+  });
 });

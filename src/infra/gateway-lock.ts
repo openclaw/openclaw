@@ -260,8 +260,9 @@ export async function acquireGatewayLock(
   let lastPayload: LockPayload | null = null;
 
   while (now() - startedAt < timeoutMs) {
+    let handle: fs.FileHandle | undefined;
     try {
-      const handle = await fs.open(lockPath, "wx");
+      handle = await fs.open(lockPath, "wx");
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
@@ -276,11 +277,14 @@ export async function acquireGatewayLock(
         lockPath,
         configPath,
         release: async () => {
-          await handle.close().catch(() => undefined);
+          await handle!.close().catch(() => undefined);
           await fs.rm(lockPath, { force: true });
         },
       };
     } catch (err) {
+      if (handle) {
+        await handle.close().catch(() => undefined);
+      }
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") {
         throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, err);

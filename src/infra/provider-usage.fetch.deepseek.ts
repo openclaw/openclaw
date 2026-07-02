@@ -24,6 +24,9 @@ type DeepSeekBalanceResponse = {
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 function formatCurrencyAmount(amount: number, currency?: string): string {
+  if (!Number.isFinite(amount)) {
+    return "unknown";
+  }
   const normalized = currency?.trim().toUpperCase();
   if (normalized === "CNY" || normalized === "RMB") {
     return `¥${amount.toFixed(2)}`;
@@ -109,3 +112,5 @@ export async function fetchDeepSeekUsage(
     ...(data.is_available === false ? { plan: "Unavailable" } : {}),
   };
 }
+
+export const testing = { formatCurrencyAmount };
