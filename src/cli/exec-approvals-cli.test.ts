@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 // Exec approvals CLI tests cover approval command registration and output handling.
 import { Readable } from "node:stream";
 import { Command } from "commander";
@@ -567,5 +570,33 @@ describe("exec approvals CLI", () => {
     await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
       "Exec approvals stdin exceeds 5 bytes.",
     );
+  });
+
+  it("bounds approvals JSON read from file", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approvals-file-"));
+    try {
+      const smallPath = path.join(tmpDir, "small.json");
+      fs.writeFileSync(smallPath, "{}", "utf8");
+      await expect(testing.readFileWithBound(smallPath, 100)).resolves.toBe("{}");
+
+      const largePath = path.join(tmpDir, "large.json");
+      const largeContent = Buffer.alloc(101, "x");
+      fs.writeFileSync(largePath, largeContent, "utf8");
+      await expect(testing.readFileWithBound(largePath, 100)).rejects.toThrow(
+        "Exec approvals file exceeds 100 bytes",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-regular file paths", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approvals-nonreg-"));
+    try {
+      // Directories are not regular files; readFileWithBound must reject them.
+      await expect(testing.readFileWithBound(tmpDir, 100)).rejects.toThrow("not a regular file");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
