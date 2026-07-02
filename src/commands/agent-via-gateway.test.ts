@@ -290,6 +290,41 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("omits the gateway timeout override and preserves longer server-owned waits", async () => {
+    await withTempStore(async ({ store }) => {
+      const config = {
+        agents: { defaults: { timeoutSeconds: 200_000 } },
+        session: { store, mainKey: "main" },
+      };
+      loadConfig.mockReturnValue(config);
+      loadRuntimeConfig.mockReturnValue(config);
+      loadConfigWithShellEnvFallback.mockResolvedValue(config);
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params).not.toHaveProperty("timeout");
+      expect(request.timeoutMs).toBe(2_147_000_000);
+    });
+  });
+
+  it("sends the gateway timeout override when --timeout is explicit", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", timeout: "600" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.timeout).toBe(600);
+      expect(request.timeoutMs).toBe(630_000);
+    });
+  });
+
   it("uses gateway by default", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

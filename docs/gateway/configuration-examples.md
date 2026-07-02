@@ -268,7 +268,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
@@ -473,6 +472,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   },
 }
 ```
+
+Omit `agents.defaults.timeoutSeconds` to use the runtime default of `172800`
+seconds (48 hours). Add it only for deployments that intentionally want a
+shorter global ceiling for every agent run.
 
 ### Symlinked sibling skill repo
 

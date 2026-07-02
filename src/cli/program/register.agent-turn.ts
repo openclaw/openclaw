@@ -62,7 +62,7 @@ export function registerAgentTurnCommand(
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",
-      "Override agent command timeout (seconds, default 600 or config value)",
+      "Override agent command timeout (seconds, config value or runtime default 172800)",
     )
     .addHelpText(
       "after",

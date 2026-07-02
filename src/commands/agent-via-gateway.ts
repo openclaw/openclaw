@@ -236,11 +236,11 @@ async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatc
   return { ...rest, message };
 }
 
-function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
-  const raw =
-    opts.timeout !== undefined
-      ? parseStrictNonNegativeInteger(opts.timeout)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+function parseTimeoutSeconds(timeout?: string) {
+  if (timeout === undefined) {
+    return undefined;
+  }
+  const raw = parseStrictNonNegativeInteger(timeout);
   if (raw === undefined) {
     throw new Error(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
@@ -712,8 +712,11 @@ async function agentViaGatewayCommand(
       );
     }
   }
-  const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
+  const timeoutSeconds = parseTimeoutSeconds(opts.timeout);
+  const gatewayTimeoutMs =
+    timeoutSeconds === undefined
+      ? NO_GATEWAY_TIMEOUT_MS
+      : resolveGatewayAgentTimeoutMs(timeoutSeconds);
 
   const sessionKey =
     classifySessionKeyShape(explicitSessionKey) === "agent"
@@ -772,7 +775,7 @@ async function agentViaGatewayCommand(
             replyChannel: opts.replyChannel,
             replyAccountId: opts.replyAccount,
             bestEffortDeliver: opts.bestEffortDeliver,
-            timeout: timeoutSeconds,
+            ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
             cleanupBundleMcpOnRunEnd: true,
