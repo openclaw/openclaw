@@ -129,7 +129,18 @@ export function normalizeAgentRuntimeTools<
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     });
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
-  return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
+  const normalizedToolProjection = filterProviderNormalizableTools(normalizedTools);
+  if (normalizedToolProjection.diagnostics.length > 0) {
+    params.onPreNormalizationSchemaDiagnostics?.(
+      normalizedToolProjection.diagnostics,
+      normalizedTools,
+    );
+  }
+  const runtimeTools =
+    normalizedToolProjection.diagnostics.length > 0
+      ? ([...normalizedToolProjection.tools] as AgentTool<TSchemaType, TResult>[])
+      : normalizedTools;
+  return preserveRuntimeToolMetadata(normalizableTools, runtimeTools);
 }
 
 /** Emits runtime-plan or provider fallback diagnostics for normalized tools. */
