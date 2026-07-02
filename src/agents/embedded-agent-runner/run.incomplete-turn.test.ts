@@ -1379,6 +1379,77 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("uses currentAttemptAssistant over stale lastAssistant for incomplete-turn classification (#80918)", () => {
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        lastAssistant: { stopReason: "stop" } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    ).toBe(false);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: false,
+        lastAssistant: { stopReason: "toolUse" },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
+        toolMetas: [{ toolName: "update_plan" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [
+            { type: "text", text: "Analysis..." },
+            { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Here is the final answer after update_plan." }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still flags incomplete-turn when currentAttemptAssistant is absent and lastAssistant=toolUse (#76477 regression)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me update the file..."],
+        toolMetas: [{ toolName: "write" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Let me update the file..." },
+            { type: "tool_use", id: "tool_1", name: "write", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: undefined,
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
   it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
     const interruptedToolOnlyAttempt = makeAttemptResult({
       assistantTexts: [],
