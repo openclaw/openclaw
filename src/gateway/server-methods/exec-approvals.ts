@@ -112,6 +112,29 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
   }
+  const node = params.context.nodeRegistry.get(nodeId);
+  if (!node) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `Node ${nodeId} is not connected`),
+    );
+    return;
+  }
+  if (!node.commands.includes(params.command)) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Node ${nodeId} does not support exec approvals management. ` +
+          `The node must advertise ${params.command}, or the operator must edit ` +
+          `the node host approvals file directly.`,
+        { details: { nodeId, missingCommand: params.command, nodeCommands: node.commands } },
+      ),
+    );
+    return;
+  }
   await respondUnavailableOnThrow(params.respond, async () => {
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
