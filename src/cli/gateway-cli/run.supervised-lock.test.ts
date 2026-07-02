@@ -54,6 +54,38 @@ describe("supervised gateway lock recovery", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("falls back to the gateway port when deferred control-port probe is unhealthy", async () => {
+    const startLoop = vi.fn(async () => {
+      throw new GatewayLockError("gateway already running");
+    });
+    const probeHealth = vi.fn(async (params: { path?: string; port: number }) => {
+      return params.port === 18789 && params.path === undefined;
+    });
+    const log = createLogger();
+
+    await testing.runGatewayLoopWithSupervisedLockRecovery({
+      fallbackHealthProbe: { host: "0.0.0.0", port: 18789 },
+      healthHost: "127.0.0.1",
+      healthPath: "/healthz",
+      log,
+      port: 19789,
+      probeHealth,
+      startLoop,
+      supervisor: "launchd",
+    });
+
+    expect(startLoop).toHaveBeenCalledTimes(1);
+    expect(probeHealth).toHaveBeenNthCalledWith(1, {
+      host: "127.0.0.1",
+      path: "/healthz",
+      port: 19789,
+    });
+    expect(probeHealth).toHaveBeenNthCalledWith(2, { host: "0.0.0.0", port: 18789 });
+    expect(log.info).toHaveBeenCalledWith(
+      "gateway already running under launchd; existing gateway is healthy, leaving it in control",
+    );
+  });
+
   it("uses exit 78 semantics for healthy systemd-supervised lock conflicts", async () => {
     const startLoop = vi.fn(async () => {
       throw new GatewayLockError("another gateway instance is already listening");
