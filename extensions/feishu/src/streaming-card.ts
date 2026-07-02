@@ -47,8 +47,7 @@ type StreamingStartOptions = {
   header?: StreamingCardHeader;
 };
 
-const STREAMING_UPDATE_THROTTLE_MS = 160;
-const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
+const STREAMING_UPDATE_THROTTLE_MS = 750;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
 // Token cache (keyed by domain + appId)
@@ -143,20 +142,6 @@ function truncateSummary(text: string, max = 50): string {
   // straddling the limit is dropped whole, instead of leaving a lone surrogate
   // half that Feishu renders as the replacement char.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
-}
-
-function hasNaturalStreamingBoundary(text: string): boolean {
-  return /[\n。！？!?；;：:]$/.test(text);
-}
-
-function shouldPushStreamingUpdate(previousText: string, nextText: string): boolean {
-  if (!previousText) {
-    return true;
-  }
-  if (hasNaturalStreamingBoundary(nextText)) {
-    return true;
-  }
-  return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
 }
 
 export function mergeStreamingText(
@@ -467,9 +452,8 @@ export class FeishuStreamingSession {
     this.pendingText = mergedInput;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
     const now = Date.now();
-    if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
+    if (now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
       return;
     }
@@ -484,12 +468,13 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
-      if (mergedText === this.state.sentText) {
+      const updateContent = mergedText;
+      if (!updateContent) {
         return;
       }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      const sent = await this.updateCardContent(mergedText, (e) =>
+      const sent = await this.updateCardContent(updateContent, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {

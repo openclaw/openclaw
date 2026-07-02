@@ -283,7 +283,7 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
+Set `streaming: false` to send the complete reply in one message. Streaming cards follow Feishu CardKit's documented full-content update behavior. To reduce Feishu-side latency on long replies, OpenClaw coalesces rapid token updates and sends the latest complete text at a bounded cadence. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
 ### Quota optimization
 
