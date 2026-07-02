@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
@@ -369,6 +370,12 @@ describe("collectInstalledPackageErrors", () => {
     return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
   }
 
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
   it("flags version mismatches", () => {
     const errors = collectInstalledPackageErrors({
       expectedVersion: "2026.3.23-2",
@@ -379,6 +386,43 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
+  });
+
+  it("fails closed when the facade activation runtime file is missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
+      writeInstalledFile(packageRoot, "dist/plugin-sdk/zod.js", "export const z = {};\n");
+      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/package.json", "{}\n");
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "export {};\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/media-understanding-core/package.json",
+        "{}\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/media-understanding-core/runtime-api.js",
+        "export {};\n",
+      );
+
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toStrictEqual([
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it("requires runtime sidecars for bundled extensions included in the package", () => {
@@ -444,6 +488,138 @@ describe("collectInstalledPackageErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("flags allowed runtime facades that have no packaged sidecar", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["image-generation-core", "speech-core"]);\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "export {};\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
+        "installed package allows bundled runtime facade speech-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/speech-core/runtime-api.js.",
+      ]);
+    });
+  });
+
+  it("accepts allowed runtime facades that have packaged sidecars", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["image-generation-core", "media-understanding-core"]);\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "export {};\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/media-understanding-core/runtime-api.js",
+        "export {};\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
+  });
+
+  it("fails closed when multiple facade activation runtime files are packaged", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["image-generation-core"]);\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.mjs",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["media-understanding-core"]);\n',
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package has multiple facade activation runtimes; expected exactly one: dist/facade-activation-check.runtime.js, dist/facade-activation-check.runtime.mjs.",
+      ]);
+    });
+  });
+
+  it("fails closed when the facade activation runtime lacks the allowlist marker", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        "export function checkFacadeActivation() { return true; }\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package facade activation runtime 'dist/facade-activation-check.runtime.js' is missing ALWAYS_ALLOWED_RUNTIME_DIR_NAMES for bundled runtime facade verification.",
+      ]);
+    });
+  });
+
+  it("fails closed when the allowlist marker is not statically parseable", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        "// ALWAYS_ALLOWED_RUNTIME_DIR_NAMES is intentionally absent as a declaration.\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package facade activation runtime 'dist/facade-activation-check.runtime.js' could not be parsed for bundled runtime facade verification: ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be declared with new Set([...]).",
+      ]);
+    });
+  });
+
+  it("ignores oversized non-facade root dist files", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        "const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([]);\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/typescript-compiler.js",
+        "x".repeat(6 * 1024 * 1024 + 1),
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
+  });
+
+  it("fails closed when the root dist facade scan exceeds its file limit", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([
+        "installed package root dist contains more than 10000 JavaScript files; refusing to scan unbounded package contents.",
+      ]);
+    });
   });
 });
 

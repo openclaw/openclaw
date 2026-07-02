@@ -740,6 +740,7 @@ describe("collectMissingPackPaths", () => {
           packageRoot,
         }),
       ).toEqual([
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
         "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
       ]);

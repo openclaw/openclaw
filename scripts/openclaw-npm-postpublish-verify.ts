@@ -66,6 +66,8 @@ const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+const INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE =
+  /^facade-activation-check\.runtime\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -409,6 +411,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
@@ -659,9 +662,30 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScri
   });
 }
 
+function listInstalledFacadeActivationRuntimeFiles(
+  packageRoot: string,
+): DistJavaScriptFileListResult {
+  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
+  if (distFiles.limitExceeded) {
+    return distFiles;
+  }
+
+  const distRoot = join(packageRoot, "dist");
+  return {
+    files: distFiles.files.filter((filePath) =>
+      INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE.test(
+        relative(distRoot, filePath).replaceAll("\\", "/"),
+      ),
+    ),
+    limitExceeded: false,
+  };
+}
+
 type ParsedImportSpecifiersResult =
   | { ok: true; specifiers: Set<string> }
   | { ok: false; error: string };
+
+type ParsedStringArrayResult = { ok: true; values: string[] } | { ok: false; error: string };
 
 function extractLiteralSpecifier(node: unknown): string | null {
   if (!node || typeof node !== "object") {
@@ -734,6 +758,159 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
   }
 
   return { ok: true, specifiers };
+}
+
+function extractStringArrayElements(node: unknown): string[] | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const candidate = node as { type?: string; elements?: unknown[] };
+  if (candidate.type !== "ArrayExpression" || !Array.isArray(candidate.elements)) {
+    return null;
+  }
+  const values: string[] = [];
+  for (const element of candidate.elements) {
+    const value = extractLiteralSpecifier(element);
+    if (value === null) {
+      return null;
+    }
+    values.push(value);
+  }
+  return values;
+}
+
+function extractNewSetStringArrayArgument(node: unknown): string[] | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const candidate = node as {
+    type?: string;
+    callee?: { type?: string; name?: string };
+    arguments?: unknown[];
+  };
+  if (
+    candidate.type !== "NewExpression" ||
+    candidate.callee?.type !== "Identifier" ||
+    candidate.callee.name !== "Set" ||
+    !Array.isArray(candidate.arguments)
+  ) {
+    return null;
+  }
+  return extractStringArrayElements(candidate.arguments[0]);
+}
+
+function extractAlwaysAllowedRuntimeFacadeDirNames(source: string): ParsedStringArrayResult {
+  let program: unknown;
+  try {
+    program = acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+
+  const pending: unknown[] = [program];
+  const visited = new Set<unknown>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    const node = current as Record<string, unknown>;
+    const nodeType = typeof node.type === "string" ? node.type : null;
+    const id = node.id as { type?: string; name?: string } | undefined;
+    if (
+      nodeType === "VariableDeclarator" &&
+      id?.type === "Identifier" &&
+      id.name === "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES"
+    ) {
+      const values = extractNewSetStringArrayArgument(node.init);
+      return values
+        ? { ok: true, values }
+        : {
+            ok: false,
+            error: "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be initialized with new Set([...]).",
+          };
+    }
+
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        pending.push(...value);
+      } else if (value && typeof value === "object") {
+        pending.push(value);
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    error: "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be declared with new Set([...]).",
+  };
+}
+
+function isSafeBundledRuntimeFacadeDirName(value: string): boolean {
+  return (
+    value.length > 0 && !value.includes("/") && !value.includes("\\") && !value.startsWith(".")
+  );
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const facadeRuntimeFiles = listInstalledFacadeActivationRuntimeFiles(packageRoot);
+  if (facadeRuntimeFiles.limitExceeded) {
+    return [formatInstalledDistFileScanLimitError("root dist", facadeRuntimeFiles.limit)];
+  }
+  if (facadeRuntimeFiles.files.length === 0) {
+    return [
+      "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+    ];
+  }
+  if (facadeRuntimeFiles.files.length > 1) {
+    const relativePaths = facadeRuntimeFiles.files
+      .map((filePath) => relative(packageRoot, filePath).replaceAll("\\", "/"))
+      .toSorted((left, right) => left.localeCompare(right));
+    return [
+      `installed package has multiple facade activation runtimes; expected exactly one: ${relativePaths.join(", ")}.`,
+    ];
+  }
+
+  for (const filePath of facadeRuntimeFiles.files) {
+    const fileStat = lstatSync(filePath);
+    const relativePath = relative(packageRoot, filePath).replaceAll("\\", "/");
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      return [
+        `installed package facade activation runtime '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+      ];
+    }
+    const source = readFileSync(filePath, "utf8");
+    if (!source.includes("ALWAYS_ALLOWED_RUNTIME_DIR_NAMES")) {
+      return [
+        `installed package facade activation runtime '${relativePath}' is missing ALWAYS_ALLOWED_RUNTIME_DIR_NAMES for bundled runtime facade verification.`,
+      ];
+    }
+    const parsed = extractAlwaysAllowedRuntimeFacadeDirNames(source);
+    if (!parsed.ok) {
+      return [
+        `installed package facade activation runtime '${relativePath}' could not be parsed for bundled runtime facade verification: ${parsed.error}`,
+      ];
+    }
+    for (const dirName of parsed.values) {
+      if (!isSafeBundledRuntimeFacadeDirName(dirName)) {
+        errors.push(`installed package declares invalid bundled runtime facade id: ${dirName}.`);
+        continue;
+      }
+      const requiredPath = `dist/extensions/${dirName}/runtime-api.js`;
+      if (!existsSync(join(packageRoot, ...requiredPath.split("/")))) {
+        errors.push(
+          `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${requiredPath}.`,
+        );
+      }
+    }
+  }
+  return errors;
 }
 
 export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {

@@ -8,7 +8,6 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "image-generation-core",
   "media-understanding-core",
-  "speech-core",
 ]);
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
