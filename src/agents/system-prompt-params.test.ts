@@ -1,15 +1,25 @@
 // System prompt params tests cover runtime metadata assembly, especially repo
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 
-async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-system-prompt-" });
+
+async function makeTempDir(): Promise<string> {
+  return suiteTempDirs.make("temp");
 }
+
+beforeAll(async () => {
+  await suiteTempDirs.setup();
+});
+
+afterAll(async () => {
+  await suiteTempDirs.cleanup();
+});
 
 async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
@@ -32,7 +42,7 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 
 describe("buildSystemPromptParams", () => {
   it("detects repo root from workspaceDir", async () => {
-    const temp = await makeTempDir("workspace");
+    const temp = await makeTempDir();
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "nested", "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -44,7 +54,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("falls back to cwd when workspaceDir has no repo", async () => {
-    const temp = await makeTempDir("cwd");
+    const temp = await makeTempDir();
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(temp, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -56,7 +66,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("uses configured repoRoot when valid", async () => {
-    const temp = await makeTempDir("config");
+    const temp = await makeTempDir();
     const repoRoot = path.join(temp, "config-root");
     const workspaceDir = path.join(temp, "workspace");
     await fs.mkdir(repoRoot, { recursive: true });
@@ -79,7 +89,7 @@ describe("buildSystemPromptParams", () => {
   it("ignores invalid repoRoot config and auto-detects", async () => {
     // Invalid explicit roots must not poison runtime metadata; auto-detection
     // still finds the real repository root from the workspace path.
-    const temp = await makeTempDir("invalid");
+    const temp = await makeTempDir();
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -99,7 +109,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("returns undefined when no repo is found", async () => {
-    const workspaceDir = await makeTempDir("norepo");
+    const workspaceDir = await makeTempDir();
 
     const { runtimeInfo } = buildParams({ workspaceDir });
 
