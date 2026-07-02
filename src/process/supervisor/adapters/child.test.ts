@@ -471,7 +471,7 @@ describe("createChildAdapter", () => {
     // The prompt arg must be safe for cmd.exe: no unescaped &|<> in the
     // command line, and no throw from escapeForWindowsCmdExe.
     // argv = [cmd.exe, /d, /s, /c, <command-line>]
-    const cmdLine = spawnArgs.argv?.[4] as string | undefined;
+    const cmdLine = spawnArgs.argv?.[4];
     expect(cmdLine).toBeDefined();
     // Metacharacters must be caret-escaped
     expect(cmdLine).toContain("^&");
