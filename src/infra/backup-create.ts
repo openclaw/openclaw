@@ -1,6 +1,6 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,38 @@ class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
 
   override set(_key: BackupLinkCacheKey, _value: string): this {
     return this;
+  }
+}
+
+type VolatileFilterPlan = {
+  stateDirs: string[];
+};
+
+const VOLATILE_BACKUP_SYNTHETIC_STAT = {
+  isBlockDevice: () => false,
+  isCharacterDevice: () => false,
+  isDirectory: () => false,
+  isFIFO: () => false,
+  isFile: () => false,
+  isSocket: () => false,
+  isSymbolicLink: () => false,
+} as unknown as Stats;
+
+class BackupVolatileStatCache extends Map<string, Stats> {
+  constructor(private readonly volatilePlan: VolatileFilterPlan) {
+    super();
+  }
+
+  override get(key: string): Stats | undefined {
+    const cached = super.get(key);
+    if (cached) {
+      return cached;
+    }
+    // node-tar calls filter only after stat succeeds. Synthetic stats let
+    // disposable paths that vanish during traversal reach the normal skip path.
+    return isVolatileBackupPath(key, this.volatilePlan)
+      ? VOLATILE_BACKUP_SYNTHETIC_STAT
+      : undefined;
   }
 }
 
@@ -108,8 +140,8 @@ export type BackupCreateResult = {
     coveredBy?: string;
   }>;
   /**
-   * Count of files the archiver actively skipped because they matched the
-   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
+   * Count of paths the archiver actively skipped because they matched the
+   * known-volatile filter (live sessions, caches, queues, sockets, lock/tmp).
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
@@ -409,9 +441,9 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
     lines.push(`Created ${result.archivePath}`);
     if (result.skippedVolatileCount > 0) {
       lines.push(
-        `Skipped ${result.skippedVolatileCount} volatile file${
+        `Skipped ${result.skippedVolatileCount} volatile path${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (live sessions, caches, queues, sockets, lock/tmp).`,
       );
     }
     if (result.verified) {
@@ -785,7 +817,9 @@ export async function createBackupArchive(
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
-    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
+    const volatilePlan: VolatileFilterPlan = {
+      stateDirs: [stateAsset?.sourcePath ?? plan.stateDir],
+    };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
     // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
@@ -844,6 +878,7 @@ export async function createBackupArchive(
             portable: true,
             preservePaths: true,
             linkCache: new BackupLinkCache(),
+            statCache: new BackupVolatileStatCache(volatilePlan),
             filter: tarFilter,
             onWriteEntry: (entry) => {
               entry.path = remapArchiveEntryPath({
@@ -871,9 +906,9 @@ export async function createBackupArchive(
     result.skippedVolatileCount = skippedVolatileCount;
     if (skippedVolatileCount > 0) {
       opts.log?.(
-        `Backup skipped ${skippedVolatileCount} volatile file${
+        `Backup skipped ${skippedVolatileCount} volatile path${
           skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (live sessions, caches, queues, sockets, lock/tmp).`,
       );
     }
     await publishTempArchive({ tempArchivePath, outputPath });
