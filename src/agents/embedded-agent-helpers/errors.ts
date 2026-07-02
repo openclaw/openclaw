@@ -815,6 +815,13 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
+    // Overloaded 429 (e.g. z.ai code 1305, "temporarily overloaded") must be
+    // distinguished from genuine rate limits so the user-facing copy and
+    // failover reason are accurate.  503 and 499 already perform this check;
+    // 429 should follow the same pattern.
+    if (messageReason === "overloaded") {
+      return messageClassification;
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -1058,11 +1065,11 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  if (isRateLimitErrorMessage(raw)) {
-    return toReasonClassification("rate_limit");
-  }
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return toReasonClassification("rate_limit");
   }
   if (
     isStructuredServerErrorMessage(raw) &&

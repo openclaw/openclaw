@@ -1,6 +1,6 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
-import { classifyFailoverReason } from "./errors.js";
+import { classifyFailoverReason, classifyFailoverReasonFromHttpStatus } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -208,5 +208,25 @@ describe("generic assistant error text classification (#93931)", () => {
     expect(
       isTimeoutErrorMessage("LLM request failed: connection refused by the provider endpoint."),
     ).toBe(false);
+  });
+});
+
+describe("HTTP 429 overloaded vs rate-limit classification (#98101)", () => {
+  it("classifies a 429 with overloaded body as overloaded, not rate_limit", () => {
+    // z.ai code 1305: "The service may be temporarily overloaded, please try again later"
+    const message =
+      "429 status code (exceeded limit)\n" +
+      '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
+    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("overloaded");
+  });
+
+  it("classifies a 429 with generic rate-limit body as rate_limit", () => {
+    const message = "429 status code (exceeded limit)\nRate limit exceeded. Try again in 60s.";
+    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("rate_limit");
+  });
+
+  it("classifies a 429 with billing body as billing, not rate_limit", () => {
+    const message = "429 status code\nInsufficient balance or no resource package.";
+    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("billing");
   });
 });
