@@ -2607,9 +2607,9 @@ internal fun permissionContinueNeedsNodeApproval(
   requiresNodeApprovalAfterApply: Boolean,
   nodeCapabilityApprovalState: GatewayNodeApprovalState,
 ): Boolean =
-  !ready &&
+  requiresNodeApprovalAfterApply ||
     (
-      requiresNodeApprovalAfterApply ||
+      !ready &&
         nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)
     )
 

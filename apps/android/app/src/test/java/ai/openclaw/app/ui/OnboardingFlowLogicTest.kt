@@ -121,8 +121,10 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
-    assertFalse(initialCameraCapabilityEnabled(androidCameraPermissionGranted = false))
-    assertFalse(initialCameraCapabilityEnabled(androidCameraPermissionGranted = true))
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false))
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true))
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = false))
+    assertTrue(initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = true))
   }
 
   @Test
@@ -441,11 +443,18 @@ class OnboardingFlowLogicTest {
         nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
-    assertFalse(
+    assertTrue(
       permissionContinueNeedsNodeApproval(
         ready = true,
         requiresNodeApprovalAfterApply = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+      ),
+    )
+    assertFalse(
+      permissionContinueNeedsNodeApproval(
+        ready = true,
+        requiresNodeApprovalAfterApply = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
       ),
     )
   }
