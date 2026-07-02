@@ -49,6 +49,24 @@ class SettingsScreensTest {
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
   }
 
+  @Test
+  fun gatewaySetupResetCopyExplainsCredentialAndApprovalImpact() {
+    val text = gatewaySettingsSetupResetConfirmationText()
+
+    assertEquals(true, text.contains("saved setup credentials"))
+    assertEquals(true, text.contains("device tokens"))
+    assertEquals(true, text.contains("node capability approval"))
+  }
+
+  @Test
+  fun devicePairingAdminCopySeparatesPairingFromNodeApproval() {
+    val text = devicePairingAdminUnavailableText()
+
+    assertEquals(true, text.contains("approve new phone pairing"))
+    assertEquals(true, text.contains("Node capability approval is separate"))
+    assertEquals(true, text.contains("nodes approve <request id>"))
+  }
+
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(
       code = code,
