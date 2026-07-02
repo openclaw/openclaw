@@ -105,6 +105,31 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
+  it("skips unreadable trajectory tool descriptors while preserving healthy siblings", () => {
+    const unreadableName = Object.defineProperty({ parameters: { type: "object" } }, "name", {
+      get() {
+        throw new Error("trajectory tool name getter exploded");
+      },
+    });
+    const unreadableParameters = Object.defineProperty(
+      { name: "broken_parameters" },
+      "parameters",
+      {
+        get() {
+          throw new Error("trajectory tool parameters getter exploded");
+        },
+      },
+    );
+
+    expect(
+      toTrajectoryToolDefinitions([
+        unreadableName,
+        unreadableParameters,
+        { name: "healthy_tool", description: "usable", parameters: { type: "object" } },
+      ]),
+    ).toEqual([{ name: "healthy_tool", description: "usable", parameters: { type: "object" } }]);
+  });
+
   it("bounds large runtime event fields before serialization", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
