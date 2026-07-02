@@ -114,10 +114,18 @@ describe("config set input parsing", () => {
   });
 
   it("accepts --batch-file payload at the exact size limit", () => {
-    const content = `[${"x".repeat(MAX_BATCH_FILE_BYTES - 2)}]`; // just under limit
+    // Build a valid entry at exactly MAX_BATCH_FILE_BYTES
+    // Template: [{"path":"p","value":"PAD"}]
+    // Prefix: 22 bytes, suffix: 3 bytes, so PAD = MAX - 25 = 1,048,551 bytes
+    const padLen = MAX_BATCH_FILE_BYTES - 25;
+    const content = `[{"path":"p","value":"${"x".repeat(padLen)}"}]`;
+    expect(content.length).toBe(MAX_BATCH_FILE_BYTES);
     withBatchFile("openclaw-config-set-input-at-limit-", content, (batchPath) => {
-      // Should not throw — at exactly the limit (minus closing bracket room)
-      expect(() => parseBatchSource({ batchFile: batchPath })).not.toThrow("Batch file too large");
+      const parsed = parseBatchSource({ batchFile: batchPath });
+      expect(parsed).toHaveLength(1);
+      expect(parsed![0].path).toBe("p");
+      expect(typeof parsed![0].value).toBe("string");
+      expect((parsed![0].value as string).length).toBe(padLen);
     });
   });
 
