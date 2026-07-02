@@ -74,6 +74,12 @@ type AgentCommandDeliveryPayloadOutcome = {
   status: AgentCommandDeliveryPayloadStatus;
   reason?: string;
   resultCount?: number;
+  target?: {
+    provider?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
   sentBeforeError?: boolean;
   stage?: string;
   error?: string;
@@ -239,6 +245,30 @@ function buildDeliveryResult(params: {
   };
 }
 
+type SerializableDeliveryTarget = {
+  channel?: string | null;
+  accountId?: string | null;
+  to?: string;
+  threadId?: string | number | null;
+};
+
+function serializeDeliveryTarget(
+  target: SerializableDeliveryTarget | undefined,
+): AgentCommandDeliveryPayloadOutcome["target"] | undefined {
+  if (!target) {
+    return undefined;
+  }
+  const provider = target.channel?.trim();
+  const to = target.to?.trim();
+  const accountId = target.accountId?.trim();
+  return {
+    ...(provider ? { provider } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(to ? { to } : {}),
+    ...(target.threadId != null ? { threadId: target.threadId } : {}),
+  };
+}
+
 function serializeDeliveryPayloadOutcomes(
   outcomes: DurableSendResult["payloadOutcomes"],
 ): AgentCommandDeliveryPayloadOutcome[] | undefined {
@@ -247,10 +277,12 @@ function serializeDeliveryPayloadOutcomes(
   }
   return outcomes.map((outcome) => {
     if (outcome.status === "sent") {
+      const target = serializeDeliveryTarget(outcome.target);
       return {
         index: outcome.index,
         status: "sent",
         resultCount: outcome.results.length,
+        ...(target ? { target } : {}),
       };
     }
     if (outcome.status === "suppressed") {
@@ -261,12 +293,14 @@ function serializeDeliveryPayloadOutcomes(
         ...(outcome.hookEffect ? { hookEffect: outcome.hookEffect } : {}),
       };
     }
+    const target = serializeDeliveryTarget(outcome.target);
     return {
       index: outcome.index,
       status: "failed",
       error: formatErrorMessage(outcome.error),
       sentBeforeError: outcome.sentBeforeError,
       stage: outcome.stage,
+      ...(target ? { target } : {}),
     };
   });
 }
