@@ -41,7 +41,28 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  request?: {
+    allowPrivateNetwork?: boolean;
+  };
 };
+
+function buildEmbeddingSsrfPolicy(
+  baseUrl: string,
+  configuredProvider: ConfiguredEmbeddingProvider | undefined,
+): SsrFPolicy | undefined {
+  const allowPrivateNetwork = configuredProvider?.request?.allowPrivateNetwork;
+  if (allowPrivateNetwork === false) {
+    return undefined;
+  }
+  const base = ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl);
+  if (!base) {
+    return base;
+  }
+  if (allowPrivateNetwork === true) {
+    return { ...base, allowPrivateNetwork: true };
+  }
+  return base;
+}
 
 function normalizeBaseUrl(value: string | undefined): string {
   const baseUrl = value?.trim();
@@ -417,7 +438,7 @@ export async function createOpenAICompatibleEmbeddingClient(
         ...options.remote?.headers,
       },
     }),
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: buildEmbeddingSsrfPolicy(baseUrl, configuredProvider),
     model,
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }

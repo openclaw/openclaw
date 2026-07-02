@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { type LookupFn, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
@@ -534,6 +535,133 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
+  it("honors a configured provider request.allowPrivateNetwork for the embedding SSRF policy", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowPrivateNetwork).toBe(true);
+  });
+
+  it("preserves exact-host trust without broader allowPrivateNetwork when the provider does not opt in", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy?.allowedHostnames).toEqual(["llm.internal"]);
+    expect(client.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    const lookupFn = (async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
+    await expect(
+      resolvePinnedHostnameWithPolicy("llm.internal", {
+        policy: client.ssrfPolicy,
+        lookupFn,
+      }),
+    ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
+  });
+
+  it("does not apply exact-host trust when the configured provider explicitly denies private network access", async () => {
+    const { client } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai-compatible",
+        config: {
+          models: {
+            providers: {
+              "openai-compatible": {
+                api: "openai-compatible",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: false },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://llm.internal/v1" },
+      }),
+    );
+    expect(client.ssrfPolicy).toBeUndefined();
+    const lookupFn = (async () => [{ address: "10.0.0.5", family: 4 }]) as unknown as LookupFn;
+    await expect(
+      resolvePinnedHostnameWithPolicy("llm.internal", {
+        policy: client.ssrfPolicy,
+        lookupFn,
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use IP address/u);
+  });
+
+  it("preserves configured provider exact-host trust for private endpoints without request.allowPrivateNetwork", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-local",
+        config: {
+          models: {
+            providers: {
+              "configured-local": {
+                baseUrl: server.baseUrl,
+                models: [{ id: "text-embedding-bge-m3" }],
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it("allows configured provider private endpoints when request.allowPrivateNetwork opts in", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-local",
+        config: {
+          models: {
+            providers: {
+              "configured-local": {
+                baseUrl: server.baseUrl,
+                models: [{ id: "text-embedding-bge-m3" }],
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests).toHaveLength(1);
+  });
+
   it("resolves env-template API key strings before treating them as inline secrets", async () => {
     const token = "env-template-token";
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
@@ -589,6 +717,7 @@ describe("openai-compatible generic embedding provider", () => {
                 headers: {
                   "x-tenant": "tenant-a",
                 },
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -617,6 +746,7 @@ describe("openai-compatible generic embedding provider", () => {
                 api: "openai-responses",
                 baseUrl: server.baseUrl,
                 apiKey: token,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -644,6 +774,7 @@ describe("openai-compatible generic embedding provider", () => {
               "tenant-embeddings": {
                 baseUrl: server.baseUrl,
                 apiKey: token,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
@@ -672,6 +803,7 @@ describe("openai-compatible generic embedding provider", () => {
             providers: {
               "ollama-local": {
                 baseUrl: server.baseUrl,
+                request: { allowPrivateNetwork: true },
                 models: [],
               },
             },
