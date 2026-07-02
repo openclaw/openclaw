@@ -734,6 +734,10 @@ struct RootTabsSourceGuardTests {
         #expect(!sectionsSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
+        // Every problem report re-surfaces a swiped-away toast or shakes the
+        // visible one; value equality alone must not keep the toast hidden.
+        #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
+        #expect(rootSource.contains("GatewayToastShakeEffect"))
 
         #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
