@@ -195,6 +195,10 @@ describe("renderTable", () => {
         { Path: `prefix${home}/project` },
         { Path: `Workspace: ${home}/project` },
         { Path: `path=${home}/project` },
+        { Path: `Home: ${home},` },
+        { Path: `(${home})` },
+        { Path: `${home},backup` },
+        { Path: `${home} backup\\file` },
       ],
     });
 
@@ -206,7 +210,13 @@ describe("renderTable", () => {
     expect(out).toContain(embedded);
     expect(out).toContain("Workspace: ~/project");
     expect(out).toContain("path=~/project");
+    expect(out).toContain("Home: ~,");
+    expect(out).toContain("(~)");
+    expect(out).toContain(`${home},backup`);
+    expect(out).toContain(`${home} backup\\file`);
     expect(out).not.toContain("~2/project");
+    expect(out).not.toContain("~,backup");
+    expect(out).not.toContain("~ backup\\file");
     expect(out).not.toContain("prefix~/project");
   });
 
