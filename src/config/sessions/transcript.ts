@@ -101,14 +101,16 @@ export type TailAssistantTranscriptText = AssistantTranscriptText;
 
 export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
-function parseAssistantTranscriptText(
+export function parseAssistantTranscriptText(
   line: string,
   options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
 ): AssistantTranscriptText | undefined {
-  const parsed = JSON.parse(line) as {
-    id?: unknown;
-    message?: unknown;
-  };
+  let parsed: { id?: unknown; message?: unknown };
+  try {
+    parsed = JSON.parse(line) as { id?: unknown; message?: unknown };
+  } catch {
+    return undefined;
+  }
   const message = parsed.message as
     | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
     | undefined;
@@ -165,11 +167,15 @@ function normalizeRecentTranscriptLimit(limit: number | undefined): number {
   return Math.max(1, Math.floor(limit ?? 10));
 }
 
-function parseRecentConversationText(line: string): SessionRecentConversationText | undefined {
-  const parsed = JSON.parse(line) as {
-    id?: unknown;
-    message?: unknown;
-  };
+export function parseRecentConversationText(
+  line: string,
+): SessionRecentConversationText | undefined {
+  let parsed: { id?: unknown; message?: unknown };
+  try {
+    parsed = JSON.parse(line) as { id?: unknown; message?: unknown };
+  } catch {
+    return undefined;
+  }
   const message = parsed.message as
     | {
         role?: unknown;
