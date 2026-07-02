@@ -1178,7 +1178,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
+  it("keeps non-capture live prepared backend cleanup with the whole-run owner", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
       write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
@@ -1225,11 +1225,13 @@ describe("runCliAgent spawn path", () => {
     const result = await executePreparedCliRun(context);
 
     expect(result.text).toBe("ok");
-    expect(context.preparedBackend.cleanup).toBeUndefined();
+    expect(context.preparedBackend.cleanup).toBe(preparedBackendCleanup);
     expect(preparedBackendCleanup).not.toHaveBeenCalled();
 
     resetClaudeLiveSessionsForTest();
-    await vi.waitFor(() => expect(preparedBackendCleanup).toHaveBeenCalledOnce());
+    expect(preparedBackendCleanup).not.toHaveBeenCalled();
+    await context.preparedBackend.cleanup?.();
+    expect(preparedBackendCleanup).toHaveBeenCalledOnce();
   });
 
   it("keeps captured live prepared backend cleanup with the whole-run owner", async () => {
