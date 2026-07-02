@@ -720,8 +720,53 @@ describe("buildMcpToolSchema", () => {
     }
 
     expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
-      'mcp loopback: conflicting schema definitions for "action", keeping the first variant',
-      'mcp loopback: conflicting schema definitions for "callId", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.callId", keeping the first variant',
+    ]);
+  });
+
+  it("warns per tool for the same conflicting field name across different tools", () => {
+    const conflictingUnion = (label: string) => ({
+      anyOf: [
+        { type: "object", properties: { action: { type: "string", description: `${label} a` } } },
+        { type: "object", properties: { action: { type: "number", description: `${label} b` } } },
+      ],
+    });
+    const messageTool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: conflictingUnion("message"),
+    });
+    const calendarTool = makeMockTool({
+      name: "mcp_calendar_create",
+      parameters: conflictingUnion("calendar"),
+    });
+
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+    // Rebuild to prove per-(tool, field) dedupe survives repeated schema builds.
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_calendar_create.action", keeping the first variant',
+    ]);
+  });
+
+  it("warns once per tool for repeated malformed variant schemas across rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          { type: "object", properties: { action: { type: "string" } } },
+          { type: "object", properties: { action: 123 } },
+        ],
+      },
+    });
+
+    buildMockMcpToolSchema([tool]);
+    buildMockMcpToolSchema([tool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: malformed schema definition for "mcp_message_send.action", ignoring that variant',
     ]);
   });
 });
