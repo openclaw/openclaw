@@ -122,6 +122,9 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
+  collectStartupChannelMaintenanceHealthFindings: vi.fn(
+    async (): Promise<readonly HealthFinding[]> => [],
+  ),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -367,6 +370,15 @@ vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
 }));
+
+vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
+  return {
+    ...actual,
+    collectStartupChannelMaintenanceHealthFindings:
+      mocks.collectStartupChannelMaintenanceHealthFindings,
+  };
+});
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
@@ -1399,6 +1411,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/startup-channel-maintenance");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1964,6 +1977,56 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
+  });
+
+  it("keeps startup channel maintenance opt-in for default lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    expect(contribution.healthCheckIds).toEqual([
+      "core/doctor/channel-plugin-blockers",
+      "core/doctor/startup-channel-maintenance",
+    ]);
+    const startupCheck = contribution.healthChecks.find(
+      (check) => check.id === "core/doctor/startup-channel-maintenance",
+    ) as HealthCheck | undefined;
+    expect(startupCheck).toMatchObject({ defaultEnabled: false });
+    expect(startupCheck).toBeDefined();
+    mocks.collectStartupChannelMaintenanceHealthFindings.mockResolvedValue([
+      {
+        checkId: "core/doctor/startup-channel-maintenance",
+        severity: "warning",
+        message: "channels.matrix needs startup maintenance",
+        path: "channels.matrix",
+      },
+    ]);
+
+    const ctx = {
+      cfg: { channels: { matrix: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [startupCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectStartupChannelMaintenanceHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/startup-channel-maintenance"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/startup-channel-maintenance",
+          path: "channels.matrix",
+        }),
+      ],
+    });
+    expect(mocks.collectStartupChannelMaintenanceHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

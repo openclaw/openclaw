@@ -1,8 +1,59 @@
 // Doctor startup maintenance tests cover channel startup maintenance checks.
-import { describe, expect, it } from "vitest";
-import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  collectStartupChannelMaintenanceHealthFindings,
+  maybeRunDoctorStartupChannelMaintenance,
+} from "./doctor-startup-channel-maintenance.js";
+
+const mocks = vi.hoisted(() => ({
+  collectChannelDoctorPreviewWarnings: vi.fn(async (): Promise<string[]> => []),
+}));
+
+vi.mock("../commands/doctor/shared/channel-doctor.js", () => ({
+  collectChannelDoctorPreviewWarnings: mocks.collectChannelDoctorPreviewWarnings,
+}));
 
 describe("doctor startup channel maintenance", () => {
+  beforeEach(() => {
+    mocks.collectChannelDoctorPreviewWarnings.mockReset().mockResolvedValue([]);
+  });
+
+  it("maps channel doctor preview warnings to structured findings", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+    mocks.collectChannelDoctorPreviewWarnings.mockResolvedValue([
+      "- channels.matrix: stale config needs startup maintenance.",
+    ]);
+
+    await expect(
+      collectStartupChannelMaintenanceHealthFindings({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix --dry-run",
+        env: { OPENCLAW_TEST: "1" },
+      }),
+    ).resolves.toEqual([
+      {
+        checkId: "core/doctor/startup-channel-maintenance",
+        severity: "warning",
+        message: "channels.matrix: stale config needs startup maintenance.",
+        path: "channels.matrix",
+        requirement: "Configured channels should not require startup maintenance before use.",
+        fixHint:
+          "Run `openclaw doctor --fix --dry-run` to apply safe channel maintenance repairs, or update the affected channel config manually.",
+      },
+    ]);
+    expect(mocks.collectChannelDoctorPreviewWarnings).toHaveBeenCalledWith({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix --dry-run",
+      env: { OPENCLAW_TEST: "1" },
+    });
+  });
+
   it("runs Matrix startup migration during repair flows", async () => {
     const cfg = {
       channels: {
