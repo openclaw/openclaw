@@ -211,7 +211,7 @@ function resolveWorkerExecPath(): string {
 
   // General fallback: search PATH for a working node binary.
   const nodeName = process.platform === "win32" ? "node.exe" : "node";
-  const pathDirs = (process.env.PATH ?? "").split(path.delimiter);
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter((dir) => dir.length > 0);
   for (const dir of pathDirs) {
     const candidate = path.resolve(dir, nodeName);
     try {

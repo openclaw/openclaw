@@ -664,4 +664,29 @@ describe("resolveHomebrewStablePath", () => {
         result === "/home/linuxbrew/.linuxbrew/opt/node/bin/node",
     ).toBe(true);
   });
+
+  it("filters blank PATH entries to prevent cwd node selection", () => {
+    // resolveWorkerExecPath filters empty PATH segments so that a
+    // leading, trailing, or doubled path delimiter does not resolve
+    // to the Gateway working directory.
+    const sep = path.delimiter;
+
+    // Empty PATH → no candidates.
+    expect("".split(sep).filter((d) => d.length > 0)).toEqual([]);
+
+    // Leading delimiter → blank filtered out.
+    expect(`${sep}/usr/bin`.split(sep).filter((d) => d.length > 0)).toEqual(["/usr/bin"]);
+
+    // Trailing delimiter → blank filtered out.
+    expect(`/usr/bin${sep}`.split(sep).filter((d) => d.length > 0)).toEqual(["/usr/bin"]);
+
+    // Doubled delimiter → blank filtered out.
+    expect(`/usr/bin${sep}${sep}/usr/local/bin`.split(sep).filter((d) => d.length > 0)).toEqual([
+      "/usr/bin",
+      "/usr/local/bin",
+    ]);
+
+    // Normal path → unchanged.
+    expect("/usr/bin".split(sep).filter((d) => d.length > 0)).toEqual(["/usr/bin"]);
+  });
 });
