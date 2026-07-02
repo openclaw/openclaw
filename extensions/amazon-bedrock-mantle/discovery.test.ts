@@ -668,4 +668,39 @@ describe("bedrock mantle discovery", () => {
 
     expect(result.models?.map((m) => m.id)).toEqual(["custom-model"]);
   });
+
+  it("fails soft and stops reading when discovery JSON exceeds the byte cap", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32;
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedResponse = (): Response => {
+      bytesPulled = 0;
+      canceled = false;
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) { controller.close(); return; }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() { canceled = true; },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+
+    const mockFetch = vi.fn().mockResolvedValue(makeOversizedResponse());
+    const models = await discoverMantleModels({
+      region: "us-east-1",
+      bearerToken: "test-token",
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(models).toEqual([]);
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
 });
