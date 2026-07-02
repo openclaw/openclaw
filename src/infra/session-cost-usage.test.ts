@@ -390,6 +390,78 @@ describe("session cost usage", () => {
     });
   });
 
+  it("excludes untimestamped entries from batched ranged session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-range-untimestamped");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-batch-range.jsonl");
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model,
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
+        JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const createReadStreamSpy = vi.spyOn(nodeFs, "createReadStream");
+      try {
+        const ranged = await loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: "sess-batch-range", sessionFile }],
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        });
+
+        expect(ranged.cacheStatus.status).toBe("fresh");
+        expect(ranged.summaries[0]?.totalTokens).toBe(20);
+        expect(ranged.summaries[0]?.dailyBreakdown).toEqual([
+          { date: "2026-02-05", tokens: 20, cost: 0.02 },
+        ]);
+        expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
+
+        const allRange = await loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: "sess-batch-range", sessionFile }],
+          agentId: "main",
+          startMs: 0,
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        });
+
+        expect(allRange.cacheStatus.status).toBe("fresh");
+        expect(allRange.summaries[0]?.totalTokens).toBe(1_030);
+        expect(allRange.summaries[0]?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+          true,
+        );
+        expect(createReadStreamSpy).not.toHaveBeenCalled();
+      } finally {
+        createReadStreamSpy.mockRestore();
+      }
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -1215,13 +1287,17 @@ describe("session cost usage", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "sess-cache-range.jsonl");
-    const assistantEntry = (timestamp: string, totalTokens: number) => ({
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
       type: "message",
       timestamp,
       message: {
         role: "assistant",
         provider: "openai",
-        model: "gpt-5.5",
+        model,
         content: [{ type: "tool_use", name: "weather" }],
         usage: {
           input: totalTokens,
@@ -1243,6 +1319,7 @@ describe("session cost usage", () => {
     await fs.writeFile(
       sessionFile,
       [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
         JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
         JSON.stringify(userEntry("2026-02-05T11:59:00.000Z")),
         JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
@@ -1276,10 +1353,26 @@ describe("session cost usage", () => {
           errors: 0,
         });
         expect(summary.summary?.toolUsage?.tools).toEqual([{ name: "weather", count: 1 }]);
+        expect(summary.summary?.modelUsage).toHaveLength(1);
         expect(summary.summary?.modelUsage?.[0]?.provider).toBe("openai");
         expect(summary.summary?.modelUsage?.[0]?.model).toBe("gpt-5.5");
         expect(summary.summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.5");
         expect(summary.summary?.utcQuarterHourMessageCounts).toHaveLength(2);
+
+        const allRange = await loadSessionCostSummaryFromCache({
+          sessionId: "sess-cache-range",
+          sessionFile,
+          startMs: 0,
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+
+        expect(allRange.cacheStatus.status).toBe("fresh");
+        expect(allRange.summary?.totalTokens).toBe(1_030);
+        expect(allRange.summary?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+        expect(allRange.summary?.dailyModelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+          false,
+        );
         expect(createReadStreamSpy).not.toHaveBeenCalled();
       } finally {
         createReadStreamSpy.mockRestore();
@@ -1457,6 +1550,85 @@ describe("session cost usage", () => {
       expect(summary.summary?.dailyBreakdown).toEqual([]);
       expect(summary.summary?.modelUsage?.[0]?.model).toBe("gpt-5.5");
     });
+  });
+
+  it("excludes untimestamped entries from direct ranged session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-session-direct-range-untimestamped");
+    const sessionFile = path.join(root, "session.jsonl");
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model,
+        content: [{ type: "tool_use", name: "weather" }],
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+    const userEntry = (timestamp: string) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "user",
+        content: "hello",
+      },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
+        JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(userEntry("2026-02-05T11:59:00.000Z")),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const ranged = await loadSessionCostSummary({
+      sessionFile,
+      startMs: Date.UTC(2026, 1, 5),
+      endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+    });
+
+    expect(ranged?.totalTokens).toBe(20);
+    expect(ranged?.dailyBreakdown).toEqual([{ date: "2026-02-05", tokens: 20, cost: 0.02 }]);
+    expect(ranged?.messageCounts).toEqual({
+      total: 2,
+      user: 1,
+      assistant: 1,
+      toolCalls: 1,
+      toolResults: 0,
+      errors: 0,
+    });
+    expect(ranged?.modelUsage).toHaveLength(1);
+    expect(ranged?.modelUsage?.[0]?.provider).toBe("openai");
+    expect(ranged?.modelUsage?.[0]?.model).toBe("gpt-5.5");
+    expect(ranged?.dailyModelUsage?.[0]?.model).toBe("gpt-5.5");
+
+    const allTime = await loadSessionCostSummary({ sessionFile });
+    expect(allTime?.totalTokens).toBe(1_030);
+    expect(allTime?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+
+    const allRange = await loadSessionCostSummary({
+      sessionFile,
+      startMs: 0,
+      endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+    });
+
+    expect(allRange?.totalTokens).toBe(1_030);
+    expect(allRange?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+    expect(allRange?.dailyModelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
   });
 
   it("rebuilds missing session summaries synchronously when requested", async () => {

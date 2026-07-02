@@ -552,9 +552,37 @@ function isSessionSummaryContainedInRange(
   startMs: number,
   endMs: number,
 ): boolean {
+  if (summary.firstActivity === undefined || summary.lastActivity === undefined) {
+    return false;
+  }
+  return summary.firstActivity >= startMs && summary.lastActivity <= endMs;
+}
+
+function hasUntimestampedCachedTranscriptEntry(
+  entry: UsageCostCacheFileEntry | undefined,
+): boolean {
   return (
-    (summary.firstActivity === undefined || summary.firstActivity >= startMs) &&
-    (summary.lastActivity === undefined || summary.lastActivity <= endMs)
+    entry?.transcriptEntries?.some((transcriptEntry) => transcriptEntry.timestamp === undefined) ??
+    false
+  );
+}
+
+function rangeRequiresTimestampedTranscriptEntries(params: { startMs?: number }): boolean {
+  // All/range=all callers may pass startMs=0 plus a finite endMs; legacy
+  // untimestamped rows still count there, but selected bounded ranges cannot.
+  return params.startMs !== undefined && Number.isFinite(params.startMs) && params.startMs > 0;
+}
+
+function shouldDeriveCachedSessionSummaryForRange(params: {
+  summary: SessionCostSummary;
+  entry: UsageCostCacheFileEntry | undefined;
+  startMs: number;
+  endMs: number;
+}): boolean {
+  return (
+    !isSessionSummaryContainedInRange(params.summary, params.startMs, params.endMs) ||
+    (rangeRequiresTimestampedTranscriptEntries(params) &&
+      hasUntimestampedCachedTranscriptEntry(params.entry))
   );
 }
 
@@ -592,9 +620,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   let lastActivity: number | undefined;
   let lastUserTimestamp: number | undefined;
   const maxLatencyMs = 12 * 60 * 60 * 1000;
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   for (const entry of params.entry.transcriptEntries) {
     const ts = entry.timestamp;
+    if (ts === undefined && requiresTimestamp) {
+      continue;
+    }
     if (ts !== undefined && ts < params.startMs) {
       continue;
     }
@@ -1853,19 +1885,26 @@ export async function loadSessionCostSummaryFromCache(params: {
       endMs: params.endMs,
     });
   }
+  const rangeStartMs = params.startMs;
+  const rangeEndMs = params.endMs;
   if (
     summary &&
-    params.startMs !== undefined &&
-    params.endMs !== undefined &&
-    !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    rangeStartMs !== undefined &&
+    rangeEndMs !== undefined &&
+    shouldDeriveCachedSessionSummaryForRange({
+      summary,
+      entry,
+      startMs: rangeStartMs,
+      endMs: rangeEndMs,
+    })
   ) {
     summary = entry
       ? buildSessionCostSummaryFromCacheEntry({
           entry,
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
-          startMs: params.startMs,
-          endMs: params.endMs,
+          startMs: rangeStartMs,
+          endMs: rangeEndMs,
         })
       : params.refreshMode === "sync-when-empty"
         ? await loadSessionCostSummary({
@@ -1874,8 +1913,8 @@ export async function loadSessionCostSummaryFromCache(params: {
             sessionFile: params.sessionFile,
             config: params.config,
             agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
           })
         : null;
   }
@@ -1922,6 +1961,8 @@ export async function loadSessionCostSummariesFromCache(params: {
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const summaries = params.sessions.map((session, index) => {
+    const rangeStartMs = params.startMs;
+    const rangeEndMs = params.endMs;
     const stat = stats[index];
     const file = stat
       ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
@@ -1943,17 +1984,22 @@ export async function loadSessionCostSummariesFromCache(params: {
     const summary = entry?.sessionSummary ?? null;
     if (
       summary &&
-      params.startMs !== undefined &&
-      params.endMs !== undefined &&
-      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+      rangeStartMs !== undefined &&
+      rangeEndMs !== undefined &&
+      shouldDeriveCachedSessionSummaryForRange({
+        summary,
+        entry,
+        startMs: rangeStartMs,
+        endMs: rangeEndMs,
+      })
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
             entry,
             sessionId: session.sessionId,
             sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
           })
         : null;
     }
@@ -2229,6 +2275,7 @@ export async function loadSessionCostSummary(params: {
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
   const resolveCost = createUsageCostResolver(params.config);
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   await scanTranscriptFile({
     filePath: sessionFile,
@@ -2236,6 +2283,9 @@ export async function loadSessionCostSummary(params: {
     resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
+      if (ts === undefined && requiresTimestamp) {
+        return;
+      }
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
