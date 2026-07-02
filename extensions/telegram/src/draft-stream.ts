@@ -597,13 +597,27 @@ export function createTelegramDraftStream(params: {
   const finalizeToPreview = async (
     preview: TelegramDraftPreview,
   ): Promise<number | undefined> => {
+    const text = preview.text.trimEnd();
+    if (!text) {
+      return undefined;
+    }
     // Settle pending updates so we edit the real, current window message.
     streamState.final = true;
     await loop.flush();
-    const text = preview.text.trimEnd();
-    // No live window message to edit (never rendered, or already torn down):
-    // nothing to collapse in place — caller falls back to a fresh bar post.
-    if (typeof streamMessageId !== "number" || !text) {
+    // A throttled preview can still be pending (the last tool-progress line was
+    // coalesced and never sent), leaving no message id even though the window
+    // "rendered". Materialize it as a final flush would, so the window message
+    // exists and can be edited in place — otherwise on-off collapses missed it
+    // and fell back to a delete + repost.
+    if (typeof streamMessageId !== "number" && !streamState.stopped) {
+      const pending = lastRequestedText.trimEnd();
+      if (pending && pending !== lastDeliveredText.trimEnd()) {
+        await sendOrEditStreamMessage(pending);
+      }
+    }
+    // Genuinely no live window message (rv mode never rendered): caller posts a
+    // fresh durable bar instead — but it must NOT delete anything.
+    if (typeof streamMessageId !== "number") {
       return undefined;
     }
     // Replace the whole message with the bar line: edits diff from a zero

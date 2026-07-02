@@ -312,6 +312,50 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("finalizeToPreview edits the live window message in place without deleting", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    stream.update("🛠️ Exec: pnpm test");
+    await stream.flush();
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBe(17);
+    // The window message is EDITED into the bar, never deleted (no focus-jump).
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizeToPreview materializes a still-pending window before editing", async () => {
+    // A throttled preview may not have been sent yet when the collapse runs;
+    // finalizeToPreview must send it first so there is a message to edit into
+    // the bar, rather than returning undefined and forcing a delete + repost.
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      throttleMs: 10_000,
+    });
+
+    stream.update("🛠️ Exec: pnpm test");
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizeToPreview returns undefined when no window ever rendered", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBeUndefined();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
   it("deletes message preview on clear after finalization", async () => {
     vi.useFakeTimers();
     try {

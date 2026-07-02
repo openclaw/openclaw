@@ -3017,6 +3017,76 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "Done" });
   });
 
+  it("collapses a tool-progress-only window without deleting when reasoning is durable and the lane rotated mid-turn (on-off)", async () => {
+    // on-off cell: /reasoning on (durable), /verbose off. The window streams
+    // tool progress only; a mid-turn assistant boundary/rotation must not leave
+    // the collapse to a delete + repost. Every non-error collapse edits in place
+    // (or posts the bar durably) — NEVER a bare clear()/deleteMessage — so there
+    // is exactly one bar and no Telegram focus-jump.
+    loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        // Durable reasoning + an assistant boundary land between tool progress
+        // and the final — the mid-turn churn that dropped the live window id.
+        await dispatcherOptions.deliver(
+          { text: "<think>hidden</think>", isReasoning: true },
+          { kind: "block" },
+        );
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    // Collapse edited the window in place into the bar; the window was NOT
+    // deleted (no focus-jump), and exactly one bar exists.
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 2 tool calls · ⏱️ 1s");
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    const texts = allDeliveredReplyTexts();
+    expect(texts.filter((text) => text.includes("⏱️"))).toHaveLength(0); // bar is the in-place edit
+    expect(texts).toContain("Done");
+  });
+
+  it("posts the collapse bar durably with no delete when the window has no live message", async () => {
+    // When finalizeToPreview cannot edit in place (no live window message id),
+    // the bar is still surfaced — as a durable post — and the window is NOT
+    // cleared/deleted (nothing to delete; never a bare clear when a bar exists).
+    const answerDraftStream = createTestDraftStream({}); // no messageId -> edit fails
+    const reasoningDraftStream = createTestDraftStream({});
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    const texts = allDeliveredReplyTexts();
+    expect(texts.filter((text) => text.includes("⏱️"))).toEqual(["🛠️ 1 tool call · ⏱️ 1s"]);
+    expect(texts).toContain("Done");
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("does not duplicate tool lines into the window under verbose", async () => {
     // Invariant D2 (persistent XOR window): when the durable verbose lane owns
     // tool messages, the window must render no tool line and must not count it.

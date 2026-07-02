@@ -1944,54 +1944,73 @@ export const dispatchTelegramMessage = async ({
       }
       await sendPayload({ text: line }, { durable: true });
     };
-    // Collapse the live window IN PLACE into the summary bar: edit the existing
-    // window message so its content becomes the bar line, keeping it on screen.
-    // Mirrors Discord — deleting the window and reposting the bar scroll-jumps
-    // the Telegram client and flashes the window away. Returns true when the
-    // window was collapsed in place; false when there is no bar (nothing
-    // streamed) or no live window message, so the caller tears the window down.
-    const collapseProgressWindowIntoSummary = async (): Promise<boolean> => {
+    // Collapse the progress window into the summary bar. ONE deterministic path
+    // for every mode (off-off, stream-off, on-off tool-progress-only): edit the
+    // live window message IN PLACE into the bar (no delete — deleting scroll-
+    // jumps the Telegram client). Only when there is genuinely no live window
+    // message (rv mode never rendered a message) is the bar posted durably, and
+    // even then NOTHING is deleted. Returns "edited" | "posted" | "none" so the
+    // caller resets lane state without ever falling back to a bare clear() when
+    // a bar exists. finalizeToPreview settles pending previews first, so a
+    // still-pending tool-progress window is materialized and edited rather than
+    // missed (the on-off inconsistency).
+    const collapseProgressWindowIntoSummary = async (): Promise<"edited" | "posted" | "none"> => {
       const line = resolveProgressCollapseSummaryLine();
       if (!line) {
-        return false;
+        return "none";
       }
       const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line));
       if (typeof messageId === "number") {
-        return true;
+        return "edited";
       }
-      // No live window to edit (rv mode, never rendered): keep the bar as a
-      // fresh durable post so the timeline still shows the collapse summary.
+      // No live window message existed to edit; still surface the bar, but never
+      // delete (there is nothing on screen to remove).
       await sendPayload({ text: line }, { durable: true });
-      return false;
+      return "posted";
+    };
+    // Reset answer-lane bookkeeping after a bar was edited/posted in place,
+    // WITHOUT clear() — the window message stays (as the bar) and must not be
+    // deleted (no focus-jump). forceNewMessage only rewinds the stream so the
+    // next send starts a new message.
+    const resetAnswerLaneAfterCollapse = () => {
+      if (activeAnswerDraftIsToolProgressOnly) {
+        resetAnswerToolProgressDraft();
+        suppressProgressDraftState();
+        rotateAnswerLaneWhenQueuedBlocksSettle = false;
+      }
+      answerLane.stream?.forceNewMessage();
+      resetDraftLaneState(answerLane);
+    };
+    // Tear the window down (delete) — only when there is NO bar to keep it on
+    // screen for (error final, or a turn with nothing to summarize). A bar
+    // collapse never reaches here, so clear()/delete never runs when a bar
+    // exists (the on-off focus-jump).
+    const teardownProgressWindow = async () => {
+      if (activeAnswerDraftIsToolProgressOnly) {
+        await rotateAnswerLaneAfterToolProgress();
+      } else {
+        await answerLane.stream?.clear();
+        resetDraftLaneState(answerLane);
+      }
     };
     const deliverProgressModeFinalAnswer = async (
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
-      // Collapse the window into the bar in place BEFORE resetting lane state
-      // (which drops the stream's message id). Error finals get no summary
-      // (Discord parity). When nothing collapsed in place, tear the window down
-      // so a stale progress box does not linger above the final answer.
-      const collapsedInPlace =
-        payload.isError === true ? false : await collapseProgressWindowIntoSummary();
       if (payload.isError === true) {
+        // Error finals get no collapse summary (Discord parity); tear down.
         progressSummaryDelivered = true;
-      }
-      if (!collapsedInPlace) {
-        if (activeAnswerDraftIsToolProgressOnly) {
-          await rotateAnswerLaneAfterToolProgress();
-        } else {
-          await answerLane.stream?.clear();
-          resetDraftLaneState(answerLane);
-        }
+        await teardownProgressWindow();
       } else {
-        if (activeAnswerDraftIsToolProgressOnly) {
-          resetAnswerToolProgressDraft();
-          suppressProgressDraftState();
-          rotateAnswerLaneWhenQueuedBlocksSettle = false;
+        // Collapse BEFORE resetting lane state (which drops the stream's message
+        // id). "edited"/"posted" keep a bar on screen — reset without delete;
+        // "none" (nothing to summarize) tears the stale window down.
+        const outcome = await collapseProgressWindowIntoSummary();
+        if (outcome === "none") {
+          await teardownProgressWindow();
+        } else {
+          resetAnswerLaneAfterCollapse();
         }
-        answerLane.stream?.forceNewMessage();
-        resetDraftLaneState(answerLane);
       }
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
       if (!delivered) {
