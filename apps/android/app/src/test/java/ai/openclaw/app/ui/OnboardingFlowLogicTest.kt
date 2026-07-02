@@ -30,6 +30,24 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun permissionsBackCanReturnToRecoveryWhenNodeApprovalWasSkipped() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.Recovery),
+      onboardingBackDestination(
+        step = OnboardingStep.Permissions,
+        permissionsBackStep = OnboardingStep.Recovery,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        permissionsBackStep = OnboardingStep.Recovery,
+      ),
+    )
+  }
+
+  @Test
   fun setupCodeEntryBackRestoresInlineScannerOnlyWhenOpenedFromScanner() {
     assertEquals(
       OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true),
@@ -457,6 +475,50 @@ class OnboardingFlowLogicTest {
         statusText = "Waiting for node approval",
         connectSettling = false,
         connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingPrefersManualApprovalErrorOverPartialOperatorConnect() {
+    assertEquals(
+      GatewayRecoveryUiState.ApprovalRequired,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingPrefersRetryableApprovalErrorOverPartialOperatorConnect() {
+    assertEquals(
+      GatewayRecoveryUiState.Pairing,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = "wait_then_retry",
+            pauseReconnect = false,
+            retryable = true,
+          ),
       ),
     )
   }
