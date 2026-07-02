@@ -39,7 +39,7 @@ Without that flag, bundled runtime registration stays on the official API-backed
 
 A full rebuild should land as small follow-up PRs:
 
-1. Update the main Google provider setup page so the Gemini CLI section directly documents the opt-in flag.
+1. Keep the main Google provider setup page aligned with the opt-in Gemini CLI runtime boundary as the rebuild continues.
 2. Remove Gemini CLI OAuth from default onboarding prominence or keep it marked as an opt-in harness path behind the same boundary.
 3. Add a first-class Gemini API provider implementation for the current official API surface.
 4. Keep Vertex AI as a separate provider with its own auth and endpoint resolution.
