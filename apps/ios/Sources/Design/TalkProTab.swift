@@ -119,17 +119,16 @@ struct TalkProTab: View {
 
                 Spacer(minLength: 0)
 
-                if self.showsOfflineReconnect {
-                    self.offlineReconnect
-                        .padding(.horizontal, OpenClawProMetric.pagePadding)
-                        .padding(.bottom, 40)
-                } else if self.showsBlockingAction {
+                if self.showsBlockingAction {
                     self.blockingAction
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
                         .padding(.bottom, 40)
-                } else if self.showsCallControls {
+                } else if self.showsBottomControls {
                     VStack(spacing: 12) {
-                        if self.showsConnectingRetry {
+                        if self.showsOfflineReconnect {
+                            self.offlineReconnect
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        } else if self.showsConnectingRetry {
                             self.connectingRetry
                                 .padding(.horizontal, OpenClawProMetric.pagePadding)
                         }
@@ -223,8 +222,8 @@ struct TalkProTab: View {
                 .primaryAction == .openSettings)
     }
 
-    private var showsCallControls: Bool {
-        self.isInActiveCall
+    private var showsBottomControls: Bool {
+        self.isInActiveCall || self.showsOfflineReconnect
     }
 
     private var showsConnectingRetry: Bool {
@@ -346,7 +345,7 @@ struct TalkProTab: View {
     }
 
     private var centerStatusColor: Color {
-        if !self.gatewayConnected { return OpenClawBrand.danger }
+        if !self.gatewayConnected { return self.chromeStyle.primary }
         return self.chromeStyle.secondary
     }
 
