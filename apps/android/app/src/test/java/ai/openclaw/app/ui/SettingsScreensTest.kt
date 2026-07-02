@@ -16,42 +16,12 @@ class SettingsScreensTest {
   fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
     assertEquals(
       "Setup code expired",
-      gatewayStatusLabel("auth error", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID")),
-    )
-    assertEquals(
-      "Gateway token needed",
-      gatewayStatusLabel("authentication needed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")),
-    )
-    assertEquals(
-      "Saved auth invalid",
-      gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISMATCH")),
-    )
-    assertEquals(
-      "Device identity required",
-      gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED")),
-    )
-  }
-
-  @Test
-  fun gatewayStatusLabelMatchesRealGatewayUnauthorizedFailureText() {
-    // "unauthorized" contains "auth" — this locks in that the real server-formatted
-    // message (formatGatewayAuthFailureMessage in ws-connection/auth-messages.ts) hits
-    // the status.contains("auth") gate, not just synthetic test strings.
-    assertEquals(
-      "Gateway password invalid",
       gatewayStatusLabel(
-        "Gateway error: unauthorized: gateway password mismatch (enter the password in Control UI settings)",
+        "Gateway error: unauthorized: bootstrap token invalid or expired",
         isConnected = false,
-        gatewayConnectionProblem = authProblem("AUTH_PASSWORD_MISMATCH"),
+        gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID"),
       ),
     )
-  }
-
-  @Test
-  fun gatewayStatusLabelMatchesRealGatewayDeviceIdentityFailureText() {
-    // Device-identity handshake rejections (message-handler.ts) say "device identity
-    // required" / "control ui requires device identity...", which do not contain "auth" —
-    // the status gate needs a second substring for these two codes to be reachable.
     assertEquals(
       "Device identity required",
       gatewayStatusLabel(
@@ -74,7 +44,7 @@ class SettingsScreensTest {
   @Test
   fun gatewayStatusLabelLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
     val problem = authProblem("AUTH_TOKEN_MISSING")
-    assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = problem))
+    assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
   }

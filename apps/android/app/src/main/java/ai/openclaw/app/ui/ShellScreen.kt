@@ -1782,26 +1782,10 @@ internal fun gatewaySummary(
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pairing") -> "Waiting for pairing"
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: "Authentication needed"
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
     else -> "Not connected"
   }
 }
-
-/** Maps an already-computed gateway auth-reject reason to a short, specific status label. */
-internal fun gatewayAuthNeededSummary(gatewayConnectionProblem: GatewayConnectionProblem?): String =
-  when (gatewayConnectionProblem?.code) {
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired"
-    "AUTH_TOKEN_MISSING" -> "Gateway token needed"
-    "AUTH_PASSWORD_MISSING" -> "Gateway password needed"
-    "AUTH_PASSWORD_MISMATCH" -> "Gateway password invalid"
-    "AUTH_TOKEN_MISMATCH",
-    "AUTH_DEVICE_TOKEN_MISMATCH",
-    -> "Saved auth invalid"
-    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
-    "DEVICE_IDENTITY_REQUIRED",
-    -> "Device identity required"
-    else -> "Authentication needed"
-  }
