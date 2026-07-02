@@ -296,6 +296,7 @@ export function createFindToolDefinition(
 
             child.on("error", (error) => {
               cleanup();
+              stopChild?.();
               settle(() => reject(new Error(`Failed to run fd: ${error.message}`)));
             });
 
