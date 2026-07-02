@@ -5811,6 +5811,100 @@ describe("active-memory plugin", () => {
     expect(config.circuitBreakerMaxTimeouts).toBe(1);
     expect(config.circuitBreakerCooldownMs).toBe(5000);
   });
+
+  describe("isChitchatSummary", () => {
+    it("returns true for greeting + help offer (2+ patterns)", () => {
+      expect(
+        testing.isChitchatSummary(
+          "Hello! How can I help you today? I'm here to assist with any questions.",
+        ),
+      ).toBe(true);
+    });
+
+    it("returns true for model-metadata help offer with 请告诉", () => {
+      expect(
+        testing.isChitchatSummary(
+          "当前模型是 Claude 3.5 Sonnet。如果您有任何问题或需要帮助，请告诉我！",
+        ),
+      ).toBe(true);
+    });
+
+    it("returns true for current-model + help offer when 2 patterns match", () => {
+      expect(
+        testing.isChitchatSummary(
+          "Current model: GPT-4o. If you need assistance or help, please let me know!",
+        ),
+      ).toBe(true);
+    });
+
+    it("returns false for factual summary mentioning a model name", () => {
+      expect(
+        testing.isChitchatSummary(
+          "The user configured their project to use Claude 3.5 Sonnet for code review tasks.",
+        ),
+      ).toBe(false);
+    });
+
+    it("returns false for single-match chitchat patterns", () => {
+      expect(testing.isChitchatSummary("Please provide more details.")).toBe(false);
+    });
+
+    it("returns true for date/time help-offer variant", () => {
+      expect(
+        testing.isChitchatSummary(
+          "当前日期和时间是 2026-06-23，如果您需要任何帮助，请随时告诉我。",
+        ),
+      ).toBe(true);
+    });
+
+    it("returns true for Chinese feel-free-to-ask variant", () => {
+      expect(testing.isChitchatSummary("请随时告诉我您的偏好和设置。")).toBe(true);
+    });
+
+    it("returns true for Chinese unfinished message variant", () => {
+      expect(testing.isChitchatSummary("您好像没有说完您的消息。")).toBe(true);
+    });
+
+    it("returns true for English unfinished message with repeat request", () => {
+      expect(testing.isChitchatSummary("I didn't finish your message, could you repeat?")).toBe(
+        true,
+      );
+    });
+
+    it("returns true for Chinese if-need-help with contact support", () => {
+      expect(testing.isChitchatSummary("如果需要帮助，请联系客服。")).toBe(true);
+    });
+
+    it("returns false for empty string", () => {
+      expect(testing.isChitchatSummary("")).toBe(false);
+    });
+  });
+
+  describe("normalizeActiveSummary", () => {
+    it("filters out model-metadata help chatter", () => {
+      expect(
+        testing.normalizeActiveSummary(
+          "当前模型是 Claude 3.5 Sonnet。如果您有任何问题或需要帮助，请告诉我！",
+        ),
+      ).toBeNull();
+    });
+
+    it("preserves factual summaries", () => {
+      expect(
+        testing.normalizeActiveSummary(
+          "The user set up a React project with TypeScript and Tailwind CSS.",
+        ),
+      ).toBe("The user set up a React project with TypeScript and Tailwind CSS.");
+    });
+
+    it("filters out greeting + help boilerplate", () => {
+      expect(
+        testing.normalizeActiveSummary(
+          "Hello! How can I help you today? I'm here to assist with any questions.",
+        ),
+      ).toBeNull();
+    });
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
