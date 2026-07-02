@@ -494,20 +494,6 @@ struct ProValuePill: View {
     }
 }
 
-struct OpenClawProMark: View {
-    var size: CGFloat = 42
-    var shadowRadius: CGFloat = 10
-
-    var body: some View {
-        Image("OpenClawIcon")
-            .resizable()
-            .scaledToFit()
-            .frame(width: self.size, height: self.size)
-            .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
-            .accessibilityLabel("OpenClaw")
-    }
-}
-
 struct ProProgressBar: View {
     let progress: Double
     var color: Color = OpenClawBrand.accentHot

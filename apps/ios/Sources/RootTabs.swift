@@ -295,7 +295,7 @@ struct RootTabs: View {
 
     private var sidebarIdentityHeader: some View {
         HStack(spacing: 10) {
-            OpenClawProMark(size: 30, shadowRadius: 3)
+            OpenClawMascot(scale: .section)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {

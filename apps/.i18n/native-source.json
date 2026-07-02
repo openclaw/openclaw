@@ -7706,6 +7706,14 @@
       "id": "native.apple.5217a044d98947d5"
     },
     {
+      "kind": "ui-modifier",
+      "line": 55,
+      "path": "apps/ios/Sources/Design/OpenClawMascot.swift",
+      "source": "OpenClaw",
+      "surface": "apple",
+      "id": "native.apple.5311cd0850c1a3dd"
+    },
+    {
       "kind": "ui-call",
       "line": 374,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
@@ -7715,15 +7723,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 507,
-      "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
-      "source": "OpenClaw",
-      "surface": "apple",
-      "id": "native.apple.cf9bb65f8e405cc8"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 545,
+      "line": 531,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Gateway \\(self.title)",
       "surface": "apple",
@@ -7731,7 +7731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 550,
+      "line": 536,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Online",
       "surface": "apple",
@@ -7739,7 +7739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 552,
+      "line": 538,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -7747,7 +7747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 554,
+      "line": 540,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Attention",
       "surface": "apple",
@@ -7755,7 +7755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 556,
+      "line": 542,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Offline",
       "surface": "apple",
