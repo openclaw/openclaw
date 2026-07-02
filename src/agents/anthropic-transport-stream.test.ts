@@ -4,7 +4,11 @@
  * provider transport hooks.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetClaudeCodeVersionResolverForTest,
+  setClaudeCodeVersionResolverForTest,
+} from "../llm/utils/claude-code-version.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -185,8 +189,13 @@ async function runTransportStream(
 
 describe("anthropic transport stream", () => {
   beforeAll(async () => {
+    setClaudeCodeVersionResolverForTest(() => "2.1.177");
     ({ createAnthropicMessagesTransportStreamFn } =
       await import("./anthropic-transport-stream.js"));
+  });
+
+  afterAll(() => {
+    resetClaudeCodeVersionResolverForTest();
   });
 
   beforeEach(() => {
@@ -1096,7 +1105,7 @@ describe("anthropic transport stream", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-example");
     expect(headers.get("x-app")).toBe("cli");
-    expect(headers.get("user-agent")).toContain("claude-cli/");
+    expect(headers.get("user-agent")).toBe("claude-cli/2.1.177");
     const firstCallParams = latestAnthropicRequest().payload;
     const system = requireArray(firstCallParams.system, "system");
     expect(
