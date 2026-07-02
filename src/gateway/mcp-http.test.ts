@@ -3,7 +3,7 @@
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import { buildMcpToolSchema } from "./mcp-http.schema.js";
+import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
 
 type MockGatewayTool = {
   name: string;
@@ -84,9 +84,19 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
+const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
+
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
+
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return {
+    ...actual,
+    logWarn: (message: string) => logWarnMock(message),
+  };
+});
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
@@ -568,6 +578,8 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
+  clearMcpToolSchemaWarningsForTest();
+  logWarnMock.mockClear();
   clearMcpLoopbackToolCallCapturesForTest();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -672,6 +684,45 @@ describe("buildMcpToolSchema", () => {
         ])[0]?.inputSchema,
       ).toEqual(testCase.expected);
     }
+  });
+
+  it("warns once for repeated union schema conflicts across loopback schema rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "message action" },
+              callId: { type: "string", description: "voice call id" },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "number", description: "different server action" },
+              callId: { type: "number", description: "different call id" },
+            },
+          },
+        ],
+      },
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+        type: "object",
+        properties: {
+          action: { type: "string", description: "message action" },
+          callId: { type: "string", description: "voice call id" },
+        },
+      });
+    }
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "callId", keeping the first variant',
+    ]);
   });
 });
 
