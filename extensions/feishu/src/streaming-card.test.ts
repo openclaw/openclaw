@@ -65,7 +65,6 @@ describe("FeishuStreamingSession", () => {
     fetchWithSsrFGuardMock.mockImplementation(
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         const release = vi.fn(async () => {});
-        let ok = true;
         let status = 200;
         if (url.includes("/auth/")) {
           return {
@@ -626,7 +625,9 @@ describe("Feishu streaming card oversized response rejection", () => {
     const ONE_MIB = 1024 * 1024;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        for (let i = 0; i < 18; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
         controller.close();
       },
       cancel() {
