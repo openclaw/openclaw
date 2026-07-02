@@ -117,7 +117,9 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
-private class GatewayRequestNotEnqueued(message: String) : IllegalStateException(message)
+private class GatewayRequestNotEnqueued(
+  message: String,
+) : IllegalStateException(message)
 
 internal enum class NodeEventSendOutcome {
   COMPLETED,

@@ -778,7 +778,10 @@ class NodeRuntime(
   }
 
   private fun notificationDeliveryIntervalMs(): Long {
-    val maxEvents = prefs.notificationForwardingMaxEventsPerMinute.value.coerceAtLeast(1).toLong()
+    val maxEvents =
+      prefs.notificationForwardingMaxEventsPerMinute.value
+        .coerceAtLeast(1)
+        .toLong()
     return (60_000L + maxEvents - 1L) / maxEvents
   }
 
