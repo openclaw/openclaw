@@ -103,6 +103,7 @@ describe("exec approvals gateway methods", () => {
         makeNodeSession({
           nodeId: "node-no-approvals",
           declaredCommands: ["system.run", "system.which"],
+          commands: ["system.run", "system.which"],
         }),
       ),
       invoke: nodeRegistryInvokeMock,
@@ -139,6 +140,7 @@ describe("exec approvals gateway methods", () => {
         makeNodeSession({
           nodeId: "node-capable",
           declaredCommands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
+          commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
         }),
       ),
       invoke: nodeRegistryInvokeMock,
@@ -172,6 +174,7 @@ describe("exec approvals gateway methods", () => {
         makeNodeSession({
           nodeId: "node-capable",
           declaredCommands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
+          commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
         }),
       ),
       invoke: nodeRegistryInvokeMock,
@@ -201,6 +204,7 @@ describe("exec approvals gateway methods", () => {
         makeNodeSession({
           nodeId: "node-no-approvals",
           declaredCommands: ["system.run", "system.which"],
+          commands: ["system.run", "system.which"],
         }),
       ),
       invoke: nodeRegistryInvokeMock,

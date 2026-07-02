@@ -112,11 +112,11 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
   }
-  // Use declaredCommands (raw advertised commands) rather than commands
-  // (filtered effective surface) so capable nodes are not falsely rejected
-  // when gateway command reconciliation filters out exec approvals commands.
+  // Check the effective approved command surface. NODE_EXEC_APPROVALS_COMMANDS
+  // are part of SYSTEM_COMMANDS so they survive gateway command reconciliation
+  // for node hosts that advertise them.
   const node = params.context.nodeRegistry.get(nodeId);
-  if (node && !node.declaredCommands.includes(params.command)) {
+  if (node && !node.commands.includes(params.command)) {
     params.respond(
       false,
       undefined,
@@ -125,13 +125,7 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
         `Node ${nodeId} does not support exec approvals management. ` +
           `The node must advertise ${params.command}, or the operator must edit ` +
           `the node host approvals file directly.`,
-        {
-          details: {
-            nodeId,
-            missingCommand: params.command,
-            declaredCommands: node.declaredCommands,
-          },
-        },
+        { details: { nodeId, missingCommand: params.command, nodeCommands: node.commands } },
       ),
     );
     return;
