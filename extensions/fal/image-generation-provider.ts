@@ -34,11 +34,12 @@ const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const FAL_KREA_2_MODEL_PREFIX = "krea/v2/";
 const FAL_KREA_2_MEDIUM_MODEL = "krea/v2/medium/text-to-image";
 const FAL_KREA_2_LARGE_MODEL = "krea/v2/large/text-to-image";
-const FAL_NANO_BANANA_2_MODEL = "fal-ai/nano-banana-2";
+const FAL_NANO_BANANA_MODEL = "fal-ai/nano-banana";
 const FAL_NANO_BANANA_2_LITE_MODEL = "google/nano-banana-2-lite";
 const FAL_GROK_IMAGINE_MODEL = "xai/grok-imagine-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
 const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 10;
+const NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES = 3;
 const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
 const GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES = 3;
 const KREA_STYLE_REFERENCE_MAX_INPUT_IMAGES = 10;
@@ -74,6 +75,18 @@ const KREA_SUPPORTED_ASPECT_RATIOS = [
   "16:9",
   "2.35:1",
   "4:5",
+  "2:3",
+  "9:16",
+] as const;
+const NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS = [
+  "21:9",
+  "16:9",
+  "3:2",
+  "4:3",
+  "5:4",
+  "1:1",
+  "4:5",
+  "3:4",
   "2:3",
   "9:16",
 ] as const;
@@ -230,8 +243,22 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       defaultBody: { creativity: "medium" },
     };
   }
-  if (model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-")) {
-    const isNanoBanana = model.startsWith("fal-ai/nano-banana-");
+  if (model === FAL_NANO_BANANA_MODEL || model.startsWith(`${FAL_NANO_BANANA_MODEL}/`)) {
+    return {
+      geometry: "native_aspect_ratio",
+      aspectRatios: NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS,
+      resolutions: [],
+      referenceImages: "image_urls",
+      maxInputImages: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
+      referenceLimitLabel: "fal Nano Banana",
+      referenceLimitNoun: "reference image",
+      appendEditPath: "edit",
+      supportsCount: true,
+      supportsOutputFormat: true,
+    };
+  }
+  if (model.startsWith("openai/gpt-image-") || model.startsWith(`${FAL_NANO_BANANA_MODEL}-`)) {
+    const isNanoBanana = model.startsWith(`${FAL_NANO_BANANA_MODEL}-`);
     return {
       geometry: isNanoBanana ? "native_aspect_ratio" : "image_size",
       ...(isNanoBanana ? { aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS } : {}),
@@ -628,24 +655,15 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         maxCount: 4,
         maxInputImages: 1,
         maxInputImagesByModel: {
-          "openai/gpt-image-1": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-1/edit": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-1-mini": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-1-mini/edit": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-1.5": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-1.5/edit": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-2": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          "openai/gpt-image-2/edit": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
-          [FAL_KREA_2_MEDIUM_MODEL]: KREA_STYLE_REFERENCE_MAX_INPUT_IMAGES,
-          [FAL_KREA_2_LARGE_MODEL]: KREA_STYLE_REFERENCE_MAX_INPUT_IMAGES,
-          [FAL_NANO_BANANA_2_MODEL]: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
-          [`${FAL_NANO_BANANA_2_MODEL}/edit`]: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
+          [FAL_NANO_BANANA_MODEL]: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
+          [`${FAL_NANO_BANANA_MODEL}/edit`]: NANO_BANANA_LEGACY_EDIT_MAX_INPUT_IMAGES,
+        },
+        maxInputImagesByModelPrefix: {
+          "openai/gpt-image-": GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
+          [FAL_KREA_2_MODEL_PREFIX]: KREA_STYLE_REFERENCE_MAX_INPUT_IMAGES,
+          [`${FAL_NANO_BANANA_MODEL}-`]: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
           [FAL_NANO_BANANA_2_LITE_MODEL]: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
-          [`${FAL_NANO_BANANA_2_LITE_MODEL}/edit`]: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
           [FAL_GROK_IMAGINE_MODEL]: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
-          [`${FAL_GROK_IMAGINE_MODEL}/edit`]: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
-          [`${FAL_GROK_IMAGINE_MODEL}/quality`]: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
-          [`${FAL_GROK_IMAGINE_MODEL}/quality/edit`]: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
         },
         supportsSize: true,
         supportsAspectRatio: true,
@@ -659,6 +677,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         },
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         aspectRatiosByModel: {
+          [FAL_NANO_BANANA_MODEL]: [...NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS],
+          [`${FAL_NANO_BANANA_MODEL}/edit`]: [...NANO_BANANA_LEGACY_SUPPORTED_ASPECT_RATIOS],
           [FAL_NANO_BANANA_2_LITE_MODEL]: [...NANO_BANANA_SUPPORTED_ASPECT_RATIOS],
           [`${FAL_NANO_BANANA_2_LITE_MODEL}/edit`]: [...NANO_BANANA_SUPPORTED_ASPECT_RATIOS],
           [FAL_GROK_IMAGINE_MODEL]: [...GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS],
@@ -670,6 +690,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         resolutionsByModel: {
           [FAL_KREA_2_MEDIUM_MODEL]: [],
           [FAL_KREA_2_LARGE_MODEL]: [],
+          [FAL_NANO_BANANA_MODEL]: [],
+          [`${FAL_NANO_BANANA_MODEL}/edit`]: [],
           [FAL_NANO_BANANA_2_LITE_MODEL]: [],
           [`${FAL_NANO_BANANA_2_LITE_MODEL}/edit`]: [],
           [FAL_GROK_IMAGINE_MODEL]: [...GROK_IMAGINE_SUPPORTED_RESOLUTIONS],

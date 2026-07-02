@@ -99,6 +99,7 @@ type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
   maxInputImagesByModel?: Readonly<Record<string, number>>;
+  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
 };
 
 type ImageGenerationGeometryCapabilities = {

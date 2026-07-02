@@ -53,6 +53,8 @@ describe("fal image-generation provider", () => {
 
     expect(grokRatios).toContain("2:1");
     expect(grokRatios).toContain("20:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).toContain("21:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).not.toContain("4:1");
     expect(grokResolutions).toEqual(["1K", "2K"]);
     expect(geometry?.aspectRatiosByModel?.["xai/grok-imagine-image/edit"]).toEqual(grokRatios);
     expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality/edit"]).toEqual(
@@ -61,10 +63,11 @@ describe("fal image-generation provider", () => {
     expect(nanoResolutions).toEqual([]);
     expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
     expect(edit.maxInputImages).toBe(1);
-    expect(edit.maxInputImagesByModel?.["google/nano-banana-2-lite"]).toBe(14);
-    expect(edit.maxInputImagesByModel?.["xai/grok-imagine-image"]).toBe(3);
-    expect(edit.maxInputImagesByModel?.["xai/grok-imagine-image/quality"]).toBe(3);
-    expect(edit.maxInputImagesByModel?.["openai/gpt-image-2/edit"]).toBe(10);
+    expect(edit.maxInputImagesByModel?.["fal-ai/nano-banana"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["fal-ai/nano-banana-"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["google/nano-banana-2-lite"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["xai/grok-imagine-image"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["openai/gpt-image-"]).toBe(10);
     expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality"]).toEqual(
       grokResolutions,
     );
@@ -505,7 +508,10 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("routes Nano Banana 2 edits through /edit with NB2 geometry", async () => {
+  it.each([
+    { model: "fal-ai/nano-banana", resolution: undefined },
+    { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
+  ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -536,11 +542,11 @@ describe("fal image-generation provider", () => {
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
       provider: "fal",
-      model: "fal-ai/nano-banana-2",
+      model,
       prompt: "blend these references",
       cfg: {},
       aspectRatio: "9:16",
-      resolution: "2K",
+      ...(resolution ? { resolution } : {}),
       inputImages: [
         { buffer: Buffer.from("first"), mimeType: "image/png" },
         { buffer: Buffer.from("second"), mimeType: "image/png" },
@@ -549,11 +555,11 @@ describe("fal image-generation provider", () => {
 
     expectFalJsonPost({
       call: 1,
-      url: "https://fal.run/fal-ai/nano-banana-2/edit",
+      url: `https://fal.run/${model}/edit`,
       body: {
         prompt: "blend these references",
         aspect_ratio: "9:16",
-        resolution: "2K",
+        ...(resolution ? { resolution } : {}),
         num_images: 1,
         output_format: "png",
         image_urls: [
@@ -564,7 +570,18 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("rejects Nano Banana 2 edits above 14 reference images", async () => {
+  it.each([
+    {
+      model: "fal-ai/nano-banana",
+      inputCount: 4,
+      error: "fal Nano Banana supports at most 3 reference images",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      inputCount: 15,
+      error: "fal Nano Banana 2 supports at most 14 reference images",
+    },
+  ])("rejects $model edits above its reference limit", async ({ model, inputCount, error }) => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -576,15 +593,15 @@ describe("fal image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "fal",
-        model: "fal-ai/nano-banana-2",
+        model,
         prompt: "too many references",
         cfg: {},
-        inputImages: Array.from({ length: 15 }, () => ({
+        inputImages: Array.from({ length: inputCount }, () => ({
           buffer: Buffer.from("ref"),
           mimeType: "image/png",
         })),
       }),
-    ).rejects.toThrow("fal Nano Banana 2 supports at most 14 reference images");
+    ).rejects.toThrow(error);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 

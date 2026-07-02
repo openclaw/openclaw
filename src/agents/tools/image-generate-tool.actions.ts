@@ -48,9 +48,9 @@ function listSupportedImageGenerationModes(provider: ImageGenerationProvider): s
 function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
-    const modelLimits = Object.values(
-      provider.capabilities.edit.maxInputImagesByModel ?? {},
-    ).filter((value) => Number.isFinite(value));
+    const modelLimits = Object.values(provider.capabilities.edit.maxInputImagesByModel ?? {})
+      .concat(Object.values(provider.capabilities.edit.maxInputImagesByModelPrefix ?? {}))
+      .filter((value) => Number.isFinite(value));
     const declaredLimits = [
       ...(typeof provider.capabilities.edit.maxInputImages === "number"
         ? [provider.capabilities.edit.maxInputImages]

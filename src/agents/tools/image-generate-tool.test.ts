@@ -261,6 +261,7 @@ function createFalEditProvider(params?: {
   defaultModel?: string;
   maxInputImages?: number;
   maxInputImagesByModel?: Readonly<Record<string, number>>;
+  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
   omitMaxInputImages?: boolean;
   models?: string[];
   supportsAspectRatio?: boolean;
@@ -283,6 +284,9 @@ function createFalEditProvider(params?: {
         ...(!params?.omitMaxInputImages ? { maxInputImages: params?.maxInputImages ?? 1 } : {}),
         ...(params?.maxInputImagesByModel
           ? { maxInputImagesByModel: params.maxInputImagesByModel }
+          : {}),
+        ...(params?.maxInputImagesByModelPrefix
+          ? { maxInputImagesByModelPrefix: params.maxInputImagesByModelPrefix }
           : {}),
         supportsSize: true,
         supportsAspectRatio: params?.supportsAspectRatio ?? false,
@@ -1579,6 +1583,7 @@ describe("createImageGenerateTool", () => {
       model: "openai/gpt-image-2/edit",
       primaryRef: "FAL/openai/gpt-image-2/edit",
       maxInputImages: 10,
+      limitPrefix: "openai/gpt-image-",
       disablesResolution: false,
     },
   ])("accepts $model edits up to its reference limit", async (testCase) => {
@@ -1588,7 +1593,9 @@ describe("createImageGenerateTool", () => {
         defaultModel: model,
         models: [model],
         maxInputImages: 1,
-        maxInputImagesByModel: { [model]: maxInputImages },
+        ...(testCase.limitPrefix
+          ? { maxInputImagesByModelPrefix: { [testCase.limitPrefix]: maxInputImages } }
+          : { maxInputImagesByModel: { [model]: maxInputImages } }),
         ...(testCase.disablesResolution ? { resolutionsByModel: { [model]: [] } } : {}),
       }),
     ]);
@@ -2559,9 +2566,9 @@ describe("createImageGenerateTool", () => {
         defaultModel: "fal-ai/flux/dev",
         models: ["fal-ai/flux/dev", "google/nano-banana-2-lite"],
         maxInputImages: 1,
-        maxInputImagesByModel: {
+        maxInputImagesByModelPrefix: {
           "fal-ai/flux/dev": 1,
-          "google/nano-banana-2-lite": 14,
+          "google/nano-banana": 14,
         },
       }),
     ]);

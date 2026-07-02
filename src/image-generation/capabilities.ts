@@ -5,8 +5,21 @@ export function resolveImageGenerationMaxInputImages(params: {
   model?: string;
 }): number | undefined {
   const model = params.model?.trim();
+  let prefixLimit: number | undefined;
+  let prefixLength = -1;
+  if (model) {
+    for (const [prefix, limit] of Object.entries(
+      params.provider.capabilities.edit.maxInputImagesByModelPrefix ?? {},
+    )) {
+      if (prefix.length > prefixLength && model.startsWith(prefix)) {
+        prefixLimit = limit;
+        prefixLength = prefix.length;
+      }
+    }
+  }
   return (
     (model ? params.provider.capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
+    prefixLimit ??
     params.provider.capabilities.edit.maxInputImages
   );
 }
