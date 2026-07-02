@@ -50,6 +50,25 @@ async function readExistingSourcePage(pagePath: string): Promise<string> {
   }
 }
 
+function isMissingSourcePageError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+async function readExistingSourcePageTitle(pagePath: string, fallbackName: string) {
+  try {
+    return readWikiPageTitle(await fs.readFile(pagePath, "utf8"), fallbackName);
+  } catch {
+    try {
+      return readWikiPageTitle(await fs.readFile(pagePath, "utf8"), fallbackName);
+    } catch (retryError) {
+      if (isMissingSourcePageError(retryError)) {
+        return undefined;
+      }
+      throw retryError;
+    }
+  }
+}
+
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
@@ -65,10 +84,8 @@ export async function ingestMemoryWikiSource(params: {
     title,
     baseSlug: slugifyWikiPageStem(title),
     readExistingTitleBySlug: async (candidate) =>
-      readWikiPageTitle(
-        await fs
-          .readFile(path.join(params.config.vault.path, "sources", `${candidate}.md`), "utf8")
-          .catch(() => ""),
+      readExistingSourcePageTitle(
+        path.join(params.config.vault.path, "sources", `${candidate}.md`),
         candidate,
       ),
   });

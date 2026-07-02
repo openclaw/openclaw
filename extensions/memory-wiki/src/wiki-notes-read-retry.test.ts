@@ -283,6 +283,91 @@ describe("memory-wiki existing-page read retry", () => {
     expect(after).toContain("privacyTier: sensitive");
   });
 
+  it("keeps colliding syntheses separate after a transient title-read failure", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-apply-collision-read-retry-",
+    });
+
+    const first = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Q3 Report",
+        body: "Revenue grew 12 percent.",
+        sourceIds: ["source.finance"],
+      },
+    });
+
+    securityRuntimeMock.failReadTextOnceFor = "syntheses/q3-report.md";
+    securityRuntimeMock.readTextOnceError = new FsSafeError(
+      "not-found",
+      "page temporarily missing",
+    );
+
+    const second = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Q3-Report",
+        body: "Headcount fell 4 percent.",
+        sourceIds: ["source.hr"],
+      },
+    });
+
+    const firstAfter = await fs.readFile(path.join(rootDir, first.pagePath), "utf8");
+    const secondAfter = await fs.readFile(path.join(rootDir, second.pagePath), "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    expect(second.pagePath).not.toBe(first.pagePath);
+    expect(firstAfter).toContain("Revenue grew 12 percent.");
+    expect(secondAfter).toContain("Headcount fell 4 percent.");
+  });
+
+  it("keeps colliding ingested sources separate after a transient title-read failure", async () => {
+    const suiteRoot = await createTempDir("memory-wiki-ingest-collision-read-retry-");
+    const firstInput = path.join(suiteRoot, "first.txt");
+    const secondInput = path.join(suiteRoot, "second.txt");
+    await fs.writeFile(firstInput, "finance source body\n", "utf8");
+    await fs.writeFile(secondInput, "headcount source body\n", "utf8");
+    const { config } = await createVault({ rootDir: path.join(suiteRoot, "vault") });
+
+    const first = await ingestMemoryWikiSource({
+      config,
+      inputPath: firstInput,
+      title: "Q3 Report",
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const firstPagePath = path.join(config.vault.path, first.pagePath);
+    const originalReadFile = fs.readFile.bind(fs);
+    let injectedFailure = false;
+    vi.spyOn(fs, "readFile").mockImplementation(
+      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+        if (!injectedFailure && args[0] === firstPagePath && args[1] === "utf8") {
+          injectedFailure = true;
+          throw Object.assign(new Error("page temporarily missing"), { code: "ENOENT" });
+        }
+        return originalReadFile(...args);
+      },
+    );
+
+    const second = await ingestMemoryWikiSource({
+      config,
+      inputPath: secondInput,
+      title: "Q3-Report",
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    const firstAfter = await originalReadFile(firstPagePath, "utf8");
+    const secondAfter = await originalReadFile(
+      path.join(config.vault.path, second.pagePath),
+      "utf8",
+    );
+    expect(injectedFailure).toBe(true);
+    expect(second.pagePath).not.toBe(first.pagePath);
+    expect(firstAfter).toContain("finance source body");
+    expect(secondAfter).toContain("headcount source body");
+  });
+
   it("does not treat a path-alias policy failure as a missing synthesis page", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-path-alias-" });
 
