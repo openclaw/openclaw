@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements tool behavior.
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -111,20 +112,106 @@ async function syncImportedSourcesIfNeeded(
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
+  agentChatType?: string;
   sandboxed?: boolean;
 };
+
+function wikiSearchToolDescription(memoryContext: WikiToolMemoryContext): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: memoryContext.agentSessionKey,
+      chatType: memoryContext.agentChatType,
+    })
+  ) {
+    return "On-demand wiki recall tool for shared sessions: search wiki pages and imported memory only when the user explicitly asks for long-term memory/wiki context or a visible session instruction requests it. Shared search may include the active memory corpus when enabled.";
+  }
+  return "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.";
+}
+
+function wikiGetToolDescription(memoryContext: WikiToolMemoryContext): string {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: memoryContext.agentSessionKey,
+      chatType: memoryContext.agentChatType,
+    })
+  ) {
+    return "On-demand wiki exact-read tool for shared sessions: read wiki pages or imported memory only when the user explicitly asks for long-term memory/wiki context or a visible session instruction requests it. Shared search may fall back to the active memory corpus when enabled.";
+  }
+  return "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.";
+}
+
+function canMutateWikiMemory(memoryContext: WikiToolMemoryContext): boolean {
+  return shouldIncludeLongTermMemoryByDefault({
+    sessionKey: memoryContext.agentSessionKey,
+    chatType: memoryContext.agentChatType,
+  });
+}
+
+async function syncWikiReadSnapshotIfAllowed(
+  config: ResolvedMemoryWikiConfig,
+  appConfig: OpenClawConfig | undefined,
+  memoryContext: WikiToolMemoryContext,
+): Promise<boolean> {
+  if (!canMutateWikiMemory(memoryContext)) {
+    return false;
+  }
+  await syncImportedSourcesIfNeeded(config, appConfig);
+  return true;
+}
+
+function wikiRestrictedResult(toolName: "wiki_apply" | "wiki_lint" | "wiki_status") {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text:
+          toolName === "wiki_status"
+            ? "wiki_status is limited in shared sessions because private wiki status can sync sources and expose private vault metadata. Use a private/direct session for full wiki status."
+            : `${toolName} was not run because shared sessions cannot mutate private wiki memory. Use a private/direct session for durable personal wiki changes.`,
+      },
+    ],
+    details: {
+      action: "rejected",
+      reason: "shared_session_explicit_only",
+    },
+  };
+}
+
+function wikiStatusToolDescription(memoryContext: WikiToolMemoryContext): string {
+  if (!canMutateWikiMemory(memoryContext)) {
+    return "Limited wiki status for shared sessions. Full private wiki vault status is disabled because it may sync sources and expose private vault metadata.";
+  }
+  return "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.";
+}
+
+function wikiLintToolDescription(memoryContext: WikiToolMemoryContext): string {
+  if (!canMutateWikiMemory(memoryContext)) {
+    return "Wiki lint writes private wiki reports and is disabled for shared sessions. Use a private/direct session before running durable wiki maintenance.";
+  }
+  return "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.";
+}
+
+function wikiApplyToolDescription(memoryContext: WikiToolMemoryContext): string {
+  if (!canMutateWikiMemory(memoryContext)) {
+    return "Wiki apply writes private wiki memory and is disabled for shared sessions. Use a private/direct session before applying durable wiki changes.";
+  }
+  return "Apply narrow wiki mutations for syntheses and page metadata without freeform markdown surgery.";
+}
 
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_status",
     label: "Wiki Status",
-    description:
-      "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
+    description: wikiStatusToolDescription(memoryContext),
     parameters: WikiStatusSchema,
     execute: async () => {
+      if (!canMutateWikiMemory(memoryContext)) {
+        return wikiRestrictedResult("wiki_status");
+      }
       await syncImportedSourcesIfNeeded(config, appConfig);
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
@@ -145,8 +232,7 @@ export function createWikiSearchTool(
   return {
     name: "wiki_search",
     label: "Wiki Search",
-    description:
-      "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.",
+    description: wikiSearchToolDescription(memoryContext),
     parameters: WikiSearchSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as {
@@ -156,13 +242,14 @@ export function createWikiSearchTool(
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
         mode?: (typeof WIKI_SEARCH_MODES)[number];
       };
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      const initializeVault = await syncWikiReadSnapshotIfAllowed(config, appConfig, memoryContext);
       const results = await searchMemoryWiki({
         config,
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
+        initializeVault,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
@@ -189,14 +276,17 @@ export function createWikiSearchTool(
 export function createWikiLintTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_lint",
     label: "Wiki Lint",
-    description:
-      "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
+    description: wikiLintToolDescription(memoryContext),
     parameters: WikiLintSchema,
     execute: async () => {
+      if (!canMutateWikiMemory(memoryContext)) {
+        return wikiRestrictedResult("wiki_lint");
+      }
       await syncImportedSourcesIfNeeded(config, appConfig);
       const result = await lintMemoryWikiVault(config);
       const contradictions = result.issuesByCategory.contradictions.length;
@@ -231,14 +321,17 @@ export function createWikiLintTool(
 export function createWikiApplyTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  memoryContext: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_apply",
     label: "Wiki Apply",
-    description:
-      "Apply narrow wiki mutations for syntheses and page metadata without freeform markdown surgery.",
+    description: wikiApplyToolDescription(memoryContext),
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
+      if (!canMutateWikiMemory(memoryContext)) {
+        return wikiRestrictedResult("wiki_apply");
+      }
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
       await syncImportedSourcesIfNeeded(config, appConfig);
       const result = await applyMemoryWikiMutation({ config, mutation });
@@ -268,8 +361,7 @@ export function createWikiGetTool(
   return {
     name: "wiki_get",
     label: "Wiki Get",
-    description:
-      "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.",
+    description: wikiGetToolDescription(memoryContext),
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as {
@@ -279,13 +371,14 @@ export function createWikiGetTool(
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
       };
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      const initializeVault = await syncWikiReadSnapshotIfAllowed(config, appConfig, memoryContext);
       const result = await getMemoryWikiPage({
         config,
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
+        initializeVault,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

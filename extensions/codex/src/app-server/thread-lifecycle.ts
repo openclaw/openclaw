@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
   isMaxReasoningCodexModel,
@@ -130,6 +131,23 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
 const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
+
+const CODEX_MEMORY_DISABLED_THREAD_CONFIG: JsonObject = {
+  "memories.use_memories": false,
+  "memories.generate_memories": false,
+};
+
+type LongTermMemoryDefaultPolicy = "include" | "explicit-only";
+
+export function buildCodexNativeMemoryThreadConfigForRun(params?: {
+  sessionKey?: string | null;
+  chatType?: string | null;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy | null;
+}): JsonObject | undefined {
+  return shouldIncludeLongTermMemoryByDefault(params)
+    ? undefined
+    : CODEX_MEMORY_DISABLED_THREAD_CONFIG;
+}
 
 export type CodexThreadLifecycleTimingSpan = {
   name: string;
@@ -356,6 +374,12 @@ export async function startOrResumeThread(params: {
   const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
     params.environmentSelection,
   );
+  const nativeMemoryDefaultPolicy = shouldIncludeLongTermMemoryByDefault({
+    sessionKey: params.params.sessionKey,
+    chatType: params.params.chatType,
+  })
+    ? "include"
+    : "explicit-only";
   let binding = await lifecycleTiming.measure("read-binding", () =>
     readCodexAppServerBinding(params.params.sessionFile, {
       authProfileStore: params.params.authProfileStore,
@@ -374,6 +398,18 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server runtime identity changed; starting a new thread", {
       threadId: binding.threadId,
       connectionClass: params.appServer.connectionClass,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    isNativeMemoryDefaultPolicyBindingStale(binding, nativeMemoryDefaultPolicy)
+  ) {
+    embeddedAgentLog.debug("codex app-server memory policy changed; starting a new thread", {
+      threadId: binding.threadId,
+      previous: binding.nativeMemoryDefaultPolicy,
+      next: nativeMemoryDefaultPolicy,
     });
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
@@ -703,6 +739,7 @@ export async function startOrResumeThread(params: {
               pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+              nativeMemoryDefaultPolicy,
               contextEngine: contextEngineBinding,
               environmentSelectionFingerprint,
               createdAt: resumeBinding.createdAt,
@@ -754,6 +791,7 @@ export async function startOrResumeThread(params: {
           pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
+          nativeMemoryDefaultPolicy,
           contextEngine: contextEngineBinding,
           environmentSelectionFingerprint,
           lifecycle: {
@@ -856,6 +894,7 @@ export async function startOrResumeThread(params: {
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+          nativeMemoryDefaultPolicy,
           contextEngine: contextEngineBinding,
           environmentSelectionFingerprint,
           createdAt,
@@ -907,6 +946,7 @@ export async function startOrResumeThread(params: {
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+    nativeMemoryDefaultPolicy,
     contextEngine: contextEngineBinding,
     environmentSelectionFingerprint,
     createdAt,
@@ -930,6 +970,15 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
     return false;
   }
   return params.connectionClass === "remote" || Boolean(params.binding);
+}
+
+function isNativeMemoryDefaultPolicyBindingStale(
+  binding: CodexAppServerThreadBinding,
+  current: LongTermMemoryDefaultPolicy,
+): boolean {
+  return binding.nativeMemoryDefaultPolicy === undefined
+    ? current !== "include"
+    : binding.nativeMemoryDefaultPolicy !== current;
 }
 
 function isTransientWebSearchRestriction(
@@ -1382,6 +1431,10 @@ function buildCodexRuntimeThreadConfigForRun(
     nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
+  const memoryConfig = buildCodexNativeMemoryThreadConfigForRun({
+    sessionKey: params.sessionKey,
+    chatType: params.chatType,
+  });
   const baseConfig = buildCodexRuntimeThreadConfig(
     mergeCodexThreadConfigs(config, webSearchConfig),
     options,
@@ -1393,6 +1446,7 @@ function buildCodexRuntimeThreadConfigForRun(
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
+      memoryConfig,
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;

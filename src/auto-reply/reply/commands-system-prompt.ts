@@ -27,7 +27,11 @@ import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import {
+  resolveRuntimePolicySessionKey,
+  resolveTargetSessionChatType,
+  shouldPreferSessionEntryForTargetSession,
+} from "./runtime-policy-session-key.js";
 
 export type CommandsSystemPromptBundle = {
   systemPrompt: string;
@@ -164,11 +168,21 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     agentId: params.agentId,
   });
+  const chatType = resolveTargetSessionChatType({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    sessionEntry: targetSessionEntry,
+    preferSessionEntry: shouldPreferSessionEntryForTargetSession({
+      ctx: params.ctx,
+      sessionKey: params.sessionKey,
+    }),
+  });
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    chatType,
     agentId: sessionAgentId,
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({
@@ -201,6 +215,7 @@ export async function resolveCommandsSystemPromptBundle(
         agentId: sessionAgentId,
         workspaceDir,
         sessionKey: toolPolicySessionKey,
+        chatType,
         allowGatewaySubagentBinding: true,
         messageProvider: params.command.channel,
         groupId: targetSessionEntry?.groupId ?? undefined,
@@ -233,6 +248,7 @@ export async function resolveCommandsSystemPromptBundle(
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: targetSessionEntry?.sessionId,
+      chatType,
       host: "unknown",
       os: "unknown",
       arch: "unknown",

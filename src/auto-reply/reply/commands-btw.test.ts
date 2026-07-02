@@ -130,9 +130,11 @@ describe("handleBtwCommand", () => {
     params.ctx.SenderUsername = "rosita";
     params.ctx.SenderE164 = "+15550001";
     params.ctx.MessageThreadId = "thread-1";
+    params.ctx.ChatType = "group";
     params.agentDir = "/tmp/agent";
     params.sessionEntry = {
       sessionId: "session-1",
+      chatType: "direct",
       groupId: "group-1",
       parentSessionKey: "agent:main:parent",
       updatedAt: Date.now(),
@@ -149,6 +151,7 @@ describe("handleBtwCommand", () => {
       resolvedReasoningLevel: "off",
       messageChannel: "whatsapp",
       messageProvider: "whatsapp",
+      chatType: "group",
       agentAccountId: "account-1",
       sandboxSessionKey: "agent:main:runtime-policy",
       messageThreadId: "thread-1",
@@ -330,6 +333,82 @@ describe("handleBtwCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "target context", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the targeted transcript chat type for cross-session side questions", async () => {
+    const targetSessionKey = "agent:main:discord:group:ops";
+    const params = buildParams("/btw what changed?");
+    params.ctx.ChatType = "direct";
+    params.ctx.SessionKey = "agent:main:whatsapp:direct:operator";
+    params.ctx.CommandTargetSessionKey = targetSessionKey;
+    params.sessionKey = targetSessionKey;
+    params.sessionEntry = {
+      sessionId: "source-session",
+      chatType: "direct",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      [targetSessionKey]: {
+        sessionId: "target-session",
+        chatType: "group",
+        updatedAt: Date.now(),
+      },
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      chatType: "group",
+      sessionKey: targetSessionKey,
+    });
+  });
+
+  it("keeps explicit-only targets restrictive even when the command source is direct", async () => {
+    const targetSessionKey = "agent:main:whatsapp:direct:target-user";
+    const params = buildParams("/btw what changed?");
+    params.ctx.ChatType = "direct";
+    params.ctx.SessionKey = "agent:main:whatsapp:direct:operator";
+    params.ctx.CommandTargetSessionKey = targetSessionKey;
+    params.sessionKey = targetSessionKey;
+    params.sessionStore = {
+      [targetSessionKey]: {
+        sessionId: "target-session",
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        updatedAt: Date.now(),
+      },
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      chatType: "group",
+      sessionKey: targetSessionKey,
+    });
+  });
+
+  it("keeps live direct current-session side questions direct", async () => {
+    const sessionKey = "agent:main:whatsapp:direct:operator";
+    const params = buildParams("/btw what changed?");
+    params.ctx.ChatType = "direct";
+    params.ctx.SessionKey = sessionKey;
+    params.sessionKey = sessionKey;
+    params.sessionEntry = {
+      sessionId: "current-session",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "current context" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      chatType: "direct",
+      sessionKey,
     });
   });
 });

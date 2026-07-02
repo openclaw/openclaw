@@ -1,4 +1,5 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
@@ -18,6 +19,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
+import { revokeAttachGrantsForSession } from "../gateway/mcp-grant-store.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -54,6 +56,14 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import {
+  resolveLongTermMemoryRuntimePolicyContext,
+  resolveLongTermMemoryRunPolicy,
+  resolveLongTermMemoryTargetChatType,
+  resolvePolicyIsolatedTranscriptPath,
+  resolveSessionMemoryBoundaryPlan,
+} from "../sessions/session-memory-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -729,9 +739,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
+    strictRead: true,
   });
 
-  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
+  const sessionId = sessionResolution.sessionId;
+  const { sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
     sessionResolution;
   const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
@@ -874,7 +886,6 @@ async function agentCommandInternal(
     verboseOverride,
     timeoutMs,
     runTimeoutOverrideMs,
-    sessionId,
     sessionKey,
     sessionStore,
     storePath,
@@ -894,6 +905,7 @@ async function agentCommandInternal(
     manifestMetadataSnapshot,
     modelManifestContext,
   } = prepared;
+  let sessionId = prepared.sessionId;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
@@ -901,6 +913,7 @@ async function agentCommandInternal(
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
+  const runContext = resolveAgentRunContext(opts);
 
   try {
     if (opts.deliver === true) {
@@ -909,7 +922,7 @@ async function agentCommandInternal(
         entry: sessionEntry,
         sessionKey,
         channel: sessionEntry?.channel,
-        chatType: sessionEntry?.chatType,
+        chatType: resolveSessionEntryChatType(sessionEntry),
       });
       if (sendPolicy === "deny") {
         throw new Error("send blocked by session policy");
@@ -1004,6 +1017,77 @@ async function agentCommandInternal(
         }
 
         const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
+        const acpMemoryPolicy = resolveLongTermMemoryRuntimePolicyContext({
+          sessionKey,
+          liveChatType: runContext.chatType,
+          storedChatType: resolveSessionEntryChatType(sessionEntry),
+          longTermMemoryDefaultPolicy: sessionEntry?.longTermMemoryDefaultPolicy,
+        });
+        if (sessionStore && sessionKey && sessionEntry && !suppressVisibleSessionEffects) {
+          const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
+          const resolvedSessionFile = await resolveSessionTranscriptFile({
+            sessionId,
+            sessionKey,
+            sessionStore,
+            storePath,
+            sessionEntry,
+            agentId: sessionAgentId,
+            threadId: opts.threadId,
+          });
+          const resolvedBoundaryEntry = resolvedSessionFile.sessionEntry;
+          if (!resolvedBoundaryEntry) {
+            throw new Error("Session memory boundary could not be resolved; retry the request.");
+          }
+          const plan = resolveSessionMemoryBoundaryPlan({
+            currentEntry: resolvedBoundaryEntry,
+            sessionKey,
+            sessionFile: resolvedSessionFile.sessionFile,
+            storedChatType: resolveSessionEntryChatType(resolvedBoundaryEntry),
+            hasPersistedTranscriptContent:
+              await attemptExecutionRuntime.sessionFileHasMemoryBoundaryContent(
+                resolvedSessionFile.sessionFile,
+              ),
+            runMemoryPolicy: acpMemoryPolicy.longTermMemoryDefaultPolicy,
+            runMemoryChatType: acpMemoryPolicy.chatType,
+          });
+          if (plan) {
+            if (!storePath) {
+              throw new Error("Session memory boundary cannot be persisted; retry the request.");
+            }
+            const now = Date.now();
+            const nextEntry: SessionEntry = {
+              ...plan.currentEntry,
+              sessionId: plan.nextSessionId,
+              sessionFile: plan.nextSessionFile,
+              longTermMemoryDefaultPolicy: plan.runMemoryPolicy,
+              updatedAt: now,
+              sessionStartedAt: plan.currentEntry.sessionStartedAt ?? now,
+            };
+            const persisted = await persistSessionEntryBase({
+              sessionStore,
+              sessionKey,
+              storePath,
+              entry: nextEntry,
+              shouldPersist: (current) =>
+                current !== undefined &&
+                current.sessionId === plan.currentEntry.sessionId &&
+                current.sessionFile === plan.expectedSessionFile &&
+                current.longTermMemoryDefaultPolicy === plan.expectedPolicy,
+            });
+            const persistedMatchesMemoryBoundary =
+              persisted?.sessionId === nextEntry.sessionId &&
+              persisted?.sessionFile === nextEntry.sessionFile &&
+              persisted?.longTermMemoryDefaultPolicy === nextEntry.longTermMemoryDefaultPolicy;
+            if (!persistedMatchesMemoryBoundary) {
+              throw new Error(
+                "Session memory boundary changed during ACP setup; retry the request.",
+              );
+            }
+            sessionEntry = persisted;
+            sessionId = persisted.sessionId;
+            revokeAttachGrantsForSession(sessionKey);
+          }
+        }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         await acpManager.runTurn({
           cfg,
@@ -1013,6 +1097,7 @@ async function agentCommandInternal(
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
+          memoryPolicy: acpMemoryPolicy,
           onLifecycle: (event) => {
             if (event.type === "prompt_submitted") {
               attemptExecutionRuntime.emitAcpPromptSubmitted({
@@ -1116,6 +1201,8 @@ async function agentCommandInternal(
           sessionEntry: transcriptSessionEntry,
           sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
           storePath: suppressVisibleSessionEffects ? undefined : storePath,
+          expectedSessionFile: transcriptSessionEntry?.sessionFile,
+          expectedLongTermMemoryDefaultPolicy: transcriptSessionEntry?.longTermMemoryDefaultPolicy,
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
@@ -1282,7 +1369,6 @@ async function agentCommandInternal(
       allowPluginNormalization: pluginsEnabled,
       ...modelManifestContext,
     });
-    const runContext = resolveAgentRunContext(opts);
     const { provider: defaultProvider, model: defaultModel } = normalizeAgentCommandDefaultModelRef(
       cfg,
       configuredDefaultRef.provider,
@@ -1431,7 +1517,7 @@ async function agentCommandInternal(
               sessionEntry?.lastChannel ??
               sessionEntry?.origin?.provider,
             groupId: channelOverrideGroupId,
-            groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+            groupChatType: resolveSessionEntryChatType(sessionEntry),
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
@@ -1681,6 +1767,85 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
+    const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+    let attemptTranscriptStartedFresh = false;
+    let runMemoryChatType = runContext.chatType ?? resolveSessionEntryChatType(sessionEntry);
+    if (sessionStore && sessionKey && !suppressVisibleSessionEffects && sessionEntry) {
+      const storedChatType = resolveSessionEntryChatType(sessionEntry);
+      const hasPersistedTranscriptContent =
+        await attemptExecutionRuntime.sessionFileHasMemoryBoundaryContent(sessionFile);
+      runMemoryChatType = resolveLongTermMemoryTargetChatType({
+        sessionKey,
+        liveChatType: runContext.chatType,
+        storedChatType,
+        longTermMemoryDefaultPolicy: sessionEntry.longTermMemoryDefaultPolicy,
+      });
+      const runMemoryPolicy = resolveLongTermMemoryRunPolicy({
+        sessionKey,
+        liveChatType: runContext.chatType,
+        storedChatType,
+        longTermMemoryDefaultPolicy: sessionEntry.longTermMemoryDefaultPolicy,
+      });
+      const storedMemoryPolicy =
+        sessionEntry.longTermMemoryDefaultPolicy ??
+        (hasPersistedTranscriptContent ? "include" : runMemoryPolicy);
+      const needsTranscriptRotation = storedMemoryPolicy !== runMemoryPolicy;
+      const needsPolicyStamp = sessionEntry.longTermMemoryDefaultPolicy !== runMemoryPolicy;
+      const previousEntry = sessionEntry;
+      const nextSessionFile = needsTranscriptRotation
+        ? resolvePolicyIsolatedTranscriptPath({
+            sessionFile,
+            policy: runMemoryPolicy,
+          })
+        : sessionFile;
+      const nextSessionId = needsTranscriptRotation ? crypto.randomUUID() : previousEntry.sessionId;
+      attemptTranscriptStartedFresh = needsTranscriptRotation;
+
+      if (needsTranscriptRotation || needsPolicyStamp) {
+        const now = Date.now();
+        const nextEntry: SessionEntry = {
+          ...previousEntry,
+          sessionId: nextSessionId,
+          sessionFile: nextSessionFile,
+          longTermMemoryDefaultPolicy: runMemoryPolicy,
+          updatedAt: now,
+          sessionStartedAt: previousEntry.sessionStartedAt ?? now,
+        };
+        const persisted = await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          entry: nextEntry,
+          shouldPersist: (current) =>
+            current !== undefined &&
+            current.sessionId === previousEntry.sessionId &&
+            current.sessionFile === previousEntry.sessionFile &&
+            current.longTermMemoryDefaultPolicy === previousEntry.longTermMemoryDefaultPolicy,
+        });
+        const persistedMatchesMemoryBoundary =
+          persisted?.sessionId === nextEntry.sessionId &&
+          persisted?.sessionFile === nextEntry.sessionFile &&
+          persisted?.longTermMemoryDefaultPolicy === nextEntry.longTermMemoryDefaultPolicy;
+        if (!persistedMatchesMemoryBoundary) {
+          throw new Error("Session memory boundary changed during setup; retry the request.");
+        }
+        if (persistedMatchesMemoryBoundary && persisted) {
+          sessionEntry = persisted;
+          sessionFile = persisted.sessionFile ?? nextSessionFile;
+          sessionId = persisted.sessionId;
+          revokeAttachGrantsForSession(sessionKey);
+        }
+      }
+      if (!autoFallbackPrimaryProbeSessionEntry) {
+        sessionEntryForAttempt = sessionEntry;
+      } else if (sessionEntryForAttempt?.sessionId === sessionEntry?.sessionId) {
+        sessionEntryForAttempt = {
+          ...sessionEntryForAttempt,
+          sessionFile: sessionEntry?.sessionFile,
+          longTermMemoryDefaultPolicy: sessionEntry?.longTermMemoryDefaultPolicy,
+        };
+      }
+    }
     const attemptSessionFile = suppressVisibleSessionEffects
       ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
       : sessionFile;
@@ -1825,7 +1990,6 @@ async function agentCommandInternal(
         },
       });
     };
-    const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
     const messageChannel = resolveMessageChannel(
       runContext.messageChannel,
       opts.replyChannel ?? opts.channel,
@@ -1980,7 +2144,7 @@ async function agentCommandInternal(
               ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
-                !isNewSession ||
+                (!attemptTranscriptStartedFresh && !isNewSession) ||
                 (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
               fallbackRuntimeState,
               suppressPromptPersistenceOnRetry:
@@ -2195,6 +2359,7 @@ async function agentCommandInternal(
           contextTokensOverride: agentCfg?.contextTokens,
           sessionId: effectiveSessionId,
           sessionKey,
+          expectedSessionFile: attemptSessionFile,
           storePath,
           sessionStore,
           defaultProvider: provider,
@@ -2244,6 +2409,9 @@ async function agentCommandInternal(
             sessionEntry: transcriptSessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
+            expectedSessionFile: transcriptSessionEntry?.sessionFile ?? effectiveSessionFile,
+            expectedLongTermMemoryDefaultPolicy:
+              transcriptSessionEntry?.longTermMemoryDefaultPolicy,
             sessionAgentId,
             threadId: opts.threadId,
             sessionCwd: effectiveCwd,
@@ -2283,6 +2451,7 @@ async function agentCommandInternal(
             model: result.meta.agentMeta?.model ?? model,
             skillsSnapshot,
             messageChannel,
+            chatType: runMemoryChatType,
             agentAccountId: runContext.accountId,
             senderIsOwner: opts.senderIsOwner,
             thinkLevel: resolvedThinkLevel,

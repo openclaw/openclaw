@@ -2178,7 +2178,11 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt({
+      ...createParams(sessionFile, workspaceDir),
+      sessionKey: "agent:main:acp:opaque-conversation",
+      chatType: "group",
+    });
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -2189,12 +2193,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
       { messages?: Array<{ role?: string }>; prompt?: string },
-      { runId?: string; sessionId?: string },
+      { runId?: string; sessionId?: string; chatType?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
     expect(hookInput.messages).toEqual([]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
+    expect(hookContext.chatType).toBe("group");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     const wrappedPluginSystemContext = (text: string) =>

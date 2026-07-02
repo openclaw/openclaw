@@ -46,6 +46,11 @@ export type AcpRuntimeEnsureInput = {
   thinking?: string;
   cwd?: string;
   env?: Record<string, string>;
+  /** Trusted OpenClaw memory boundary for launch-time native memory defaults. */
+  memoryPolicy?: {
+    chatType?: "direct" | "group" | "channel";
+    longTermMemoryDefaultPolicy?: "include" | "explicit-only";
+  };
 };
 
 export type AcpRuntimeTurnAttachment = {
@@ -61,6 +66,8 @@ export type AcpRuntimeTurnInput = {
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
+  /** Trusted OpenClaw memory boundary for runtimes that need per-turn policy. */
+  memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
 };
 
 export type AcpRuntimeCapabilities = {

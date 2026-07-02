@@ -1835,6 +1835,54 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("passes stored explicit-only direct-shaped sessions to local /btw without live chat type", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const sessionKey = "agent:main:telegram:direct:alice";
+    loadSessionEntryMock.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {
+        [sessionKey]: {
+          sessionId: "session-shared-direct",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      },
+      entry: {
+        sessionId: "session-shared-direct",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    });
+    runBtwSideQuestionMock.mockResolvedValueOnce({ text: "nothing important" });
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey,
+      message: "/btw what changed?",
+      runId: "run-btw-explicit-only",
+      timeoutMs: 0,
+    });
+    await flushMicrotasks();
+
+    await vi.waitFor(() => {
+      expect(runBtwSideQuestionMock).toHaveBeenCalledTimes(1);
+    });
+    const params = runBtwSideQuestionMock.mock.calls[0]?.[0] as
+      | { chatType?: string; sessionEntry?: Record<string, unknown>; sessionKey?: string }
+      | undefined;
+    expect(params?.sessionKey).toBe(sessionKey);
+    expect(params?.chatType).toBeUndefined();
+    expect(params?.sessionEntry).toMatchObject({
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
   it("emits side-result events for local /side alias runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     loadSessionEntryMock.mockReturnValueOnce({

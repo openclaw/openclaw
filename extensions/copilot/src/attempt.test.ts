@@ -18,6 +18,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import type { SessionOptionsUpdateParams } from "./event-bridge.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { CopilotToolBridgeInput } from "./tool-bridge.js";
 
@@ -64,6 +65,7 @@ type SessionEventShape = {
   type: string;
 };
 type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
+type SessionOptionsUpdateFn = (params: SessionOptionsUpdateParams) => Promise<{ success: boolean }>;
 
 type FakeSession = {
   abort: ReturnType<typeof vi.fn<() => Promise<void>>>;
@@ -76,6 +78,9 @@ type FakeSession = {
   rpc: {
     history: {
       cancelBackgroundCompaction: ReturnType<typeof vi.fn<() => Promise<{ cancelled: boolean }>>>;
+    };
+    options: {
+      update: ReturnType<typeof vi.fn<SessionOptionsUpdateFn>>;
     };
   };
   sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
@@ -179,6 +184,9 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
         cancelBackgroundCompaction: vi.fn<() => Promise<{ cancelled: boolean }>>(async () => ({
           cancelled: true,
         })),
+      },
+      options: {
+        update: vi.fn<SessionOptionsUpdateFn>(async () => ({ success: true })),
       },
     },
     sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
@@ -3428,6 +3436,170 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual(["builtin:ask_user"]);
+    });
+  });
+
+  describe("native memory policy", () => {
+    function readPoolAcquireOptions(pool: ReturnType<typeof makeFakePool>): {
+      mode?: string;
+    } {
+      return (pool.acquire.mock.calls[0] as unknown[] | undefined)?.[1] as { mode?: string };
+    }
+
+    it("disables SDK native memory before sending shared sessions while keeping project instructions enabled", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          chatType: "group",
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        } as never),
+        { pool },
+      );
+
+      expect(result.promptError).toBeUndefined();
+      expect(readPoolAcquireOptions(pool).mode).toBe("empty");
+      const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+        skipCustomInstructions?: boolean;
+      };
+      expect(cfg.skipCustomInstructions).toBe(false);
+      const session = sdk.sessions[0];
+      expect(session).toBeDefined();
+      if (!session) {
+        throw new Error("expected session");
+      }
+      expect(session.rpc.options.update).toHaveBeenCalledWith({
+        featureFlags: {
+          "copilot-feature-agentic-memory": false,
+          "copilot-feature-agentic-memory-disabled": true,
+          copilot_feature_agentic_memory_user_scoped: false,
+          copilot_swe_agent_memory_in_repo_store: false,
+        },
+        skipCustomInstructions: false,
+      });
+      expect(session.rpc.options.update.mock.invocationCallOrder[0]).toBeLessThan(
+        session.sendAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    });
+
+    it("keeps the documented SDK client mode for direct sessions", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          chatType: "direct",
+          sessionKey: "agent:main:acp:binding:telegram:acct:direct:user-1",
+        } as never),
+        { pool },
+      );
+
+      expect(readPoolAcquireOptions(pool).mode).toBe("copilot-cli");
+      const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+        skipCustomInstructions?: boolean;
+      };
+      expect(cfg.skipCustomInstructions).toBeUndefined();
+      expect(sdk.sessions[0]?.rpc.options.update).not.toHaveBeenCalled();
+    });
+
+    it("disables SDK native memory before sending resumed shared sessions", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          chatType: "group",
+          initialReplayState: { sdkSessionId: "sess-resume-memory" },
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        } as never),
+        { pool },
+      );
+
+      expect(result.promptError).toBeUndefined();
+      expect(sdk.resumeSession).toHaveBeenCalledWith(
+        "sess-resume-memory",
+        expect.objectContaining({
+          continuePendingWork: false,
+          skipCustomInstructions: false,
+        }),
+      );
+      const session = sdk.sessions[0];
+      expect(session).toBeDefined();
+      if (!session) {
+        throw new Error("expected session");
+      }
+      expect(session.rpc.options.update).toHaveBeenCalledTimes(1);
+      expect(session.rpc.options.update.mock.invocationCallOrder[0]).toBeLessThan(
+        session.sendAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    });
+
+    it("starts a fresh direct session when the replay state was shared", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const onSessionEstablished = vi.fn();
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          chatType: "direct",
+          initialReplayState: {
+            longTermMemoryDefaultPolicy: "explicit-only",
+            sdkSessionId: "sess-shared-memory",
+          },
+          sessionKey: "agent:main:acp:binding:telegram:acct:direct:user-1",
+        } as never),
+        { onSessionEstablished, pool },
+      );
+
+      expect(result.promptError).toBeUndefined();
+      expect(sdk.resumeSession).not.toHaveBeenCalled();
+      expect(sdk.createSession).toHaveBeenCalledTimes(1);
+      expect(sdk.sessions[0]?.rpc.options.update).not.toHaveBeenCalled();
+      expect(onSessionEstablished).toHaveBeenCalledWith(
+        expect.objectContaining({
+          longTermMemoryDefaultPolicy: "include",
+          sdkSessionId: "sess-1",
+        }),
+      );
+    });
+
+    it("fails closed for shared sessions when SDK native memory cannot be disabled", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          delete (session.rpc as { options?: unknown }).options;
+        },
+      });
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          chatType: "group",
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        } as never),
+        { pool: makeFakePool(sdk) },
+      );
+
+      expect(getPromptErrorCode(result)).toBe("native_memory_policy_unsupported");
+      expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+    });
+
+    it("fails closed for shared sessions when SDK native memory update is rejected", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.rpc.options.update.mockResolvedValueOnce({ success: false });
+        },
+      });
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          chatType: "group",
+          sessionKey: "agent:main:acp:binding:telegram:acct:group:room-1",
+        } as never),
+        { pool: makeFakePool(sdk) },
+      );
+
+      expect(getPromptErrorCode(result)).toBe("native_memory_policy_unsupported");
+      expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
     });
   });
 

@@ -1,6 +1,9 @@
 // Tests tool listing in info command responses.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
+import type {
+  EffectiveToolInventoryResult,
+  ResolveEffectiveToolInventoryParams,
+} from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -58,12 +61,18 @@ function makeDefaultInventory(): EffectiveToolInventoryResult {
   };
 }
 
+type ResolveToolsImpl = (
+  params: ResolveEffectiveToolInventoryParams,
+) => EffectiveToolInventoryResult;
+
 const toolsTestState = vi.hoisted(() => {
-  const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
+  const defaultResolveTools: ResolveToolsImpl = () => makeDefaultInventory();
 
   return {
     resolveToolsImpl: defaultResolveTools,
-    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    resolveToolsMock: vi.fn((params: ResolveEffectiveToolInventoryParams) =>
+      defaultResolveTools(params),
+    ),
     threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
@@ -83,7 +92,8 @@ vi.mock("../../agents/agent-scope.js", async () => {
 });
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
-  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+  resolveEffectiveToolInventory: (params: ResolveEffectiveToolInventoryParams) =>
+    toolsTestState.resolveToolsMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -97,10 +107,10 @@ vi.mock("./reply-threading.js", () => ({
 let buildCommandTestParamsImpl: typeof import("./commands.test-harness.js").buildCommandTestParams;
 let handleToolsCommandImpl: typeof import("./commands-info.js").handleToolsCommand;
 
-async function loadToolsHarness(options?: { resolveTools?: () => EffectiveToolInventoryResult }) {
+async function loadToolsHarness(options?: { resolveTools?: ResolveToolsImpl }) {
   toolsTestState.resolveToolsImpl = options?.resolveTools ?? (() => makeDefaultInventory());
-  toolsTestState.resolveToolsMock.mockImplementation((..._args: unknown[]) =>
-    toolsTestState.resolveToolsImpl(),
+  toolsTestState.resolveToolsMock.mockImplementation((params: ResolveEffectiveToolInventoryParams) =>
+    toolsTestState.resolveToolsImpl(params),
   );
 
   return {
@@ -123,6 +133,23 @@ function resolveToolsArg(resolveToolsMock: { mock: { calls: unknown[][] } }, ind
     throw new Error(`expected resolve tools call ${index + 1}`);
   }
   return arg as Record<string, unknown>;
+}
+
+function inventoryWithMemoryForDirect(...args: unknown[]): EffectiveToolInventoryResult {
+  const inventory = makeDefaultInventory();
+  const [arg] = args;
+  if (arg && typeof arg === "object" && (arg as { chatType?: unknown }).chatType === "direct") {
+    inventory.groups[1]?.tools.push(
+      makeInventoryEntry({
+        id: "memory_store",
+        label: "Memory Store",
+        description: "Write durable memory",
+        source: "plugin",
+        pluginId: "memory",
+      }),
+    );
+  }
+  return inventory;
 }
 
 describe("handleToolsCommand", () => {
@@ -271,6 +298,95 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Profile: coding");
     expect(result?.reply?.text).toContain("Exec - Run shell commands");
     expect(result?.reply?.text).toContain("Docs Lookup - Search internal documentation");
+  });
+
+  it("uses the effective shared chat type for verbose tool visibility", async () => {
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
+      await loadToolsHarness({ resolveTools: inventoryWithMemoryForDirect });
+    const params = buildCommandTestParamsLocal("/tools verbose", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "stale-direct-session",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      },
+    };
+    params.ctx = {
+      ...params.ctx,
+      SessionKey: params.sessionKey,
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    };
+
+    const result = await handleToolsCommandLocal(params, true);
+
+    expect(result?.reply?.text).not.toContain("memory_store");
+    expect(result?.reply?.text).not.toContain("Memory Store");
+    expect(resolveToolsArg(resolveToolsMock).chatType).toBe("group");
+  });
+
+  it("keeps direct verbose tool visibility for live direct chats", async () => {
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
+      await loadToolsHarness({ resolveTools: inventoryWithMemoryForDirect });
+    const params = buildCommandTestParamsLocal("/tools verbose", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "stale-shared-session",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    };
+    params.ctx = {
+      ...params.ctx,
+      SessionKey: params.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "direct",
+    };
+
+    const result = await handleToolsCommandLocal(params, true);
+
+    expect(result?.reply?.text).toContain("Memory Store - Write durable memory");
+    expect(resolveToolsArg(resolveToolsMock).chatType).toBe("direct");
+  });
+
+  it("uses stored target policy for cross-session verbose tool visibility", async () => {
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
+      await loadToolsHarness({ resolveTools: inventoryWithMemoryForDirect });
+    const targetSessionKey = "agent:main:opaque-target";
+    const params = buildCommandTestParamsLocal("/tools verbose", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.sessionKey = targetSessionKey;
+    params.sessionStore = {
+      [targetSessionKey]: {
+        sessionId: "target-explicit-only-session",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      },
+    };
+    params.ctx = {
+      ...params.ctx,
+      SessionKey: "agent:main:whatsapp:direct:source",
+      CommandTargetSessionKey: targetSessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "direct",
+    };
+
+    const result = await handleToolsCommandLocal(params, true);
+
+    expect(result?.reply?.text).not.toContain("memory_store");
+    expect(result?.reply?.text).not.toContain("Memory Store");
+    expect(resolveToolsArg(resolveToolsMock).chatType).toBe("group");
   });
 
   it("accepts explicit compact mode", async () => {

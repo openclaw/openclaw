@@ -6,6 +6,7 @@ import type {
 } from "../media-understanding/types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { LongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
@@ -110,6 +111,8 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /** Explicit long-term memory policy for helper/model sub-runs in this context. */
+  LongTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   /**
    * Resolved agent scope for canonical session keys that do not encode the agent
    * id, such as selected-agent global sessions.

@@ -18,6 +18,10 @@ import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import {
+  resolveTargetSessionChatType,
+  shouldPreferSessionEntryForTargetSession,
+} from "./runtime-policy-session-key.js";
 
 const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
 
@@ -245,11 +249,27 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
+  const compactExistingExplicitOnlyTranscript =
+    targetSessionEntry.longTermMemoryDefaultPolicy === "explicit-only";
+  const chatType = resolveTargetSessionChatType({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    sessionEntry: targetSessionEntry,
+    // Manual compaction rewrites the existing transcript before normal run
+    // rotation can promote it back to private memory inclusion.
+    preferSessionEntry:
+      compactExistingExplicitOnlyTranscript ||
+      shouldPreferSessionEntryForTargetSession({
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
+  });
   const result = await runtime.compactEmbeddedAgentSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
+    chatType,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,

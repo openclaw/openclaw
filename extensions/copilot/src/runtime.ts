@@ -1,6 +1,6 @@
 // Copilot plugin module implements runtime behavior.
 import { normalize, resolve, sep } from "node:path";
-import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import type { CopilotClient, CopilotClientMode, CopilotClientOptions } from "@github/copilot-sdk";
 import { loadCopilotSdk } from "./sdk-loader.js";
 
 // SAFETY: The pool reuses CopilotClient instances per normalized PoolKey and does not
@@ -17,6 +17,7 @@ export interface PoolKey {
   readonly authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   readonly authProfileId?: string;
   readonly authProfileVersion?: string;
+  readonly clientMode: CopilotClientMode;
 }
 
 export interface ClientCreateOptions extends Omit<
@@ -355,6 +356,7 @@ function normalizePoolKey(key: PoolKey, rawCopilotHome: string): PoolKey {
     authMode: key.authMode,
     authProfileId: key.authProfileId,
     authProfileVersion: key.authProfileVersion,
+    clientMode: key.clientMode,
   };
 }
 

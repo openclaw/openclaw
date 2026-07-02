@@ -1,3 +1,4 @@
+import type { ChatType } from "../../channels/chat-type.js";
 /**
  * Installs context guards for oversized tool-result histories.
  */
@@ -51,6 +52,10 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
+
+function buildContextEngineLoopChatTypeParams(chatType?: ChatType): { chatType?: ChatType } {
+  return chatType === "group" || chatType === "channel" ? { chatType } : {};
+}
 
 export {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -328,6 +333,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -342,7 +348,8 @@ export function installContextEngineLoopHook(params: {
   /** True when this turn belongs to a heartbeat run. */
   isHeartbeat?: boolean;
 }): () => void {
-  const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const { contextEngine, sessionId, sessionKey, chatType, sessionFile, tokenBudget, modelId } =
+    params;
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
@@ -397,6 +404,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          ...buildContextEngineLoopChatTypeParams(chatType),
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,
@@ -415,6 +423,7 @@ export function installContextEngineLoopHook(params: {
             await contextEngine.ingestBatch({
               sessionId,
               sessionKey,
+              ...buildContextEngineLoopChatTypeParams(chatType),
               messages: newMessages,
               isHeartbeat: params.isHeartbeat,
             });
@@ -423,6 +432,7 @@ export function installContextEngineLoopHook(params: {
               await contextEngine.ingest({
                 sessionId,
                 sessionKey,
+                ...buildContextEngineLoopChatTypeParams(chatType),
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
@@ -436,6 +446,7 @@ export function installContextEngineLoopHook(params: {
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
+        ...buildContextEngineLoopChatTypeParams(chatType),
         messages: providerMessages,
         tokenBudget,
         model: modelId,

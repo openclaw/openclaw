@@ -14,6 +14,7 @@ export type CachedRuntimeState = {
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   configSignature: string;
+  memoryPolicySignature?: string;
   appliedControlSignature?: string;
 };
 

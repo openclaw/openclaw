@@ -176,7 +176,7 @@ prompt surface that matches their lifetime:
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
-- `MEMORY.md` when present
+- `MEMORY.md` when the session is eligible for long-term memory by default
 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files
 in every user turn. Codex loads `AGENTS.md` through its own project-doc
@@ -193,15 +193,21 @@ search is unavailable, or the active workspace differs from the agent memory
 workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
 `BOOTSTRAP.md` content keeps the normal turn-context role for now.
 
+Long-term memory eligibility is session-aware. Private/direct sessions and main
+local sessions keep the documented default behavior. Shared group and channel
+sessions do not receive raw `MEMORY.md` by default; memory tools remain available
+for explicit/on-demand reads. Sub-agent and cron sessions keep their existing
+minimal bootstrap policies.
+
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
 normal runs when heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise, especially non-Codex `MEMORY.md`. `MEMORY.md` is intended to stay
-a curated long-term summary; detailed daily notes belong in `memory/*.md` where
-`memory_search` and `memory_get` can retrieve them on demand. Oversized
-non-Codex `MEMORY.md` files increase prompt usage and can be partially injected
-because of the bootstrap file limits below.
+files concise, especially non-Codex `MEMORY.md` in private/direct sessions.
+`MEMORY.md` is intended to stay a curated long-term summary; detailed daily
+notes belong in `memory/*.md` where `memory_search` and `memory_get` can
+retrieve them on demand. Oversized non-Codex `MEMORY.md` files increase prompt
+usage and can be partially injected because of the bootstrap file limits below.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
@@ -218,11 +224,12 @@ default: `always`). Detailed raw/injected counts stay in diagnostics such as
 
 For memory files, truncation is not data loss: the file remains intact on disk.
 On native Codex, `MEMORY.md` is read on demand through memory tools when
-available, with bounded prompt fallback when tools cannot run. On other
-harnesses, the model only sees the shortened injected copy until it reads or
-searches memory directly. If `MEMORY.md` is repeatedly truncated there, distill
-it into a shorter durable summary and move detailed history into `memory/*.md`,
-or intentionally raise the bootstrap limits.
+available, with bounded prompt fallback only for sessions that are eligible for
+long-term memory by default. On other harnesses, eligible private/direct sessions
+only see the shortened injected copy until they read or search memory directly.
+If `MEMORY.md` is repeatedly truncated there, distill it into a shorter durable
+summary and move detailed history into `memory/*.md`, or intentionally raise the
+bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).

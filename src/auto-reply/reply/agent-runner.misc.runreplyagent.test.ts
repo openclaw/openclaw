@@ -92,6 +92,9 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
+const commitmentState = vi.hoisted(() => ({
+  enqueueCommitmentExtractionMock: vi.fn(),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -103,6 +106,11 @@ vi.mock("../../agents/model-fallback.js", () => ({
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
     Array.isArray((err as { attempts?: unknown[] }).attempts),
+}));
+
+vi.mock("../../commitments/runtime.js", () => ({
+  enqueueCommitmentExtraction: (params: unknown) =>
+    commitmentState.enqueueCommitmentExtractionMock(params),
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
@@ -277,6 +285,7 @@ beforeEach(() => {
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
+  commitmentState.enqueueCommitmentExtractionMock.mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
@@ -2414,7 +2423,12 @@ describe("runReplyAgent messaging tool dedupe", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
-  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
+  function createRun(params?: {
+    sessionKey?: string;
+    omitSessionKey?: boolean;
+    sessionCtx?: Partial<TemplateContext>;
+    followupRun?: Partial<FollowupRun["run"]>;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "telegram",
@@ -2422,6 +2436,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       AccountId: "primary",
       MessageSid: "msg",
       Surface: "telegram",
+      ...params?.sessionCtx,
     } as unknown as TemplateContext;
     const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
     const followupRun = {
@@ -2448,6 +2463,7 @@ describe("runReplyAgent reminder commitment guard", () => {
         },
         timeoutMs: 1_000,
         blockReplyBreak: "message_end",
+        ...params?.followupRun,
       },
     } as unknown as FollowupRun;
 
@@ -2521,6 +2537,38 @@ describe("runReplyAgent reminder commitment guard", () => {
 
     const result = await createRun();
     expectReplyText(result, "I'll ping you when it's done.");
+  });
+
+  it("queues commitment extraction with the target chat type for routed shared turns", async () => {
+    const targetSessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remember that for this workspace." }],
+      meta: {},
+      successfulCronAdds: 1,
+    });
+
+    const result = await createRun({
+      sessionKey: targetSessionKey,
+      sessionCtx: {
+        ChatType: "direct",
+      },
+      followupRun: {
+        sessionKey: targetSessionKey,
+        chatType: "group",
+      },
+    });
+
+    expectReplyText(result, "I'll remember that for this workspace.");
+    expect(commitmentState.enqueueCommitmentExtractionMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      firstMockCallArg(commitmentState.enqueueCommitmentExtractionMock, "commitment enqueue"),
+      {
+        sessionKey: targetSessionKey,
+        chatType: "group",
+        channel: "telegram",
+      },
+      "commitment enqueue",
+    );
   });
 
   it("still appends guard note when cron jobs exist but not for the current session", async () => {

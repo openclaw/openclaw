@@ -13,4 +13,5 @@ export {
   persistCliTurnTranscript,
   runAgentAttempt,
   sessionFileHasContent,
+  sessionFileHasMemoryBoundaryContent,
 } from "./attempt-execution.js";

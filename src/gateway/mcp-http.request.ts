@@ -3,16 +3,20 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 import { resolveAttachGrant } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
 const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
@@ -53,6 +57,7 @@ type McpRequestContext = {
   sessionKey: string;
   sessionId: string | undefined;
   messageProvider: string | undefined;
+  chatType: ChatType | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
@@ -86,6 +91,22 @@ function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefin
   return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
 
+function resolveCurrentGrantChatType(params: {
+  sessionKey: string;
+  grantChatType?: ChatType;
+}): ChatType | undefined {
+  const entry = loadSessionEntry(params.sessionKey, { strictRead: true }).entry;
+  if (!entry) {
+    return params.grantChatType;
+  }
+  return resolveLongTermMemoryTargetChatType({
+    sessionKey: params.sessionKey,
+    storedChatType: resolveSessionEntryChatType(entry) ?? params.grantChatType,
+    longTermMemoryDefaultPolicy: entry.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
+}
+
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
@@ -113,7 +134,7 @@ function resolveMcpSender(params: {
   req: IncomingMessage;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean; boundSessionKey?: string } | undefined {
+}): { senderIsOwner: boolean; boundSessionKey?: string; boundChatType?: ChatType } | undefined {
   const authHeader = getHeader(params.req, "authorization") ?? "";
   const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
   const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
@@ -123,7 +144,11 @@ function resolveMcpSender(params: {
   const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
   if (grant) {
-    return { senderIsOwner: false, boundSessionKey: grant.sessionKey };
+    return {
+      senderIsOwner: false,
+      boundSessionKey: grant.sessionKey,
+      ...(grant.chatType ? { boundChatType: grant.chatType } : {}),
+    };
   }
   return undefined;
 }
@@ -134,7 +159,7 @@ export function validateMcpLoopbackRequest(params: {
   ownerToken: string;
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
-}): { senderIsOwner: boolean; boundSessionKey?: string } | null {
+}): { senderIsOwner: boolean; boundSessionKey?: string; boundChatType?: ChatType } | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -250,7 +275,11 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner: sender.senderIsOwner, boundSessionKey: sender.boundSessionKey };
+  return {
+    senderIsOwner: sender.senderIsOwner,
+    ...(sender.boundSessionKey ? { boundSessionKey: sender.boundSessionKey } : {}),
+    ...(sender.boundChatType ? { boundChatType: sender.boundChatType } : {}),
+  };
 }
 
 export async function readMcpHttpBody(
@@ -363,7 +392,7 @@ export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefine
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean; boundSessionKey?: string },
+  auth: { senderIsOwner: boolean; boundSessionKey?: string; boundChatType?: ChatType },
 ): McpRequestContext {
   // Grant-authenticated callers get only their server-bound session; spoofable
   // delivery/action headers stay reserved for the gateway-launched loopback client.
@@ -372,6 +401,10 @@ export function resolveMcpRequestContext(
       sessionKey: auth.boundSessionKey,
       sessionId: undefined,
       messageProvider: undefined,
+      chatType: resolveCurrentGrantChatType({
+        sessionKey: auth.boundSessionKey,
+        grantChatType: auth.boundChatType,
+      }),
       currentChannelId: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
@@ -386,6 +419,7 @@ export function resolveMcpRequestContext(
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
+    chatType: normalizeChatType(getHeader(req, "x-openclaw-chat-type")) ?? undefined,
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),

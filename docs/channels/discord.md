@@ -287,7 +287,7 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   </Step>
 
   <Step title="Plan for memory in guild channels">
-    By default, long-term memory (MEMORY.md) only loads in DM sessions. Guild channels do not auto-load MEMORY.md.
+    By default, long-term memory (MEMORY.md) only loads in private/direct sessions. Guild channels do not auto-load MEMORY.md; they follow the same shared-session memory boundary as other group/channel surfaces.
 
     <Tabs>
       <Tab title="Ask your agent">

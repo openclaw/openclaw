@@ -1,7 +1,10 @@
 // Covers task registry lifecycle, delivery, notification, and query behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
@@ -1398,6 +1401,57 @@ describe("task-registry", () => {
         sessionKey: "agent:main:main",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it("queues ACP completion when requester session policy cannot be read", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const requesterSessionKey = "agent:main:main";
+      const storePath = resolveSessionStorePathForScope({ sessionKey: requesterSessionKey });
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, "{malformed", "utf8");
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: requesterSessionKey,
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+          threadId: "321",
+        },
+        runId: "run-policy-read-failure",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-policy-read-failure",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-policy-read-failure"), {
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents(requesterSessionKey)).toEqual([
+        expect.stringContaining("Background task done: ACP background task"),
+      ]);
     });
   });
 

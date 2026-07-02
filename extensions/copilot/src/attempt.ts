@@ -28,6 +28,9 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  shouldIncludeLongTermMemoryByDefault,
+} from "openclaw/plugin-sdk/routing";
 import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import {
@@ -44,6 +47,7 @@ import {
   type AssistantUsageSnapshot,
   type OnAssistantDeltaPayload,
   type SessionLike,
+  type SessionOptionsUpdateParams,
 } from "./event-bridge.js";
 import { createHooksBridge, type CopilotHooksConfig } from "./hooks-bridge.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
@@ -67,9 +71,16 @@ import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.j
 const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
+const COPILOT_NATIVE_MEMORY_FEATURE_FLAG_OVERRIDES = {
+  "copilot-feature-agentic-memory": false,
+  "copilot-feature-agentic-memory-disabled": true,
+  copilot_feature_agentic_memory_user_scoped: false,
+  copilot_swe_agent_memory_in_repo_store: false,
+} satisfies Record<string, boolean>;
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
+type LongTermMemoryDefaultPolicy = "include" | "explicit-only";
 type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 export type CopilotSessionConfig = Pick<
   SessionConfig,
@@ -84,6 +95,7 @@ export type CopilotSessionConfig = Pick<
   | "onUserInputRequest"
   | "provider"
   | "reasoningEffort"
+  | "skipCustomInstructions"
   | "systemMessage"
   | "tools"
   | "workingDirectory"
@@ -105,7 +117,10 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   enableSessionTelemetry?: boolean;
   hooksConfig?: CopilotHooksConfig;
   infiniteSessionConfig?: CopilotInfiniteSessionOptions;
-  initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & { sdkSessionId?: string };
+  initialReplayState?: AgentHarnessAttemptParams["initialReplayState"] & {
+    longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
+    sdkSessionId?: string;
+  };
   messages?: AgentMessage[];
   model?: string | { api?: string; id?: string; input?: string[]; provider?: string };
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
@@ -182,6 +197,7 @@ export interface CopilotAttemptDeps {
    */
   onSessionEstablished?: (info: {
     compactionSessionConfig?: CopilotSessionConfig;
+    longTermMemoryDefaultPolicy: LongTermMemoryDefaultPolicy;
     sdkSessionId: string;
     pooledClient: PooledClient;
     sessionConfig: CopilotSessionConfig;
@@ -786,9 +802,12 @@ export async function runCopilotAttempt(
             : undefined,
         )
       : sessionConfig;
+    const memoryDefaultPolicy = resolveAttemptMemoryDefaultPolicy(attemptInput);
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
-      replayInvalid: input.initialReplayState?.replayInvalid,
+      replayInvalid:
+        input.initialReplayState?.replayInvalid === true ||
+        replayMemoryPolicyChanged(input.initialReplayState, memoryDefaultPolicy),
     });
     downgradedFromResume = replayDecision.downgradedFromResume;
     const resumeSessionId =
@@ -821,6 +840,7 @@ export async function runCopilotAttempt(
     } else {
       session = (await client.createSession(sessionConfig)) as unknown as SessionLike;
     }
+    await disableCopilotNativeMemoryForExplicitOnlySession(session, memoryDefaultPolicy);
     // Bind the session holder so the tool bridge's onYield callback
     // can abort the live SDK session if a wrapped tool yields.
     sessionRef.current = session;
@@ -834,6 +854,7 @@ export async function runCopilotAttempt(
       try {
         deps.onSessionEstablished({
           compactionSessionConfig,
+          longTermMemoryDefaultPolicy: memoryDefaultPolicy,
           sdkSessionId,
           pooledClient: handle,
           sessionConfig,
@@ -1277,6 +1298,70 @@ function createPromptError(code: string, message: string, cause?: unknown): Prom
   return error;
 }
 
+function resolveAttemptMemoryDefaultPolicy(params: AttemptParamsLike): LongTermMemoryDefaultPolicy {
+  return shouldIncludeLongTermMemoryByDefault({
+    sessionKey: readString((params as { sessionKey?: unknown }).sessionKey),
+    chatType: readString((params as { chatType?: unknown }).chatType),
+    longTermMemoryDefaultPolicy: readLongTermMemoryDefaultPolicy(
+      (params as { longTermMemoryDefaultPolicy?: unknown }).longTermMemoryDefaultPolicy,
+    ),
+  })
+    ? "include"
+    : "explicit-only";
+}
+
+function readLongTermMemoryDefaultPolicy(value: unknown): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
+}
+
+function replayMemoryPolicyChanged(
+  state: AttemptParamsLike["initialReplayState"],
+  memoryDefaultPolicy: LongTermMemoryDefaultPolicy,
+): boolean {
+  const priorPolicy = state?.longTermMemoryDefaultPolicy;
+  return (
+    (priorPolicy === "include" || priorPolicy === "explicit-only") &&
+    priorPolicy !== memoryDefaultPolicy
+  );
+}
+
+async function disableCopilotNativeMemoryForExplicitOnlySession(
+  session: SessionLike,
+  memoryDefaultPolicy: LongTermMemoryDefaultPolicy,
+): Promise<void> {
+  if (memoryDefaultPolicy !== "explicit-only") {
+    return;
+  }
+  const update = session.rpc?.options?.update;
+  if (!update) {
+    throw createPromptError(
+      "native_memory_policy_unsupported",
+      "[copilot-attempt] refusing shared session before SDK native memory can be disabled",
+    );
+  }
+  const params: SessionOptionsUpdateParams = {
+    featureFlags: COPILOT_NATIVE_MEMORY_FEATURE_FLAG_OVERRIDES,
+    skipCustomInstructions: false,
+  };
+  try {
+    // SDK native memory is gated by mutable session feature flags; apply
+    // this after create/resume and before sendAndWait so shared sessions
+    // never build a prompt with long-term private memory.
+    const result = await update(params);
+    if (!result.success) {
+      throw new Error("session options update returned success=false");
+    }
+  } catch (error: unknown) {
+    throw createPromptError(
+      "native_memory_policy_unsupported",
+      `[copilot-attempt] refusing shared session because SDK native memory could not be disabled: ${
+        toError(error).message
+      }`,
+      error,
+    );
+  }
+}
+
 function createSessionConfig(
   params: AttemptParamsLike,
   sdkModelId: string,
@@ -1292,6 +1377,7 @@ function createSessionConfig(
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
   const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
+  const memoryDefaultPolicy = resolveAttemptMemoryDefaultPolicy(params);
   return {
     model: sdkModelId,
     // Permission decisions for SDK built-in tool kinds (shell, write,
@@ -1336,6 +1422,9 @@ function createSessionConfig(
     // (`enabled: true`, background 0.80, buffer 0.95) apply when
     // omitted. See compaction-bridge.ts.
     ...(infiniteSessions ? { infiniteSessions } : {}),
+    // Shared sessions run the SDK in isolated mode; keep project instructions
+    // available while optional ambient memory/plugins stay disabled.
+    ...(memoryDefaultPolicy === "explicit-only" ? { skipCustomInstructions: false } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     // Restrict the SDK's tool catalog to the bridged tool names returned
@@ -1657,6 +1746,8 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   provider: ResolvedCopilotProvider;
 } {
   const model = resolveModelRef(params);
+  const memoryDefaultPolicy = resolveAttemptMemoryDefaultPolicy(params);
+  const clientMode = memoryDefaultPolicy === "explicit-only" ? "empty" : "copilot-cli";
   const provider = resolveCopilotProvider({
     model,
     resolvedApiKey: readString(params.resolvedApiKey),
@@ -1696,6 +1787,7 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
             authProfileVersion: auth.authProfileVersion,
           }
         : {}),
+      clientMode,
       copilotHome: auth.copilotHome,
     },
     options: {
@@ -1703,6 +1795,7 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
       ...(auth.authMode === "gitHubToken" && auth.gitHubToken
         ? { gitHubToken: auth.gitHubToken }
         : {}),
+      mode: clientMode,
       useLoggedInUser: auth.authMode === "useLoggedInUser",
     },
     auth,

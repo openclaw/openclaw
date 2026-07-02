@@ -10,7 +10,7 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -41,6 +41,8 @@ import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-cont
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -61,6 +63,18 @@ const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
 type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
+
+function resolveStoredRunChatType(
+  sessionKey: string | undefined,
+  entry: SessionEntry | undefined,
+): ChatType | undefined {
+  return resolveLongTermMemoryTargetChatType({
+    sessionKey,
+    storedChatType: resolveSessionEntryChatType(entry),
+    longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
+}
 
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
@@ -498,18 +512,21 @@ async function loadRestartSentinelStartupTask(params: {
 
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
-    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey, { strictRead: true });
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
-    let chatType = entry?.origin?.chatType ?? "direct";
+    let chatType = resolveStoredRunChatType(canonicalKey ?? sessionKey, entry) ?? "direct";
     if (
       !hasRoutableDeliveryContext(sessionDeliveryContext) &&
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {
-      const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
+      const { entry: baseEntry } = loadSessionEntry(baseSessionKey, { strictRead: true });
+      chatType =
+        resolveStoredRunChatType(canonicalKey ?? sessionKey, entry) ??
+        resolveStoredRunChatType(baseSessionKey, baseEntry) ??
+        "direct";
       sessionDeliveryContext = mergeDeliveryContext(
         sessionDeliveryContext,
         deliveryContextFromSession(baseEntry),

@@ -1,9 +1,12 @@
 // Memory Core plugin module implements prompt section behavior.
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 
 export const buildPromptSection: MemoryPromptSectionBuilder = ({
   availableTools,
   citationsMode,
+  sessionKey,
+  chatType,
 }) => {
   const hasMemorySearch = availableTools.has("memory_search");
   const hasMemoryGet = availableTools.has("memory_get");
@@ -13,7 +16,18 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
   }
 
   let toolGuidance: string;
-  if (hasMemorySearch && hasMemoryGet) {
+  if (!shouldIncludeLongTermMemoryByDefault({ sessionKey, chatType })) {
+    if (hasMemorySearch && hasMemoryGet) {
+      toolGuidance =
+        "Shared sessions do not run long-term memory recall by default. Use memory_search only when the user explicitly asks for long-term memory or a visible session instruction requests it; then use memory_get only for needed lines.";
+    } else if (hasMemorySearch) {
+      toolGuidance =
+        "Shared sessions do not run long-term memory recall by default. Use memory_search only when the user explicitly asks for long-term memory or a visible session instruction requests it.";
+    } else {
+      toolGuidance =
+        "Shared sessions do not read long-term memory by default. Use memory_get only when the user explicitly asks for a memory file excerpt or a visible session instruction requests it.";
+    }
+  } else if (hasMemorySearch && hasMemoryGet) {
     toolGuidance =
       "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md + indexed session transcripts; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.";
   } else if (hasMemorySearch) {

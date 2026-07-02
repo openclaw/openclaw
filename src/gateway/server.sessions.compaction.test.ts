@@ -417,6 +417,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     entries: {
       main: sessionStoreEntry("sess-main", {
         spawnedCwd: "/tmp/task-repo",
+        chatType: "group",
         thinkingLevel: "medium",
         reasoningLevel: "stream",
         contextBudgetStatus: {
@@ -497,6 +498,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         sessionFile?: string;
         sessionId?: string;
         sessionKey?: string;
+        chatType?: string;
         thinkLevel?: string;
         trigger?: string;
         workspaceDir?: string;
@@ -511,6 +513,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   };
   expect(compactionCall.sessionId).toBe("sess-main");
   expect(compactionCall.sessionKey).toBe("agent:main:main");
+  expect(compactionCall.chatType).toBe("group");
   if (!compactionCall.sessionFile) {
     throw new Error("expected embedded compaction session file");
   }
@@ -547,6 +550,78 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.compact discards embedded result when the memory boundary changes mid-compact", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-main.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      }),
+    },
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async () => {
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { sessionFile?: string; longTermMemoryDefaultPolicy?: string }
+    >;
+    store["agent:main:main"] = {
+      ...store["agent:main:main"],
+      sessionFile: path.join(dir, "sess-shared.jsonl"),
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    return {
+      ok: true,
+      compacted: true,
+      reason: "compact",
+      result: {
+        summary: "summary",
+        sessionId: "sess-main-compacted",
+        sessionFile: path.join(dir, "sess-main-compacted.jsonl"),
+        tokensAfter: 80,
+      },
+    };
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    reason?: string;
+    result?: unknown;
+  }>(ws, "sessions.compact", {
+    key: "main",
+  });
+
+  expectMainCompactionResult(compacted, false);
+  expect(compacted.payload?.reason).toBe("session changed");
+  expect(compacted.payload?.result).toBeUndefined();
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      longTermMemoryDefaultPolicy?: string;
+      sessionFile?: string;
+      sessionId?: string;
+      totalTokens?: number;
+    }
+  >;
+  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
+  expect(store["agent:main:main"]?.sessionFile).toBe(path.join(dir, "sess-shared.jsonl"));
+  expect(store["agent:main:main"]?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+  expect(store["agent:main:main"]?.compactionCount).toBeUndefined();
+  expect(store["agent:main:main"]?.totalTokens).toBeUndefined();
 
   ws.close();
 });

@@ -1463,6 +1463,7 @@ export async function searchMemoryWiki(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  initializeVault?: boolean;
   query: string;
   maxResults?: number;
   searchBackend?: WikiSearchBackend;
@@ -1478,7 +1479,9 @@ export async function searchMemoryWiki(params: {
     sandboxed: params.sandboxed,
     operation: "wiki_search",
   });
-  await initializeMemoryWikiVault(effectiveConfig);
+  if (params.initializeVault !== false) {
+    await initializeMemoryWikiVault(effectiveConfig);
+  }
   const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
@@ -1530,6 +1533,7 @@ export async function getMemoryWikiPage(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  initializeVault?: boolean;
   lookup: string;
   fromLine?: number;
   lineCount?: number;
@@ -1545,7 +1549,9 @@ export async function getMemoryWikiPage(params: {
     sandboxed: params.sandboxed,
     operation: "wiki_get",
   });
-  await initializeMemoryWikiVault(effectiveConfig);
+  if (params.initializeVault !== false) {
+    await initializeMemoryWikiVault(effectiveConfig);
+  }
   const fromLine = normalizePositiveInteger(params.fromLine, 1);
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 

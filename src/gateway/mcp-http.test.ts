@@ -27,6 +27,7 @@ type ScopedToolsCall = {
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   accountId?: string;
+  chatType?: string;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -83,6 +84,9 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
     ],
   })),
 );
+const sessionEntryByKey = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const sessionEntryLoadErrorByKey = vi.hoisted(() => new Map<string, Error>());
+const sessionEntryLoadOptionsByKey = vi.hoisted(() => new Map<string, unknown[]>());
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
@@ -100,6 +104,22 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 vi.mock("./tool-resolution.js", () => ({
   resolveGatewayScopedTools: (...args: Parameters<typeof resolveGatewayScopedToolsMock>) =>
     resolveGatewayScopedToolsMock(...args),
+}));
+
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: (sessionKey: string, opts?: unknown) => {
+    const options = sessionEntryLoadOptionsByKey.get(sessionKey) ?? [];
+    options.push(opts);
+    sessionEntryLoadOptionsByKey.set(sessionKey, options);
+    const error = sessionEntryLoadErrorByKey.get(sessionKey);
+    if (error) {
+      throw error;
+    }
+    return {
+      cfg: {},
+      entry: sessionEntryByKey.get(sessionKey),
+    };
+  },
 }));
 
 import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
@@ -570,6 +590,9 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 beforeEach(() => {
   clearMcpLoopbackToolCallCapturesForTest();
   resolveGatewayScopedToolsMock.mockClear();
+  sessionEntryByKey.clear();
+  sessionEntryLoadErrorByKey.clear();
+  sessionEntryLoadOptionsByKey.clear();
   runBeforeToolCallHookMock.mockClear();
   runBeforeToolCallHookMock.mockImplementation(
     async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
@@ -690,6 +713,7 @@ describe("mcp loopback server", () => {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-session-id": "session-123",
         "x-openclaw-account-id": "work",
+        "x-openclaw-chat-type": "group",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
@@ -707,6 +731,7 @@ describe("mcp loopback server", () => {
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.sessionId).toBe("session-123");
     expect(call.accountId).toBe("work");
+    expect(call.chatType).toBe("group");
     expect(call.messageProvider).toBe("telegram");
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
@@ -728,7 +753,7 @@ describe("mcp loopback server", () => {
 
   it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
     resetAttachGrantsForTest();
-    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
+    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host", chatType: "group" });
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -740,6 +765,7 @@ describe("mcp loopback server", () => {
       token: grant.token,
       headers: jsonHeaders({
         "x-session-key": "agent:main:SPOOFED-other-session",
+        "x-openclaw-chat-type": "direct",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-account-id": "victim-account",
         "x-openclaw-current-channel-id": "telegram:victim-chat",
@@ -753,6 +779,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:attach-host");
+    expect(call.chatType).toBe("group");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(call.messageProvider).toBeUndefined();
@@ -761,6 +788,85 @@ describe("mcp loopback server", () => {
     expect(call.currentThreadTs).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
+  });
+
+  it("re-resolves current explicit-only policy for attach grants before memory tool resolution", async () => {
+    resetAttachGrantsForTest();
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const grant = mintAttachGrant({ sessionKey, chatType: "direct" });
+    sessionEntryByKey.set(sessionKey, {
+      sessionId: "same-session-now-explicit-only",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
+      const call = input as ScopedToolsCall;
+      return {
+        agentId: "main",
+        tools: [
+          makeMessageTool(),
+          ...(call.chatType === "direct"
+            ? [
+                makeMockTool({
+                  name: "memory_store",
+                  description: "write durable memory",
+                  execute: async () => ({
+                    content: [{ type: "text", text: "stored" }],
+                  }),
+                }),
+              ]
+            : []),
+        ],
+      };
+    });
+    const { port: serverPort } = await startLoopbackServerForTest();
+
+    const listPayload = await readOkMcpPayload(
+      await sendLoopbackToolsList({ token: grant.token }),
+    );
+    expectMcpToolNames(listPayload, ["message"]);
+    expect(listPayload.result?.tools?.map((tool) => tool.name)).not.toContain("memory_store");
+    expect(getScopedToolsCall(0).sessionKey).toBe(sessionKey);
+    expect(getScopedToolsCall(0).chatType).toBe("group");
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+
+    const callPayload = await readMcpPayload(
+      await sendRaw({
+        port: serverPort,
+        token: grant.token,
+        headers: jsonHeaders(),
+        body: mcpToolCallBody("memory_store"),
+      }),
+    );
+    expectMcpResultText(callPayload, "Tool not available: memory_store", true);
+  });
+
+  it("fails closed when an attach grant request cannot read current session policy", async () => {
+    resetAttachGrantsForTest();
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const grant = mintAttachGrant({ sessionKey, chatType: "direct" });
+    sessionEntryLoadErrorByKey.set(sessionKey, new Error("permission denied"));
+    const { port: serverPort } = await startLoopbackServerForTest();
+
+    const response = await sendRaw({
+      port: serverPort,
+      token: grant.token,
+      headers: jsonHeaders(),
+      body: mcpToolsListBody(7),
+    });
+    const payload = (await response.json()) as {
+      id?: unknown;
+      error?: { code?: number; message?: string };
+    };
+
+    expect(response.status).toBe(500);
+    expect(payload.id).toBe(7);
+    expect(payload.error).toMatchObject({
+      code: -32603,
+      message: "Internal error",
+    });
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
   it("routes sessions_yield to the current CLI capture", async () => {
@@ -871,6 +977,7 @@ describe("mcp loopback server", () => {
       currentThreadTs: "thread-1",
       inboundEventKind: "room_event",
       messageProvider: "telegram",
+      chatType: undefined,
       sessionKey: "agent:main:telegram:group:chat123",
       sourceReplyDeliveryMode: "message_tool_only",
     } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "senderIsOwner">;
@@ -899,6 +1006,38 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps loopback tool cache entries separate by chat type", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "acp:binding:opaque",
+      currentInboundAudio: undefined,
+      currentMessageId: "message-1",
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "acp",
+      senderIsOwner: true,
+      sessionKey: "agent:main:acp:binding:opaque",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "chatType">;
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as { chatType?: string };
+      return {
+        agentId: "main",
+        tools:
+          params.chatType === "group" ? [makeMessageTool()] : [makeMessageTool(), makeCronTool()],
+      };
+    });
+
+    const directFirst = cache.resolve({ ...baseParams, chatType: "direct" });
+    const groupSecond = cache.resolve({ ...baseParams, chatType: "group" });
+    expect(directFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
+    expect(groupSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+  });
+
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = {
@@ -910,6 +1049,7 @@ describe("mcp loopback server", () => {
       currentThreadTs: "thread-1",
       inboundEventKind: "room_event",
       messageProvider: "telegram",
+      chatType: "group",
       senderIsOwner: true,
       sessionKey: "agent:main:telegram:group:chat123",
       sourceReplyDeliveryMode: "message_tool_only",
@@ -1739,6 +1879,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-session-id"]).toBe(
       "${OPENCLAW_MCP_SESSION_ID}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-chat-type"]).toBe(
+      "${OPENCLAW_MCP_CHAT_TYPE}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",

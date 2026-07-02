@@ -6,6 +6,8 @@ import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  sessionKey?: string;
+  chatType?: string;
 }) => string[];
 
 export type MemoryCorpusSearchResult = {
@@ -246,6 +248,8 @@ export function registerMemoryPromptSupplement(
 export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  sessionKey?: string;
+  chatType?: string;
 }): string[] {
   const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],

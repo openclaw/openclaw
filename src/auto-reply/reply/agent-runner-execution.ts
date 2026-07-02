@@ -2430,6 +2430,7 @@ async function runAgentTurnWithFallbackInternal(
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
+                    chatType: params.followupRun.run.chatType,
                     agentId: params.followupRun.run.agentId,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     sessionFile: params.followupRun.run.sessionFile,

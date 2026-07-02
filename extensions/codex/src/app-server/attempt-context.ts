@@ -184,6 +184,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       config: params.params.config,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      chatType: params.params.chatType,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
       contextMode: params.params.bootstrapContextMode,
@@ -259,6 +260,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
+            sessionKey: params.sessionKey,
+            chatType: params.params.chatType,
             citationsMode: params.params.config?.memory?.citations,
           })
         : undefined,
@@ -857,11 +860,15 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryToolRouted: boolean;
+  sessionKey?: string;
+  chatType?: string;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
 }): string | undefined {
   const memoryRecallInstructions = params.memoryToolRouted
     ? renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
+        sessionKey: params.sessionKey,
+        chatType: params.chatType,
         citationsMode: params.citationsMode,
       })
     : undefined;
@@ -875,11 +882,15 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 
 function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
+  sessionKey?: string;
+  chatType?: string;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
 }): string | undefined {
   const availableTools = new Set(params.toolNames);
   const memoryPrompt = buildMemorySystemPromptAddition({
     availableTools,
+    sessionKey: params.sessionKey,
+    chatType: params.chatType,
     citationsMode: params.citationsMode,
   });
   if (!memoryPrompt) {

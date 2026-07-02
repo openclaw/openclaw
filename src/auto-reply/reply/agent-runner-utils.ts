@@ -246,6 +246,9 @@ function buildEmbeddedContextFromTemplate(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
+  const runChatType = normalizeChatType(params.run.chatType);
+  const sharedRunChatType =
+    runChatType === "group" || runChatType === "channel" ? runChatType : undefined;
   const sessionCtx = {
     ...params.sessionCtx,
     OriginatingChannel:
@@ -256,9 +259,10 @@ function buildEmbeddedContextFromTemplate(params: {
       params.sessionCtx.AccountId ??
       params.run.agentAccountId,
     ChatType:
+      sharedRunChatType ??
       normalizeChatType(params.replyRoute?.originatingChatType) ??
       normalizeChatType(params.sessionCtx.ChatType) ??
-      params.run.chatType,
+      runChatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
   };

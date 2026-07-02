@@ -326,13 +326,14 @@ describe("telegram state migrations", () => {
       await writeFile(
         stickerCachePath,
         JSON.stringify({
-          version: 1,
+          version: 2,
           stickers: {
             unique_sticker: {
               fileId: "file-1",
               fileUniqueId: "unique_sticker",
               description: "Deploy sticker",
               cachedAt: "2026-05-24T12:00:00.000Z",
+              descriptionPolicy: "memory-disabled",
             },
           },
         }),
@@ -387,6 +388,18 @@ describe("telegram state migrations", () => {
         sourcePath: stickerCachePath,
         namespace: "telegram.sticker-cache",
       });
+      const stickerPlan = byLabel.get("Telegram sticker cache");
+      if (!stickerPlan || stickerPlan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram sticker cache import plan");
+      }
+      expect(stickerPlan.readEntries()).toEqual([
+        {
+          key: "unique_sticker",
+          value: expect.objectContaining({
+            descriptionPolicy: "memory-disabled",
+          }),
+        },
+      ]);
       expect(byLabel.get("Telegram sent-message cache")).toMatchObject({
         kind: "plugin-state-import",
         sourcePath: sentMessagePath,

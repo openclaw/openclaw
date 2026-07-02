@@ -22,6 +22,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../../sessions/session-memory-policy.js";
 import {
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
@@ -59,6 +61,7 @@ import type { AgentCommandOpts } from "./types.js";
 export {
   createAcpVisibleTextAccumulator,
   sessionFileHasContent,
+  sessionFileHasMemoryBoundaryContent,
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -120,6 +123,8 @@ type PersistTextTurnTranscriptParams = {
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  expectedSessionFile?: string;
+  expectedLongTermMemoryDefaultPolicy?: SessionEntry["longTermMemoryDefaultPolicy"];
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
@@ -353,6 +358,21 @@ async function persistTextTurnTranscript(
     });
   }
 
+  const hasExpectedPolicy = Object.hasOwn(params, "expectedLongTermMemoryDefaultPolicy");
+  const expectedPolicy = hasExpectedPolicy
+    ? params.expectedLongTermMemoryDefaultPolicy
+    : params.sessionEntry?.longTermMemoryDefaultPolicy;
+  const expectedSessionFile = params.expectedSessionFile ?? params.sessionEntry?.sessionFile;
+  const expectedBoundary =
+    params.sessionStore && params.storePath
+      ? {
+          expectedSessionId: params.sessionId,
+          ...(expectedSessionFile ? { expectedSessionFile } : {}),
+          ...(hasExpectedPolicy || params.sessionEntry
+            ? { expectedLongTermMemoryDefaultPolicy: expectedPolicy }
+            : {}),
+        }
+      : {};
   const turn = await persistSessionTranscriptTurn(
     {
       sessionId: params.sessionId,
@@ -370,7 +390,7 @@ async function persistTextTurnTranscript(
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
-      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
+      ...expectedBoundary,
     },
   );
   if (turn.rejectedReason === "session-rebound") {
@@ -405,6 +425,8 @@ export async function persistAcpTurnTranscript(params: {
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  expectedSessionFile?: string;
+  expectedLongTermMemoryDefaultPolicy?: SessionEntry["longTermMemoryDefaultPolicy"];
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
@@ -430,6 +452,8 @@ export async function persistCliTurnTranscript(params: {
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  expectedSessionFile?: string;
+  expectedLongTermMemoryDefaultPolicy?: SessionEntry["longTermMemoryDefaultPolicy"];
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
@@ -453,6 +477,8 @@ export async function persistCliTurnTranscript(params: {
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
+    expectedSessionFile: params.expectedSessionFile,
+    expectedLongTermMemoryDefaultPolicy: params.expectedLongTermMemoryDefaultPolicy,
     sessionAgentId: params.sessionAgentId,
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
@@ -561,6 +587,12 @@ export function runAgentAttempt(params: {
   }
   const shouldForwardImagesToEmbedded =
     !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
+  const runtimeChatType = resolveLongTermMemoryTargetChatType({
+    sessionKey: params.sessionKey ?? params.sessionId,
+    liveChatType: params.runContext.chatType,
+    storedChatType: resolveSessionEntryChatType(params.sessionEntry),
+    longTermMemoryDefaultPolicy: params.sessionEntry?.longTermMemoryDefaultPolicy,
+  });
   const allowCliAuthProfileForwarding =
     isCliExecutionProvider &&
     cliBackendAcceptsAuthProfileForwarding({
@@ -713,6 +745,7 @@ export function runAgentAttempt(params: {
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
+        chatType: runtimeChatType,
         currentChannelId: params.runContext.currentChannelId,
         chatId: params.runContext.chatId,
         channelContext: params.runContext.channelContext,
@@ -789,6 +822,7 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    chatType: runtimeChatType,
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,

@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
+  cliCompactionCalls: [] as Array<{ chatType?: string }>,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -144,8 +145,13 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
 });
 
 vi.mock("./command/cli-compaction.js", () => ({
-  runCliTurnCompactionLifecycle: async (params: { sessionEntry?: SessionEntry }) =>
-    params.sessionEntry,
+  runCliTurnCompactionLifecycle: async (params: {
+    chatType?: string;
+    sessionEntry?: SessionEntry;
+  }) => {
+    state.cliCompactionCalls.push(params);
+    return params.sessionEntry;
+  },
 }));
 
 vi.mock("./command/delivery.runtime.js", () => ({
@@ -168,6 +174,7 @@ beforeEach(async () => {
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.deliveryFreshEntries = [];
+  state.cliCompactionCalls = [];
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rotation-e2e-"));
   state.workspaceDir = path.join(tmpDir, "workspace");
   state.agentDir = path.join(tmpDir, "agent");
@@ -315,6 +322,32 @@ describe("agentCommand compaction transcript rotation", () => {
       expect.objectContaining({ provider: "tui-pty-mock" }),
     );
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves live shared chat type for post-turn compaction", async () => {
+    const storePath = requireStorePath();
+    await saveSessionStore(storePath, {
+      "agent:main:main": {
+        sessionId: "stale-direct-session",
+        updatedAt: Date.now(),
+        chatType: "direct",
+      },
+    });
+    state.runAgentAttemptMock.mockResolvedValueOnce(
+      makeResult({
+        sessionId: "stale-direct-session",
+        text: "shared answer",
+      }),
+    );
+
+    await agentCommand({
+      message: "shared prompt",
+      sessionKey: "agent:main:main",
+      cwd: state.workspaceDir,
+      runContext: { chatType: "group" },
+    });
+
+    expect(state.cliCompactionCalls[0]?.chatType).toBe("group");
   });
 
   it("keeps sessions.json on the rotated successor", async () => {

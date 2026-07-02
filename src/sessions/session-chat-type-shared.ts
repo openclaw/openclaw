@@ -1,5 +1,6 @@
 // Shared session chat type helpers expose cross-module chat type classification.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -16,6 +17,22 @@ export type CanonicalSessionPeerShape = {
   channel?: string;
   chatType: Exclude<SessionKeyChatType, "unknown">;
 };
+
+export type SessionEntryChatTypeSource = {
+  chatType?: string | null;
+  origin?: { chatType?: string | null } | null;
+  route?: { target?: { chatType?: string | null; to?: unknown } | null } | null;
+};
+
+export function resolveSessionEntryChatType(
+  entry?: SessionEntryChatTypeSource,
+): ChatType | undefined {
+  return (
+    normalizeChatType(entry?.route?.target?.chatType ?? undefined) ??
+    normalizeChatType(entry?.chatType ?? undefined) ??
+    normalizeChatType(entry?.origin?.chatType ?? undefined)
+  );
+}
 
 export function hasAmbiguousCanonicalSessionPeerShape(scopedSessionKey: string): boolean {
   const parts = scopedSessionKey.split(":");
@@ -75,6 +92,10 @@ function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyCha
   return parseCanonicalSessionPeerShape(scopedSessionKey)?.chatType;
 }
 
+function isExplicitScopedSessionKey(scopedSessionKey: string): boolean {
+  return normalizeLowercaseStringOrEmpty(scopedSessionKey).startsWith("explicit:");
+}
+
 function deriveBuiltInLegacySessionChatType(
   scopedSessionKey: string,
 ): SessionKeyChatType | undefined {
@@ -90,6 +111,9 @@ function deriveBuiltInLegacySessionChatType(
   if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scopedSessionKey)) {
     return "channel";
   }
+  if (/^discord:guild:[^:]+:channel:[^:]+(?::.*)?$/.test(scopedSessionKey)) {
+    return "channel";
+  }
   return undefined;
 }
 
@@ -99,6 +123,9 @@ export function deriveSessionChatTypeFromScopedKey(
     (scopedSessionKey: string) => SessionKeyChatType | undefined
   > = [],
 ): SessionKeyChatType {
+  if (isExplicitScopedSessionKey(scopedSessionKey)) {
+    return "unknown";
+  }
   const canonical = deriveCanonicalSessionChatType(scopedSessionKey);
   if (canonical) {
     return canonical;

@@ -13,7 +13,6 @@ import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
-import { normalizeChatType } from "../channels/chat-type.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionTotalTokens } from "../config/sessions.js";
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
@@ -25,6 +24,7 @@ import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
@@ -263,7 +263,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
   const { cfg, entry, key } = params;
   const origin = entry.origin;
   const deliveryContext = entry.deliveryContext;
-  const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
+  const chatType = resolveSessionEntryChatType(entry);
   if (chatType !== "direct") {
     return undefined;
   }

@@ -6,6 +6,7 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -37,6 +38,8 @@ type AcpTurnSource = "manual_spawn";
 /** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
   messageChannel?: string;
+  /** Trusted live conversation kind for current memory/tool/session policy. */
+  chatType?: ChatType;
   accountId?: string;
   groupId?: string | null;
   groupChannel?: string | null;

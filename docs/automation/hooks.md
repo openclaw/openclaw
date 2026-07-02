@@ -243,7 +243,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`). Session bootstrap policy still applies after hooks run, so shared group/channel sessions do not receive hook-added `MEMORY.md` by default.
 
 <a id="command-logger"></a>
 

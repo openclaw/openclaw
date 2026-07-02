@@ -23,6 +23,7 @@ import {
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   filterBootstrapFilesForSession,
+  filterLongTermMemoryBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
@@ -294,6 +295,7 @@ export async function resolveBootstrapFilesForRun(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: string;
   agentId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
@@ -310,7 +312,7 @@ export async function resolveBootstrapFilesForRun(params: {
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(rawFiles, { sessionKey, chatType: params.chatType }),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
@@ -327,7 +329,10 @@ export async function resolveBootstrapFilesForRun(params: {
     agentId: params.agentId,
   });
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated,
+    filterLongTermMemoryBootstrapFilesForSession(updated, {
+      sessionKey,
+      chatType: params.chatType,
+    }),
     workspaceSetupCompleted,
     params.workspaceDir,
   );
@@ -344,6 +349,7 @@ export async function resolveBootstrapContextForRun(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: string;
   agentId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;

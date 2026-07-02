@@ -18,6 +18,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { shouldIncludeLongTermMemoryByDefault } from "openclaw/plugin-sdk/routing";
 import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -86,6 +87,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import {
+  buildCodexNativeMemoryThreadConfigForRun,
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
@@ -110,6 +112,7 @@ const CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_STARTUP_REQUEST_COUNT = 3;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
   CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
+type LongTermMemoryDefaultPolicy = "include" | "explicit-only";
 const SIDE_BOUNDARY_PROMPT = `Side conversation boundary.
 
 Everything before this boundary is inherited history from the parent thread. It is reference context only. It is not your current task.
@@ -135,6 +138,15 @@ You may perform non-mutating inspection, including reading or searching files an
 
 Do not modify files, source, git state, permissions, configuration, workspace state, or external state unless the user explicitly requests that mutation in this side conversation. Do not request escalated permissions or broader sandbox access unless the user explicitly requests a mutation that requires it. If the user explicitly requests a mutation, keep it minimal, local to the request, and avoid disrupting the main thread.`;
 
+function isCodexSideNativeMemoryBindingStale(
+  bindingPolicy: LongTermMemoryDefaultPolicy | undefined,
+  currentPolicy: LongTermMemoryDefaultPolicy,
+): boolean {
+  return bindingPolicy === undefined
+    ? currentPolicy !== "include"
+    : bindingPolicy !== currentPolicy;
+}
+
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options: {
@@ -155,6 +167,22 @@ export async function runCodexAppServerSideQuestion(
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
+    );
+  }
+  const nativeMemoryDefaultPolicy = shouldIncludeLongTermMemoryByDefault({
+    sessionKey: params.sessionKey,
+    chatType: params.chatType,
+  })
+    ? "include"
+    : "explicit-only";
+  if (
+    isCodexSideNativeMemoryBindingStale(
+      binding.nativeMemoryDefaultPolicy,
+      nativeMemoryDefaultPolicy,
+    )
+  ) {
+    throw new Error(
+      "Codex /btw needs a fresh Codex thread for this session memory policy. Send a normal message first, then try /btw again.",
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
@@ -428,12 +456,18 @@ export async function runCodexAppServerSideQuestion(
     const pluginAppsConfigPatch = binding.pluginAppPolicyContext
       ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
       : undefined;
+    const nativeMemoryConfig = buildCodexNativeMemoryThreadConfigForRun({
+      sessionKey: params.sessionKey,
+      chatType: params.chatType,
+      longTermMemoryDefaultPolicy: nativeMemoryDefaultPolicy,
+    });
     const threadConfig =
       mergeCodexThreadConfigs(
         nativeHookRelayConfig,
         runtimeThreadConfig,
         pluginAppsConfigPatch,
         modelScopedAppServer.networkProxy?.configPatch,
+        nativeMemoryConfig,
       ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
@@ -617,6 +651,7 @@ function buildSideRunAttemptParams(
     agentId: params.agentId,
     ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     ...(params.agentAccountId ? { agentAccountId: params.agentAccountId } : {}),
     ...(params.messageTo ? { messageTo: params.messageTo } : {}),
     ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
@@ -687,6 +722,7 @@ async function createCodexSideToolBridge(input: {
         input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey
           ? input.params.sessionKey
           : undefined,
+      chatType: input.params.chatType,
       sessionId: input.params.sessionId,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
       agentDir:
@@ -927,6 +963,7 @@ function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
 }
 
 export const testing = {
+  buildSideRunAttemptParams,
   resolveSideDynamicToolCallTimeoutMs,
 } as const;
 

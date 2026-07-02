@@ -43,6 +43,12 @@ export interface DescribeStickerParams {
   cfg: OpenClawConfig;
   agentDir?: string;
   agentId?: string;
+  scopeContext?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+    longTermMemoryDefaultPolicy?: "include" | "explicit-only";
+  };
 }
 
 /**
@@ -162,6 +168,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       prompt: STICKER_DESCRIPTION_PROMPT,
       maxTokens: 150,
       timeoutMs: 30_000,
+      ...(params.scopeContext ? { scopeContext: params.scopeContext } : {}),
     });
     return result.text ?? null;
   } catch (err) {

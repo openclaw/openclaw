@@ -107,6 +107,8 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryTargetChatType } from "../sessions/session-memory-policy.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -1611,6 +1613,14 @@ export async function runHeartbeatOnce(opts: {
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+  const heartbeatRunChatType =
+    resolveLongTermMemoryTargetChatType({
+      sessionKey,
+      liveChatType: delivery.chatType,
+      storedChatType: resolveSessionEntryChatType(entry),
+      longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+      preferStoredPolicy: true,
+    }) ?? delivery.chatType;
   const replyPrefix = createReplyPrefixContext({
     cfg,
     agentId,
@@ -1627,7 +1637,7 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     entry,
-    chatType: delivery.chatType,
+    chatType: heartbeatRunChatType,
   });
   const {
     prompt,
@@ -1825,6 +1835,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
+    ChatType: heartbeatRunChatType,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

@@ -3182,6 +3182,7 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
         childSessionKey: "agent:main:subagent:child",
         reason: "deleted",
         workspaceDir: undefined,
@@ -3366,6 +3367,7 @@ describe("subagent registry seam flow", () => {
     );
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
         childSessionKey: "agent:main:subagent:parent",
         reason: "deleted",
         workspaceDir: undefined,
@@ -3523,6 +3525,7 @@ describe("subagent registry seam flow", () => {
     ).toBeUndefined();
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
         childSessionKey: "agent:main:subagent:killed-delete",
         reason: "deleted",
         workspaceDir: "/tmp/killed-delete-workspace",
@@ -3659,6 +3662,7 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
         childSessionKey: "agent:main:subagent:release-delete",
         reason: "released",
         workspaceDir: undefined,
@@ -3716,6 +3720,45 @@ describe("subagent registry seam flow", () => {
         workspaceDir: "/tmp/workspace",
       },
     );
+  });
+
+  it("passes stored explicit-only scope into direct-shaped context-engine end hooks", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:session:child-explicit": {
+        sessionId: "sess-child-explicit",
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        updatedAt: 1,
+      },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-release-context-engine-explicit",
+      childSessionKey: "agent:main:session:child-explicit",
+      controllerSessionKey: "agent:main:session:parent",
+      requesterSessionKey: "agent:main:session:parent",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "parent",
+      task: "task",
+      cleanup: "keep",
+      expectsCompletionMessage: undefined,
+      spawnMode: "run",
+      createdAt: 1,
+      startedAt: 1,
+      sessionStartedAt: 1,
+      accumulatedRuntimeMs: 0,
+      cleanupHandled: false,
+    });
+
+    mod.releaseSubagentRun("run-release-context-engine-explicit");
+
+    await waitForFast(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
+        childSessionKey: "agent:main:session:child-explicit",
+        reason: "released",
+        workspaceDir: undefined,
+      });
+    });
   });
 
   it("passes stored agentDir through swept context-engine cleanup paths", async () => {
@@ -3872,6 +3915,7 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        chatType: "group",
         childSessionKey: "agent:main:subagent:suspended-cron",
         reason: "completed",
         workspaceDir: undefined,

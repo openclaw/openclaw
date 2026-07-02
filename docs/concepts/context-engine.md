@@ -126,6 +126,7 @@ export default function register(api) {
     info: {
       id: "my-engine",
       name: "My Context Engine",
+      supportsSharedSessionScope: true,
       ownsCompaction: true,
     },
 
@@ -134,13 +135,23 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
+    async assemble({
+      sessionId,
+      sessionKey,
+      chatType,
+      messages,
+      tokenBudget,
+      availableTools,
+      citationsMode,
+    }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
         estimatedTokens: countTokens(messages),
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
+          sessionKey,
+          chatType,
           citationsMode,
         }),
       };
@@ -157,6 +168,11 @@ export default function register(api) {
 The factory `ctx` includes optional `config`, `agentDir`, and `workspaceDir`
 values so plugins can initialize per-agent or per-workspace state before the
 first lifecycle hook runs.
+
+Set `info.supportsSharedSessionScope` only when every lifecycle hook treats
+`chatType: "group"` and `chatType: "channel"` as restrictive shared-session
+scope. Engines that omit it are treated as private-only and OpenClaw bypasses
+them for shared sessions, using the legacy pass-through engine instead.
 
 Then enable it in config:
 

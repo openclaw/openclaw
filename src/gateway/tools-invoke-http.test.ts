@@ -12,6 +12,9 @@ type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 const pluginToolMetaState = vi.hoisted(
   () => new Map<string, { pluginId: string; optional: boolean }>(),
 );
+const sessionEntryByKey = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const sessionEntryLoadErrorByKey = vi.hoisted(() => new Map<string, Error>());
+const sessionEntryLoadOptionsByKey = vi.hoisted(() => new Map<string, unknown[]>());
 
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
@@ -35,22 +38,28 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: (params?: {
-    session?: { scope?: string; mainKey?: string };
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) => {
-    if (params?.session?.scope === "global") {
-      return "global";
-    }
-    const agents = params?.agents?.list ?? [];
-    const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-    const agentId = rawDefault.trim().toLowerCase() || "main";
-    const mainKeyRaw = (params?.session?.mainKey ?? "main").trim().toLowerCase();
-    const mainKey = mainKeyRaw || "main";
-    return `agent:${agentId}:${mainKey}`;
-  },
-}));
+vi.mock("../config/sessions.js", async () => {
+  return {
+    resolveMainSessionKey: (params?: {
+      session?: { scope?: string; mainKey?: string };
+      agents?: { list?: Array<{ id?: string; default?: boolean }> };
+    }) => {
+      if (params?.session?.scope === "global") {
+        return "global";
+      }
+      const agents = params?.agents?.list ?? [];
+      const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+      const agentId = rawDefault.trim().toLowerCase() || "main";
+      const mainKeyRaw = (params?.session?.mainKey ?? "main").trim().toLowerCase();
+      const mainKey = mainKeyRaw || "main";
+      return `agent:${agentId}:${mainKey}`;
+    },
+    resolveStorePath: (_store?: string, opts?: { agentId?: string }) => {
+      const agentId = (opts?.agentId ?? "main").trim().toLowerCase() || "main";
+      return `/tmp/openclaw-tools-invoke-session-mock/${agentId}/sessions.json`;
+    },
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(async () => ({ ok: true })),
@@ -71,6 +80,22 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name?: string }) =>
     typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
+}));
+
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: (sessionKey: string, opts?: unknown) => {
+    const options = sessionEntryLoadOptionsByKey.get(sessionKey) ?? [];
+    options.push(opts);
+    sessionEntryLoadOptionsByKey.set(sessionKey, options);
+    const error = sessionEntryLoadErrorByKey.get(sessionKey);
+    if (error) {
+      throw error;
+    }
+    return {
+      cfg,
+      entry: sessionEntryByKey.get(sessionKey),
+    };
+  },
 }));
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
@@ -154,6 +179,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, permissionFlow: true }),
     },
     {
+      name: "memory_store",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "stored" }),
+    },
+    {
       name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "write-scoped" }),
@@ -206,7 +236,13 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      let resolvedTools = ctx.disablePluginTools
+        ? tools.filter((tool) => tool.name !== "browser")
+        : tools;
+      if (ctx.agentChatType !== "direct") {
+        resolvedTools = resolvedTools.filter((tool) => tool.name !== "memory_store");
+      }
+      return resolvedTools;
     },
   };
 });
@@ -278,7 +314,11 @@ beforeEach(() => {
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
+  sessionEntryByKey.clear();
+  sessionEntryLoadErrorByKey.clear();
+  sessionEntryLoadOptionsByKey.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
+  pluginToolMetaState.set("memory_store", { pluginId: "memory", optional: false });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -386,17 +426,21 @@ const invokeToolAuthed = async (params: {
   tool: string;
   args?: Record<string, unknown>;
   action?: string;
+  headers?: Record<string, string>;
   sessionKey?: string;
-}) =>
-  invokeTool({
+}) => {
+  const { headers, ...rest } = params;
+  return invokeTool({
     port: sharedPort,
-    headers: gatewayAuthHeaders(),
-    ...params,
+    headers: { ...gatewayAuthHeaders(), ...headers },
+    ...rest,
   });
+};
 
 const expectOkInvokeResponse = async (res: Response) => {
-  expect(res.status).toBe(200);
-  const body = await res.json();
+  const rawBody = await res.text();
+  expect(res.status, rawBody).toBe(200);
+  const body = JSON.parse(rawBody);
   expect(body.ok).toBe(true);
   return body as { ok: boolean; result?: Record<string, unknown> };
 };
@@ -507,6 +551,57 @@ describe("POST /tools/invoke", () => {
     expect(body.result?.ok).toBe(true);
     expect(body.result?.permissionFlow).toBe(true);
     expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toContain("plugin_doctor");
+  });
+
+  it("uses request chat type for opaque plugin tool invoke sessions", async () => {
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["plugin_doctor"] },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      headers: { "x-openclaw-chat-type": "group" },
+    });
+
+    await expectOkInvokeResponse(res);
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("group");
+  });
+
+  it("lets live shared chat type override stale direct metadata for opaque tool invoke sessions", async () => {
+    const sessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["plugin_doctor"] },
+    };
+    sessionEntryByKey.set(sessionKey, { sessionId: "persisted-direct", chatType: "direct" });
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey,
+      headers: { "x-openclaw-chat-type": "group" },
+    });
+
+    await expectOkInvokeResponse(res);
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("group");
+  });
+
+  it("uses persisted chat type for opaque plugin tool invoke sessions", async () => {
+    const sessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["plugin_doctor"] },
+    };
+    sessionEntryByKey.set(sessionKey, { sessionId: "persisted-group", chatType: "group" });
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey,
+    });
+
+    await expectOkInvokeResponse(res);
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("group");
   });
 
   it("uses tools.alsoAllow for optional plugin discovery without loading every plugin tool", async () => {
@@ -1109,6 +1204,124 @@ describe("tools.invoke Gateway RPC", () => {
     expect(call?.[1]?.toolName).toBe("nodes");
     expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+  });
+
+  it("uses stored explicit-only policy when invoking private memory tools without live chat", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["memory_store"] },
+    };
+    sessionEntryByKey.set(sessionKey, {
+      sessionId: "explicit-only-direct-shaped",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+
+    const call = await invokeToolsRpc({
+      name: "memory_store",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(false);
+    expect(call?.[1]?.toolName).toBe("memory_store");
+    expect((call?.[1]?.error as { code?: string } | undefined)?.code).toBe("not_found");
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("group");
+  });
+
+  it("does not let a direct request header lift stored explicit-only memory policy", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["memory_store"] },
+    };
+    sessionEntryByKey.set(sessionKey, {
+      sessionId: "explicit-only-direct-shaped",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "memory_store",
+      sessionKey,
+      headers: { "x-openclaw-chat-type": "direct" },
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error?.type).toBe("not_found");
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("group");
+  });
+
+  it("keeps private memory tools available for direct include sessions", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["memory_store"] },
+    };
+    sessionEntryByKey.set(sessionKey, {
+      sessionId: "include-direct",
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "include",
+    });
+
+    const call = await invokeToolsRpc({
+      name: "memory_store",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("memory_store");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "stored" });
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("direct");
+  });
+
+  it("keeps direct-key tools.invoke callers functional when no persisted row exists", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["memory_store"] },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "memory_store",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("memory_store");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "stored" });
+    expect(lastCreateOpenClawToolsContext?.agentChatType).toBe("direct");
+  });
+
+  it("fails closed when tools.invoke cannot read the persisted session policy", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["memory_store"] },
+    };
+    sessionEntryLoadErrorByKey.set(sessionKey, new Error("permission denied"));
+
+    const call = await invokeToolsRpc({
+      name: "memory_store",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(false);
+    expect(call?.[1]?.toolName).toBe("memory_store");
+    const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
+    expect(error?.code).toBe("internal_error");
+    expect(error?.message).toBe("session policy unavailable");
+    expect(sessionEntryLoadOptionsByKey.get(sessionKey)).toEqual([{ strictRead: true }]);
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
   });
 
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {

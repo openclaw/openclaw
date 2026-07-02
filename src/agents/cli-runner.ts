@@ -390,6 +390,7 @@ async function finalizeCliContextEngineTurn(params: {
     yieldAborted: false,
     sessionIdUsed: runParams.sessionId,
     sessionKey: runParams.sessionKey,
+    chatType: runParams.chatType,
     sessionFile: runParams.sessionFile,
     isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
@@ -1027,6 +1028,9 @@ export async function runPreparedCliAgent(
                   ...(context.promptToolNamesHash
                     ? { promptToolNamesHash: context.promptToolNamesHash }
                     : {}),
+                  ...(context.longTermMemoryDefaultPolicy
+                    ? { longTermMemoryDefaultPolicy: context.longTermMemoryDefaultPolicy }
+                    : {}),
                   ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
                   ...(context.preparedBackend.mcpConfigHash
                     ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
@@ -1066,6 +1070,7 @@ export async function runPreparedCliAgent(
       contextEngine: context.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       config: context.contextEngineConfig,
       contextEngineHostSupport: buildGenericCliContextEngineHostSupport({

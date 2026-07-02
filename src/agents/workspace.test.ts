@@ -856,6 +856,47 @@ describe("filterBootstrapFilesForSession", () => {
     expect(result).toStrictEqual(mockFiles);
   });
 
+  it.each(["agent:default:discord:direct:user-1", "agent:default:telegram:dm:123456"])(
+    "keeps MEMORY.md for private/direct sessions (%s)",
+    (sessionKey) => {
+      const result = filterBootstrapFilesForSession(mockFiles, sessionKey);
+      expect(result).toStrictEqual(mockFiles);
+    },
+  );
+
+  it.each([
+    "agent:default:discord:channel:c1",
+    "agent:default:slack:channel:c1:thread:1699999999.0001",
+    "agent:default:telegram:group:-1001234567890:topic:99",
+  ])("drops only MEMORY.md for shared sessions (%s)", (sessionKey) => {
+    const result = filterBootstrapFilesForSession(mockFiles, sessionKey);
+    expect(result.map((file) => file.name)).toStrictEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "BOOTSTRAP.md",
+    ]);
+  });
+
+  it("uses runtime chat type to drop MEMORY.md for opaque shared sessions", () => {
+    const result = filterBootstrapFilesForSession(mockFiles, {
+      sessionKey: "agent:default:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+    });
+    expect(result.map((file) => file.name)).toStrictEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "BOOTSTRAP.md",
+    ]);
+  });
+
   it("filters to allowlist for subagent sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:subagent:task-1");
     expectSubagentAllowedBootstrapNames(result);

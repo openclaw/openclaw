@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -50,6 +51,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  chatType?: ChatType;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -354,10 +356,15 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   };
 }
 
+function buildContextEngineMaintenanceChatTypeParams(chatType?: ChatType): { chatType?: ChatType } {
+  return chatType === "group" || chatType === "channel" ? { chatType } : {};
+}
+
 async function executeContextEngineMaintenance(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -374,6 +381,7 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    ...buildContextEngineMaintenanceChatTypeParams(params.chatType),
     sessionFile: params.sessionFile,
     runtimeSettings: params.runtimeSettings,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
@@ -405,6 +413,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  chatType?: ChatType;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -460,6 +469,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -607,6 +617,7 @@ function scheduleDeferredTurnMaintenance(
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey,
+        chatType: params.chatType,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -674,6 +685,7 @@ export async function runContextEngineMaintenance(params: {
   contextEngine?: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -703,6 +715,7 @@ export async function runContextEngineMaintenance(params: {
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        chatType: params.chatType,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -726,6 +739,7 @@ export async function runContextEngineMaintenance(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      chatType: params.chatType,
       sessionFile: params.sessionFile,
       reason: params.reason,
       sessionManager: params.sessionManager,

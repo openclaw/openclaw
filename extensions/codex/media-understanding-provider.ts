@@ -58,6 +58,7 @@ export function buildCodexMediaUnderstandingProvider(
           authStore: req.authStore,
           agentDir: req.agentDir,
           cfg: req.cfg,
+          ...(req.scopeContext ? { scopeContext: req.scopeContext } : {}),
         },
         options,
       ),
@@ -95,6 +96,7 @@ async function describeCodexImages(
     ],
     requiredModalities: ["text", "image"],
     isolation: "configured-transport",
+    longTermMemoryContext: req.scopeContext,
   });
   return { text, model };
 }
@@ -132,6 +134,7 @@ async function extractCodexStructured(
     input: buildCodexStructuredInput(req),
     requiredModalities: requiredStructuredModalities(),
     isolation: "configured-transport",
+    longTermMemoryContext: req.scopeContext,
   });
   return normalizeStructuredExtractionResult({ text, model, provider: req.provider, req });
 }

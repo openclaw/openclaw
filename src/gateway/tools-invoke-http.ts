@@ -1,6 +1,7 @@
 // HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -75,6 +76,7 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
+  const requestChatType = normalizeChatType(getHeader(req, "x-openclaw-chat-type"));
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const outcome = await invokeGatewayTool({
     cfg,
@@ -85,6 +87,7 @@ export async function handleToolsInvokeHttpRequest(
     agentThreadId,
     senderIsOwner,
     toolCallIdPrefix: "http",
+    ...(requestChatType ? { requestChatType } : {}),
   });
   if (outcome.ok) {
     sendJson(res, outcome.status, { ok: true, result: outcome.result });

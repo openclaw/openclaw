@@ -221,6 +221,64 @@ describe("browser plugin", () => {
     });
   });
 
+  it("keeps shared browser media scope when runtime metadata says direct", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:telegram:group:chat-123",
+      chatType: "direct",
+      messageChannel: "telegram",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:telegram:group:chat-123",
+      mediaScope: {
+        sessionKey: "agent:main:telegram:group:chat-123",
+        channel: "telegram",
+        chatType: "group",
+      },
+    });
+  });
+
+  it("preserves trusted chat type for opaque browser media scopes", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:opaque-shared-session",
+      chatType: "channel",
+      messageChannel: "browser",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:opaque-shared-session",
+      mediaScope: {
+        sessionKey: "agent:main:opaque-shared-session",
+        channel: "browser",
+        chatType: "channel",
+      },
+    });
+  });
+
   it("registers CLI descriptors and lazy-loads the lightweight browser CLI", async () => {
     const { api, registerCli } = createApi();
     registerBrowserPlugin(api);

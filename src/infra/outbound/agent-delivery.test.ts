@@ -98,9 +98,17 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "telegram"].includes(channel),
+    ["custom", "directchat", "msteams", "telegram", "whatsapp", "workspace"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "telegram", "webchat"].includes(channel),
+    [
+      "custom",
+      "directchat",
+      "msteams",
+      "telegram",
+      "webchat",
+      "whatsapp",
+      "workspace",
+    ].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
 }));
 
@@ -492,6 +500,257 @@ describe("agent delivery helpers", () => {
     expect(plan.targetResolutionError).toBeUndefined();
   });
 
+  it("classifies explicit targets when the plugin has no session-route resolver", async () => {
+    const resolvedTarget = {
+      to: "room:ops",
+      kind: "group",
+      source: "normalized",
+      resolutionSource: "normalized",
+    } as const;
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct", "group"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "room:ops",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: resolvedTarget,
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: undefined,
+      requestedChannel: "workspace",
+      explicitTo: "room:ops",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(plan.resolvedTo).toBe("room:ops");
+    expect(plan.resolvedChatType).toBe("group");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("does not rewrite route-less delivery targets while classifying them", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct", "group"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "user:+1555",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "user:+1555",
+        kind: "user",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: undefined,
+      requestedChannel: "whatsapp",
+      explicitTo: "+1555",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("+1555");
+    expect(plan.resolvedChatType).toBe("direct");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("keeps route-less plugin delivery when target classification is unavailable", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "conversation:teams-123",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("target parser unavailable"),
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main",
+      sessionEntry: {
+        sessionId: "s-teams",
+        updatedAt: 4,
+        lastChannel: "msteams",
+        lastTo: "conversation:teams-123",
+      },
+      requestedChannel: "last",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("msteams");
+    expect(plan.resolvedTo).toBe("conversation:teams-123");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("keeps route-less explicit-only delivery when target classification rejects", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "custom-direct-target",
+    });
+    mocks.resolveChannelTarget.mockRejectedValueOnce(new Error("target lookup failed"));
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main:custom:direct:alice",
+      sessionEntry: {
+        sessionId: "s-explicit-only-reject",
+        updatedAt: 4,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        deliveryContext: { channel: "custom", to: "custom-direct-target" },
+      },
+      requestedChannel: "last",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("custom-direct-target");
+    expect(plan.resolvedChatType).toBe("group");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("treats route-less explicit-only direct sessions as shared when parsing fails", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "custom-direct-target",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("target parser unavailable"),
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main:custom:direct:alice",
+      sessionEntry: {
+        sessionId: "s-explicit-only",
+        updatedAt: 4,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        deliveryContext: { channel: "custom", to: "custom-direct-target" },
+      },
+      requestedChannel: "last",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("custom-direct-target");
+    expect(plan.resolvedChatType).toBe("group");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("preserves implicit direct session targets when route-less plugins cannot infer kind", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct", "group"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "qqbot:c2c:OPENID",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "qqbot:c2c:OPENID",
+        kind: "group",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main:qqbot:direct:OPENID",
+      sessionEntry: {
+        sessionId: "s-direct",
+        updatedAt: 4,
+        chatType: "direct",
+        deliveryContext: { channel: "workspace", to: "qqbot:c2c:OPENID" },
+      },
+      requestedChannel: "last",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("qqbot:c2c:OPENID");
+    expect(plan.resolvedChatType).toBe("direct");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
+  it("does not preserve direct fallback hints for explicit-only sessions", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      capabilities: { chatTypes: ["direct", "group"] },
+      messaging: {},
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "qqbot:c2c:OPENID",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "qqbot:c2c:OPENID",
+        kind: "group",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main:qqbot:direct:OPENID",
+      sessionEntry: {
+        sessionId: "s-shared-direct-target",
+        updatedAt: 4,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        deliveryContext: { channel: "workspace", to: "qqbot:c2c:OPENID" },
+      },
+      requestedChannel: "last",
+      accountId: "work",
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("qqbot:c2c:OPENID");
+    expect(plan.resolvedChatType).toBe("group");
+    expect(plan.targetResolutionError).toBeUndefined();
+  });
+
   it("surfaces stored explicit target errors even when explicit validation is disabled", () => {
     const targetResolutionError = new Error('reserved target "current"');
 
@@ -513,13 +772,22 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBeUndefined();
   });
 
-  it("falls back to the original plan when session-route canonicalization fails", async () => {
+  it("classifies the target when session-route canonicalization fails", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       messaging: { resolveOutboundSessionRoute: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: true,
       to: "channel:C123",
+    });
+    mocks.resolveChannelTarget.mockResolvedValueOnce({
+      ok: true,
+      target: {
+        to: "channel:C123",
+        kind: "channel",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
     });
     mocks.resolveOutboundSessionRoute.mockRejectedValueOnce(new Error("route lookup failed"));
 
@@ -533,8 +801,51 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
 
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "workspace",
+      input: "channel:C123",
+      accountId: undefined,
+      unknownTargetMode: "normalized",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function) },
+      },
+    });
     expect(plan.resolvedTo).toBe("channel:C123");
+    expect(plan.resolvedChatType).toBe("channel");
     expect(plan.resolvedThreadId).toBeUndefined();
+  });
+
+  it("keeps delivery when post-route target classification rejects", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "custom-direct-target",
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+    mocks.resolveChannelTarget.mockRejectedValueOnce(new Error("target lookup failed"));
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      currentSessionKey: "agent:main:custom:direct:alice",
+      sessionEntry: {
+        sessionId: "s-post-route-explicit-only",
+        updatedAt: 4,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        deliveryContext: { channel: "custom", to: "custom-direct-target" },
+      },
+      requestedChannel: "last",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedTo).toBe("custom-direct-target");
+    expect(plan.resolvedChatType).toBe("group");
+    expect(plan.targetResolutionError).toBeUndefined();
   });
 
   it("does not session-route targets when delivery is disabled", async () => {

@@ -1,10 +1,15 @@
 // Agent delivery planning resolves final reply destinations from explicit
 // options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  deriveSessionChatTypeFromKey,
+  resolveSessionEntryChatType,
+} from "../../sessions/session-chat-type-shared.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -28,11 +33,114 @@ export type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
   resolvedChannel: GatewayMessageChannel;
   resolvedTo?: string;
+  resolvedChatType?: ChatType;
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
   targetResolutionError?: Error;
 };
+
+function chatTypeFromResolvedMessagingTarget(
+  target: ResolvedMessagingTarget | undefined,
+): ChatType | undefined {
+  if (target?.kind === "user") {
+    return "direct";
+  }
+  if (target?.kind === "group" || target?.kind === "channel") {
+    return target.kind;
+  }
+  return undefined;
+}
+
+function chatTypeFromSessionKey(sessionKey: string | undefined): ChatType | undefined {
+  const chatType = deriveSessionChatTypeFromKey(sessionKey);
+  return chatType === "unknown" ? undefined : chatType;
+}
+
+function trustedImplicitSessionChatType(params: {
+  deliveryTargetMode?: ChannelOutboundTargetMode;
+  sessionEntry?: SessionEntry;
+  currentSessionKey?: string;
+}): ChatType | undefined {
+  const chatType =
+    resolveSessionEntryChatType(params.sessionEntry) ??
+    chatTypeFromSessionKey(params.currentSessionKey);
+  if (
+    params.sessionEntry?.longTermMemoryDefaultPolicy === "explicit-only" &&
+    chatType === "direct"
+  ) {
+    return "group";
+  }
+  if (params.deliveryTargetMode === "explicit") {
+    return undefined;
+  }
+  return chatType;
+}
+
+function chatTypeForResolvedMessagingTarget(params: {
+  target: ResolvedMessagingTarget;
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+  deliveryTargetMode?: ChannelOutboundTargetMode;
+  sessionEntry?: SessionEntry;
+  currentSessionKey?: string;
+}): ChatType | undefined {
+  return (
+    normalizeChatType(params.plugin?.messaging?.inferTargetChatType?.({ to: params.target.to })) ??
+    trustedImplicitSessionChatType({
+      deliveryTargetMode: params.deliveryTargetMode,
+      sessionEntry: params.sessionEntry,
+      currentSessionKey: params.currentSessionKey,
+    }) ??
+    chatTypeFromResolvedMessagingTarget(params.target)
+  );
+}
+
+function deliveryPlanWithResolvedMessagingTarget(params: {
+  plan: AgentDeliveryPlan;
+  target: ResolvedMessagingTarget;
+  chatType?: ChatType;
+  explicitThreadId?: string | number;
+  resolvedTo?: string;
+}): AgentDeliveryPlan {
+  return {
+    ...params.plan,
+    resolvedChatType: params.chatType ?? chatTypeFromResolvedMessagingTarget(params.target),
+    resolvedTo: params.resolvedTo ?? params.target.to,
+    resolvedThreadId:
+      params.plan.deliveryTargetMode === "explicit"
+        ? params.explicitThreadId
+        : params.plan.resolvedThreadId,
+  };
+}
+
+type ChannelTargetResolution = Awaited<ReturnType<typeof resolveChannelTarget>>;
+
+async function resolveChannelTargetForClassification(
+  params: Parameters<typeof resolveChannelTarget>[0],
+): Promise<ChannelTargetResolution | undefined> {
+  try {
+    return await resolveChannelTarget(params);
+  } catch {
+    return undefined;
+  }
+}
+
+function deliveryPlanWithTrustedImplicitChatType(
+  plan: AgentDeliveryPlan,
+  params: {
+    sessionEntry?: SessionEntry;
+    currentSessionKey?: string;
+  },
+): AgentDeliveryPlan {
+  return {
+    ...plan,
+    resolvedChatType: trustedImplicitSessionChatType({
+      deliveryTargetMode: plan.deliveryTargetMode,
+      sessionEntry: params.sessionEntry,
+      currentSessionKey: params.currentSessionKey,
+    }),
+  };
+}
 
 export function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
@@ -155,8 +263,35 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     cfg: params.cfg,
     allowBootstrap: true,
   });
+  const explicitThreadId =
+    params.explicitThreadId != null && params.explicitThreadId !== ""
+      ? params.explicitThreadId
+      : undefined;
   if (!plugin?.messaging?.resolveOutboundSessionRoute) {
-    return plan;
+    const fallbackTarget = await resolveChannelTargetForClassification({
+      cfg: params.cfg,
+      channel: resolvedChannel as ChannelId,
+      input: resolvedTo,
+      accountId: plan.resolvedAccountId,
+      unknownTargetMode: "normalized",
+      plugin,
+    });
+    if (!fallbackTarget?.ok) {
+      return deliveryPlanWithTrustedImplicitChatType(plan, params);
+    }
+    return deliveryPlanWithResolvedMessagingTarget({
+      plan,
+      target: fallbackTarget.target,
+      resolvedTo: plan.resolvedTo,
+      chatType: chatTypeForResolvedMessagingTarget({
+        target: fallbackTarget.target,
+        plugin,
+        deliveryTargetMode: plan.deliveryTargetMode,
+        sessionEntry: params.sessionEntry,
+        currentSessionKey: params.currentSessionKey,
+      }),
+      explicitThreadId,
+    });
   }
   const normalizedTarget = resolveOutboundTarget({
     channel: resolvedChannel,
@@ -173,7 +308,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     if (!isReservedTargetLiteralError(normalizedTarget.error)) {
       return { ...plan, targetResolutionError: normalizedTarget.error };
     }
-    const resolvedTarget = await resolveChannelTarget({
+    const resolvedTarget = await resolveChannelTargetForClassification({
       cfg: params.cfg,
       channel: resolvedChannel as ChannelId,
       input: resolvedTo,
@@ -181,16 +316,15 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       unknownTargetMode: "normalized",
       plugin,
     });
+    if (!resolvedTarget) {
+      return deliveryPlanWithTrustedImplicitChatType(plan, params);
+    }
     if (!resolvedTarget.ok) {
       return { ...plan, targetResolutionError: resolvedTarget.error };
     }
     sessionRouteTarget = resolvedTarget.target.to;
     resolvedSessionRouteTarget = resolvedTarget.target;
   }
-  const explicitThreadId =
-    params.explicitThreadId != null && params.explicitThreadId !== ""
-      ? params.explicitThreadId
-      : undefined;
   const route = await (async () => {
     try {
       return await resolveOutboundSessionRoute({
@@ -209,18 +343,49 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   })();
   if (!route) {
     if (resolvedSessionRouteTarget) {
-      return {
-        ...plan,
-        resolvedTo: resolvedSessionRouteTarget.to,
-        resolvedThreadId:
-          plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
-      };
+      return deliveryPlanWithResolvedMessagingTarget({
+        plan,
+        target: resolvedSessionRouteTarget,
+        chatType: chatTypeForResolvedMessagingTarget({
+          target: resolvedSessionRouteTarget,
+          plugin,
+          deliveryTargetMode: plan.deliveryTargetMode,
+          sessionEntry: params.sessionEntry,
+          currentSessionKey: params.currentSessionKey,
+        }),
+        explicitThreadId,
+      });
     }
-    return plan;
+    // If routing cannot provide a canonical session, still classify the
+    // delivery target so shared replies keep private long-term memory out.
+    const fallbackTarget = await resolveChannelTargetForClassification({
+      cfg: params.cfg,
+      channel: resolvedChannel as ChannelId,
+      input: sessionRouteTarget,
+      accountId: plan.resolvedAccountId,
+      unknownTargetMode: "normalized",
+      plugin,
+    });
+    if (!fallbackTarget?.ok) {
+      return deliveryPlanWithTrustedImplicitChatType(plan, params);
+    }
+    return deliveryPlanWithResolvedMessagingTarget({
+      plan,
+      target: fallbackTarget.target,
+      chatType: chatTypeForResolvedMessagingTarget({
+        target: fallbackTarget.target,
+        plugin,
+        deliveryTargetMode: plan.deliveryTargetMode,
+        sessionEntry: params.sessionEntry,
+        currentSessionKey: params.currentSessionKey,
+      }),
+      explicitThreadId,
+    });
   }
   return {
     ...plan,
     resolvedTo: route.to,
+    resolvedChatType: route.chatType,
     resolvedThreadId:
       route.threadId ??
       (plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId),

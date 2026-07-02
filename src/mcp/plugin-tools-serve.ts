@@ -21,7 +21,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
+import {
+  resolveLongTermMemoryTargetChatType,
+  shouldIncludeLongTermMemoryByDefault,
+} from "../sessions/session-memory-policy.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
+
+export const OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV =
+  "OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY";
 
 function resolvePluginToolPolicy(config: OpenClawConfig): {
   toolAllowlist?: string[];
@@ -40,14 +49,51 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
   };
 }
 
-function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+export function resolvePluginToolsMcpAgentSessionKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env[OPENCLAW_PLUGIN_TOOLS_MCP_AGENT_SESSION_KEY_ENV]?.trim() || undefined;
+}
+
+function resolvePluginToolContext(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const sessionKey = resolvePluginToolsMcpAgentSessionKey(params.env);
+  if (!sessionKey) {
+    return { config: params.config, chatType: "group" as const };
+  }
+  const entry = loadSessionEntry(sessionKey, { strictRead: true }).entry;
+  const storedChatType = resolveSessionEntryChatType(entry);
+  const scopedChatType = resolveLongTermMemoryTargetChatType({
+    sessionKey,
+    storedChatType,
+    longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+    preferStoredPolicy: true,
+  });
+  const shouldUseDirectScope =
+    scopedChatType === undefined &&
+    shouldIncludeLongTermMemoryByDefault({
+      sessionKey,
+      chatType: storedChatType,
+      longTermMemoryDefaultPolicy: entry?.longTermMemoryDefaultPolicy,
+    });
+  return {
+    config: params.config,
+    sessionKey,
+    chatType: scopedChatType ?? (shouldUseDirectScope ? "direct" : "group"),
+  };
+}
+
+function resolveTools(config: OpenClawConfig, env: NodeJS.ProcessEnv = process.env): AnyAgentTool[] {
   const pluginToolPolicy = resolvePluginToolPolicy(config);
+  const context = resolvePluginToolContext({ config, env });
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context: { config },
+    context,
     ...pluginToolPolicy,
   });
   return resolvePluginTools({
-    context: { config },
+    context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
     runtimeRegistry,
@@ -57,11 +103,12 @@ function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
 export function createPluginToolsMcpServer(
   params: {
     config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
     tools?: AnyAgentTool[];
   } = {},
 ): Server {
   const cfg = params.config ?? getRuntimeConfig();
-  const tools = params.tools ?? resolveTools(cfg);
+  const tools = params.tools ?? resolveTools(cfg, params.env);
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
@@ -71,8 +118,8 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   const config = getRuntimeConfig();
-  const tools = resolveTools(config);
-  const server = createPluginToolsMcpServer({ config, tools });
+  const tools = resolveTools(config, process.env);
+  const server = createPluginToolsMcpServer({ config, env: process.env, tools });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");
   }

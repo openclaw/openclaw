@@ -56,6 +56,7 @@ import {
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../sessions/session-chat-type-shared.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
@@ -512,7 +513,7 @@ function resolveChannelModelNote(params: {
     cfg: params.config,
     channel: params.entry.channel ?? params.entry.origin?.provider,
     groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
+    groupChatType: resolveSessionEntryChatType(params.entry),
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
@@ -938,9 +939,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter(Boolean)
     .join(" • ");
 
+  const entryChatType = resolveSessionEntryChatType(entry);
   const isGroupSession =
-    entry?.chatType === "group" ||
-    entry?.chatType === "channel" ||
+    entryChatType === "group" ||
+    entryChatType === "channel" ||
     Boolean(args.sessionKey?.includes(":group:")) ||
     Boolean(args.sessionKey?.includes(":channel:"));
   const groupActivationValue = isGroupSession

@@ -40,6 +40,7 @@ import {
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import {
   buildUsageAggregateTail,
@@ -1308,7 +1309,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const chatType = resolveSessionEntryChatType(merged.storeEntry);
 
       if (usage) {
         if (usage.messageCounts) {

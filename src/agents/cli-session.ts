@@ -11,6 +11,7 @@ import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+type LongTermMemoryDefaultPolicy = NonNullable<CliSessionBinding["longTermMemoryDefaultPolicy"]>;
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
 export function hashCliSessionText(value: string | undefined): string | undefined {
@@ -66,6 +67,13 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.promptToolNamesHash)
         ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
         : {}),
+      ...(readLongTermMemoryDefaultPolicy(binding.longTermMemoryDefaultPolicy)
+        ? {
+            longTermMemoryDefaultPolicy: readLongTermMemoryDefaultPolicy(
+              binding.longTermMemoryDefaultPolicy,
+            ),
+          }
+        : {}),
       ...(normalizeOptionalString(binding.cwdHash)
         ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
         : {}),
@@ -118,6 +126,7 @@ export type CliSessionInvalidatedReason =
   | "auth-profile"
   | "auth-epoch"
   | "message-policy"
+  | "memory-policy"
   | "cwd"
   | "mcp";
 
@@ -142,6 +151,7 @@ export function resolveCliSessionReuse(params: {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -150,6 +160,22 @@ export function resolveCliSessionReuse(params: {
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
     return { mode: "none" };
+  }
+  const currentLongTermMemoryDefaultPolicy = readLongTermMemoryDefaultPolicy(
+    params.longTermMemoryDefaultPolicy,
+  );
+  const storedLongTermMemoryDefaultPolicy = readLongTermMemoryDefaultPolicy(
+    binding?.longTermMemoryDefaultPolicy,
+  );
+  if (
+    currentLongTermMemoryDefaultPolicy &&
+    !(
+      storedLongTermMemoryDefaultPolicy === undefined &&
+      currentLongTermMemoryDefaultPolicy === "include"
+    ) &&
+    storedLongTermMemoryDefaultPolicy !== currentLongTermMemoryDefaultPolicy
+  ) {
+    return { mode: "invalidate", invalidatedReason: "memory-policy" };
   }
   if (binding?.forceReuse === true) {
     return { mode: "reuse", sessionId };
@@ -217,4 +243,8 @@ export function resolveCliSessionReuse(params: {
     return { mode: "reuse-with-drift", sessionId, drift: { reasons: driftReasons } };
   }
   return { mode: "reuse", sessionId };
+}
+
+function readLongTermMemoryDefaultPolicy(value: unknown): LongTermMemoryDefaultPolicy | undefined {
+  return value === "include" || value === "explicit-only" ? value : undefined;
 }

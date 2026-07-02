@@ -12,6 +12,7 @@ import {
   mockCallArg,
   readySessionMeta,
   type OpenClawConfig,
+  type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager initializeSession", () => {
@@ -97,6 +98,47 @@ describe("AcpSessionManager initializeSession", () => {
       sessionKey: "agent:codex:acp:session-a",
       model: "openai/gpt-5.4",
       thinking: "high",
+    });
+  });
+
+  it("derives explicit-only memory policy for ACP runtime keys when initializeSession omits it", async () => {
+    const runtimeState = createRuntime();
+    const sessionKey = "agent:codex:acp:session-derived-policy";
+    let persistedMeta: SessionAcpMeta | undefined;
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      persistedMeta = params.mutate(undefined, undefined) ?? undefined;
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: persistedMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey,
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(mockCallArg(runtimeState.ensureSession).memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+    expect(persistedMeta?.identity?.memoryPolicy).toEqual({
+      chatType: "group",
+      longTermMemoryDefaultPolicy: "explicit-only",
     });
   });
 

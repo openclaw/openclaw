@@ -159,11 +159,13 @@ describe("handleCompactCommand", () => {
           SenderName: "Alice",
           SenderUsername: "alice_u",
           SenderE164: "+15551234567",
+          ChatType: "direct",
         },
         agentDir: "/tmp/openclaw-agent-compact",
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
+          chatType: "group",
           groupId: "group-1",
           groupChannel: "#general",
           space: "workspace-1",
@@ -181,6 +183,7 @@ describe("handleCompactCommand", () => {
     expect(call.sessionId).toBe("session-1");
     expect(call.sessionKey).toBe("agent:main:main");
     expect(call.allowGatewaySubagentBinding).toBe(true);
+    expect(call.chatType).toBe("group");
     expect(call.trigger).toBe("manual");
     expect(call.customInstructions).toBe("focus on decisions");
     expect(call.messageChannel).toBe("whatsapp");
@@ -196,6 +199,72 @@ describe("handleCompactCommand", () => {
     expect(call.authProfileId).toBe("github-copilot:work");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
+  });
+
+  it("lets live shared chat metadata override stale direct metadata for current-session compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+    const sessionKey = "agent:main:acp:binding:telegram:acct:opaque";
+    const params = buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.ctx = {
+      ...params.ctx,
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "text",
+      CommandBody: "/compact",
+      SessionKey: sessionKey,
+      ChatType: "group",
+    };
+    params.command = { ...params.command, channel: "telegram" };
+    params.sessionKey = sessionKey;
+    params.sessionEntry = {
+      sessionId: "session-current",
+      updatedAt: Date.now(),
+      chatType: "direct",
+    };
+
+    await handleCompactCommand(params, true);
+
+    expect(requireCompactEmbeddedAgentSessionCall().chatType).toBe("group");
+  });
+
+  it("keeps stored explicit-only transcript policy authoritative for live-direct manual compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+    });
+
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const params = buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.ctx = {
+      ...params.ctx,
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "text",
+      CommandBody: "/compact",
+      SessionKey: sessionKey,
+      ChatType: "direct",
+    };
+    params.command = { ...params.command, channel: "telegram" };
+    params.sessionKey = sessionKey;
+    params.sessionEntry = {
+      sessionId: "session-current",
+      updatedAt: Date.now(),
+      chatType: "direct",
+      longTermMemoryDefaultPolicy: "explicit-only",
+    };
+
+    await handleCompactCommand(params, true);
+
+    expect(requireCompactEmbeddedAgentSessionCall().chatType).toBe("group");
   });
 
   it("does not abort the command reply run before compacting", async () => {

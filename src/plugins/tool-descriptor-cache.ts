@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
+import { resolveLongTermMemoryDefaultPolicy } from "../sessions/session-memory-policy.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
@@ -106,6 +107,12 @@ function buildDescriptorContextCacheKey(params: {
     workspaceDir: ctx.workspaceDir ?? null,
     agentDir: ctx.agentDir ?? null,
     agentId: ctx.agentId ?? null,
+    sessionKey: ctx.sessionKey ?? null,
+    chatType: ctx.chatType ?? null,
+    longTermMemoryDefaultPolicy: resolveLongTermMemoryDefaultPolicy({
+      sessionKey: ctx.sessionKey,
+      chatType: ctx.chatType,
+    }),
     activeModel: ctx.activeModel ?? null,
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,

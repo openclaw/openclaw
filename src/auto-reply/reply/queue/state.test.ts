@@ -118,6 +118,52 @@ describe("refreshQueuedFollowupSession", () => {
       modelOverrideSource: "user",
     });
   });
+
+  it("retargets queued runs when explicitly refreshing a session file without an id change", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.lastRun = makeRun();
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    });
+    queue.summarySources.push({
+      prompt: "summarized message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    });
+    queue.summaryElisions.push({
+      contextKey: "context",
+      count: 2,
+      source: {
+        prompt: "elided summary",
+        enqueuedAt: Date.now(),
+        run: makeRun(),
+      },
+      sourceRefs: new WeakSet(),
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      previousSessionId: "session-1",
+      nextSessionId: "session-1",
+      nextSessionFile: "/tmp/session-1-explicit-only.jsonl",
+      nextChatType: "group",
+    });
+
+    for (const run of [
+      queue.lastRun,
+      queue.items[0]?.run,
+      queue.summarySources[0]?.run,
+      queue.summaryElisions[0]?.source.run,
+    ]) {
+      expect(run).toMatchObject({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session-1-explicit-only.jsonl",
+        chatType: "group",
+      });
+    }
+  });
 });
 
 describe("getFollowupQueue", () => {

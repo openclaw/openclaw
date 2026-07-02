@@ -3,6 +3,7 @@
  * Shared by agent/session tool inventory resolvers and UI/API callers that
  * present enabled tools grouped by source.
  */
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
@@ -53,6 +54,7 @@ export type ResolveEffectiveToolInventoryParams = {
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

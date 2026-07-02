@@ -1434,6 +1434,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
+        chatType: "group",
         config: {
           agents: {
             defaults: {
@@ -2589,18 +2590,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       ];
     });
 
+    const privateSessionKey = "agent:main:guildchat:direct:test-ctx-engine";
     const contextEngine = createTestContextEngine({
-      assemble: async ({ messages, availableTools, citationsMode }) => ({
+      assemble: async ({
+        messages,
+        availableTools,
+        citationsMode,
+        sessionKey: assembledSessionKey,
+        chatType,
+      }) => ({
         messages,
         estimatedTokens: messages.length,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
+          sessionKey: assembledSessionKey,
+          chatType,
           citationsMode,
         }),
       }),
     });
 
-    const result = await runAssemble(sessionKey, contextEngine, {
+    const result = await runAssemble(privateSessionKey, contextEngine, {
       availableTools: new Set(["wiki_search", "memory_search"]),
       citationsMode: "on",
     });
@@ -2610,6 +2620,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(assembled.systemPromptAddition).toBe(
       "## Memory Recall\ntools=memory_search,wiki_search\ncitations=on",
     );
+  });
+
+  it("keeps context-engine memory prompt helper inert for shared sessions", async () => {
+    registerMemoryPromptSection(() => ["## Memory Recall", "mandatory recall"]);
+
+    const contextEngine = createTestContextEngine({
+      assemble: async ({
+        messages,
+        availableTools,
+        sessionKey: assembledSessionKey,
+        chatType,
+      }) => ({
+        messages,
+        estimatedTokens: messages.length,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          sessionKey: assembledSessionKey,
+          chatType,
+        }),
+      }),
+    });
+
+    const result = await runAssemble("agent:main:main", contextEngine, {
+      availableTools: new Set(["memory_search"]),
+      chatType: "group",
+    });
+
+    const assembled = requireRecord(result, "assembled context");
+    expect(assembled.systemPromptAddition).toBeUndefined();
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
@@ -2956,6 +2995,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       sessionKey,
       tempPaths,
       attemptOverrides: {
+        chatType: "group",
         config: {
           agents: {
             defaults: {
@@ -2975,6 +3015,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       "context engine loop hook params",
     );
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
+    expect(loopHookParams.chatType).toBe("group");
   });
 
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {

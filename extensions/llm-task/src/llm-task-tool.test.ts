@@ -208,6 +208,57 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("claude-4-sonnet");
   });
 
+  it("passes shared tool chat type to nested embedded runs", async () => {
+    const sessionKey = "agent:main:acp:binding:telegram:acct:abc123";
+    const tool = createLlmTaskTool(fakeApi(), {
+      sessionKey,
+      chatType: "group",
+      messageChannel: "telegram",
+    });
+
+    await tool.execute("id", { prompt: "return ok" });
+
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.chatType).toBe("group");
+    expect(call.messageProvider).toBe("telegram");
+    expect(call.sessionKey).toMatch(/^agent:main:subagent:llm-task-\d+$/);
+    expect(call.sessionKey).not.toBe(sessionKey);
+  });
+
+  it("runs direct parent tool context as a shared nested subagent", async () => {
+    const sessionKey = "agent:main:telegram:direct:alice";
+    const tool = createLlmTaskTool(fakeApi(), {
+      sessionKey,
+      chatType: "direct",
+      messageChannel: "telegram",
+    });
+
+    await tool.execute("id", { prompt: "return ok" });
+
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.chatType).toBe("group");
+    expect(call.messageProvider).toBe("telegram");
+    expect(call.sessionKey).toMatch(/^agent:main:subagent:llm-task-\d+$/);
+    expect(call.sessionKey).not.toBe(sessionKey);
+  });
+
+  it("passes cron session keys to nested embedded runs for memory policy", async () => {
+    const sessionKey = "agent:main:cron:daily:run:run-1";
+    const tool = createLlmTaskTool(fakeApi(), {
+      sessionKey,
+      chatType: "direct",
+      messageChannel: "cron",
+    });
+
+    await tool.execute("id", { prompt: "return ok" });
+
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.chatType).toBe("group");
+    expect(call.messageProvider).toBe("cron");
+    expect(call.sessionKey).toMatch(/^agent:main:subagent:llm-task-\d+$/);
+    expect(call.sessionKey).not.toBe(sessionKey);
+  });
+
   it("accepts model overrides that already include the selected provider prefix", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({

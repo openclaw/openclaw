@@ -2742,6 +2742,63 @@ describe("session accessor file-backed seam", () => {
     expect(fs.existsSync(replacementSessionFile)).toBe(false);
   });
 
+  it("rejects expected-session transcript turns after a memory boundary rebind", async () => {
+    const privateSessionFile = path.join(tempDir, "session-private.jsonl");
+    const sharedSessionFile = path.join(tempDir, "session-shared.jsonl");
+    const scope = {
+      agentId: "main",
+      sessionFile: privateSessionFile,
+      sessionId: "session-boundary",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionFile: privateSessionFile,
+      sessionId: scope.sessionId,
+      longTermMemoryDefaultPolicy: "include",
+      updatedAt: 10,
+    });
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: scope.sessionKey,
+      update: async () => ({
+        sessionFile: sharedSessionFile,
+        sessionId: scope.sessionId,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      expectedSessionId: scope.sessionId,
+      expectedSessionFile: privateSessionFile,
+      expectedLongTermMemoryDefaultPolicy: "include",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: "late private reply",
+            timestamp: 100,
+          },
+        },
+      ],
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+    });
+
+    expect(result).toMatchObject({
+      appendedCount: 0,
+      rejectedReason: "session-rebound",
+    });
+    expect(fs.existsSync(privateSessionFile)).toBe(false);
+    expect(fs.existsSync(sharedSessionFile)).toBe(false);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionFile: sharedSessionFile,
+      sessionId: scope.sessionId,
+      longTermMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
   it("publishes transcript turn appends through an active owned write lock", async () => {
     const scope = {
       agentId: "main",

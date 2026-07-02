@@ -349,6 +349,7 @@ export async function handleInlineActions(params: {
         message: {
           surface: ctx.Surface,
           provider: ctx.Provider,
+          chatType: ctx.ChatType,
           accountId: ctx.AccountId,
           senderId: ctx.SenderId,
           senderName: ctx.SenderName,
@@ -363,6 +364,7 @@ export async function handleInlineActions(params: {
         agentId,
         agentDir,
         sessionEntry: targetSessionEntry,
+        sourceSessionKey: ctx.SessionKey,
         sessionKey,
         workspaceDir,
         provider,

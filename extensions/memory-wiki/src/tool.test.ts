@@ -5,7 +5,13 @@ import { describe, expect, it } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
+import {
+  createWikiApplyTool,
+  createWikiGetTool,
+  createWikiLintTool,
+  createWikiSearchTool,
+  createWikiStatusTool,
+} from "./tool.js";
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -99,5 +105,114 @@ describe("memory-wiki tools", () => {
     const lintResult = await lintMemoryWikiVault(config);
     expect(path.isAbsolute(lintResult.reportPath)).toBe(true);
     expect(lintResult.reportPath).toContain(rootDir);
+  });
+
+  it("rejects shared wiki_lint before report or log writes", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+    const beforeLog = await fs.readFile(logPath, "utf8");
+    const tool = createWikiLintTool(config, undefined, {
+      agentSessionKey: "agent:main:telegram:group:team",
+      agentChatType: "group",
+    });
+
+    const result = await tool.execute("lint-call-shared", {});
+
+    expect(result.details).toEqual({
+      action: "rejected",
+      reason: "shared_session_explicit_only",
+    });
+    expect(result.content.find((part) => part.type === "text")?.text).toContain(
+      "shared sessions cannot mutate",
+    );
+    await expect(fs.access(path.join(rootDir, "reports", "lint.md"))).rejects.toThrow();
+    await expect(fs.readFile(logPath, "utf8")).resolves.toBe(beforeLog);
+  });
+
+  it("returns sanitized shared wiki_status before sync or vault metadata exposure", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+    const beforeLog = await fs.readFile(logPath, "utf8");
+    const tool = createWikiStatusTool(config, undefined, {
+      agentSessionKey: "agent:main:telegram:group:team",
+      agentChatType: "group",
+    });
+
+    const result = await tool.execute("status-call-shared", {});
+
+    expect(result.details).toEqual({
+      action: "rejected",
+      reason: "shared_session_explicit_only",
+    });
+    expect(result.content.find((part) => part.type === "text")?.text).toContain(
+      "limited in shared sessions",
+    );
+    expect(JSON.stringify(result)).not.toContain(rootDir);
+    await expect(fs.readFile(logPath, "utf8")).resolves.toBe(beforeLog);
+  });
+
+  it("keeps shared wiki_search and wiki_get snapshot-only without source sync", async () => {
+    const sourceDir = await harness.createTempDir("memory-wiki-unsafe-source-");
+    const privateSourcePath = path.join(sourceDir, "private.md");
+    await fs.writeFile(privateSourcePath, "# Private Source\n\nsync-only content\n", "utf8");
+    const { rootDir, config } = await harness.createVault({
+      initialize: false,
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateSourcePath],
+        },
+      },
+    });
+    const memoryContext = {
+      agentSessionKey: "agent:main:telegram:group:team",
+      agentChatType: "group",
+    };
+    const searchTool = createWikiSearchTool(config, undefined, memoryContext);
+    const getTool = createWikiGetTool(config, undefined, memoryContext);
+
+    const searchResult = await searchTool.execute("search-call-shared", {
+      query: "sync-only",
+    });
+    const getResult = await getTool.execute("get-call-shared", {
+      lookup: "source.private",
+    });
+
+    expect(searchResult.details).toEqual({ results: [] });
+    expect(searchResult.content.find((part) => part.type === "text")?.text).toBe(
+      "No wiki or memory results.",
+    );
+    expect(getResult.details).toEqual({ found: false });
+    await expect(fs.access(path.join(rootDir, ".openclaw-wiki", "log.jsonl"))).rejects.toThrow();
+    await expect(fs.access(path.join(rootDir, "sources"))).rejects.toThrow();
+  });
+
+  it("rejects shared wiki_apply before wiki page writes", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+    const beforeLog = await fs.readFile(logPath, "utf8");
+    const tool = createWikiApplyTool(config, undefined, {
+      agentSessionKey: "agent:main:telegram:direct:alice",
+      agentChatType: "group",
+    });
+
+    const result = await tool.execute("apply-call-shared", {
+      op: "create_synthesis",
+      title: "Shared Session Synthesis",
+      body: "Shared session body.",
+    });
+
+    expect(result.details).toEqual({
+      action: "rejected",
+      reason: "shared_session_explicit_only",
+    });
+    expect(result.content.find((part) => part.type === "text")?.text).toContain(
+      "shared sessions cannot mutate",
+    );
+    await expect(
+      fs.access(path.join(rootDir, "syntheses", "shared-session-synthesis.md")),
+    ).rejects.toThrow();
+    await expect(fs.readFile(logPath, "utf8")).resolves.toBe(beforeLog);
   });
 });

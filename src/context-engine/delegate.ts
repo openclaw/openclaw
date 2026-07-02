@@ -3,6 +3,7 @@ import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stabili
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { shouldIncludeLongTermMemoryByDefault } from "../sessions/session-memory-policy.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
 const loadCompactRuntime = createLazyRuntimeModule(
@@ -82,10 +83,22 @@ export async function delegateCompactionToRuntime(
  */
 export function buildMemorySystemPromptAddition(params: {
   availableTools: Set<string>;
+  sessionKey?: string;
+  chatType?: string;
   citationsMode?: MemoryCitationsMode;
 }): string | undefined {
+  if (
+    !shouldIncludeLongTermMemoryByDefault({
+      sessionKey: params.sessionKey,
+      chatType: params.chatType,
+    })
+  ) {
+    return undefined;
+  }
   const lines = buildMemoryPromptSection({
     availableTools: params.availableTools,
+    sessionKey: params.sessionKey,
+    chatType: params.chatType,
     citationsMode: params.citationsMode,
   });
   if (lines.length === 0) {

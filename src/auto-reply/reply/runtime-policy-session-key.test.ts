@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import {
+  resolveRuntimePolicySessionKey,
+  resolveTargetSessionChatType,
+} from "./runtime-policy-session-key.js";
 
 describe("resolveRuntimePolicySessionKey", () => {
   const cfg: OpenClawConfig = {
@@ -116,5 +119,80 @@ describe("resolveRuntimePolicySessionKey", () => {
         },
       }),
     ).toBe("agent:main:telegram:default:direct:alice");
+  });
+});
+
+describe("resolveTargetSessionChatType", () => {
+  it("prefers live direct chat metadata for ordinary global-scope turns", () => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "direct" },
+        sessionEntry: { chatType: "group" },
+      }),
+    ).toBe("direct");
+  });
+
+  it("lets live current direct override a stale explicit-only policy stamp", () => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "direct" },
+        sessionKey: "agent:main:telegram:direct:alice",
+        sessionEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    ).toBe("direct");
+  });
+
+  it.each([
+    "agent:main:subagent:worker",
+    "agent:main:cron:daily:run:run-1",
+    "agent:main:telegram:group:room",
+  ])("treats restricted target key %s as shared despite stored include", (sessionKey) => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "direct" },
+        sessionKey,
+        sessionEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "include",
+        },
+      }),
+    ).toBe("group");
+  });
+
+  it("prefers persisted target chat metadata for command-targeted runs", () => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "direct" },
+        sessionEntry: { chatType: "group" },
+        preferSessionEntry: true,
+      }),
+    ).toBe("group");
+  });
+
+  it("treats explicit-only direct-shaped target sessions as shared", () => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "direct" },
+        sessionKey: "agent:main:telegram:direct:alice",
+        sessionEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+        preferSessionEntry: true,
+      }),
+    ).toBe("group");
+  });
+
+  it("lets live shared metadata override stale direct metadata for target sessions", () => {
+    expect(
+      resolveTargetSessionChatType({
+        ctx: { ChatType: "group" },
+        sessionEntry: { chatType: "direct" },
+        preferSessionEntry: true,
+      }),
+    ).toBe("group");
   });
 });

@@ -50,6 +50,24 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("yesterday notes");
   });
 
+  it("skips daily memory startup context for opaque shared sessions", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11.md"),
+      "private shared-session notes",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      sessionKey: "agent:main:acp:binding:telegram:acct:abc123",
+      chatType: "group",
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toBeNull();
+  });
+
   it("loads date-prefixed session-memory artifacts saved with friendly suffixes", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(

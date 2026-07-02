@@ -619,6 +619,11 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      chatType: "group",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
       sandboxSessionKey: "agent:main:runtime-policy",
       agentAccountId: "account-1",
       groupId: "group-1",
@@ -653,6 +658,7 @@ describe("runBtwSideQuestion", () => {
           senderName?: string;
           senderUsername?: string;
           senderE164?: string;
+          chatType?: string;
           toolsAllow?: string[];
         },
       ]
@@ -675,12 +681,93 @@ describe("runBtwSideQuestion", () => {
       senderName: "Rosita",
       senderUsername: "rosita",
       senderE164: "+15550001",
+      chatType: "group",
     });
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes no-live explicit-only direct-shaped native BTW as shared", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    const result = await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: "agent:main:telegram:direct:alice",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    expect((mockArg(codexSideQuestionMock, 0, 0) as { chatType?: string }).chatType).toBe("group");
+  });
+
+  it("preserves live direct native BTW despite stored explicit-only policy", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    const result = await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      chatType: "direct",
+      sessionKey: "agent:main:telegram:direct:alice",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    expect((mockArg(codexSideQuestionMock, 0, 0) as { chatType?: string }).chatType).toBe("direct");
+  });
+
+  it("fails closed before reading transcripts when shared BTW would cross a stale memory boundary", async () => {
+    await expect(
+      runSideQuestion({
+        chatType: "group",
+        sessionKey: DEFAULT_SESSION_KEY,
+        sessionEntry: createSessionEntry({
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "include",
+          sessionFile: "/tmp/private-session.jsonl",
+        }),
+      }),
+    ).rejects.toThrow("BTW needs a fresh session memory boundary");
+
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalled();
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -921,6 +1008,7 @@ describe("runBtwSideQuestion", () => {
       model?: string;
       disableTools?: boolean;
       cliSessionId?: string;
+      chatType?: string;
       extraSystemPrompt?: string;
       prompt?: string;
     };
@@ -929,6 +1017,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.model).toBe("claude-opus-4-7");
     expect(prepareParams.disableTools).toBe(true);
     expect(prepareParams.cliSessionId).toBeUndefined();
+    expect(prepareParams.chatType).toBeUndefined();
     expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
     expect(prepareParams.prompt).toContain("<conversation_history>");
     expect(prepareParams.prompt).toContain("<btw_side_question>");
@@ -940,6 +1029,116 @@ describe("runBtwSideQuestion", () => {
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes no-live explicit-only direct-shaped CLI-runtime BTW as shared", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: "agent:main:telegram:direct:alice",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    expect(result).toEqual({ text: "CLI side answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      chatType?: string;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.chatType).toBe("group");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves live direct CLI-runtime BTW despite stored explicit-only policy", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      chatType: "direct",
+      sessionKey: "agent:main:telegram:direct:alice",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    expect(result).toEqual({ text: "CLI side answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      chatType?: string;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.chatType).toBe("direct");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves live shared chat type for CLI-runtime BTW despite stale direct metadata", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "CLI side answer." });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as never,
+      model: "claude-opus-4-7",
+      sessionKey: DEFAULT_SESSION_KEY,
+      chatType: "channel",
+      sessionEntry: createSessionEntry({
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      }),
+    });
+
+    expect(result).toEqual({ text: "CLI side answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      executionMode?: string;
+      chatType?: string;
+    };
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.chatType).toBe("channel");
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {

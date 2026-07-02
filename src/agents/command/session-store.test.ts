@@ -126,10 +126,16 @@ vi.mock("../../config/sessions.js", async () => {
       return true;
     },
     updateSessionStore: sessionStoreMocks.updateSessionStore,
-    loadSessionStore: (storePath: string) => {
+    loadSessionStore: (storePath: string, opts?: { strictRead?: boolean }) => {
       try {
         return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
-      } catch {
+      } catch (err) {
+        if (
+          opts?.strictRead === true &&
+          !(typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT")
+        ) {
+          throw err;
+        }
         return {};
       }
     },
@@ -833,6 +839,25 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: "claude-cli-session-1",
         authEpoch: "auth-epoch-1",
       });
+    });
+  });
+
+  it("fails closed on malformed stores during strict session resolution", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      await fs.writeFile(storePath, "{malformed", "utf8");
+
+      expect(() =>
+        resolveSession({
+          cfg: {
+            session: {
+              store: storePath,
+              mainKey: "main",
+            },
+          } as OpenClawConfig,
+          sessionKey: "agent:main:main",
+          strictRead: true,
+        }),
+      ).toThrow();
     });
   });
 
@@ -1980,6 +2005,60 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("does not rebind a privacy-rotated row after a stale run finalizes", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:boundary-rebound-row";
+      const sessionId = "boundary-rebound-session";
+      const privateSessionFile = path.join(dir, "private-session.jsonl");
+      const sharedSessionFile = path.join(dir, "shared-session.jsonl");
+      const staleEntry: SessionEntry = {
+        sessionId,
+        sessionFile: privateSessionFile,
+        longTermMemoryDefaultPolicy: "include",
+        updatedAt: 1,
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      };
+      const rotatedEntry: SessionEntry = {
+        sessionId,
+        sessionFile: sharedSessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+        updatedAt: 2,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      };
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: staleEntry,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: rotatedEntry }, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              sessionFile: privateSessionFile,
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+            },
+          },
+        },
+      });
+
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(rotatedEntry);
+      expect(sessionStore[sessionKey]).toEqual(rotatedEntry);
+    });
+  });
+
   it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -2415,6 +2494,50 @@ describe("recordCliCompactionInStore", () => {
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
     });
   });
+
+  it("does not overwrite a boundary-rotated row when post-run compaction finishes late", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-boundary-rotated";
+      const sessionId = "test-record-cli-compaction-boundary-session";
+      const oldSessionFile = path.join(dir, "old-private.jsonl");
+      const rotatedSessionFile = path.join(dir, "new-shared.jsonl");
+      const staleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        sessionFile: oldSessionFile,
+        longTermMemoryDefaultPolicy: "include",
+        cliSessionIds: {
+          codex: "stale-cli-session",
+        },
+      };
+      const rotatedEntry: SessionEntry = {
+        ...staleEntry,
+        sessionFile: rotatedSessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: staleEntry };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: rotatedEntry }, null, 2));
+
+      const result = await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedSessionId: sessionId,
+        tokensAfter: 42,
+      });
+
+      expect(result?.sessionFile).toBe(rotatedSessionFile);
+      expect(result?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+      expect(result?.compactionCount).toBeUndefined();
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(rotatedSessionFile);
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.sessionFile).toBe(rotatedSessionFile);
+      expect(persisted?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+      expect(persisted?.totalTokens).toBeUndefined();
+      expect(persisted?.cliSessionIds?.codex).toBe("stale-cli-session");
+    });
+  });
 });
 
 describe("clearCliSessionInStore", () => {
@@ -2572,6 +2695,46 @@ describe("clearCliSessionInStore", () => {
       });
 
       expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    });
+  });
+
+  it("does not overwrite a boundary-rotated row when post-run binding clear finishes late", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:explicit:test-clear-cli-boundary-rotated";
+      const sessionId = "openclaw-session-1";
+      const oldSessionFile = path.join(dir, "old-private.jsonl");
+      const rotatedSessionFile = path.join(dir, "new-shared.jsonl");
+      const staleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        sessionFile: oldSessionFile,
+        longTermMemoryDefaultPolicy: "include",
+        claudeCliSessionId: "claude-session-1",
+      };
+      const rotatedEntry: SessionEntry = {
+        ...staleEntry,
+        sessionFile: rotatedSessionFile,
+        longTermMemoryDefaultPolicy: "explicit-only",
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: staleEntry };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: rotatedEntry }, null, 2));
+
+      const cleared = await clearCliSessionInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedSessionId: sessionId,
+      });
+
+      expect(cleared?.sessionFile).toBe(rotatedSessionFile);
+      expect(cleared?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+      expect(cleared?.claudeCliSessionId).toBe("claude-session-1");
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(rotatedSessionFile);
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.sessionFile).toBe(rotatedSessionFile);
+      expect(persisted?.longTermMemoryDefaultPolicy).toBe("explicit-only");
+      expect(persisted?.claudeCliSessionId).toBe("claude-session-1");
     });
   });
 });

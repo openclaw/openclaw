@@ -7,6 +7,7 @@ import type { MediaUnderstandingSkipError } from "../../../packages/media-unders
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -1443,6 +1444,63 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).toHaveBeenCalledOnce();
     expect(runTurnCall().text).toBe("test");
+  });
+
+  it("rotates persisted ACP dispatch memory boundary before the runtime turn", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-boundary-"));
+    try {
+      const storePath = path.join(tempDir, "sessions.json");
+      const sessionFile = path.join(tempDir, "private.jsonl");
+      const entry: SessionEntry = {
+        sessionId: "session-private",
+        updatedAt: 1,
+        sessionFile,
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
+      };
+      await fs.writeFile(sessionFile, JSON.stringify({ type: "message" }) + "\n", "utf8");
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf8");
+      const cfg = createAcpTestConfig({ session: { store: storePath } });
+      setReadyAcpResolution();
+      sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+        cfg,
+        storePath,
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry,
+        acp: createAcpSessionMeta(),
+      });
+      let storeAtRun: Record<string, SessionEntry> | undefined;
+      managerMocks.runTurn.mockImplementation(
+        async (params: { memoryPolicy?: unknown; onEvent?: (event: unknown) => Promise<void> }) => {
+          storeAtRun = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+            string,
+            SessionEntry
+          >;
+          expect(params.memoryPolicy).toEqual({
+            chatType: "group",
+            longTermMemoryDefaultPolicy: "explicit-only",
+          });
+          await params.onEvent?.({ type: "done" });
+        },
+      );
+
+      await runDispatch({
+        bodyForAgent: "shared turn",
+        cfg,
+        ctxOverrides: { ChatType: "group" },
+      });
+
+      expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+      const rotatedEntry = storeAtRun?.[sessionKey];
+      expect(rotatedEntry).toMatchObject({
+        longTermMemoryDefaultPolicy: "explicit-only",
+      });
+      expect(rotatedEntry?.sessionId).not.toBe(entry.sessionId);
+      expect(rotatedEntry?.sessionFile).toMatch(/memory-explicit-only-[\w-]+\.jsonl$/u);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {

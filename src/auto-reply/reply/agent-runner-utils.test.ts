@@ -325,6 +325,30 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
+  it("uses the target run chat type for embedded context before source route metadata", () => {
+    const run = makeRun({ agentAccountId: "work", chatType: "group" });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "slack",
+        ChatType: "direct",
+      },
+      replyRoute: {
+        originatingChannel: "slack",
+        originatingTo: "user:U1",
+        originatingAccountId: "work",
+        originatingChatType: "direct",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext.chatType).toBe("group");
+  });
+
   it("hydrates the queued route before resolving channel threading policy", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {

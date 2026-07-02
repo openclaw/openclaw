@@ -6,6 +6,11 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import {
+  readCodexAppServerBinding,
+  resolveCodexAppServerBindingPath,
+  writeCodexAppServerBinding,
+} from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -123,11 +128,12 @@ function createNetworkProxyAppServerOptions() {
 function createThreadLifecycleParams(
   sessionFile: string,
   workspaceDir: string,
+  options: { sessionKey?: string; chatType?: string } = {},
 ): EmbeddedRunAttemptParams {
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: options.sessionKey ?? "agent:main:session-1",
     sessionFile,
     workspaceDir,
     runId: "run-1",
@@ -140,6 +146,7 @@ function createThreadLifecycleParams(
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
+    ...(options.chatType ? { chatType: options.chatType } : {}),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -216,6 +223,17 @@ function expectSingleLogMessage(
   const message = mock.mock.calls[0]?.[0];
   expect(typeof message).toBe("string");
   return message as string;
+}
+
+function readThreadConfig(request: ReturnType<typeof vi.fn>): Record<string, unknown> | undefined {
+  const params = request.mock.calls.at(0)?.[1];
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return undefined;
+  }
+  const config = (params as { config?: unknown }).config;
+  return config && typeof config === "object" && !Array.isArray(config)
+    ? (config as Record<string, unknown>)
+    : undefined;
 }
 
 describe("Codex app-server native code mode config", () => {
@@ -454,6 +472,48 @@ describe("Codex app-server native code mode config", () => {
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
+  });
+
+  it("disables native Codex memories for shared thread start and resume", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.sessionKey = "agent:main:acp:binding:telegram:acct:shared";
+    params.chatType = "group";
+    const startRequest = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+    const resumeRequest = buildThreadResumeParams(params, {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(startRequest.config).toMatchObject({
+      "memories.use_memories": false,
+      "memories.generate_memories": false,
+    });
+    expect(resumeRequest.config).toMatchObject({
+      "memories.use_memories": false,
+      "memories.generate_memories": false,
+    });
+  });
+
+  it("keeps native Codex memory defaults for direct thread start", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.sessionKey = "agent:main:session-1";
+    params.chatType = "direct";
+
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).not.toHaveProperty("memories.use_memories");
+    expect(request.config).not.toHaveProperty("memories.generate_memories");
   });
 
   it("disables hosted Codex web search when the active provider lacks support", () => {
@@ -1314,6 +1374,92 @@ describe("Codex app-server thread lifecycle timing", () => {
     const message = expectSingleLogMessage(log, "trace");
     expect(message).toContain("action=resumed");
     expect(message).toContain("thread-resume-request:9ms@9ms");
+  });
+
+  it("starts a new thread when a shared binding predates native memory policy stamps", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-shared-restricted");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir, {
+        sessionKey: "agent:main:acp:binding:telegram:acct:shared",
+        chatType: "group",
+      }),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(result.threadId).toBe("thread-shared-restricted");
+    expect(result.nativeMemoryDefaultPolicy).toBe("explicit-only");
+    expect(readThreadConfig(request)).toMatchObject({
+      "memories.use_memories": false,
+      "memories.generate_memories": false,
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-shared-restricted",
+      nativeMemoryDefaultPolicy: "explicit-only",
+    });
+  });
+
+  it("keeps legacy direct bindings resumable and stamps the native memory policy", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const commonParams = {
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+    const startRequest = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-legacy-direct");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    await startOrResumeThread({
+      client: { request: startRequest } as never,
+      ...commonParams,
+    });
+    const bindingPath = resolveCodexAppServerBindingPath(sessionFile);
+    const legacyBinding = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete legacyBinding.nativeMemoryDefaultPolicy;
+    await fs.writeFile(bindingPath, `${JSON.stringify(legacyBinding, null, 2)}\n`);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-legacy-direct");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await startOrResumeThread({
+      client: { request } as never,
+      ...commonParams,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(result.nativeMemoryDefaultPolicy).toBe("include");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-legacy-direct",
+      nativeMemoryDefaultPolicy: "include",
+    });
   });
 
   it("warns on slow start even when trace logging is disabled", async () => {

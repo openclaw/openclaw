@@ -3,6 +3,7 @@
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
 import {
@@ -27,6 +28,8 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { resolveSessionEntryChatType } from "../../sessions/session-chat-type-shared.js";
+import { resolveLongTermMemoryDefaultPolicy } from "../../sessions/session-memory-policy.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
@@ -432,6 +435,13 @@ export async function prepareCliRunContext(
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliProvider(params.provider);
+  const runtimeChatType = normalizeChatType(
+    params.chatType ?? resolveSessionEntryChatType(params.sessionEntry),
+  );
+  const longTermMemoryDefaultPolicy = resolveLongTermMemoryDefaultPolicy({
+    sessionKey: params.sessionKey,
+    chatType: runtimeChatType,
+  });
   const modelContextTokens = isClaudeCli
     ? resolveContextTokensForModel({
         cfg: params.config,
@@ -460,6 +470,7 @@ export async function prepareCliRunContext(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        chatType: runtimeChatType,
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
@@ -529,6 +540,7 @@ export async function prepareCliRunContext(
             OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
             OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
             OPENCLAW_MCP_SESSION_ID: params.sessionId,
+            OPENCLAW_MCP_CHAT_TYPE: runtimeChatType ?? "",
             OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
             OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
             OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
@@ -650,6 +662,7 @@ export async function prepareCliRunContext(
         ? prepareDeps.resolveMcpLoopbackScopedTools({
             cfg: params.config ?? getRuntimeConfig(),
             sessionKey: params.sessionKey ?? "",
+            chatType: runtimeChatType,
             messageProvider: params.messageChannel ?? params.messageProvider,
             currentChannelId: params.currentChannelId,
             // CLI binding hashes must use session-stable prompt facts. Per-sender
@@ -679,6 +692,7 @@ export async function prepareCliRunContext(
             extraSystemPromptHash,
             messageToolPolicyHash,
             promptToolNamesHash,
+            longTermMemoryDefaultPolicy,
             cwdHash,
             mcpConfigHash: preparedBackendFinal.mcpConfigHash,
             mcpResumeHash: preparedBackendFinal.mcpResumeHash,
@@ -783,7 +797,7 @@ export async function prepareCliRunContext(
           requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
-          runtimeChatType: params.sessionEntry?.chatType,
+          runtimeChatType,
           runtimeCapabilities,
           ownerNumbers: params.ownerNumbers,
           heartbeatPrompt,
@@ -825,6 +839,7 @@ export async function prepareCliRunContext(
             workspaceDir,
             modelProviderId: params.provider,
             modelId,
+            chatType: runtimeChatType,
             trigger: params.trigger,
             ...buildAgentHookContextChannelFields(params),
           },
@@ -956,6 +971,7 @@ export async function prepareCliRunContext(
       const preparedParams: RunCliAgentParams = {
         ...params,
         config: contextEngineConfig,
+        chatType: runtimeChatType,
         prompt: preparedPrompt,
         ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
       };
@@ -983,6 +999,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         messageToolPolicyHash,
         promptToolNamesHash,
+        longTermMemoryDefaultPolicy,
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
       };
@@ -1021,6 +1038,7 @@ export async function prepareCliRunContext(
     const preparedParams: RunCliAgentParams = {
       ...params,
       config: contextEngineConfig,
+      chatType: runtimeChatType,
       prompt: preparedPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
@@ -1052,6 +1070,7 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
+      longTermMemoryDefaultPolicy,
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };

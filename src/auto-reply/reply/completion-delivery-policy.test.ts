@@ -37,11 +37,32 @@ describe("completion delivery policy", () => {
     expect(resolveCompletionChatType({ requesterSessionKey })).toBe(expected);
   });
 
-  it("prefers explicit session chat type over key inference", () => {
+  it("keeps stored shared boundaries over stale direct metadata", () => {
     expect(
       resolveCompletionChatType({
         requesterSessionKey: "agent:main:slack:channel:C123",
         requesterEntry: { chatType: "direct" },
+      }),
+    ).toBe("channel");
+    expect(
+      resolveCompletionChatType({
+        requesterSessionKey: "agent:main:direct:user-1",
+        requesterEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    ).toBe("group");
+  });
+
+  it("keeps ordinary direct completion requesters direct", () => {
+    expect(
+      resolveCompletionChatType({
+        requesterSessionKey: "agent:main:direct:user-1",
+        requesterEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "include",
+        },
       }),
     ).toBe("direct");
   });
@@ -108,10 +129,38 @@ describe("completion delivery policy", () => {
   });
 
   it("routes group and channel task completions through the requester session", () => {
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:whatsapp:123@g.us")).toBe(true);
     expect(
-      shouldRouteCompletionThroughRequesterSession("agent:main:discord:guild-123:channel-456"),
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:whatsapp:123@g.us",
+      }),
     ).toBe(true);
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:discord:dm:U123")).toBe(false);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:discord:guild-123:channel-456",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:direct:user-1",
+        requesterEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:discord:dm:U123",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:direct:user-1",
+        requesterEntry: {
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "include",
+        },
+      }),
+    ).toBe(false);
   });
 });

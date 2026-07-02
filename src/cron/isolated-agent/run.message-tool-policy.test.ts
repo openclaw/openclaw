@@ -13,6 +13,7 @@ import {
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
   queueCronMessageToolDeliveryAwarenessMock,
@@ -1020,6 +1021,62 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
     expect(cronSession.store).toBeUndefined();
     clearAgentRunContext("test-session-id");
+  });
+
+  it("runs direct-shaped explicit-only persistent cron targets with shared memory scope", async () => {
+    mockRunCronFallbackPassthrough();
+    const sessionKey = "agent:default:session:ops-review";
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        isNewSession: false,
+        sessionEntry: makeCronSessionEntry({
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "explicit-only",
+        }),
+      }),
+    );
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = `session:${sessionKey}`;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      sessionKey,
+      job: currentSessionJob as never,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expectEmbeddedRunFields({
+      sessionKey,
+      chatType: "group",
+    });
+  });
+
+  it("runs direct persistent cron targets with shared memory scope", async () => {
+    mockRunCronFallbackPassthrough();
+    const sessionKey = "agent:default:whatsapp:direct:42";
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        isNewSession: false,
+        sessionEntry: makeCronSessionEntry({
+          chatType: "direct",
+          longTermMemoryDefaultPolicy: "include",
+        }),
+      }),
+    );
+    const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
+    currentSessionJob.sessionTarget = `session:${sessionKey}`;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      sessionKey,
+      job: currentSessionJob as never,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expectEmbeddedRunFields({
+      sessionKey,
+      chatType: "group",
+    });
   });
 
   it("releases a shared cron run context created by this invocation", async () => {

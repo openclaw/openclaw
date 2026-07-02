@@ -11,6 +11,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { LongTermMemoryDefaultPolicy } from "../../sessions/session-memory-policy.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -60,6 +61,7 @@ export type CliSessionBinding = {
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -248,6 +250,8 @@ export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
+  /** Long-term memory default policy that owns the active transcript. */
+  longTermMemoryDefaultPolicy?: LongTermMemoryDefaultPolicy;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */

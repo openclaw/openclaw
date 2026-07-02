@@ -132,6 +132,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     Provider?: string;
     SessionKey?: string;
     MessageThreadId?: number;
+    ChatType?: string;
     Body?: string;
   } => {
     const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
@@ -142,6 +143,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       SessionKey?: string;
       MessageThreadId?: number;
+      ChatType?: string;
       Body?: string;
     };
   };
@@ -713,10 +715,132 @@ describe("Ghost reminder bug (issue #13317)", () => {
       const replyCtx = getFirstReplyContext(replySpy);
       expect(replyCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
       expect(replyCtx.MessageThreadId).toBe(42);
+      expect(replyCtx.ChatType).toBe("group");
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",
         text: "Topic heartbeat",
         messageThreadId: 42,
+      });
+    });
+  });
+
+  it("scopes direct-shaped explicit-only heartbeat runs as shared", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createLastTargetConfig({ tmpDir, storePath });
+      const sessionKey = "agent:main:direct:user-1";
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        chatType: "direct",
+        lastTo: "155462274",
+        longTermMemoryDefaultPolicy: "explicit-only",
+      });
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "155462274",
+      });
+      replySpy.mockResolvedValue({ text: "Scoped heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "timer",
+        deps: {
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).ChatType).toBe("group");
+      expectTelegramSend(sendTelegram, {
+        to: "155462274",
+        text: "Scoped heartbeat",
+      });
+    });
+  });
+
+  it("lets an explicit shared heartbeat target override stale direct session metadata", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "telegram",
+              to: "group:-100155462274",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:direct:user-1";
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        chatType: "direct",
+        lastTo: "155462274",
+        longTermMemoryDefaultPolicy: "include",
+      });
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-100155462274",
+      });
+      replySpy.mockResolvedValue({ text: "Shared heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "timer",
+        deps: {
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).ChatType).toBe("group");
+      expectTelegramSend(sendTelegram, {
+        to: "group:-100155462274",
+        text: "Shared heartbeat",
+      });
+    });
+  });
+
+  it("keeps ordinary direct heartbeat runs direct", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createLastTargetConfig({ tmpDir, storePath });
+      const sessionKey = "agent:main:direct:user-1";
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        chatType: "direct",
+        lastTo: "155462274",
+        longTermMemoryDefaultPolicy: "include",
+      });
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "155462274",
+      });
+      replySpy.mockResolvedValue({ text: "Direct heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "timer",
+        deps: {
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).ChatType).toBe("direct");
+      expectTelegramSend(sendTelegram, {
+        to: "155462274",
+        text: "Direct heartbeat",
       });
     });
   });

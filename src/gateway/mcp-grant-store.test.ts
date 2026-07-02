@@ -15,11 +15,18 @@ describe("mcp-grant-store", () => {
   beforeEach(() => resetAttachGrantsForTest());
 
   it("mints a grant bound to the sessionKey with a token and a TTL window", () => {
-    const g = mintAttachGrant({ sessionKey: "agent:main:main", ttlMs: 60_000, nowMs: T0 });
+    const g = mintAttachGrant({
+      sessionKey: "agent:main:main",
+      chatType: "group",
+      ttlMs: 60_000,
+      nowMs: T0,
+    });
     expect(g.sessionKey).toBe("agent:main:main");
+    expect(g.chatType).toBe("group");
     expect(g.token).toMatch(/^[0-9a-f]{64}$/);
     expect(g.issuedAtMs).toBe(T0);
     expect(g.expiresAtMs).toBe(T0 + 60_000);
+    expect(resolveAttachGrant(g.token, T0)?.chatType).toBe("group");
   });
 
   it("requires a non-empty sessionKey", () => {

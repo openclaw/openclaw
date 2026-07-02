@@ -8,7 +8,11 @@ import {
   resolveRuntimeResumeSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import type {
+  AcpRuntime,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeHandle,
+} from "@openclaw/acp-core/runtime/types";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -20,6 +24,10 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection, resolveAcpAgentFromSessionKey } from "./manager.utils.js";
+import {
+  buildAcpRuntimeMemoryPolicySignature,
+  normalizeAcpRuntimeMemoryPolicy,
+} from "./memory-policy-context.js";
 import {
   normalizeRuntimeOptions,
   normalizeText,
@@ -34,6 +42,7 @@ export async function ensureManagerRuntimeHandle(params: {
   meta: SessionAcpMeta;
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
+  memoryPolicy?: AcpRuntimeEnsureInput["memoryPolicy"];
   enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
@@ -44,6 +53,8 @@ export async function ensureManagerRuntimeHandle(params: {
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
+  const memoryPolicy = normalizeAcpRuntimeMemoryPolicy(params.memoryPolicy);
+  const memoryPolicySignature = buildAcpRuntimeMemoryPolicySignature(memoryPolicy);
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const cached = params.runtimeHandles.get(params.sessionKey);
@@ -53,6 +64,7 @@ export async function ensureManagerRuntimeHandle(params: {
     const modeMatches = cached.mode === mode;
     const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
     const configMatches = cached.configSignature === configSignature;
+    const memoryPolicyMatches = (cached.memoryPolicySignature ?? "") === memoryPolicySignature;
     const handleMatchesMeta = params.runtimeHandles.handleMatchesMeta({
       handle: cached.handle,
       meta: params.meta,
@@ -63,6 +75,7 @@ export async function ensureManagerRuntimeHandle(params: {
       modeMatches &&
       cwdMatches &&
       configMatches &&
+      memoryPolicyMatches &&
       handleMatchesMeta &&
       (await params.runtimeHandles.isReusable({
         sessionKey: params.sessionKey,
@@ -91,13 +104,25 @@ export async function ensureManagerRuntimeHandle(params: {
   const runtime = backend.runtime;
   const previousMeta = params.meta;
   const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
-  let identityForEnsure = previousIdentity;
+  const previousMemoryPolicySignature = buildAcpRuntimeMemoryPolicySignature(
+    previousIdentity?.memoryPolicy,
+  );
+  const hasPreviousMemoryPolicy = previousMemoryPolicySignature.length > 0;
+  const isLegacyIdentityEnteringExplicitOnly =
+    !hasPreviousMemoryPolicy && memoryPolicy?.longTermMemoryDefaultPolicy === "explicit-only";
+  const memoryPolicyBoundaryChanged =
+    memoryPolicySignature.length > 0 &&
+    ((hasPreviousMemoryPolicy && previousMemoryPolicySignature !== memoryPolicySignature) ||
+      isLegacyIdentityEnteringExplicitOnly);
+  let identityForEnsure = memoryPolicyBoundaryChanged ? undefined : previousIdentity;
   const persistedResumeSessionId =
-    mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+    mode === "persistent" && !memoryPolicyBoundaryChanged
+      ? resolveRuntimeResumeSessionId(previousIdentity)
+      : undefined;
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
-    previousIdentity != null &&
-    !identityHasStableSessionId(previousIdentity);
+    (memoryPolicyBoundaryChanged ||
+      (previousIdentity != null && !identityHasStableSessionId(previousIdentity)));
   const ensureSession = async (resumeSessionId?: string) =>
     await withAcpRuntimeErrorBoundary({
       run: async () =>
@@ -109,6 +134,7 @@ export async function ensureManagerRuntimeHandle(params: {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
+          ...(memoryPolicy ? { memoryPolicy } : {}),
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",
@@ -159,7 +185,7 @@ export async function ensureManagerRuntimeHandle(params: {
     ...runtimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
-  const nextIdentity =
+  const mergedIdentity =
     mergeSessionIdentity({
       current: identityForEnsure,
       incoming: createIdentityFromEnsure({
@@ -168,6 +194,8 @@ export async function ensureManagerRuntimeHandle(params: {
       }),
       now,
     }) ?? identityForEnsure;
+  const nextIdentity =
+    mergedIdentity && memoryPolicy ? { ...mergedIdentity, memoryPolicy } : mergedIdentity;
   const nextHandleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
   const nextHandle: AcpRuntimeHandle = {
     ...ensured,
@@ -218,6 +246,7 @@ export async function ensureManagerRuntimeHandle(params: {
     mode,
     cwd: effectiveCwd,
     configSignature,
+    memoryPolicySignature,
     appliedControlSignature: undefined,
   });
   return {

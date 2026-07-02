@@ -127,6 +127,128 @@ describe("harness context engine lifecycle", () => {
     });
   });
 
+  it("passes trusted chat type into assemble hooks", async () => {
+    const visibleUser = textMessage("user", "visible ask", 1);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "agent:main:acp:opaque-conversation",
+      chatType: "group",
+      messages: [visibleUser],
+      modelId: "gpt-5.5",
+    });
+
+    expect(assemble.mock.calls.at(0)?.[0].chatType).toBe("group");
+  });
+
+  it("omits direct chat type from assemble hooks for strict private-engine compatibility", async () => {
+    const visibleUser = textMessage("user", "visible ask", 1);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "agent:main:telegram:direct:user-1",
+      chatType: "direct",
+      messages: [visibleUser],
+      modelId: "gpt-5.5",
+    });
+
+    expect(assemble.mock.calls.at(0)?.[0]).not.toHaveProperty("chatType");
+  });
+
+  it("passes shared chat type into bootstrap hooks", async () => {
+    const bootstrap = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => ({
+        bootstrapped: true,
+      }),
+    );
+    const runMaintenance = vi.fn(async (_params: { chatType?: string }) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: true,
+      contextEngine: createContextEngine({ bootstrap }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "agent:main:acp:opaque-conversation",
+      chatType: "channel",
+      sessionFile: sessionParams.sessionFile,
+      runMaintenance,
+      warn: () => {},
+    });
+
+    const bootstrapParams = bootstrap.mock.calls.at(0)?.[0];
+    expect(bootstrapParams?.chatType).toBe("channel");
+    expect(runMaintenance.mock.calls.at(0)?.[0]).toHaveProperty("chatType", "channel");
+  });
+
+  it("omits direct chat type from bootstrap hooks for strict private-engine compatibility", async () => {
+    const bootstrap = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => ({
+        bootstrapped: true,
+      }),
+    );
+    const runMaintenance = vi.fn(async (_params: { chatType?: string }) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: true,
+      contextEngine: createContextEngine({ bootstrap }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "agent:main:telegram:direct:user-1",
+      chatType: "direct",
+      sessionFile: sessionParams.sessionFile,
+      runMaintenance,
+      warn: () => {},
+    });
+
+    const bootstrapParams = bootstrap.mock.calls.at(0)?.[0];
+    expect(bootstrapParams).not.toHaveProperty("chatType");
+    expect(runMaintenance.mock.calls.at(0)?.[0]).toHaveProperty("chatType", "direct");
+  });
+
+  it("passes shared chat type into afterTurn hooks and turn maintenance", async () => {
+    const turnUser = textMessage("user", "new ask", 1);
+    const turnAssistant = textMessage("assistant", "new answer", 2);
+    const afterTurn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => {},
+    );
+    const runMaintenance = vi.fn(async (_params: { chatType?: string }) => undefined);
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: "agent:main:acp:opaque-conversation",
+      chatType: "group",
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [turnUser, turnAssistant],
+      prePromptMessageCount: 0,
+      tokenBudget: 2048,
+      runMaintenance,
+      warn: () => {},
+    });
+
+    expect(afterTurn.mock.calls.at(0)?.[0]).toHaveProperty("chatType", "group");
+    expect(runMaintenance.mock.calls.at(0)?.[0]).toHaveProperty("chatType", "group");
+  });
+
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
     const engineId = uniqueConfiguredProofEngineId();
     const captured: Array<{
@@ -134,7 +256,11 @@ describe("harness context engine lifecycle", () => {
       runtimeSettings?: ContextEngineRuntimeSettings;
     }> = [];
     const engine = createContextEngine({
-      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      info: {
+        id: engineId,
+        name: "Configured runtime settings proof engine",
+        supportsSharedSessionScope: true,
+      },
       bootstrap: vi.fn(async (params) => {
         captured.push({ hook: "bootstrap", runtimeSettings: params.runtimeSettings });
         return { bootstrapped: true };
@@ -195,6 +321,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      chatType: "channel",
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         textMessage("user", "old ask", 1),
@@ -308,6 +435,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      chatType: "channel",
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         beforePromptUser,
@@ -416,6 +544,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      chatType: "channel",
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         beforePromptUser,
@@ -436,9 +565,10 @@ describe("harness context engine lifecycle", () => {
     const ingestBatchCalls = (ingestBatch as unknown as { mock: { calls: unknown[][] } }).mock
       .calls;
     const ingestBatchParams = ingestBatchCalls[0]?.[0] as
-      | { isHeartbeat?: boolean; messages?: AgentMessage[] }
+      | { chatType?: string; isHeartbeat?: boolean; messages?: AgentMessage[] }
       | undefined;
     expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
+    expect(ingestBatchParams?.chatType).toBe("channel");
     expect(ingestBatchParams?.isHeartbeat).toBe(true);
   });
 
@@ -454,6 +584,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      chatType: "group",
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [turnUser, turnAssistant],
       prePromptMessageCount: 0,
@@ -467,7 +598,8 @@ describe("harness context engine lifecycle", () => {
     const ingestCalls = (ingest as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(ingestCalls).toHaveLength(2);
     for (const call of ingestCalls) {
-      const ingestParams = call[0] as { isHeartbeat?: boolean };
+      const ingestParams = call[0] as { chatType?: string; isHeartbeat?: boolean };
+      expect(ingestParams.chatType).toBe("group");
       expect(ingestParams.isHeartbeat).toBe(true);
     }
   });

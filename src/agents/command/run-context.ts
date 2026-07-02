@@ -1,6 +1,7 @@
 /**
  * Resolves channel/account/thread run context for agent command execution.
  */
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
@@ -16,6 +17,13 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
   );
   if (normalizedChannel) {
     merged.messageChannel = normalizedChannel;
+  }
+
+  const normalizedChatType = normalizeChatType(merged.chatType);
+  if (normalizedChatType) {
+    merged.chatType = normalizedChatType;
+  } else {
+    delete merged.chatType;
   }
 
   const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);

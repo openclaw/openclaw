@@ -14,8 +14,13 @@ import {
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  deriveSessionChatTypeFromKey,
+  type SessionKeyChatType,
+} from "../sessions/session-chat-type-shared.js";
 import {
   extractLeadingHttpStatus,
   parseApiErrorPayload,
@@ -67,12 +72,20 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
   return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
 }
 
+function normalizeDerivedChatType(chatType: SessionKeyChatType): ChatType | undefined {
+  return chatType === "direct" || chatType === "group" || chatType === "channel"
+    ? chatType
+    : undefined;
+}
+
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
  */
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  sourceSessionKey?: string;
+  sourceChatType?: ChatType;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -97,6 +110,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       agentId,
     });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
+    const sourceChatType =
+      params.sourceChatType ??
+      normalizeDerivedChatType(deriveSessionChatTypeFromKey(params.sourceSessionKey));
 
     const result = await runEmbeddedAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -111,6 +127,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       model,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
+      chatType: sourceChatType,
       cleanupBundleMcpOnRunEnd: true,
       // Internal helper run: route failures lane-local so an upstream 400/billing
       // here cannot poison the shared profile (#71709).

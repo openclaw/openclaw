@@ -21,6 +21,8 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
+import { resolveSessionEntryChatType } from "../../../sessions/session-chat-type-shared.js";
+import { shouldIncludeLongTermMemoryByDefault } from "../../../sessions/session-memory-policy.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
@@ -151,14 +153,6 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       (cfg
         ? resolveAgentWorkspaceDir(cfg, agentId)
         : path.join(resolveStateDir(process.env, os.homedir), "workspace"));
-    const displaySessionKey = resolveDisplaySessionKey({
-      cfg,
-      workspaceDir: contextWorkspaceDir,
-      sessionKey: event.sessionKey,
-    });
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
-
     // Use the user's local timezone for memory artifact names and headings.
     const now = new Date(event.timestamp);
     const localTimestamp = formatLocalSessionTimestamp(now);
@@ -170,6 +164,35 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       string,
       unknown
     >;
+    const sourceChatType = resolveSessionEntryChatType(sessionEntry);
+    const longTermMemoryDefaultPolicy =
+      sessionEntry.longTermMemoryDefaultPolicy === "include" ||
+      sessionEntry.longTermMemoryDefaultPolicy === "explicit-only"
+        ? sessionEntry.longTermMemoryDefaultPolicy
+        : undefined;
+    if (
+      !shouldIncludeLongTermMemoryByDefault({
+        sessionKey: event.sessionKey,
+        chatType: sourceChatType,
+        longTermMemoryDefaultPolicy,
+      })
+    ) {
+      log.debug("Skipping private session memory capture for shared session", {
+        sessionKey: event.sessionKey,
+        chatType: sourceChatType,
+        longTermMemoryDefaultPolicy,
+      });
+      return;
+    }
+
+    const displaySessionKey = resolveDisplaySessionKey({
+      cfg,
+      workspaceDir: contextWorkspaceDir,
+      sessionKey: event.sessionKey,
+    });
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
@@ -233,7 +256,12 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        slug = await generateSlugViaLLM({
+          sessionContent,
+          cfg,
+          sourceSessionKey: event.sessionKey,
+          sourceChatType,
+        });
         log.debug("Generated slug", { slug });
       }
     }

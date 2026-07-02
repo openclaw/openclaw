@@ -112,6 +112,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       contextEngine: params.contextEngine,
       sessionId: params.compactParams.sessionId,
       sessionKey: params.compactParams.sessionKey,
+      chatType: params.compactParams.chatType,
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
@@ -406,6 +407,7 @@ export async function compactEmbeddedAgentSession(
             {
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              chatType: params.chatType,
               sessionFile: params.sessionFile,
               tokenBudget: contextTokenBudget,
               currentTokenCount: params.currentTokenCount,
@@ -505,6 +507,7 @@ export async function compactEmbeddedAgentSession(
             contextEngine,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
+            chatType: params.chatType,
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,

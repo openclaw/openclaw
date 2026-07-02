@@ -70,7 +70,12 @@ function createMockSessionContent(
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string; sessionFile?: string };
+  previousSessionEntry: {
+    sessionId: string;
+    sessionFile?: string;
+    chatType?: "direct" | "group" | "channel";
+    longTermMemoryDefaultPolicy?: "include" | "explicit-only";
+  };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
   sessionKey?: string;
@@ -354,6 +359,171 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips private session memory capture for shared reset sources", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Summarize shared workspace planning" },
+      { role: "assistant", content: "Captured before reset" },
+    ]);
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "shared-session.jsonl",
+      content: sessionContent,
+    });
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const event = createHookEvent("command", "new", "agent:main:acp:binding:team:acct:opaque", {
+          cfg: {
+            agents: { defaults: { workspace: tempDir } },
+            hooks: {
+              internal: {
+                entries: {
+                  "session-memory": {
+                    enabled: true,
+                    llmSlug: true,
+                  },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          previousSessionEntry: {
+            sessionId: "shared-session",
+            sessionFile,
+            chatType: "group",
+          },
+        });
+        await handler(event);
+        await flushSessionMemoryWritesForTest();
+        await expectPathMissing(path.join(tempDir, "memory"));
+      },
+    );
+
+    expect(generateSlug).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit-only reset policy for direct-looking sessions", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Summarize shared voice planning" },
+      { role: "assistant", content: "Captured before reset" },
+    ]);
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "shared-direct-target-session.jsonl",
+      content: sessionContent,
+    });
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const event = createHookEvent("command", "new", "agent:main:discord:default:direct:U123", {
+          cfg: {
+            agents: { defaults: { workspace: tempDir } },
+            hooks: {
+              internal: {
+                entries: {
+                  "session-memory": {
+                    enabled: true,
+                    llmSlug: true,
+                  },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          previousSessionEntry: {
+            sessionId: "shared-direct-target-session",
+            sessionFile,
+            chatType: "direct",
+            longTermMemoryDefaultPolicy: "explicit-only",
+          },
+        });
+        await handler(event);
+        await flushSessionMemoryWritesForTest();
+        await expectPathMissing(path.join(tempDir, "memory"));
+      },
+    );
+
+    expect(generateSlug).not.toHaveBeenCalled();
+  });
+
+  it("passes direct reset source scope to opt-in model slug generation", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Summarize private workspace planning" },
+      { role: "assistant", content: "Captured before reset" },
+    ]);
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "direct-session.jsonl",
+      content: sessionContent,
+    });
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockResolvedValueOnce("direct-plan");
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        await runNewWithPreviousSessionEntry({
+          tempDir,
+          sessionKey: "agent:main:telegram:default:direct:U123",
+          cfg: {
+            agents: { defaults: { workspace: tempDir } },
+            hooks: {
+              internal: {
+                entries: {
+                  "session-memory": {
+                    enabled: true,
+                    llmSlug: true,
+                  },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          previousSessionEntry: {
+            sessionId: "direct-session",
+            sessionFile,
+            chatType: "direct",
+          },
+        });
+      },
+    );
+
+    expect(generateSlug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionKey: "agent:main:telegram:default:direct:U123",
+        sourceChatType: "direct",
+      }),
+    );
   });
 
   it("does not block reset command handling on opt-in model slug generation", async () => {

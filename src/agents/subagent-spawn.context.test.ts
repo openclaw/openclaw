@@ -169,6 +169,8 @@ describe("sessions_spawn context modes", () => {
       main: {
         sessionId: "parent-session-id",
         sessionFile: "/tmp/parent-session.jsonl",
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "include",
         updatedAt: 1,
         totalTokens: 1200,
       },
@@ -203,9 +205,43 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionKey).toBe("main");
     expect(prepareContext.childSessionKey).toBe(childSessionKey);
     expect(prepareContext.contextMode).toBe("fork");
+    expect(prepareContext.chatType).toBe("direct");
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
     expect(prepareContext.childSessionId).toBe("forked-session-id");
     expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
+  });
+
+  it("passes explicit-only parent scope into context-engine subagent preparation", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        chatType: "direct",
+        longTermMemoryDefaultPolicy: "explicit-only",
+        updatedAt: 1,
+        totalTokens: 1200,
+      },
+    };
+    usePersistentStoreMock(store);
+    forkSessionFromParentMock.mockImplementation(async () => ({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    }));
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect the current thread", context: "fork" },
+      { agentSessionKey: "main" },
+    );
+
+    const accepted = requireAcceptedResult(result);
+    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
+    expect(prepareContext.parentSessionKey).toBe("main");
+    expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(accepted));
+    expect(prepareContext.contextMode).toBe("fork");
+    expect(prepareContext.chatType).toBe("group");
+    expect(prepareContext.parentSessionId).toBe("parent-session-id");
   });
 
   it("keeps the default spawn context isolated", async () => {
@@ -224,6 +260,27 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionKey).toBe("main");
     expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(result));
     expect(prepareContext.contextMode).toBe("isolated");
+  });
+
+  it("passes requester-key shared scope into isolated context-engine subagent preparation", async () => {
+    const store: SessionStore = {};
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "clean worker" },
+      { agentSessionKey: "discord:channel:team-room" },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
+    expect(prepareContext.parentSessionKey).toBe("discord:channel:team-room");
+    expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(result));
+    expect(prepareContext.contextMode).toBe("isolated");
+    expect(prepareContext.chatType).toBe("channel");
+    expect(prepareContext.parentSessionId).toBeUndefined();
   });
 
   it("keeps lightContext isolated spawns out of context-engine preparation", async () => {

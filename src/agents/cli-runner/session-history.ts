@@ -60,6 +60,7 @@ type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
   | "message-policy"
+  | "memory-policy"
   | "system-prompt"
   | "cwd"
   | "mcp"

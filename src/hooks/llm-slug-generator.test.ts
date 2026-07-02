@@ -65,6 +65,19 @@ describe("generateSlugViaLLM", () => {
     expect(requireFirstRunOptions().authProfileFailurePolicy).toBe("local");
   });
 
+  it("uses the source session classification for helper-run memory policy", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+      sourceSessionKey: "agent:main:slack:channel:C123",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.sessionKey).toBe("temp:slug-generator");
+    expect(options.chatType).toBe("channel");
+  });
+
   it("honors configured agent timeoutSeconds for slow local providers", async () => {
     await generateSlugViaLLM({
       sessionContent: "hello",

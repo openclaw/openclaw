@@ -374,6 +374,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.requestedModelId = "gpt-5.4-codex-primary";
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
+    params.chatType = "group";
     params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
@@ -389,6 +390,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
+    expect(bootstrapParams.chatType).toBe("group");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
     expect(bootstrapParams.runtimeSettings).toMatchObject({
       runtime: { mode: "degraded" },
@@ -408,6 +410,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     >[0];
     expect(assembleParams.sessionId).toBe("session-1");
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
+    expect(assembleParams.chatType).toBe("group");
     expect(assembleParams.tokenBudget).toBe(321);
     expect(assembleParams.citationsMode).toBe("on");
     expect(assembleParams.model).toBe("gpt-5.4-codex");

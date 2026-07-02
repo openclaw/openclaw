@@ -29,6 +29,12 @@ export {
   sanitizeAgentId,
 } from "../routing/session-key.js";
 export { resolveAccountEntry } from "../routing/account-lookup.js";
+export {
+  deriveSessionChatTypeFromKey,
+} from "../sessions/session-chat-type-shared.js";
+export {
+  shouldIncludeLongTermMemoryByDefault,
+} from "../sessions/session-memory-policy.js";
 export { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 export {
   formatSetExplicitDefaultInstruction,

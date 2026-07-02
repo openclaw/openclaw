@@ -57,6 +57,11 @@ export type SessionAcpIdentity = {
   acpxRecordId?: string;
   acpxSessionId?: string;
   agentSessionId?: string;
+  /** OpenClaw memory boundary that authorized this resumable backend identity. */
+  memoryPolicy?: {
+    chatType?: "direct" | "group" | "channel";
+    longTermMemoryDefaultPolicy?: "include" | "explicit-only";
+  };
   /** Runtime lifecycle point that last supplied the identity fields. */
   source: SessionAcpIdentitySource;
   lastUpdatedAt: number;

@@ -274,6 +274,25 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("passes session key and chat type into compacted prompt memory policy", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:acp:binding:opaque",
+      chatType: "group",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeInfo: expect.objectContaining({
+          sessionKey: "agent:main:acp:binding:opaque",
+          chatType: "group",
+        }),
+      }),
+    );
+  });
+
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
@@ -422,6 +441,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       senderName: "Alice",
       senderUsername: "alice_u",
       senderE164: "+15551234567",
+      chatType: "group",
     });
 
     expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
@@ -429,6 +449,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       senderName: "Alice",
       senderUsername: "alice_u",
       senderE164: "+15551234567",
+      chatType: "group",
     });
   });
 

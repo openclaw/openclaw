@@ -10,6 +10,8 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   asPositiveSafeInteger,
   normalizeOptionalString,
@@ -151,7 +153,32 @@ function supportsThinkingPolicyLevel(
   return Boolean(level) && policy.levels.some((entry) => entry.id === level);
 }
 
-export function createLlmTaskTool(api: OpenClawPluginApi) {
+function buildNestedLlmTaskSessionKey(parentSessionKey: string | undefined, sessionId: string) {
+  const parent = parentSessionKey?.trim();
+  if (!parent) {
+    return undefined;
+  }
+  return `agent:${resolveAgentIdFromSessionKey(parent)}:subagent:${sessionId}`;
+}
+
+function resolveNestedLlmTaskChatType(params: {
+  nestedSessionKey?: string;
+  parentChatType?: string;
+}): "direct" | "group" | "channel" | undefined {
+  if (params.nestedSessionKey) {
+    return "group";
+  }
+  return params.parentChatType === "direct" ||
+    params.parentChatType === "group" ||
+    params.parentChatType === "channel"
+    ? params.parentChatType
+    : undefined;
+}
+
+export function createLlmTaskTool(
+  api: OpenClawPluginApi,
+  toolContext?: Pick<OpenClawPluginToolContext, "chatType" | "messageChannel" | "sessionKey">,
+) {
   return {
     ...llmTaskToolDefinition,
 
@@ -265,6 +292,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         async ({ dir: tmpDir }) => {
           const sessionId = `llm-task-${Date.now()}`;
           const sessionFile = path.join(tmpDir, "session.json");
+          const nestedSessionKey = buildNestedLlmTaskSessionKey(toolContext?.sessionKey, sessionId);
 
           const result = await api.runtime.agent.runEmbeddedAgent({
             sessionId,
@@ -274,6 +302,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
             prompt: fullPrompt,
             timeoutMs,
             runId: `llm-task-${Date.now()}`,
+            sessionKey: nestedSessionKey,
+            messageProvider: toolContext?.messageChannel,
+            chatType: resolveNestedLlmTaskChatType({
+              nestedSessionKey,
+              parentChatType: toolContext?.chatType,
+            }),
             provider,
             model,
             authProfileId,
