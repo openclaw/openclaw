@@ -84,6 +84,42 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun retryableNodePairingProblemSurvivesReconnectStatus() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "nodeSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: pairing required")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "NOT_PAIRED",
+        message = "pairing required",
+        details =
+          GatewayConnectErrorDetails(
+            code = "PAIRING_REQUIRED",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "wait_then_retry",
+            reason = "not-paired",
+            requestId = "request-1",
+            retryable = true,
+          ),
+      ),
+      false,
+    )
+
+    onDisconnected("Reconnecting…")
+
+    val reconnectDisplay = runtime.gatewayConnectionDisplay.value
+    assertEquals("Reconnecting…", reconnectDisplay.statusText)
+    assertEquals("PAIRING_REQUIRED", reconnectDisplay.problem?.code)
+    assertEquals("request-1", reconnectDisplay.problem?.requestId)
+
+    onDisconnected("Gateway error: timeout")
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(
       resolveOperatorSessionConnectAuth(

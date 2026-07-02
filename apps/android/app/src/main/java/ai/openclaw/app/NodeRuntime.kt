@@ -112,6 +112,13 @@ data class GatewayConnectionDisplay(
   val problem: GatewayConnectionProblem?,
 )
 
+private fun gatewayProblemAfterDisconnect(
+  problem: GatewayConnectionProblem?,
+  statusText: String,
+): GatewayConnectionProblem? =
+  // Automatic bootstrap pairing retries need their approval guidance until success or a different failure.
+  problem?.takeIf { statusText == "Reconnecting…" && it.canAutoRetry }
+
 internal fun gatewayConnectionDisplay(
   operatorConnected: Boolean,
   nodeConnected: Boolean,
@@ -547,7 +554,7 @@ class NodeRuntime(
         updateStatus {
           operatorConnected = false
           operatorStatusText = message
-          operatorConnectionProblem = null
+          operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
       },
@@ -603,7 +610,7 @@ class NodeRuntime(
         updateStatus {
           _nodeConnected.value = false
           nodeStatusText = message
-          nodeConnectionProblem = null
+          nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
         }
         showLocalCanvasOnDisconnect()
       },
