@@ -5578,14 +5578,6 @@
       "id": "native.apple.95300e4dfd7aad42"
     },
     {
-      "kind": "ui-call",
-      "line": 306,
-      "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
-      "source": "\\(day.entryCount) \\(day.entryCount == 1 ? \"entry\" : \"entries\")",
-      "surface": "apple",
-      "id": "native.apple.21d92f01c5cc2412"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 343,
       "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
