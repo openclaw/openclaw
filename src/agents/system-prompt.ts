@@ -1314,9 +1314,8 @@ export function buildAgentSystemPrompt(params: {
   );
 
   if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {
