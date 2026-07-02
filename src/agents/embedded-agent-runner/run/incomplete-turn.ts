@@ -684,7 +684,12 @@ export const IDLE_MODEL_TIMEOUT_NOTICE =
  * - a messaging tool already delivered a reply out-of-band, or
  * - a deterministic approval prompt was already delivered out-of-band (payload
  *   building intentionally suppresses assistant artifacts in that case) — both
- *   avoid a double / spurious notice.
+ *   avoid a double / spurious notice,
+ * - the attempt reached a structured terminal state (`clientToolCalls` /
+ *   `yieldDetected`): the shared terminal path encodes those as `stopReason`,
+ *   `pendingToolCalls`, `yielded`, and `paused` metadata that OpenAI-compatible
+ *   callers use to continue tool rounds — replacing them with an error payload
+ *   would break that contract even when the attempt also timed out.
  */
 export function resolveTurnBudgetTimeoutNotice(params: {
   timedOut: boolean;
@@ -694,6 +699,8 @@ export function resolveTurnBudgetTimeoutNotice(params: {
   allowSilentReply: boolean;
   hasMessagingDelivery: boolean;
   hasDeterministicApprovalPrompt: boolean;
+  hasClientToolCalls: boolean;
+  yieldDetected: boolean;
 }): string | null {
   if (
     !params.timedOut ||
@@ -701,7 +708,9 @@ export function resolveTurnBudgetTimeoutNotice(params: {
     params.payloadCount > 0 ||
     params.allowSilentReply ||
     params.hasMessagingDelivery ||
-    params.hasDeterministicApprovalPrompt
+    params.hasDeterministicApprovalPrompt ||
+    params.hasClientToolCalls ||
+    params.yieldDetected
   ) {
     return null;
   }

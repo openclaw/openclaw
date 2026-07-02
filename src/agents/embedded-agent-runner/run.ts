@@ -4091,8 +4091,10 @@ async function runEmbeddedAgentInternal(
           // instead, mirroring the prompt-level timeout copy above. `timedOut` is
           // distinct from a user cancel (`aborted`); the notice is suppressed for
           // compaction timeouts (paused/resumable, not abandoned), for
-          // intentionally-silent (cron/heartbeat) turns, and when a messaging tool
-          // or a deterministic approval prompt already delivered out-of-band.
+          // intentionally-silent (cron/heartbeat) turns, when a messaging tool
+          // or a deterministic approval prompt already delivered out-of-band, and
+          // when the attempt carries a structured terminal state (pending client
+          // tool calls / yield) that the terminal path below must preserve.
           const turnBudgetTimeoutNotice = resolveTurnBudgetTimeoutNotice({
             timedOut,
             idleTimedOut,
@@ -4101,6 +4103,8 @@ async function runEmbeddedAgentInternal(
             allowSilentReply: params.allowEmptyAssistantReplyAsSilent === true,
             hasMessagingDelivery: hasMessagingToolDeliveryEvidence(attempt),
             hasDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt === true,
+            hasClientToolCalls: (attempt.clientToolCalls?.length ?? 0) > 0,
+            yieldDetected: attempt.yieldDetected === true,
           });
           if (turnBudgetTimeoutNotice) {
             const replayInvalid = resolveReplayInvalidForAttempt(turnBudgetTimeoutNotice);

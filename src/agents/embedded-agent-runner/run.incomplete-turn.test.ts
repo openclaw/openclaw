@@ -3496,6 +3496,8 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     allowSilentReply: false,
     hasMessagingDelivery: false,
     hasDeterministicApprovalPrompt: false,
+    hasClientToolCalls: false,
+    yieldDetected: false,
   };
 
   it("returns the turn-budget notice when a real turn times out with no visible reply", () => {
@@ -3539,5 +3541,19 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     expect(
       resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasDeterministicApprovalPrompt: true }),
     ).toBeNull();
+  });
+
+  it("returns null when the timed-out attempt has pending client tool calls (terminal state preserved)", () => {
+    // OpenAI-compatible callers continue tool rounds from the terminal path's
+    // stopReason/pendingToolCalls metadata — the notice must not replace it.
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasClientToolCalls: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when the timed-out attempt yielded (terminal state preserved)", () => {
+    // A yielded attempt terminates as paused with `yielded: true`; the notice
+    // would override that resumable state with an abandoned error payload.
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, yieldDetected: true })).toBeNull();
   });
 });
