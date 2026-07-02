@@ -2,14 +2,20 @@
 import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  fetchRemoteEmbeddingVectors: vi.fn(async () => [[1, 0]]),
-  resolveRemoteEmbeddingClient: vi.fn(async () => ({
-    baseUrl: "https://embeddings.example/v1",
-    headers: { Authorization: "Bearer test" },
-    model: "text-embedding-3-small",
-  })),
-}));
+const mocks = vi.hoisted(() => {
+  let mockBaseUrl = "https://api.openai.com/v1";
+  return {
+    fetchRemoteEmbeddingVectors: vi.fn(async () => [[1, 0]]),
+    resolveRemoteEmbeddingClient: vi.fn(async () => ({
+      baseUrl: mockBaseUrl,
+      headers: { Authorization: "Bearer test" },
+      model: "text-embedding-3-small",
+    })),
+    setMockBaseUrl: (url: string) => {
+      mockBaseUrl = url;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
@@ -32,7 +38,22 @@ function createOptions(
 
 function expectFetchRemoteEmbeddingVectorsBody(body: Record<string, unknown>) {
   expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith({
-    url: "https://embeddings.example/v1/embeddings",
+    url: "https://api.openai.com/v1/embeddings",
+    headers: { Authorization: "Bearer test" },
+    ssrfPolicy: undefined,
+    fetchImpl: undefined,
+    signal: undefined,
+    body,
+    errorPrefix: "openai embeddings failed",
+  });
+}
+
+function expectFetchRemoteEmbeddingVectorsBodyForProxy(
+  body: Record<string, unknown>,
+  expectedUrl: string,
+) {
+  expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith({
+    url: `${expectedUrl.replace(/\/$/, "")}/embeddings`,
     headers: { Authorization: "Bearer test" },
     ssrfPolicy: undefined,
     fetchImpl: undefined,
@@ -46,6 +67,7 @@ describe("OpenAI embedding provider", () => {
   beforeEach(() => {
     mocks.fetchRemoteEmbeddingVectors.mockClear();
     mocks.resolveRemoteEmbeddingClient.mockClear();
+    mocks.setMockBaseUrl("https://api.openai.com/v1");
   });
 
   it("sends queryInputType on query embeddings", async () => {
@@ -119,5 +141,68 @@ describe("OpenAI embedding provider", () => {
         provider: "openai",
       }),
     );
+  });
+
+  describe("native OpenAI (api.openai.com)", () => {
+    it("does not add openai/ prefix for native OpenAI base URL", async () => {
+      mocks.setMockBaseUrl("https://api.openai.com/v1");
+
+      const { client } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "text-embedding-3-small" }),
+      );
+
+      expect(client.model).toBe("text-embedding-3-small");
+    });
+
+    it("strips existing openai/ prefix for native OpenAI base URL", async () => {
+      mocks.setMockBaseUrl("https://api.openai.com/v1");
+
+      const { client } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "openai/text-embedding-3-small" }),
+      );
+
+      expect(client.model).toBe("text-embedding-3-small");
+    });
+  });
+
+  describe("proxy provider (non-native OpenAI base URL)", () => {
+    const PROXY_URL = "https://embeddings.example/v1";
+
+    beforeEach(() => {
+      mocks.setMockBaseUrl(PROXY_URL);
+    });
+
+    it("adds openai/ prefix to bare model IDs for proxy providers", async () => {
+      const { client } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "text-embedding-3-small" }),
+      );
+
+      // Proxy providers like Requesty need the openai/ prefix
+      expect(client.model).toBe("openai/text-embedding-3-small");
+    });
+
+    it("normalizes openai/ prefix when re-adding for proxy providers", async () => {
+      const { client } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "openai/text-embedding-3-small" }),
+      );
+
+      // Strips duplicate, then re-adds once
+      expect(client.model).toBe("openai/text-embedding-3-small");
+    });
+
+    it("reports the model with openai/ prefix in fetch calls for proxy", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "text-embedding-3-small" }),
+      );
+
+      expect(provider.model).toBe("openai/text-embedding-3-small");
+
+      await provider.embedBatch(["hello"]);
+
+      expectFetchRemoteEmbeddingVectorsBodyForProxy(
+        { model: "openai/text-embedding-3-small", input: ["hello"] },
+        PROXY_URL,
+      );
+    });
   });
 });

@@ -6,6 +6,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
 export type OpenAiEmbeddingClient = {
@@ -96,12 +97,22 @@ export async function createOpenAiEmbeddingProvider(
 async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
+  const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({
     provider: options.provider ?? "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,
   });
+  // For proxy providers (Requesty, etc.) whose base URL is not the native
+  // OpenAI endpoint, re-add the openai/ prefix so the model ID routes
+  // correctly. Proxy providers typically use the openai/ prefix to identify
+  // the upstream provider for every model, even when the user configures a
+  // bare model ID like text-embedding-3-small.
+  const baseUrl = client.baseUrl ?? DEFAULT_OPENAI_BASE_URL;
+  if (!isOpenAIApiBaseUrl(baseUrl)) {
+    client.model = `openai/${normalizeOpenAiModel(originalModel)}`;
+  }
   return {
     ...client,
     inputType: options.inputType,
