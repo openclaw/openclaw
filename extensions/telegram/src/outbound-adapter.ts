@@ -5,7 +5,10 @@ import {
   sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import type {
+  ChannelOutboundAdapter,
+  OutboundDeliveryResult,
+} from "openclaw/plugin-sdk/channel-send-result";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
@@ -28,6 +31,7 @@ import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
+import { consumeTelegramSilentNotificationMarker } from "./silent-marker.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
@@ -127,12 +131,13 @@ export async function sendTelegramPayloadMessages(params: {
   to: string;
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
-}): Promise<Awaited<ReturnType<TelegramSendFn>>> {
+}): Promise<Omit<OutboundDeliveryResult, "channel">> {
   const telegramData = params.payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;
         quoteText?: string;
         reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
+        silent?: unknown;
       }
     | undefined;
   const quoteText =
@@ -140,12 +145,17 @@ export async function sendTelegramPayloadMessages(params: {
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
   const presentation = normalizeMessagePresentation(params.payload.presentation);
-  const text =
+  const rawText =
     resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
       presentation,
     }) ?? "";
+  const normalizedDelivery = consumeTelegramSilentNotificationMarker(
+    rawText,
+    params.baseOpts.silent === true || telegramData?.silent === true ? true : undefined,
+  );
+  const text = normalizedDelivery.text;
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
@@ -155,6 +165,7 @@ export async function sendTelegramPayloadMessages(params: {
   const replyToMessageId = params.baseOpts.replyToMessageId;
   const payloadOpts = {
     ...params.baseOpts,
+    silent: normalizedDelivery.silent,
     quoteText,
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
@@ -187,6 +198,9 @@ export async function sendTelegramPayloadMessages(params: {
   }
   if (reactionEmoji && !text && mediaUrls.length === 0 && !buttons?.length) {
     return { messageId: String(replyToMessageId), chatId: params.to };
+  }
+  if (!text && mediaUrls.length === 0 && (!buttons?.length || normalizedDelivery.consumed)) {
+    return { messageId: "" };
   }
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
@@ -310,8 +324,16 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return await send(outboundTo, params.text, {
+        const normalizedDelivery = consumeTelegramSilentNotificationMarker(
+          params.text,
+          baseOpts.silent,
+        );
+        if (!normalizedDelivery.text) {
+          return { messageId: "" };
+        }
+        return await send(outboundTo, normalizedDelivery.text, {
           ...baseOpts,
+          silent: normalizedDelivery.silent,
         });
       },
       sendMedia: async (params) => {
@@ -319,8 +341,13 @@ export function createTelegramOutboundAdapter(
           ...params,
           resolveSend,
         });
-        return await send(outboundTo, params.text, {
+        const normalizedDelivery = consumeTelegramSilentNotificationMarker(
+          params.text,
+          baseOpts.silent,
+        );
+        return await send(outboundTo, normalizedDelivery.text, {
           ...baseOpts,
+          silent: normalizedDelivery.silent,
           mediaUrl: params.mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
@@ -347,6 +374,41 @@ export function createTelegramOutboundAdapter(
         },
       });
       return attachChannelToResult("telegram", result);
+    },
+    normalizePayload: ({ payload }) => {
+      const text = payload.text ?? "";
+      const markerDelivery = consumeTelegramSilentNotificationMarker(text);
+      if (markerDelivery.text === text && markerDelivery.silent !== true) {
+        return payload;
+      }
+      const telegramData =
+        payload.channelData?.telegram &&
+        typeof payload.channelData.telegram === "object" &&
+        !Array.isArray(payload.channelData.telegram)
+          ? (payload.channelData.telegram as Record<string, unknown>)
+          : {};
+      if (
+        markerDelivery.consumed &&
+        !markerDelivery.text &&
+        !payload.mediaUrl?.trim() &&
+        !payload.mediaUrls?.some((url) => url.trim()) &&
+        !payload.presentation &&
+        !payload.interactive &&
+        !telegramData.reaction
+      ) {
+        return null;
+      }
+      return {
+        ...payload,
+        text: markerDelivery.text,
+        channelData: {
+          ...payload.channelData,
+          telegram: {
+            ...telegramData,
+            silent: true,
+          },
+        },
+      };
     },
     sendPoll: async ({
       cfg,

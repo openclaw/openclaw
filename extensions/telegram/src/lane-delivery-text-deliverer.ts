@@ -68,6 +68,10 @@ type CreateLaneTextDelivererParams = {
     finalText: string;
     laneName: LaneName;
   }) => Promise<string | undefined> | string | undefined;
+  prepareFinalText?: (params: { text: string; laneName: LaneName }) => {
+    text: string;
+    silent?: boolean;
+  };
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -543,29 +547,44 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     durable: requestedDurable,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
-    const reply = resolveSendableOutboundReplyParts(payload, { text });
     const isDurableFinal = infoKind === "final";
+    const preparedFinal = isDurableFinal
+      ? (params.prepareFinalText?.({ text, laneName }) ?? { text })
+      : { text };
+    const finalText = preparedFinal.text;
+    const reply = resolveSendableOutboundReplyParts(payload, { text: finalText });
     const finalizePreview = requestedFinalizePreview ?? isDurableFinal;
     const durable = requestedDurable ?? isDurableFinal;
-    const streamed = !reply.hasMedia
-      ? await streamText(laneName, lane, text, payload, isDurableFinal, finalizePreview, buttons)
-      : undefined;
+    const shouldFinalizeViaStream = preparedFinal.silent !== true;
+    const streamed =
+      !reply.hasMedia && shouldFinalizeViaStream
+        ? await streamText(
+            laneName,
+            lane,
+            finalText,
+            payload,
+            isDurableFinal,
+            finalizePreview,
+            buttons,
+          )
+        : undefined;
     if (streamed) {
       return streamed;
     }
 
     if (
       finalizePreview &&
+      shouldFinalizeViaStream &&
       reply.hasMedia &&
       lane.stream &&
       lane.hasStreamedMessage &&
       !lane.finalized &&
-      text.trim().length > 0
+      finalText.trim().length > 0
     ) {
       const finalizedPreview = await streamText(
         laneName,
         lane,
-        text,
+        finalText,
         textOnlyPayload(payload),
         isDurableFinal,
         true,
@@ -576,7 +595,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           finalizedPreview.kind === "preview-finalized" &&
           finalizedPreview.delivery.buttonsAttached === true;
         const mediaText =
-          finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
+          finalizedPreview.kind === "preview-finalized"
+            ? finalizedPreview.delivery.content
+            : finalText;
         await params.sendPayload(
           mediaOnlyPayload(payload, mediaText, {
             stripButtons,
@@ -594,8 +615,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await clearUnfinalizedStream(lane);
     }
 
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, finalText), {
       durable,
+      ...(preparedFinal.silent !== undefined ? { silent: preparedFinal.silent } : {}),
     });
     if (delivered && finalizePreview) {
       lane.finalized = true;
