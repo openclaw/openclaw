@@ -639,7 +639,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/setup-pnpm-store-cache-ensure-node.test.ts"],
   ],
   [".github/images/live-media-runner/Dockerfile", LIVE_MEDIA_RUNNER_IMAGE_TEST_TARGETS],
+  [".github/workflows/auto-response.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],

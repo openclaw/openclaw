@@ -1238,6 +1238,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps PR automation workflow edits on workflow guard tests", () => {
+    for (const workflowPath of [
+      ".github/workflows/auto-response.yml",
+      ".github/workflows/clawsweeper-dispatch.yml",
+      ".github/workflows/labeler.yml",
+      ".github/workflows/real-behavior-proof.yml",
+    ]) {
+      expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/ci-workflow-guards.test.ts"],
+      });
+    }
+  });
+
   it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
     expect(
       resolveChangedTestTargetPlan([".github/workflows/security-sensitive-guard.yml"]),
