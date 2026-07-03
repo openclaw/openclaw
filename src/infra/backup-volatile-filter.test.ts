@@ -38,8 +38,11 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/state/openclaw.sqlite-wal`, true],
     [`${stateDir}/state/openclaw.sqlite-shm`, true],
     [`${stateDir}/state/openclaw.sqlite-journal`, true],
-    [`${stateDir}/locks/backup.lock`, true],
-    [`${stateDir}/downloads/archive.partial`, true],
+    [`${stateDir}/tmp/backup.lock`, true],
+    [`${stateDir}/tmp/archive.partial`, true],
+    [`${stateDir}/cache/backup.lock`, true],
+    [`${stateDir}/delivery-queue/backup.lock`, true],
+    [`${stateDir}/session-delivery-queue/archive.partial`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
@@ -48,6 +51,10 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/user-data/Default/Preferences`, false],
     [`${stateDir}/browser/openclaw/user-data/Default/Login Data`, false],
     [`${stateDir}/browser/cache/user-data/Default/Preferences`, false],
+    [`${stateDir}/extensions/demo/bun.lock`, false],
+    [`${stateDir}/extensions/demo/download.partial`, false],
+    [`${stateDir}/locks/backup.lock`, false],
+    [`${stateDir}/downloads/archive.partial`, false],
     // non-volatile: cron definitions
     [`${stateDir}/cron/jobs.json`, false],
     // non-volatile: cron runs but wrong extension

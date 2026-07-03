@@ -159,7 +159,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live sessions, cron logs, queues, runtime caches, browser caches, sockets, pid/tmp/lock files).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, runtime caches, browser caches, sockets, pid/tmp files, scratch lock/partial files).",
     ]);
   });
 });

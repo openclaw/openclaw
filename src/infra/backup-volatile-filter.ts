@@ -12,7 +12,9 @@ import path from "node:path";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".lock", ".partial", ".pid", ".sock", ".tmp"]);
+const STATE_TRANSIENT_EXTENSIONS = new Set([".pid", ".sock", ".tmp"]);
+const STATE_SCRATCH_SIDECAR_EXTENSIONS = new Set([".lock", ".partial"]);
+const STATE_SCRATCH_ROOTS = new Set(["cache", "delivery-queue", "session-delivery-queue", "tmp"]);
 const STATE_TRANSIENT_SUFFIXES = ["-journal", "-shm", "-wal"] as const;
 const AGENT_RUNTIME_VOLATILE_DIRS = new Set(["cache", "shell_snapshots", "shell-snapshots", "tmp"]);
 const BROWSER_CACHE_DIRS = new Set([
@@ -58,6 +60,18 @@ function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): 
 function hasTransientStateSuffix(filePosix: string): boolean {
   const lowerFilePosix = filePosix.toLowerCase();
   return STATE_TRANSIENT_SUFFIXES.some((suffix) => lowerFilePosix.endsWith(suffix));
+}
+
+function isStateScratchSidecarPath(filePosix: string, stateDirPosix: string): boolean {
+  if (!isUnder(filePosix, stateDirPosix)) {
+    return false;
+  }
+  if (!hasExtensionInSet(filePosix, STATE_SCRATCH_SIDECAR_EXTENSIONS)) {
+    return false;
+  }
+  const relative = path.posix.relative(stateDirPosix, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  return parts.length >= 2 && STATE_SCRATCH_ROOTS.has(parts[0] ?? "");
 }
 
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
@@ -133,7 +147,8 @@ type VolatileFilterPlan = {
  *   - `{stateDir}/cache/shell-snapshots/**`
  *   - `{stateDir}/browser/**` cache/resource-cache directories
  *   - `{stateDir}/archived/**`
- *   - `{stateDir}/**`/`*.{lock,partial,pid,sock,tmp}` and `*-{journal,shm,wal}`
+ *   - `{stateDir}/**`/`*.{pid,sock,tmp}` and `*-{journal,shm,wal}`
+ *   - `{stateDir}/{cache,delivery-queue,session-delivery-queue,tmp}/**`/`*.{lock,partial}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
@@ -200,6 +215,7 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
       if (
         isUnder(filePosix, stateDirPosix) &&
         (hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS) ||
+          isStateScratchSidecarPath(filePosix, stateDirPosix) ||
           hasTransientStateSuffix(filePosix))
       ) {
         return true;

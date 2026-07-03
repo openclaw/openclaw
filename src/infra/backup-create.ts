@@ -147,7 +147,7 @@ const BACKUP_TAR_MAX_ATTEMPTS = 3;
 // Backoff between attempts: wait 10s before attempt 2, 20s before attempt 3.
 const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
 const VOLATILE_BACKUP_SUMMARY_DETAIL =
-  "live sessions, cron logs, queues, runtime caches, browser caches, sockets, pid/tmp/lock files";
+  "live sessions, cron logs, queues, runtime caches, browser caches, sockets, pid/tmp files, scratch lock/partial files";
 
 function isTarEofRaceError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
