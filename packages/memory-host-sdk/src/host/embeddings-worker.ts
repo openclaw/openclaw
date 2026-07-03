@@ -171,6 +171,7 @@ function resolveWorkerExecArgv(): string[] {
 }
 
 /**
+<<<<<<< HEAD
  * Resolve a working Node.js executable path for forking the embedding worker.
  *
  * `child_process.fork()` defaults to `process.execPath`, which after a
@@ -231,14 +232,7 @@ function resolveWorkerExecPath(): string {
   return process.execPath;
 }
 
-/**
- * Sync helper: match a Homebrew Cellar node path and resolve to the stable
- * opt/bin symlink if one exists on disk.
- *
- * Mirrors the async logic in `src/infra/stable-node-path.ts` but runs
- * synchronously so it can be called from the sync `ensureChild()` path.
- */
-function resolveHomebrewStablePath(nodePath: string): string {
+export function resolveHomebrewStablePath(nodePath: string): string {
   const cellarMatch = nodePath.match(
     /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node$/,
   );
@@ -270,7 +264,6 @@ function resolveHomebrewStablePath(nodePath: string): string {
 
   return nodePath;
 }
-
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
@@ -499,10 +492,6 @@ export async function createLocalEmbeddingWorkerProvider(
     },
   };
 }
-
-// Exported for unit testing only — resolves a stale Homebrew Cellar path
-// to the stable opt/bin symlink that survives `brew upgrade`.
-export { resolveHomebrewStablePath };
 
 /** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
