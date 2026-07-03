@@ -2,7 +2,7 @@
 // Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { logWarn } from "../logger.js";
+import { logDebug, logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 // MCP loopback schema projection adapts gateway tool definitions into MCP
@@ -100,7 +100,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
         }
         if (!isRecord(existing) || !isRecord(incoming)) {
           if (existing !== incoming) {
-            logWarn(
+            logDebug(
               `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
             );
           }
@@ -122,7 +122,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
           mergedProps[key] = merged;
           continue;
         }
-        logWarn(
+        logDebug(
           `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
         );
       }
