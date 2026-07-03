@@ -8025,7 +8025,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Version naming
   - H2: Release cadence
-  - H2: Release operator checklist
+  - H2: Monthly npm-only stable publication
+  - H2: Regular release operator checklist
   - H2: Stable main closeout
   - H2: Release preflight
   - H2: Release test boxes
@@ -8033,9 +8034,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Docker
   - H3: QA Lab
   - H3: Package
-  - H2: Release publish automation
+  - H2: Regular release publish automation
   - H2: NPM workflow inputs
-  - H2: Stable npm release sequence
+  - H2: Regular beta/latest stable release sequence
   - H2: Public references
   - H2: Related
 
