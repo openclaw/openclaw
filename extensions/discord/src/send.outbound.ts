@@ -98,26 +98,6 @@ function resolveDiscordSuppressEmbeds(params: {
   return params.override ?? params.configured ?? true;
 }
 
-function isDiscordOversizedMediaError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const obj = err as Record<string, unknown>;
-  if (obj.status === 413 || obj.statusCode === 413) {
-    return true;
-  }
-  if (obj.code === 40005) {
-    return true;
-  }
-  if (obj.rawError && typeof obj.rawError === "object") {
-    const raw = obj.rawError as Record<string, unknown>;
-    if (raw.code === 40005) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
@@ -378,7 +358,7 @@ export async function sendMessageDiscord(
       );
     }
   } catch (err) {
-    if (opts.mediaUrl && isDiscordOversizedMediaError(err) && textWithMentions.trim()) {
+    if (opts.mediaUrl && textWithMentions.trim()) {
       result = await sendDiscordText(
         rest,
         channelId,
