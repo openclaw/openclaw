@@ -349,6 +349,63 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
+  it("completes the final reply even if the transcript mirror's dispatcher-idle wait never resolves", async () => {
+    // Regression: the delivered-transcript mirror awaits dispatcher.waitForIdle()
+    // as post-delivery bookkeeping. When a follow-up is queued the dispatcher
+    // never goes idle until this operation clears — and awaiting the mirror here
+    // blocked the operation from clearing, a completion<->idle deadlock that left
+    // the reply op phase=running (stalled_agent_run, recovery=none). The mirror
+    // now runs fire-and-forget, so completion must not depend on waitForIdle.
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = { sessionKey: "agent:test:session" };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    const dispatcher = createDispatcher();
+    // Simulate a busy dispatcher (queued follow-up): idle never arrives.
+    vi.mocked(dispatcher.waitForIdle).mockImplementation(() => new Promise<void>(() => {}));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "first reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "first reply" });
+    // The mirror was still kicked off (fire-and-forget) — it just no longer gates completion.
+    expect(dispatcher.waitForIdle).toHaveBeenCalled();
+  });
+
+  it("does not fail the reply when the background transcript mirror rejects", async () => {
+    // The detached mirror's failure must be swallowed in the background (logged via
+    // .catch), never surfaced as an unhandled rejection or a failed reply.
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = { sessionKey: "agent:test:session" };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.waitForIdle).mockRejectedValue(new Error("mirror idle wait failed"));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "first reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    // Let the detached mirror's rejection settle; a missing .catch would surface
+    // as an unhandled rejection and fail this test.
+    await vi.waitFor(() => {
+      expect(dispatcher.waitForIdle).toHaveBeenCalled();
+    });
+  });
+
   it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
     const deliveryOrder: string[] = [];
     let startDelivery: () => void = () => {};
