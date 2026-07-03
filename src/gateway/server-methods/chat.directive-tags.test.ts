@@ -3642,6 +3642,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       authorized: false,
       body: "hello from phone",
     });
+    const userTurnInput = mockState.lastDispatchUserTurnInput as
+      | {
+          content?: unknown;
+        }
+      | undefined;
+    expect(userTurnInput?.content).toBe("hello from phone");
     expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
   });
 
