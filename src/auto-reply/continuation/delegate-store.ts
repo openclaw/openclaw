@@ -88,6 +88,11 @@ const PendingDelegateStateSchema = z
     // Restart recovery adds it to the (stale) child-entry chain cost so the
     // continuation cost cap is enforced against the post-run total (#1144).
     chainTokensFold: z.number().int().nonnegative().optional(),
+    // Durable inherited policy for default-mode delayed delegates queued under
+    // a silent/silent-wake parent chain. Recovery cannot reconstruct this from
+    // the session key alone, so it must ride the TaskFlow row (#1158).
+    inheritedSilent: z.boolean().optional(),
+    inheritedWake: z.boolean().optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -170,6 +175,8 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(delegate.chainTokensFold !== undefined
       ? { chainTokensFold: delegate.chainTokensFold }
       : {}),
+    ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
+    ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
   };
 }
 
@@ -417,6 +424,8 @@ function flowToDelegate(
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.model ? { model: state.model } : {}),
     ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
+    ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
+    ...(state.inheritedWake ? { inheritedWake: true } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -690,6 +699,76 @@ export function annotateQueuedDelegatesChainTokensFold(
       expectedRevision: flow.revision,
       patch: {
         stateJson: { ...state, chainTokensFold },
+        updatedAt: Date.now(),
+      },
+    });
+    if (result.applied) {
+      annotated += 1;
+    }
+  }
+  return annotated;
+}
+
+/**
+ * Clear durable chain-cost folds from still-queued delegates after the folded
+ * basis has been persisted to the child entry. Without this, later hedges reload
+ * the already-folded entry and add the same fold again (#1158).
+ */
+export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number {
+  let cleared = 0;
+  for (const flow of listQueuedPendingFlows(sessionKey)) {
+    const state = decodeDelegateState(flow);
+    if (!state?.chainTokensFold) {
+      continue;
+    }
+    const { chainTokensFold: _chainTokensFold, ...nextState } = state;
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        stateJson: nextState,
+        updatedAt: Date.now(),
+      },
+    });
+    if (result.applied) {
+      cleared += 1;
+    }
+  }
+  return cleared;
+}
+
+/**
+ * Persist inherited silent/wake policy on queued default-mode delegates before a
+ * delay hedge can outlive the process that carried the in-memory inheritance.
+ */
+export function annotateQueuedDelegatesInheritedPolicy(
+  sessionKey: string,
+  policy: { inheritedSilent?: boolean; inheritedWake?: boolean },
+): number {
+  if (policy.inheritedSilent !== true && policy.inheritedWake !== true) {
+    return 0;
+  }
+  let annotated = 0;
+  for (const flow of listQueuedPendingFlows(sessionKey)) {
+    const state = decodeDelegateState(flow);
+    if (!state) {
+      continue;
+    }
+    const hasOwnMode =
+      state.silent === true || state.silentWake === true || state.postCompaction === true;
+    if (hasOwnMode) {
+      continue;
+    }
+    const nextState = {
+      ...state,
+      ...(policy.inheritedSilent ? { inheritedSilent: true } : {}),
+      ...(policy.inheritedWake ? { inheritedWake: true } : {}),
+    };
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        stateJson: nextState,
         updatedAt: Date.now(),
       },
     });

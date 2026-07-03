@@ -38,6 +38,8 @@ import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
+  annotateQueuedDelegatesInheritedPolicy,
+  clearQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
   finalizeStagedPostCompactionDelegates,
   listPendingDelegateSessionKeysForRecovery,
@@ -155,6 +157,9 @@ function armHedgeTimer(
       .then(async (result) => {
         if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
           await params.persistChainState(result.chainState);
+          if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
+            clearQueuedDelegatesChainTokensFold(sessionKey);
+          }
         }
       })
       .catch((err: unknown) => {
@@ -275,7 +280,12 @@ export async function dispatchToolDelegates(params: {
    */
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
-}): Promise<{ dispatched: number; rejected: number; chainState: ChainState }> {
+}): Promise<{
+  dispatched: number;
+  rejected: number;
+  chainState: ChainState;
+  appliedChainTokensFold?: number;
+}> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
   // Fail closed: applying a delegate chain-cost fold requires a persist path so
@@ -298,6 +308,10 @@ export async function dispatchToolDelegates(params: {
   // arrives. The hedge re-invokes this function; idempotent per sessionKey.
   const soonestUnmaturedDueAt = peekSoonestUnmaturedDelegateDueAt(sessionKey);
   if (soonestUnmaturedDueAt !== undefined) {
+    annotateQueuedDelegatesInheritedPolicy(sessionKey, {
+      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+      ...(params.inheritedWake ? { inheritedWake: true } : {}),
+    });
     armHedgeTimer(sessionKey, soonestUnmaturedDueAt, {
       chainState: params.chainState,
       ctx: params.ctx,
@@ -353,11 +367,10 @@ export async function dispatchToolDelegates(params: {
   // shared cost carried identically on each of the child's delegates), and only
   // when the caller opts in — live dispatch already folds it into `chainState`
   // (#1144).
-  const accumulatedTokens =
-    chainState.accumulatedChainTokens +
-    (params.applyDelegateChainTokensFold
-      ? Math.max(0, ...toolDelegates.map((delegate) => delegate.chainTokensFold ?? 0))
-      : 0);
+  const appliedChainTokensFold = params.applyDelegateChainTokensFold
+    ? Math.max(0, ...toolDelegates.map((delegate) => delegate.chainTokensFold ?? 0))
+    : 0;
+  const accumulatedTokens = chainState.accumulatedChainTokens + appliedChainTokensFold;
   let currentChainId = chainState.chainId;
 
   for (const delegate of delegatesWithinLimit) {
@@ -427,9 +440,11 @@ export async function dispatchToolDelegates(params: {
     // instead of announcing (mirrors the subagent-announce chain-hop guards) (#1158).
     const ownSilent = delegate.mode === "silent" || delegate.mode === "silent-wake";
     const ownWake = delegate.mode === "silent-wake";
-    const silent = ownSilent || params.inheritedSilent === true;
-    const silentWake =
-      ownWake || (params.inheritedSilent === true && params.inheritedWake === true);
+    const canInheritMode = delegate.mode === undefined || delegate.mode === "normal";
+    const inheritedSilent = delegate.inheritedSilent === true || params.inheritedSilent === true;
+    const inheritedWake = delegate.inheritedWake === true || params.inheritedWake === true;
+    const silent = ownSilent || (canInheritMode && inheritedSilent);
+    const silentWake = ownWake || (canInheritMode && inheritedSilent && inheritedWake);
     const outboundTraceparent = resolveContinuationTraceparent(delegate.traceparent);
     const delegateMode = silentWake ? "silent-wake" : silent ? "silent" : "normal";
     const delegateDelayMs = delegate.delayMs ?? 0;
@@ -487,6 +502,12 @@ export async function dispatchToolDelegates(params: {
         {
           task: `[continuation:chain-hop:${nextHop}] Delegated task (turn ${nextHop}/${maxChainLength}): ${delegate.task}`,
           drainsContinuationDelegateQueue: true,
+          continuationChainState: {
+            count: nextHop,
+            startedAt: chainState.chainStartedAt,
+            tokens: accumulatedTokens,
+            chainId: dispatchChainId,
+          },
           ...(delegate.model ? { model: delegate.model } : {}),
           ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(silent ? { silentAnnounce: true } : {}),
@@ -570,6 +591,7 @@ export async function dispatchToolDelegates(params: {
       accumulatedChainTokens: accumulatedTokens,
       ...(currentChainId ? { chainId: currentChainId } : {}),
     },
+    ...(appliedChainTokensFold > 0 ? { appliedChainTokensFold } : {}),
   };
 }
 
@@ -615,9 +637,10 @@ export async function recoverPendingContinuationDelegates(
     // in-memory copy this recovery loop reads. The in-memory mirror keeps
     // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
     // delegates see the advancing basis instead of the stale pre-dispatch entry.
-    const derivedFromStore = !params.chainState;
-    const persistRecoveredChainState = derivedFromStore
-      ? async (nextState: ChainState): Promise<void> => {
+    // When the caller provides their own chainState they own persistence; skip.
+    const persistRecoveredChainState = params.chainState
+      ? undefined
+      : async (nextState: ChainState): Promise<void> => {
           await updateSessionStore(storePath, (store) => {
             const sessionEntry = store[sessionKey] ?? {};
             persistContinuationChainState({
@@ -638,8 +661,7 @@ export async function recoverPendingContinuationDelegates(
             ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
           });
           sessionStore[sessionKey] = inMemoryEntry;
-        }
-      : undefined;
+        };
     const result = await dispatchToolDelegates({
       sessionKey,
       chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
@@ -665,6 +687,9 @@ export async function recoverPendingContinuationDelegates(
     rejected += result.rejected;
     if (persistRecoveredChainState && (result.dispatched > 0 || result.rejected > 0)) {
       await persistRecoveredChainState(result.chainState);
+      if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
+        clearQueuedDelegatesChainTokensFold(sessionKey);
+      }
     }
   }
   return { sessions: sessionKeys.length, dispatched, rejected };
@@ -711,7 +736,12 @@ export async function dispatchStagedPostCompactionDelegates(
   options?: {
     chainState?: ChainState;
   },
-): Promise<{ dispatched: number; failed: number; dispatchedFlowIds: string[] }> {
+): Promise<{
+  dispatched: number;
+  failed: number;
+  dispatchedFlowIds: string[];
+  chainState: ChainState;
+}> {
   let dispatched = 0;
   let failed = 0;
   const dispatchedFlowIds: string[] = [];
@@ -719,6 +749,7 @@ export async function dispatchStagedPostCompactionDelegates(
   const chainStartedAt = options?.chainState?.chainStartedAt ?? Date.now();
   const accumulatedChainTokens = options?.chainState?.accumulatedChainTokens ?? 0;
   let currentChainCount = options?.chainState?.currentChainCount ?? 0;
+  let currentChainId = options?.chainState?.chainId;
   const delegatesWithinLimit = delegates.slice(0, config.maxDelegatesPerTurn);
   const delegatesOverLimit = delegates.slice(config.maxDelegatesPerTurn);
 
@@ -811,12 +842,23 @@ export async function dispatchStagedPostCompactionDelegates(
 
     try {
       const spawnTraceparent = resolveContinuationTraceparent(delegate.traceparent);
+      const nextHop = currentChainCount + 1;
+      const dispatchChainId = currentChainId ?? generateChainId();
       const spawnResult = await spawnSubagentDirect(
         {
-          task: delegate.task,
+          task:
+            `[continuation:post-compaction] ` +
+            `[continuation:chain-hop:${nextHop}] ` +
+            `Compaction just completed. Carry this working state to the post-compaction session: ${delegate.task}`,
           silentAnnounce: true,
           wakeOnReturn: true,
           drainsContinuationDelegateQueue: true,
+          continuationChainState: {
+            count: nextHop,
+            startedAt: chainStartedAt,
+            tokens: accumulatedChainTokens,
+            chainId: dispatchChainId,
+          },
           ...(delegate.model ? { model: delegate.model } : {}),
           ...(delegate.targetSessionKey
             ? { continuationTargetSessionKey: delegate.targetSessionKey }
@@ -830,7 +872,8 @@ export async function dispatchStagedPostCompactionDelegates(
         spawnCtx,
       );
       if (spawnResult.status === "accepted") {
-        currentChainCount++;
+        currentChainCount = nextHop;
+        currentChainId = dispatchChainId;
         dispatched++;
         if (delegate.flowId) {
           dispatchedFlowIds.push(delegate.flowId);
@@ -857,7 +900,17 @@ export async function dispatchStagedPostCompactionDelegates(
     }
   }
 
-  return { dispatched, failed, dispatchedFlowIds };
+  return {
+    dispatched,
+    failed,
+    dispatchedFlowIds,
+    chainState: {
+      currentChainCount,
+      chainStartedAt,
+      accumulatedChainTokens,
+      ...(currentChainId ? { chainId: currentChainId } : {}),
+    },
+  };
 }
 
 /**
@@ -943,6 +996,26 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     // cutoff), so the next restart recovers it again — never a silent drop or a
     // premature finish.
     if (result.dispatchedFlowIds.length > 0) {
+      await updateSessionStore(storePath, (store) => {
+        const sessionEntry = store[sessionKey] ?? {};
+        persistContinuationChainState({
+          sessionEntry,
+          count: result.chainState.currentChainCount,
+          startedAt: result.chainState.chainStartedAt,
+          tokens: result.chainState.accumulatedChainTokens,
+          ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+        });
+        store[sessionKey] = sessionEntry;
+      });
+      const inMemoryEntry = sessionStore[sessionKey] ?? {};
+      persistContinuationChainState({
+        sessionEntry: inMemoryEntry,
+        count: result.chainState.currentChainCount,
+        startedAt: result.chainState.chainStartedAt,
+        tokens: result.chainState.accumulatedChainTokens,
+        ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+      });
+      sessionStore[sessionKey] = inMemoryEntry;
       finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
     }
   }

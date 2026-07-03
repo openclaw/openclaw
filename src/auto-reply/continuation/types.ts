@@ -88,6 +88,13 @@ export type PendingContinuationDelegate = {
    */
   chainTokensFold?: number;
   /**
+   * Durable inherited return policy from a silent/silent-wake parent chain.
+   * Used for default-mode delayed delegates that survive process restart before
+   * their hedge fires.
+   */
+  inheritedSilent?: boolean;
+  inheritedWake?: boolean;
+  /**
    * Internal TaskFlow metadata carried from consume → dispatch so downstream
    * spawn/release failures can flip the row from succeeded → failed without
    * re-querying or guessing revision state.

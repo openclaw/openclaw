@@ -957,6 +957,27 @@ describe("tool delegate dispatch contract", () => {
     });
   });
 
+  it("does not upgrade an explicit silent delegate to silent-wake via inheritance (#1158)", async () => {
+    const sessionKey = "session-explicit-silent-inherit-wake";
+    enqueuePendingDelegate(sessionKey, { task: "explicit silent child", mode: "silent" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("explicit silent child"),
+      silentAnnounce: true,
+    });
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
+  });
+
   it("keeps a default-mode delegate visible without inherited policy (#1158)", async () => {
     // Normal (non-silent) parent: the default-mode delegate stays visible.
     const sessionKey = "session-no-inherit";
@@ -1851,6 +1872,99 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(persisted?.continuationChainCount).toBe(2);
     expect(persisted?.continuationChainTokens).toBe(150_000);
   });
+
+  it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:hedge-fold-clear";
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop one",
+      delayMs: 30_000,
+      chainTokensFold: 50_000,
+    });
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop two",
+      delayMs: 60_000,
+      chainTokensFold: 50_000,
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 0,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 100_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    let persisted = findPersistedRecoveryEntry(sessionKey);
+    expect(persisted?.continuationChainTokens).toBe(150_000);
+    const remainingFlow = [...mockFlows.values()].find((flow) => flow.status === "queued");
+    expect((remainingFlow?.stateJson as Record<string, unknown> | undefined)?.chainTokensFold).toBe(
+      undefined,
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    persisted = findPersistedRecoveryEntry(sessionKey);
+    expect(persisted?.continuationChainCount).toBe(2);
+    // Still 150_000: the second hedge reloaded an already-folded basis and did
+    // not add the same durable fold a second time.
+    expect(persisted?.continuationChainTokens).toBe(150_000);
+  });
+
+  it("recovers delayed default delegates with durable inherited silent/wake policy (#1158)", async () => {
+    const sessionKey = "agent:main:subagent:recover-inherited-silent";
+    enqueuePendingDelegate(sessionKey, { task: "delayed inherited child", delayMs: 60_000 });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    resetDelegateDispatchHedgesForTests();
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 0,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 0,
+      },
+    });
+    await recoverPendingContinuationDelegates({});
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("delayed inherited child"),
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+  });
 });
 
 describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
@@ -1899,10 +2013,16 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(spawnParams).toMatchObject({
-      task: "rehydrate after compaction",
+      task: expect.stringContaining("[continuation:post-compaction] [continuation:chain-hop:1]"),
       silentAnnounce: true,
       wakeOnReturn: true,
       drainsContinuationDelegateQueue: true,
+    });
+    expect(spawnParams.task).toEqual(expect.stringContaining("rehydrate after compaction"));
+    const persisted = findPersistedRecoveryEntry(sessionKey);
+    expect(persisted).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 0,
     });
     // The accepted row is finalized (terminal) so it cannot replay.
     expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });

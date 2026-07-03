@@ -1272,6 +1272,51 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
   });
 
+  it("treats a no-op parent token persist as failed and folds the run cost (#1158)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-parent-missing": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 150_000,
+        outputTokens: 100_000,
+      },
+      "agent:main:main": {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        continuationChainTokens: 300_000,
+      },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // The requester entry is readable for budget checks, but the write mutator
+    // touches no entry (legacy/normalized-key mismatch shape). It returns
+    // normally, so production must detect "no row mutated" and fold the run cost.
+    updateSessionStoreMock.mockImplementationOnce(
+      async (_storePath: string, mutator: (store: Record<string, unknown>) => unknown) =>
+        await mutator({}),
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-parent-missing",
+      childRunId: "run-bracket-parent-missing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+  });
+
   // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
   // already propagates model) must forward an explicit continue_delegate model
   // override to the grandchild spawn so a tool-delegated hop honors the requested

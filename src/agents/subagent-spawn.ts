@@ -208,6 +208,13 @@ export type SpawnSubagentParams = {
   traceparent?: string;
   /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
   continuationDelegateFlowId?: string;
+  /** Initial continuation chain basis for a child that can drain continuation delegates. */
+  continuationChainState?: {
+    count: number;
+    startedAt: number;
+    tokens: number;
+    chainId?: string;
+  };
 };
 
 export type SpawnSubagentContext = {
@@ -1389,6 +1396,16 @@ export async function spawnSubagentDirect(
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
     ...(params.traceparent ? { continuationTraceparent: params.traceparent } : {}),
+    ...(params.continuationChainState
+      ? {
+          continuationChainCount: params.continuationChainState.count,
+          continuationChainStartedAt: params.continuationChainState.startedAt,
+          continuationChainTokens: params.continuationChainState.tokens,
+          ...(params.continuationChainState.chainId
+            ? { continuationChainId: params.continuationChainState.chainId }
+            : {}),
+        }
+      : {}),
   };
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);
