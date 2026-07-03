@@ -201,11 +201,7 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   val uri =
     runCatching { URI(normalized) }.getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host =
-    uri.host
-      ?.trim()
-      ?.trim('[', ']')
-      .orEmpty()
+  val host = normalizeGatewayConnectionHost(uri.host?.trim()?.trim('[', ']').orEmpty())
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val scheme =
@@ -340,6 +336,16 @@ internal fun composeGatewayManualUrl(
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
+}
+
+/** Strips IPv6 interface zones so parsed hosts match socket-ready literals. */
+internal fun normalizeGatewayConnectionHost(rawHost: String): String {
+  var host = rawHost.trim().trim('[', ']')
+  val zoneIndex = host.indexOf('%')
+  if (zoneIndex >= 0) {
+    host = host.substring(0, zoneIndex)
+  }
+  return host
 }
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()

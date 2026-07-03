@@ -62,4 +62,23 @@ class TalkModeConfigParsingTest {
       TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
     )
   }
+
+  @Test
+  fun parsesStringInterruptOnSpeechFlag() {
+    val config =
+      json
+        .parseToJsonElement(
+          """
+          {
+            "talk": {
+              "interruptOnSpeech": "true"
+            }
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    val parsed = TalkModeGatewayConfigParser.parse(config)
+
+    assertEquals(true, parsed.interruptOnSpeech)
+  }
 }

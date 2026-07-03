@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
+import java.util.Locale
 
 private const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
 
@@ -17,6 +18,56 @@ fun friendlySessionName(key: String): String {
 
   val result = words.joinToString(" ")
   return result.ifBlank { key }
+}
+
+/** Mirrors iOS CommandCenterTab.isRecentChatSession for thread-picker parity. */
+internal fun isSelectableChatSession(
+  key: String,
+  mainSessionKey: String,
+): Boolean {
+  val trimmed = key.trim()
+  if (trimmed.isEmpty()) return false
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  if (trimmed == mainKey) return false
+  val normalized = trimmed.lowercase(Locale.US)
+  val defaultBase = sessionBaseKey(mainKey)
+  if (!normalized.contains(":") && isDirectSessionBase(normalized, defaultBase)) {
+    return false
+  }
+  if (isHiddenInternalSession(trimmed)) return false
+  return !isAgentDeviceSession(trimmed, mainKey)
+}
+
+private fun isHiddenInternalSession(key: String): Boolean {
+  val trimmed = key.trim()
+  if (trimmed.isEmpty()) return false
+  return trimmed == "onboarding" || trimmed.endsWith(":onboarding")
+}
+
+private fun isAgentDeviceSession(
+  key: String,
+  mainSessionKey: String,
+): Boolean {
+  val parts = key.trim().split(':', ignoreCase = false)
+  if (parts.size < 3 || parts[0].lowercase(Locale.US) != "agent") return false
+  if (parts.size != 3 && parts.getOrNull(3)?.lowercase(Locale.US) != "thread") return false
+
+  val base = parts[2].trim().lowercase(Locale.US)
+  val defaultBase = sessionBaseKey(mainSessionKey)
+  return isDirectSessionBase(base, defaultBase)
+}
+
+private fun isDirectSessionBase(
+  base: String,
+  defaultBase: String,
+): Boolean = base == defaultBase || base == "main" || base == "global" || base.startsWith("node-")
+
+private fun sessionBaseKey(key: String): String {
+  val parts = key.trim().split(':', ignoreCase = false)
+  if (parts.size < 3 || parts[0].lowercase(Locale.US) != "agent") {
+    return key.trim().lowercase(Locale.US)
+  }
+  return parts[2].trim().lowercase(Locale.US)
 }
 
 /** Builds the selectable recent-session list while preserving the active session. */
@@ -36,6 +87,7 @@ fun resolveSessionChoices(
   for (entry in sorted) {
     // Hide the legacy main alias when the gateway has supplied a canonical main session key.
     if (aliasKey != null && entry.key == aliasKey) continue
+    if (!isSelectableChatSession(entry.key, mainKey)) continue
     if (!seen.add(entry.key)) continue
     if ((entry.updatedAtMs ?: 0L) < cutoff) continue
     recent.add(entry)
@@ -58,7 +110,7 @@ fun resolveSessionChoices(
     }
   }
 
-  if (current.isNotEmpty() && !included.contains(current)) {
+  if (current.isNotEmpty() && !included.contains(current) && isSelectableChatSession(current, mainKey)) {
     // Keep the active session selectable even if it is old or missing from the recent list.
     result.add(ChatSessionEntry(key = current, updatedAtMs = null))
   }
