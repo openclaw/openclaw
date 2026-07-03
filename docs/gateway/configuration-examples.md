@@ -268,7 +268,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       humanDelay: {
         mode: "natural",
       },
-      timeoutSeconds: 600,
+      timeoutSeconds: 172800, // default 48h, unset to use the built-in default
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
