@@ -1629,14 +1629,7 @@ export async function runHeartbeatOnce(opts: {
     entry,
     chatType: delivery.chatType,
   });
-  const {
-    prompt,
-    hasExecCompletion,
-    hasRelayableExecCompletion,
-    hasCronEvents,
-    hasDueCommitments,
-    usesHeartbeatResponseTool,
-  } = resolveHeartbeatRunPrompt({
+  const promptResult = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
@@ -1648,6 +1641,14 @@ export async function runHeartbeatOnce(opts: {
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
     runScope,
   });
+  let { prompt } = promptResult;
+  const {
+    hasExecCompletion,
+    hasRelayableExecCompletion,
+    hasCronEvents,
+    hasDueCommitments,
+    usesHeartbeatResponseTool,
+  } = promptResult;
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
     : [];
@@ -1806,6 +1807,39 @@ export async function runHeartbeatOnce(opts: {
       { skipSaveWhenResult: (cleared) => !cleared },
     );
   };
+
+  // Inject pending system event text into the heartbeat prompt so the
+  // agent receives the interaction payload, not just a generic heartbeat
+  // (#99544 / #61502). Must happen BEFORE ctx is built so Body includes
+  // the injected text. Only inject on the generic (non-exec, non-cron)
+  // path — exec/cron events already have their text included via
+  // buildExecEventPrompt / buildCronEventPrompt.
+  if (
+    preflight.shouldInspectPendingEvents &&
+    inspectedSystemEventsToConsume.length > 0 &&
+    !hasExecCompletion &&
+    !hasCronEvents
+  ) {
+    const systemLines: string[] = [];
+    for (const event of inspectedSystemEventsToConsume) {
+      const text = event.text;
+      if (typeof text !== "string" || !text.trim()) {
+        continue;
+      }
+      const timestamp = timestampMsToIsoString(event.ts);
+      const sublines = text.split("\n");
+      for (let i = 0; i < sublines.length; i++) {
+        const subline = sublines[i].trimEnd();
+        if (!subline) {
+          continue;
+        }
+        systemLines.push(`System: ${i === 0 ? `${timestamp} ` : ""}${subline}`);
+      }
+    }
+    if (systemLines.length > 0) {
+      prompt = `${systemLines.join("\n")}\n\n${prompt}`;
+    }
+  }
 
   const consumeInspectedSystemEvents = () => {
     if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
