@@ -1907,6 +1907,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Skill Workshop
   - H2: Related
 
+## cli/stats.md
+
+- Route: /cli/stats
+- Headings:
+  - H1: openclaw stats
+  - H2: Commands
+  - H2: Options
+  - H2: Output
+
 ## cli/status.md
 
 - Route: /cli/status
