@@ -19,8 +19,10 @@ if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
   throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: ${maxBodyBytes}`);
 }
 
-async function cancelReader(reader) {
-  await reader.cancel().catch(() => undefined);
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
 }
 
 async function readResponseChunk(reader, timeoutPromise, markCanceled) {
@@ -30,10 +32,10 @@ async function readResponseChunk(reader, timeoutPromise, markCanceled) {
   }
 
   let waitingForRead = true;
-  const timeoutReadPromise = timeoutPromise.catch(async (error) => {
+  const timeoutReadPromise = timeoutPromise.catch((error) => {
     if (waitingForRead) {
       markCanceled();
-      await cancelReader(reader);
+      cancelReaderSoon(reader);
     }
     throw error;
   });

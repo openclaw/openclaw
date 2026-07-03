@@ -357,10 +357,13 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     }
   });
 
-  it("keeps the request timeout active while reading the response body", async () => {
+  it("rejects timed-out response body reads instead of treating cancellation as clean EOF", async () => {
     expect(bodyReadTimeoutProbe.result.error).toBeUndefined();
     expect(bodyReadTimeoutProbe.result.status).not.toBe(0);
-    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/timed out|aborted|AbortError/iu);
+    expect(bodyReadTimeoutProbe.result.stderr).toContain(
+      "chat completions request timed out after 1s",
+    );
+    expect(bodyReadTimeoutProbe.result.stderr).not.toContain("non-JSON response");
     expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
     expect(bodyReadTimeoutProbe.responseClosed).toBe(true);
   });
