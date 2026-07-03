@@ -614,6 +614,28 @@ describe("stripToolCallXmlTags", () => {
     );
   });
 
+  it("strips standalone <parameter> wrappers outside a <function> block (#98557)", () => {
+    expect(
+      stripToolCallXmlTags('prefix\n<parameter name="assumptions">\nvalue\n</parameter>\nsuffix'),
+    ).toBe("prefix\n\nvalue\n\nsuffix");
+  });
+
+  it("preserves inner markup when stripping standalone <parameter> wrappers", () => {
+    expect(
+      stripToolCallXmlTags('prefix\n<parameter name="x">\n<b>value</b>\n</parameter>\nsuffix'),
+    ).toBe("prefix\n\n<b>value</b>\n\nsuffix");
+  });
+
+  it("preserves <parameter> tags inside fenced code blocks", () => {
+    const input = '```xml\n<parameter name="x">value</parameter>\n```\nAfter';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+  });
+
+  it("preserves inline <parameter> examples in prose", () => {
+    const input = 'prefix <parameter name="x">value</parameter> suffix';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+  });
+
   it("strips function_response adjacent to an opt-in stripped function_calls block", () => {
     const input = [
       '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
@@ -829,6 +851,43 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips standalone <parameter> wrappers that leak into rich message content (#98557)", () => {
+    const input = [
+      "Here are the results.",
+      "",
+      '<parameter name="assumptions">',
+      "• 7-day window",
+      "• Direct employer filter",
+      "</parameter>",
+      "",
+      "Let me know if you need more.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(
+      [
+        "Here are the results.",
+        "",
+        "",
+        "• 7-day window",
+        "• Direct employer filter",
+        "",
+        "",
+        "Let me know if you need more.",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves inline <parameter> examples in prose", () => {
+    const input = 'Use <parameter name="x">value</parameter> in docs.';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves <parameter> tags inside fenced code blocks", () => {
+    const input = '```xml\n<parameter name="x">value</parameter>\n```\nAfter';
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
   it("preserves prose examples of plural function-call XML on the delivery path", () => {

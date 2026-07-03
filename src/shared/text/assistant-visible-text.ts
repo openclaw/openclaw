@@ -41,6 +41,7 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "tool_calls",
   "antml:invoke",
   "antml:parameter",
+  "parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
@@ -181,6 +182,24 @@ function isLikelyStandaloneFunctionToolCall(
   }
 
   return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
+}
+
+function isLikelyStandaloneParameterWrapper(
+  text: string,
+  tagStart: number,
+  tag: ParsedToolCallTag,
+): boolean {
+  if (tag.tagName !== "parameter" || tag.isClose || tag.isSelfClosing || tag.isTruncated) {
+    return false;
+  }
+
+  if (findMatchingToolCallCloseIndex(text, tag.end, tag.tagName) === -1) {
+    return false;
+  }
+
+  return (
+    isStandaloneOpeningTagLine(text, tagStart, tag) || isOpeningTagFollowedByLineBreak(text, tag)
+  );
 }
 
 function isStandaloneOpeningTagLine(
@@ -345,6 +364,7 @@ export function stripToolCallXmlTags(
   let result = "";
   let lastIndex = 0;
   let inToolCallBlock = false;
+  let stripParameterTagsOnly = false;
   let toolCallBlockContentStart = 0;
   let toolCallBlockNeedsQuoteBalance = false;
   let toolCallBlockStart = 0;
@@ -433,6 +453,14 @@ export function stripToolCallXmlTags(
           (functionResponseCloseStart !== -1 &&
             isVisibleLineStart(result) &&
             isOpeningTagFollowedByLineBreak(text, tag)));
+      const shouldStripStandaloneParameter = isLikelyStandaloneParameterWrapper(text, idx, tag);
+      if (!tag.isClose && shouldStripStandaloneParameter) {
+        stripParameterTagsOnly = true;
+        toolCallBlockTagName = tag.tagName;
+        lastIndex = tag.end;
+        idx = Math.max(idx, tag.end - 1);
+        continue;
+      }
       if (
         !tag.isClose &&
         ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult)
@@ -458,6 +486,14 @@ export function stripToolCallXmlTags(
         idx = Math.max(idx, preserveEnd - 1);
         continue;
       }
+    } else if (stripParameterTagsOnly && tag.isClose && tag.tagName === toolCallBlockTagName) {
+      result += text.slice(lastIndex, idx);
+      stripParameterTagsOnly = false;
+      toolCallBlockTagName = null;
+      lastStrippedToolCallBlockEnd = tag.end;
+      lastIndex = tag.end;
+      idx = Math.max(idx, tag.end - 1);
+      continue;
     } else if (
       tag.isClose &&
       (tag.tagName === toolCallBlockTagName ||
@@ -478,7 +514,7 @@ export function stripToolCallXmlTags(
     idx = Math.max(idx, tag.end - 1);
   }
 
-  if (!inToolCallBlock) {
+  if (!inToolCallBlock || stripParameterTagsOnly) {
     result += text.slice(lastIndex);
   } else if (toolCallBlockTagName === "function") {
     result += text.slice(toolCallBlockStart);
