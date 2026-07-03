@@ -38,15 +38,17 @@ describe("cdp helpers", () => {
 
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
-    const json = vi.fn(async () => {
+    const responseBody = JSON.stringify({ ok: true });
+    const arrayBuffer = vi.fn(async () => {
       expect(release).not.toHaveBeenCalled();
-      return { ok: true };
+      return Buffer.from(responseBody, "utf8");
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: {
         ok: true,
         status: 200,
-        json,
+        headers: new Headers(),
+        arrayBuffer,
       },
       release,
     });
@@ -58,7 +60,7 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(json).toHaveBeenCalledTimes(1);
+    expect(arrayBuffer).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
