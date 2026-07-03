@@ -224,7 +224,7 @@ describe("runReplyAgent final MEDIA replies", () => {
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
       path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
+      100 * 1024 * 1024,
       { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
     );
   });
