@@ -384,6 +384,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
     expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngineRuntimeContext).toMatchObject({
       authProfileId: "github-copilot:work",
+      authProfileIdSource: "auto",
     });
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);

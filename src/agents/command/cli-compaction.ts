@@ -441,6 +441,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
                   authProfileId,
+                  authProfileIdSource,
                   workspaceDir: params.workspaceDir,
                   cwd: params.cwd,
                   agentDir: params.agentDir,

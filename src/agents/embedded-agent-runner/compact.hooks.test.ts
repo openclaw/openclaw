@@ -657,6 +657,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("retries auto-selected auth profiles within the same provider before failing compaction", async () => {
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
     resolveAuthProfileOrderMock.mockReturnValueOnce(["openai:default", "openai:backup"]);
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
@@ -678,19 +680,34 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         details: { ok: true },
       });
 
-    const result = await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp/workspace",
-      provider: "openai",
-      model: "gpt-primary",
-      authProfileId: "openai:default",
-      authProfileIdSource: "auto",
-    });
+    try {
+      const result = await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-primary",
+        authProfileId: "openai:default",
+        authProfileIdSource: "auto",
+      });
 
-    expect(result.ok).toBe(true);
-    expect(result.result?.summary).toBe("backup profile summary");
+      expect(result.ok).toBe(true);
+      expect(result.result).toMatchObject({
+        summary: "backup profile summary",
+        firstKeptEntryId: "entry-backup",
+        tokensBefore: 120,
+        tokensAfter: 10,
+      });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionFile: "/tmp/session.jsonl",
+        sessionKey: TEST_SESSION_KEY,
+      });
+    } finally {
+      cleanup();
+    }
     expect(sessionCompactImpl).toHaveBeenCalledTimes(2);
     expect(ensureAuthProfileStoreMock).toHaveBeenCalledTimes(1);
     expect(externalCliDiscoveryForProviderAuthMock).toHaveBeenCalledWith(
@@ -744,6 +761,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("user profile rate limited");
+    expect(result.result).toBeUndefined();
     expect(sessionCompactImpl).toHaveBeenCalledTimes(1);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
     expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();

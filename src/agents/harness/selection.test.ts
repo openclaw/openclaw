@@ -979,6 +979,7 @@ describe("selectAgentHarness", () => {
         provider: "openai",
         model: "gpt-5.5",
         authProfileId: "main-profile",
+        authProfileIdSource: "user",
         agentHarnessId: "codex",
         config: {
           agents: {
@@ -996,12 +997,65 @@ describe("selectAgentHarness", () => {
     expect(compact.mock.calls[0]?.[0]).toMatchObject({
       agentDir: "/tmp/main-agent",
       agentId: "main",
+      authProfileIdSource: "user",
       resolvedApiKey: "test-key",
       runtimeModel: {
         id: "gpt-5.5",
         provider: "openai",
       },
     });
+    expect(compactAuthMocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "main-profile",
+        lockedProfile: true,
+      }),
+    );
+  });
+
+  it("leaves auto-selected compaction auth profiles eligible for credential fallback", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "main-profile",
+        authProfileIdSource: "auto",
+        agentHarnessId: "codex",
+        config: agentModelRuntimeConfig("openai/gpt-5.5", "openclaw"),
+      }),
+    ).resolves.toEqual({ ok: true, compacted: false });
+
+    expect(compactAuthMocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "main-profile",
+        lockedProfile: false,
+      }),
+    );
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileIdSource: "auto",
+        resolvedApiKey: "test-key",
+      }),
+    );
   });
 
   it("routes internal post-context-engine compaction through the harness private capability", async () => {
