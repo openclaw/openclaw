@@ -32,16 +32,10 @@ protocol LocationServicing: Sendable {
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
     func setBackgroundLocationUpdatesEnabled(_ enabled: Bool)
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
     func stopMonitoringSignificantLocationChanges()
-}
-
-extension LocationServicing {
-    func reconcileBackgroundMonitoringAuthorization(_ status: CLAuthorizationStatus) {
-        guard status != .authorizedAlways else { return }
-        self.setBackgroundLocationUpdatesEnabled(false)
-        self.stopMonitoringSignificantLocationChanges()
-    }
 }
 
 @MainActor

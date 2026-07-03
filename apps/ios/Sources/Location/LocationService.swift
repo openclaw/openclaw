@@ -14,6 +14,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     private var authWaitID: UUID?
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
 
@@ -121,6 +122,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager.allowsBackgroundLocationUpdates = enabled
     }
 
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+    {
+        self.authorizationChangeHandler = handler
+    }
+
     func stopMonitoringSignificantLocationChanges() {
         self.significantLocationCallback = nil
         self.isMonitoringSignificantChanges = false
@@ -130,7 +137,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
-            self.reconcileBackgroundMonitoringAuthorization(status)
+            self.authorizationChangeHandler?(status)
             guard let waitID = self.authWaitID else { return }
             self.finishAuthorizationWait(waitID: waitID, status: status)
         }

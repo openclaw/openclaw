@@ -1,3 +1,4 @@
+import CoreLocation
 import Observation
 import OpenClawChatUI
 import OpenClawKit
@@ -373,6 +374,12 @@ final class NodeAppModel {
         self.refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
+        self.locationService.setAuthorizationChangeHandler { [weak self] status in
+            guard let self else { return }
+            self.reconcileSignificantLocationMonitoring(
+                mode: self.locationMode(),
+                authorizationStatus: status)
+        }
 
         // Wire up deep links from canvas taps
         self.screen.onDeepLink = { [weak self] url in
@@ -781,27 +788,41 @@ final class NodeAppModel {
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else {
-            self.locationService.setBackgroundLocationUpdatesEnabled(false)
-            self.locationService.stopMonitoringSignificantLocationChanges()
+            self.reconcileSignificantLocationMonitoring(
+                mode: mode,
+                authorizationStatus: self.locationService.authorizationStatus())
             return true
         }
         let status = await self.locationService.ensureAuthorization(mode: mode)
         switch status {
         case .authorizedAlways:
-            self.locationService.setBackgroundLocationUpdatesEnabled(mode == .always)
-            if mode != .always {
-                self.locationService.stopMonitoringSignificantLocationChanges()
-            }
+            self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
             return true
         case .authorizedWhenInUse:
-            self.locationService.setBackgroundLocationUpdatesEnabled(false)
-            self.locationService.stopMonitoringSignificantLocationChanges()
+            self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
             return true
         default:
-            self.locationService.setBackgroundLocationUpdatesEnabled(false)
-            self.locationService.stopMonitoringSignificantLocationChanges()
+            self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
             return false
         }
+    }
+
+    private func reconcileSignificantLocationMonitoring(
+        mode: OpenClawLocationMode,
+        authorizationStatus: CLAuthorizationStatus)
+    {
+        guard mode == .always, authorizationStatus == .authorizedAlways else {
+            self.locationService.setBackgroundLocationUpdatesEnabled(false)
+            self.locationService.stopMonitoringSignificantLocationChanges()
+            return
+        }
+        SignificantLocationMonitor.startIfNeeded(
+            locationService: self.locationService,
+            locationMode: mode,
+            gateway: self.nodeGateway,
+            beforeSend: { [weak self] in
+                await self?.handleSignificantLocationWakeIfNeeded()
+            })
     }
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"

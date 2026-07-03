@@ -110,7 +110,7 @@ import Testing
         #expect(locationService.stopMonitoringCallCount == 1)
     }
 
-    @MainActor @Test func `always mode keeps significant location monitoring eligible when always is granted`() async {
+    @MainActor @Test func `always mode starts significant location monitoring when always is granted`() async {
         let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
         let appModel = NodeAppModel(locationService: locationService)
 
@@ -119,6 +119,7 @@ import Testing
         #expect(granted)
         #expect(locationService.backgroundUpdatesEnabled == true)
         #expect(locationService.stopMonitoringCallCount == 0)
+        #expect(locationService.startMonitoringCallCount == 1)
     }
 
     @MainActor @Test func `always mode remains selected when ios only grants while using`() async {
@@ -132,29 +133,38 @@ import Testing
         #expect(locationService.stopMonitoringCallCount == 1)
     }
 
-    @MainActor @Test func `authorization downgrade stops significant location monitoring`() {
+    @MainActor @Test func `external downgrade and always restoration reconcile significant monitoring`() {
+        let defaultsKey = "location.enabledMode"
+        let previous = UserDefaults.standard.object(forKey: defaultsKey)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+        UserDefaults.standard.set(OpenClawLocationMode.always.rawValue, forKey: defaultsKey)
         let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
+        let appModel = NodeAppModel(locationService: locationService)
 
-        locationService.reconcileBackgroundMonitoringAuthorization(.authorizedWhenInUse)
+        withExtendedLifetime(appModel) {
+            locationService.simulateAuthorizationChange(.authorizedAlways)
+            locationService.simulateAuthorizationChange(.authorizedWhenInUse)
+            locationService.simulateAuthorizationChange(.authorizedAlways)
+        }
 
-        #expect(locationService.backgroundUpdatesEnabled == false)
+        #expect(locationService.backgroundUpdatesEnabled == true)
+        #expect(locationService.startMonitoringCallCount == 2)
         #expect(locationService.stopMonitoringCallCount == 1)
-    }
-
-    @MainActor @Test func `authorized always keeps significant location monitoring active`() {
-        let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
-
-        locationService.reconcileBackgroundMonitoringAuthorization(.authorizedAlways)
-
-        #expect(locationService.backgroundUpdatesEnabled == nil)
-        #expect(locationService.stopMonitoringCallCount == 0)
     }
 }
 
 @MainActor
 private final class MockLocationService: LocationServicing, @unchecked Sendable {
-    private let status: CLAuthorizationStatus
+    private var status: CLAuthorizationStatus
+    private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
     var backgroundUpdatesEnabled: Bool?
+    var startMonitoringCallCount = 0
     var stopMonitoringCallCount = 0
 
     init(authorizationStatus: CLAuthorizationStatus) {
@@ -191,11 +201,23 @@ private final class MockLocationService: LocationServicing, @unchecked Sendable 
         self.backgroundUpdatesEnabled = enabled
     }
 
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+    {
+        self.authorizationChangeHandler = handler
+    }
+
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {
         _ = onUpdate
+        self.startMonitoringCallCount += 1
     }
 
     func stopMonitoringSignificantLocationChanges() {
         self.stopMonitoringCallCount += 1
+    }
+
+    func simulateAuthorizationChange(_ status: CLAuthorizationStatus) {
+        self.status = status
+        self.authorizationChangeHandler?(status)
     }
 }
