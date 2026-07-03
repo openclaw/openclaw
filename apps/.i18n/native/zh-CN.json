@@ -1764,6 +1764,26 @@
       "translated": "更新"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "许可证"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw 感谢开源社区中的合作伙伴。"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "此构建未包含任何许可证声明。"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "打开 ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "检查"
