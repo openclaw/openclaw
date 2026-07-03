@@ -1599,6 +1599,7 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
+      createRuntimeDynamicTool("agents_list"),
       createRuntimeDynamicTool("sessions_spawn"),
       createRuntimeDynamicTool("sessions_yield"),
     ];
@@ -1612,6 +1613,7 @@ describe("runCodexAppServerAttempt", () => {
     const message = specs.find((tool) => tool.name === "message");
     const webSearch = specs.find((tool) => tool.name === "web_search");
     const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
+    const agentsList = specs.find((tool) => tool.name === "agents_list");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -1621,6 +1623,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat).not.toHaveProperty("namespace");
     expect(heartbeat).not.toHaveProperty("deferLoading");
+    expect(agentsList).not.toHaveProperty("namespace");
+    expect(agentsList).not.toHaveProperty("deferLoading");
     expect(sessionsSpawn).not.toHaveProperty("namespace");
     expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
@@ -1686,6 +1690,21 @@ describe("runCodexAppServerAttempt", () => {
     const sortedRegisteredToolNames = registeredToolNames.toSorted();
     expect(specNames(heartbeatBridge.specs).toSorted()).toEqual(sortedRegisteredToolNames);
     expect(specNames(nextNormalBridge.specs).toSorted()).toEqual(sortedRegisteredToolNames);
+    expect(
+      heartbeatBridge.specs.find(
+        (tool) => tool.type === "function" && tool.name === "heartbeat_respond",
+      ),
+    ).toBeDefined();
+    expect(
+      nextNormalBridge.specs.find(
+        (tool) => tool.type === "function" && tool.name === "heartbeat_respond",
+      ),
+    ).toBeUndefined();
+    expect(
+      flattenSpecsWithNamespace(nextNormalBridge.specs).find(
+        (tool) => tool.name === "heartbeat_respond",
+      )?.namespace,
+    ).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {
