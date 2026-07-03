@@ -423,14 +423,17 @@ async function sendOutboundText(params: {
 
   const subChunks = chunkTextForOutbound(normalizedText, postLimit);
   let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
-  for (const chunk of subChunks) {
+  for (const [i, chunk] of subChunks.entries()) {
+    // Only the first subchunk carries the reply target so single-use
+    // implicit reply ids (replyToMode "first") are consumed once per
+    // platform send, matching core sendTextMediaPayload fanout behavior.
     lastResult = await sendMessageFeishu({
       cfg,
       to,
       text: chunk,
       accountId,
-      replyToMessageId,
-      replyInThread,
+      replyToMessageId: i === 0 ? replyToMessageId : undefined,
+      replyInThread: i === 0 ? replyInThread : undefined,
     });
   }
   return lastResult!;
