@@ -2,6 +2,9 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -58,6 +61,36 @@ internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): Strin
     "DEVICE_IDENTITY_REQUIRED",
     -> "Device identity required"
     else -> null
+  }
+
+/** Returns the exact host command for one node's approval state when available. */
+internal fun gatewayNodeApprovalCommand(
+  state: GatewayNodeApprovalState,
+  requestId: String?,
+): String? =
+  when (state) {
+    GatewayNodeApprovalState.PendingApproval,
+    GatewayNodeApprovalState.PendingReapproval,
+    -> normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
+    GatewayNodeApprovalState.Unapproved -> "openclaw nodes status"
+    GatewayNodeApprovalState.Loading,
+    GatewayNodeApprovalState.Unsupported,
+    GatewayNodeApprovalState.Approved,
+    -> null
+  }
+
+internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? =
+  when (approval) {
+    is GatewayNodeCapabilityApproval.PendingApproval ->
+      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingApproval, approval.requestId)
+    is GatewayNodeCapabilityApproval.PendingReapproval ->
+      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingReapproval, approval.requestId)
+    GatewayNodeCapabilityApproval.Unapproved ->
+      gatewayNodeApprovalCommand(GatewayNodeApprovalState.Unapproved, requestId = null)
+    GatewayNodeCapabilityApproval.Loading,
+    GatewayNodeCapabilityApproval.Unsupported,
+    GatewayNodeCapabilityApproval.Approved,
+    -> null
   }
 
 /** Builds the copyable support prompt with device, endpoint, and exact status context. */

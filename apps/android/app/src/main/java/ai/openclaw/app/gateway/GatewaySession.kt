@@ -85,6 +85,14 @@ data class GatewayConnectErrorDetails(
   val minimumProbeProtocol: Int? = null,
 )
 
+private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+/** Keeps copied approval commands single-argument and safe for a gateway host shell. */
+internal fun normalizeGatewayApprovalRequestId(requestId: String?): String? {
+  val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  return trimmed.takeIf { gatewayApprovalRequestIdPattern.matches(it) }
+}
+
 /**
  * Server hello fields cached by the Android runtime after a successful connect.
  */
@@ -144,7 +152,6 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
-    private val PAIRING_REQUEST_ID_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
   }
 
   /**
@@ -944,7 +951,7 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
-                requestId = normalizePairingRequestId(it["requestId"].asStringOrNull()),
+                requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
@@ -973,11 +980,6 @@ class GatewaySession(
         return
       }
       onEvent(event, payloadJson)
-    }
-
-    private fun normalizePairingRequestId(requestId: String?): String? {
-      val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-      return trimmed.takeIf { PAIRING_REQUEST_ID_PATTERN.matches(it) }
     }
 
     private suspend fun awaitConnectNonce(): String =
