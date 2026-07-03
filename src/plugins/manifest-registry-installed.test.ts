@@ -731,4 +731,84 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.rootDir).toBe(rootDir);
     expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
+
+  it("discovers load.paths workspace plugins when index has entries", () => {
+    const installedRoot = makeTempDir();
+    const loadPathRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(loadPathRoot, "loadpath-plugin", "loadpath-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [loadPathRoot],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins.map((p) => p.id)).toEqual(
+      expect.arrayContaining(["installed", "loadpath-plugin"]),
+    );
+    expect(registry.plugins).toHaveLength(2);
+  });
+
+  it("skips load.paths discovery when load.paths is empty", () => {
+    const installedRoot = makeTempDir();
+    const loadPathRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(loadPathRoot, "loadpath-plugin", "loadpath-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins.map((p) => p.id)).toEqual(["installed"]);
+  });
+
+  it("preserves pluginId scoping for load-path candidates", () => {
+    const installedRoot = makeTempDir();
+    const loadPathRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(loadPathRoot, "loadpath-plugin", "loadpath-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [loadPathRoot],
+          },
+        },
+      },
+      pluginIds: ["installed"],
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    // Only the scoped pluginId should appear
+    expect(registry.plugins.map((p) => p.id)).toEqual(["installed"]);
+  });
 });

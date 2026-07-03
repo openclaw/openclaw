@@ -5,8 +5,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
@@ -630,6 +630,8 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       // index without including workspace extensions). Merge them in as a
       // defensive fallback so config-origin plugins always appear in the
       // manifest registry regardless of index completeness.
+      // P1: Only consider config-origin candidates (not bundled/global).
+      // P2: Preserve pluginId scoping for load-path candidates.
       const normalized = normalizePluginsConfigWithResolver(params.config?.plugins);
       let candidates = indexCandidates;
       let extraDiagnostics: readonly PluginDiagnostic[] = [];
@@ -641,7 +643,10 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         });
         const indexRootDirs = new Set(indexCandidates.map((c) => c.rootDir));
         const extraCandidates = loadPathDiscovery.candidates.filter(
-          (c) => !indexRootDirs.has(c.rootDir),
+          (c) =>
+            c.origin === "config" &&
+            !indexRootDirs.has(c.rootDir) &&
+            (!pluginIdSet || (c.idHint != null && pluginIdSet.has(c.idHint))),
         );
         if (extraCandidates.length > 0) {
           candidates = [...indexCandidates, ...extraCandidates];
