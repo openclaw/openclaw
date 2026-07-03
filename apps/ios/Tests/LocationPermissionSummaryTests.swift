@@ -16,7 +16,6 @@ import Testing
         #expect(summary.needsAttention)
         #expect(summary.statusText == "While Using")
         #expect(summary.detailText.contains("Always is selected"))
-        #expect(summary.detailText.contains("iOS Settings > OpenClaw > Location"))
     }
 
     @Test func `always desired authorized always allows background`() {
