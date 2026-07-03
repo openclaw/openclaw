@@ -2,14 +2,26 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCliName } from "../cli/cli-name.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
+  doctorShellCompletion,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  note: vi.fn(),
+}));
+
+vi.mock("node:child_process", () => ({
+  spawnSync: vi.fn(() => ({ status: 0 })),
+}));
+
+import { note } from "../../packages/terminal-core/src/note.js";
 
 const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
 const tempDirs: string[] = [];
@@ -100,5 +112,37 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+
+  it("downgrades profile write permission failures to a note during doctor --fix", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const cachePath = path.join(stateDir, "completions", `${resolveCliName()}.bash`);
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "# bash completion\n", "utf-8");
+
+    const profilePath = path.join(homeDir, ".bashrc");
+    await fs.writeFile(profilePath, "# test profile\n", "utf-8");
+    await fs.chmod(profilePath, 0o444);
+
+    const prompter = {
+      shouldRepair: true,
+      confirm: vi.fn(async () => true),
+      confirmAutoFix: vi.fn(async () => true),
+      confirmAggressiveAutoFix: vi.fn(async () => true),
+      confirmRuntimeRepair: vi.fn(async () => true),
+      resolveServiceRepairMode: vi.fn(() => ({ shouldRepair: true })),
+    };
+
+    await expect(doctorShellCompletion({} as never, prompter)).resolves.toBeUndefined();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Shell completion not installed: ~/.bashrc is not writable."),
+      "Shell completion",
+    );
   });
 });

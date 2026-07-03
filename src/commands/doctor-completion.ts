@@ -163,6 +163,37 @@ export type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
 
+function stripCompletionInstallPrefix(message: string): string {
+  return message.replace(/^Failed to install completion:\s*/i, "").trim();
+}
+
+function formatOptionalCompletionFailureNote(
+  shell: CompletionShell,
+  cliName: string,
+  error: unknown,
+): string {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const detail = stripCompletionInstallPrefix(rawMessage);
+  const profilePath = resolveCompletionReloadPath(shell);
+  if (/\b(?:EACCES|EPERM|EROFS)\b|permission denied|read-only/i.test(detail)) {
+    return `Shell completion not installed: ${profilePath} is not writable. Run \`${cliName} completion --install --shell ${shell}\` after making the profile writable.`;
+  }
+  return `Shell completion not installed: ${detail}. Run \`${cliName} completion --install --shell ${shell}\` manually if you want shell completion.`;
+}
+
+async function installOptionalShellCompletion(
+  shell: CompletionShell,
+  cliName: string,
+): Promise<boolean> {
+  try {
+    await installCompletion(shell, true, cliName);
+    return true;
+  } catch (error) {
+    note(formatOptionalCompletionFailureNote(shell, cliName, error), "Shell completion");
+    return false;
+  }
+}
+
 /**
  * Repairs shell completion setup when doctor runs interactively.
  *
@@ -195,7 +226,10 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
+    const installed = await installOptionalShellCompletion(status.shell, cliName);
+    if (!installed) {
+      return;
+    }
     note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     return;
   }
@@ -237,7 +271,10 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
+      const installed = await installOptionalShellCompletion(status.shell, cliName);
+      if (!installed) {
+        return;
+      }
       note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
     }
   }
