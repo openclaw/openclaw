@@ -568,15 +568,17 @@ async function createSandboxContainer(params: {
   const protectedPaths = resolveProtectedSkillMountContainerPaths(
     params.readOnlyWorkspaceSkillMounts,
   );
-  appendCustomBinds(
-    args,
-    protectedPaths.size > 0
-      ? {
-          ...cfg,
-          binds: filterBindsConflictingWithProtectedMounts(cfg.binds, protectedPaths),
-        }
-      : cfg,
-  );
+  let safeBinds = cfg.binds;
+  if (protectedPaths.size > 0 && cfg.binds?.length) {
+    safeBinds = filterBindsConflictingWithProtectedMounts(cfg.binds, protectedPaths);
+    const skipped = cfg.binds.filter((b) => !safeBinds!.includes(b));
+    for (const bind of skipped) {
+      log.warn(
+        `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+      );
+    }
+  }
+  appendCustomBinds(args, safeBinds ? { ...cfg, binds: safeBinds } : cfg);
   appendReadOnlyWorkspaceSkillMountArgs({
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,

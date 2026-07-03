@@ -372,6 +372,13 @@ export async function ensureSandboxBrowser(params: {
         protectedPaths.size > 0
           ? filterBindsConflictingWithProtectedMounts(browserDockerCfg.binds, protectedPaths)
           : browserDockerCfg.binds;
+      for (const bind of browserDockerCfg.binds) {
+        if (!safeBinds.includes(bind)) {
+          defaultRuntime.log(
+            `sandbox browser: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+          );
+        }
+      }
       for (const bind of safeBinds) {
         args.push("-v", bind);
       }

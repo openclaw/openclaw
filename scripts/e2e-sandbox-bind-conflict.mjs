@@ -5,7 +5,7 @@
  * Prerequisites: Docker daemon, Node >=22.19, pnpm install
  * Usage: node --import tsx scripts/e2e-sandbox-bind-conflict.mjs
  */
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -117,32 +117,53 @@ if (dupes === 0) {
   console.log("✅ No duplicate container paths in -v args");
 }
 
+// ── Helper: run sudo docker with argv (no shell string) ───────────────
+function sudoDocker(args, opts = {}) {
+  return spawnSync("sudo", ["docker", ...args], {
+    encoding: "utf8",
+    timeout: 30_000,
+    ...opts,
+  });
+}
+
 // ── Docker create ─────────────────────────────────────────────────────
 console.log(`\n--- docker create ${containerName} ---`);
 let created = false;
 try {
-  execSync(["sudo", "docker", ...dockerArgs].join(" "), {
-    stdio: "pipe",
-    encoding: "utf8",
-    timeout: 30_000,
-  });
+  const result = sudoDocker(dockerArgs, { stdio: "pipe" });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const err = new Error(result.stderr?.trim() || `docker create exited ${result.status}`);
+    err.code = result.status;
+    err.stdout = result.stdout;
+    err.stderr = result.stderr;
+    throw err;
+  }
   created = true;
   console.log("✅ Container created — no Duplicate mount point error");
 
-  const output = execSync(
-    `sudo docker inspect -f '{{range .Mounts}}{{.Destination}}|{{end}}' ${containerName}`,
-    { encoding: "utf8" },
-  ).trim();
+  const inspectResult = sudoDocker([
+    "inspect",
+    "-f",
+    "{{range .Mounts}}{{.Destination}}|{{end}}",
+    containerName,
+  ]);
+  const output = (inspectResult.stdout || "").trim();
   const dests = output.split("|").filter(Boolean);
   const skillsCount = dests.filter((d) => d === "/workspace/skills").length;
   console.log(`Mount destinations: ${dests.join(" ")}`);
   console.log(`/workspace/skills count: ${skillsCount} ${skillsCount <= 1 ? "✅" : "❌"}`);
 
   // Verify protected mount source (not user bind)
-  const mountSrc = execSync(
-    `sudo docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace/skills"}}{{.Source}} {{.Mode}}{{end}}{{end}}' ${containerName}`,
-    { encoding: "utf8" },
-  ).trim();
+  const mountResult = sudoDocker([
+    "inspect",
+    "-f",
+    '{{range .Mounts}}{{if eq .Destination "/workspace/skills"}}{{.Source}} {{.Mode}}{{end}}{{end}}',
+    containerName,
+  ]);
+  const mountSrc = (mountResult.stdout || "").trim();
   console.log(`Mount source for /workspace/skills: ${mountSrc}`);
   const isReadOnly = mountSrc.includes("ro");
   const isProtectedSource = mountSrc.includes(path.join(workspaceDir, "skills"));
@@ -158,7 +179,7 @@ try {
   }
 } finally {
   if (created) {
-    execSync(`sudo docker rm -f ${containerName}`, { stdio: "pipe" });
+    sudoDocker(["rm", "-f", containerName]);
   }
   fs.rmSync(workspaceDir, { recursive: true, force: true });
 }
