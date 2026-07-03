@@ -2547,10 +2547,11 @@ export async function runReplyAgent(params: {
         if (isStrandedReplyRetryRun) {
           finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
         } else {
+          const retryDeliveryText = finalDeliveryText || assistantFinalText;
           const retryPrompt =
             `[System] Your previous reply was not delivered to the conversation because ` +
             `you did not call message(action=send). Your reply text was:\n\n` +
-            `"${assistantFinalText}"\n\n` +
+            `"${retryDeliveryText}"\n\n` +
             `Please deliver this reply now by calling message(action=send). ` +
             `Do not add any extra commentary; just deliver the original reply.`;
           const retryEnqueued = enqueueFollowupRun(

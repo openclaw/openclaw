@@ -112,14 +112,19 @@ export function applyQueueDropPolicy<T>(params: {
     return false;
   }
   const dropCount = params.queue.items.length - cap + 1;
+  const remaining = params.queue.items.slice();
   const dropped: T[] = [];
   for (let idx = 0; idx < dropCount; idx += 1) {
-    const selectedIndex = params.selectDropIndex?.(params.queue.items) ?? 0;
-    if (selectedIndex < 0 || selectedIndex >= params.queue.items.length) {
+    const selectedIndex = params.selectDropIndex?.(remaining) ?? 0;
+    if (selectedIndex < 0 || selectedIndex >= remaining.length) {
       return false;
     }
-    dropped.push(...params.queue.items.splice(selectedIndex, 1));
+    const [item] = remaining.splice(selectedIndex, 1);
+    if (item !== undefined) {
+      dropped.push(item);
+    }
   }
+  params.queue.items.splice(0, params.queue.items.length, ...remaining);
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {

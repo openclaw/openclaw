@@ -1779,6 +1779,47 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
   });
 
+  it("leaves the queue untouched when protected overflow cannot drop enough items", () => {
+    const key = `test-priority-followup-atomic-overflow-${Date.now()}`;
+    const initialSettings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 3,
+      dropPolicy: "summarize",
+    };
+    const shrunkSettings: QueueSettings = {
+      ...initialSettings,
+      cap: 1,
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      initialSettings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "normal one" }), initialSettings);
+    enqueueFollowupRun(key, createRun({ prompt: "normal two" }), initialSettings);
+
+    const accepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "normal after shrink" }),
+      shrunkSettings,
+    );
+
+    expect(accepted).toBe(false);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "normal one",
+      "normal two",
+    ]);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryLines).toHaveLength(0);
+  });
+
   it("drains protected priority followups before overflow summaries", async () => {
     const key = `test-priority-followup-before-summary-${Date.now()}`;
     const calls: FollowupRun[] = [];

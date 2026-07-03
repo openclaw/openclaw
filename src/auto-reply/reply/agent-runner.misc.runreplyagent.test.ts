@@ -3426,6 +3426,20 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.prompt).not.toContain("<final>");
   });
 
+  it("uses normalized delivery text, not reply directive tags, in the recovery retry prompt", async () => {
+    const normalizedFinal =
+      "Visible answer that should be threaded to the current message and is long enough to trigger recovery. It includes another complete sentence so the substantive-final detector treats it as a real reply.";
+    await runPrivateFinalCase({
+      finalAssistantText: `[[reply_to_current]] ${normalizedFinal}`,
+      payloadText: `[[reply_to_current]] ${normalizedFinal}`,
+    });
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(retryRun?.prompt).toContain(normalizedFinal);
+    expect(retryRun?.prompt).not.toContain("[[reply_to_current]]");
+  });
+
   it("suppresses retry prompt persistence and keeps the retry out of collect batches", async () => {
     await runPrivateFinalCase({ transcriptPrompt: "original user question" });
 
