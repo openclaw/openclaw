@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { Api, AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyAssistantFailoverReason,
@@ -926,35 +926,36 @@ describe("openai transport stream", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
+      const model = createNativeResponsesModel();
+      const assistantMessage = {
+        ...createResponsesAssistantOutput(model as never),
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1|fc_1",
+            name: "exec",
+            arguments: {},
+          },
+        ],
+        timestamp: 1,
+      } as AssistantMessage;
+      const toolResultMessage: ToolResultMessage = {
+        role: "toolResult",
+        toolCallId: "call_1|fc_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "OC99241_TEXT_ONLY_MARKER" }],
+        isError: false,
+        timestamp: 2,
+      };
       const params = buildOpenAIResponsesParams(
-        createNativeResponsesModel() as Model,
+        model as Model,
         {
           systemPrompt: "system",
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "call_1|fc_1",
-                  name: "exec",
-                  arguments: {},
-                },
-              ],
-              timestamp: 1,
-            },
-            {
-              role: "toolResult",
-              toolCallId: "call_1|fc_1",
-              toolName: "exec",
-              content: [{ type: "text", text: "OC99241_TEXT_ONLY_MARKER" }],
-              timestamp: 2,
-            },
-          ],
+          messages: [assistantMessage, toolResultMessage],
           tools: [],
         },
         {},
-      ) as { input?: Array<Record<string, unknown>> };
+      ) as unknown as { input?: Array<Record<string, unknown>> };
       const summary = testing.summarizeResponsesPayload(params);
       expect(summary).toContain("payload=");
       expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
@@ -12234,9 +12235,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       ) as { messages: unknown[] };
 
       // Find the tool result message in the converted output.
-      const toolMsg = params.messages.find((m: any) => m.role === "tool" && m.content === MARKER);
+      const toolMsg = params.messages.find(
+        (m): m is { role: string; content: string } =>
+          typeof m === "object" &&
+          m !== null &&
+          "role" in m &&
+          (m as { role?: unknown }).role === "tool" &&
+          "content" in m &&
+          (m as { content?: unknown }).content === MARKER,
+      );
       expect(toolMsg).toBeDefined();
-      expect(toolMsg.content).toBe(MARKER);
+      expect(toolMsg?.content).toBe(MARKER);
       const serializedPayload = JSON.stringify(params);
       expect(serializedPayload).toContain(MARKER);
 
