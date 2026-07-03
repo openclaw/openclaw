@@ -87,11 +87,12 @@ describe("buildReplyPromptEnvelope", () => {
       isBareSessionReset: false,
       startupAction: "new",
       inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: "message_tool_only",
     });
 
     expect(envelope.prefixedCommandBody).toBe("[OpenClaw room event]");
     expect(envelope.queuedBody).toBe("[OpenClaw room event]");
-    expect(envelope.transcriptCommandBody).toBe("");
+    expect(envelope.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
     expect(envelope.currentInboundContext?.text).toBe(
       [
         "[OpenClaw room event]",
@@ -108,7 +109,7 @@ describe("buildReplyPromptEnvelope", () => {
           "#35675 User ->#35674: Are you fr fr",
         ].join("\n"),
         "Current event:\n#35676 Keśava: No wtf",
-        "Treat this as observed room activity. Decide whether to act.",
+        "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).toBe(
@@ -123,11 +124,41 @@ describe("buildReplyPromptEnvelope", () => {
           "```",
         ].join("\n"),
         "Current event:\n#35676 Keśava: No wtf",
-        "Treat this as observed room activity. Decide whether to act.",
+        "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
       ].join("\n\n"),
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (untrusted, chronological, selected for current message):",
+    );
+  });
+
+  it("uses attributed coalesced room-event lines for current event and transcript", () => {
+    const ambientTranscriptBody = ["#35676 Keśava: No wtf", "#35677 Ayaan: fr"].join("\n");
+    const sessionCtx = finalizeInboundContext({
+      Body: "No wtf\nfr",
+      BodyStripped: "No wtf\nfr",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "35677",
+      SenderName: "Ayaan",
+      AmbientTranscriptBody: ambientTranscriptBody,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "No wtf\nfr",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(ambientTranscriptBody);
+    expect(envelope.currentInboundContext?.text).toContain(
+      `Current event:\n${ambientTranscriptBody}`,
     );
   });
 
@@ -159,6 +190,13 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
     expect(envelope.currentInboundContext?.text).toContain(
       "Current event:\n#2002 Bob: current note",
+    );
+    expect(envelope.currentInboundContext?.text).toContain(
+      "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.",
+    );
+    expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
+    expect(envelope.currentInboundContext?.text).not.toContain(
+      "your final text here stays private",
     );
     expect(envelope.currentInboundContext?.text).not.toContain(
       "Current event:\n#2002 Bob: [Chat history]",
@@ -203,14 +241,14 @@ describe("buildReplyPromptEnvelope", () => {
       sessionCtx,
       baseBody: "",
       hasUserBody: true,
-      inboundUserContext: "Sender (untrusted metadata):\nsender_id=U123",
+      inboundUserContext: 'Conversation info (untrusted metadata):\n{"sender":{"id":"U123"}}',
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
       softResetTail: "re-read persona files",
     });
 
-    expect(envelope.prefixedCommandBody).toContain("Sender (untrusted metadata):");
+    expect(envelope.prefixedCommandBody).toContain("Conversation info (untrusted metadata):");
     expect(envelope.prefixedCommandBody).toContain("Startup context");
     expect(envelope.prefixedCommandBody).toContain("re-read persona files");
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");

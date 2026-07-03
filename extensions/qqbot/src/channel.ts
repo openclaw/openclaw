@@ -8,9 +8,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
 import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -34,21 +35,10 @@ import {
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
-// Shared promise so concurrent multi-account startups serialize the dynamic
-// import of the gateway module, avoiding an ESM circular-dependency race.
-let gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
-function loadGatewayModule(): Promise<typeof import("./bridge/gateway.js")> {
-  gatewayModulePromise ??= import("./bridge/gateway.js");
-  return gatewayModulePromise;
-}
-
-let outboundMessagingModulePromise:
-  | Promise<typeof import("./engine/messaging/outbound.js")>
-  | undefined;
-function loadOutboundMessagingModule(): Promise<typeof import("./engine/messaging/outbound.js")> {
-  outboundMessagingModulePromise ??= import("./engine/messaging/outbound.js");
-  return outboundMessagingModulePromise;
-}
+const loadGatewayModule = createLazyRuntimeModule(() => import("./bridge/gateway.js"));
+const loadOutboundMessagingModule = createLazyRuntimeModule(
+  () => import("./engine/messaging/outbound.js"),
+);
 
 function createQQBotSendReceipt(params: {
   messageId?: string;

@@ -407,14 +407,44 @@ async function resolveTalkResponseFromConfig(params: {
   runtimeConfig: OpenClawConfig;
 }): Promise<TalkConfigResponse | undefined> {
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
-  if (!normalizedTalk) {
+  const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
+  // Resolve provider selection from materialized config, but project provider-owned fields from
+  // source config so SecretRefs stay redacted. The requested provider also avoids re-resolving them.
+  const runtimeRealtime = buildTalkRealtimeConfig(params.runtimeConfig);
+  const effectiveProvider = canonicalizeRealtimeVoiceProviderId(
+    runtimeRealtime.provider,
+    params.runtimeConfig,
+  );
+  const sourceRealtime = buildTalkRealtimeConfig(params.sourceConfig, effectiveProvider);
+  const sourceProviders: Record<string, TalkProviderConfig> = {};
+  for (const [providerId, providerConfig] of Object.entries(sourceRealtime.providers)) {
+    const canonicalProviderId =
+      canonicalizeRealtimeVoiceProviderId(providerId, params.runtimeConfig) ?? providerId;
+    sourceProviders[canonicalProviderId] = {
+      ...sourceProviders[canonicalProviderId],
+      ...providerConfig,
+    };
+  }
+  const effectiveRealtime = normalizeTalkSection({
+    realtime: {
+      ...(effectiveProvider ? { provider: effectiveProvider } : {}),
+      ...(runtimeRealtime.model ? { model: runtimeRealtime.model } : {}),
+      ...(Object.keys(sourceProviders).length > 0 ? { providers: sourceProviders } : {}),
+    },
+  })?.realtime;
+  if (!configuredPayload && !effectiveRealtime) {
     return undefined;
   }
-
-  const sourcePayload = buildTalkConfigResponse(normalizedTalk);
-  if (!sourcePayload) {
-    return undefined;
-  }
+  const realtime: TalkRealtimeConfig | undefined = effectiveRealtime
+    ? {
+        ...configuredPayload?.realtime,
+        ...effectiveRealtime,
+      }
+    : configuredPayload?.realtime;
+  const sourcePayload: TalkConfigResponse = {
+    ...configuredPayload,
+    ...(realtime ? { realtime } : {}),
+  };
   const payload = params.includeSecrets
     ? projectTalkSourcePayloadForSecrets(sourcePayload)
     : sourcePayload;

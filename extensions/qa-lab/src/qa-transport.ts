@@ -70,6 +70,13 @@ export type QaTransportWaitForNoOutboundInput = {
   sinceIndex?: number;
 };
 
+export type QaTransportNativeCommandInput = Omit<
+  QaBusInboundMessageInput,
+  "nativeCommand" | "text"
+> & {
+  command: string;
+};
+
 export type QaTransportCapabilities = {
   sendInboundMessage: QaTransportState["addInboundMessage"];
   injectOutboundMessage: QaTransportState["addOutboundMessage"];
@@ -181,6 +188,7 @@ export type QaTransportAdapter = {
   capabilities: QaTransportCapabilities;
   reset: () => Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
+  sendNativeCommand: (input: QaTransportNativeCommandInput) => Promise<void>;
   waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
   waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
@@ -273,6 +281,10 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
 
   async sendInbound(input: QaBusInboundMessageInput) {
     return await this.state.addInboundMessage(input);
+  }
+
+  async sendNativeCommand(_input: QaTransportNativeCommandInput): Promise<void> {
+    throw new Error(`${this.label} does not support native commands.`);
   }
 
   async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
