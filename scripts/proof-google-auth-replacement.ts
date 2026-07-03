@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -275,11 +274,6 @@ async function main() {
       ".gemini",
       "gemini-credentials.json",
     );
-    const expectedProfileHash = crypto
-      .createHash("sha256")
-      .update(oauthProfileId)
-      .digest("hex")
-      .slice(0, 24);
     const expectedHome = resolveGeminiCliProfileHome(agentDir, oauthProfileId);
 
     const proof = {
@@ -318,7 +312,7 @@ async function main() {
         !(await pathExists(apiKeyOauthCredsPath)) &&
         !(await pathExists(apiKeyCachedCredentialsPath)),
       oauthTokenValuesRedactedFromProofOutput: true,
-      profileIdHashUsedInHome: oauthGeminiHome.includes(expectedProfileHash),
+      profileHomeUsesResolverDerivedPath: oauthGeminiHome === expectedHome,
       rawProfileIdAbsentFromHome: !oauthGeminiHome.includes(oauthProfileId),
       selectedCredentialKinds: {
         "google-gemini-cli": hookCredential.kind,
