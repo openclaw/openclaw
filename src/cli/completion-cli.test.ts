@@ -170,3 +170,63 @@ describe("completion-cli", () => {
     expect(script).not.toContain("-t,");
   });
 });
+
+// Commander aliases are typeable commands (`openclaw capability` == `openclaw infer`),
+// so every shell must complete alias names and keep completing after an alias.
+function createAliasedCompletionProgram(): Command {
+  const program = new Command();
+  program.name("openclaw");
+  const infer = program.command("infer").alias("capability").description("Run inference");
+  infer.command("embed").description("Embed text").option("--model <id>", "Model id");
+  const cron = program.command("cron").description("Cron commands");
+  cron
+    .command("add")
+    .alias("create")
+    .description("Add a job")
+    .option("--at <time>", "Schedule time");
+  return program;
+}
+
+describe("completion-cli command aliases", () => {
+  it("completes root and nested aliases in zsh lists and dispatch", () => {
+    const script = getCompletionScript("zsh", createAliasedCompletionProgram());
+
+    expect(script).toContain("'capability[Run inference]'");
+    expect(script).toContain("(infer|capability) _openclaw_infer ;;");
+    expect(script).toContain("'create[Add a job]'");
+    expect(script).toContain("(add|create) _openclaw_cron_add ;;");
+  });
+
+  it("completes root and nested aliases in bash word lists and case labels", () => {
+    const script = getCompletionScript("bash", createAliasedCompletionProgram());
+
+    expect(script).toContain("infer capability cron");
+    expect(script).toContain("infer|capability)");
+    expect(script).toContain("add create");
+  });
+
+  it("completes aliases and their subtrees in fish", () => {
+    const script = getCompletionScript("fish", createAliasedCompletionProgram());
+
+    expect(script).toContain(
+      'complete -c openclaw -n "__fish_use_subcommand" -a "capability" -d \'Run inference\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches capability --" -a "embed" -d \'Embed text\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches cron --" -a "create" -d \'Add a job\'',
+    );
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches cron create -- --at\" -l at -d 'Schedule time'",
+    );
+  });
+
+  it("completes aliases and alias command paths in PowerShell", () => {
+    const script = getCompletionScript("powershell", createAliasedCompletionProgram());
+
+    expect(script).toContain("$completions = @('infer','capability','cron')");
+    expect(script).toContain("if ($commandPath -eq 'capability') {");
+    expect(script).toContain("if ($commandPath -eq 'cron create') {");
+  });
+});
