@@ -413,6 +413,7 @@ const TalkCatalogProviderSchema = Type.Object(
     id: NonEmptyString,
     label: NonEmptyString,
     configured: Type.Boolean(),
+    aliases: Type.Optional(Type.Array(NonEmptyString)),
     models: Type.Optional(Type.Array(Type.String())),
     voices: Type.Optional(Type.Array(Type.String())),
     defaultModel: Type.Optional(Type.String()),
