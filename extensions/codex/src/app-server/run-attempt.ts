@@ -576,8 +576,21 @@ export async function runCodexAppServerAttempt(
   preDynamicStartupStages.mark("native-hook-relay");
 
   const runAbortController = new AbortController();
+  // AbortController preserves its first reason, so retain explicit cancellation
+  // that can arrive after the timeout abort while cleanup is still draining.
+  let explicitCancellationObserved = false;
+  let explicitCancellationReason: unknown;
+  let terminalOutcomeFrozen = false;
+  const abortExplicitly = (reason: unknown) => {
+    if (terminalOutcomeFrozen) {
+      return;
+    }
+    explicitCancellationObserved = true;
+    explicitCancellationReason ??= reason;
+    runAbortController.abort(reason);
+  };
   const abortFromUpstream = () => {
-    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
+    abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
   };
   if (params.abortSignal?.aborted) {
     abortFromUpstream();
@@ -2126,6 +2139,15 @@ export async function runCodexAppServerAttempt(
     );
     return notificationQueue;
   };
+  const drainNotificationQueue = async (): Promise<void> => {
+    while (true) {
+      const queued = notificationQueue;
+      await queued;
+      if (queued === notificationQueue) {
+        return;
+      }
+    }
+  };
 
   const nativeSubagentCodexHome =
     appServer.start.transport === "stdio"
@@ -2887,12 +2909,22 @@ export async function runCodexAppServerAttempt(
       activeSteeringQueue.queue(text, optionsLocal),
     isStreaming: () => !completed && !runAbortController.signal.aborted,
     isStopped: () => completed || timedOut || runAbortController.signal.aborted,
+    isAbortable: () => !terminalOutcomeFrozen,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    cancel: () => runAbortController.abort("cancelled"),
-    abort: () => runAbortController.abort("aborted"),
+    cancel: () => abortExplicitly("cancelled"),
+    abort: () => abortExplicitly("aborted"),
   };
+  params.replyOperation?.attachBackend(handle);
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  const freezeRunTerminalOutcome = () => {
+    if (terminalOutcomeFrozen) {
+      return;
+    }
+    terminalOutcomeFrozen = true;
+    params.replyOperation?.freezeAbort();
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+  };
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   void mirrorPromptAtTurnStartBestEffort({
     params,
@@ -2937,24 +2969,59 @@ export async function runCodexAppServerAttempt(
     // projected, for example while persisting raw image-generation media. Wait
     // for already-queued projection work so the final result includes artifacts
     // from the notification that triggered the idle watchdog.
-    await notificationQueue;
-    const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    const finalAborted =
-      result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
-    const canUseCompletedAssistantTextAfterClientClose =
+    await drainNotificationQueue();
+    const hasQuiescentCompletedAssistant =
       activeProjector.hasCompletedTerminalAssistantText() &&
       activeAppServerTurnRequests === 0 &&
       activeTurnItemIds.size === 0 &&
+      activeCompletionBlockerItemIds.size === 0 &&
       pendingOpenClawDynamicToolCompletionIds.size === 0;
+    const hasRecoverableCompletedAssistant =
+      !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
+      turnWatches.isAssistantCompletionIdleWatchArmed() &&
+      hasQuiescentCompletedAssistant;
+    const recoveredTurnWatchTimeout =
+      turnCompletionIdleTimedOut &&
+      !explicitCancellationObserved &&
+      !terminalTurnNotificationQueued &&
+      hasRecoverableCompletedAssistant &&
+      activeProjector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout();
+    if (recoveredTurnWatchTimeout) {
+      embeddedAgentLog.warn(
+        "codex app-server recovered completed assistant output after missing turn completion",
+        {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          timeoutKind: turnWatchTimeoutKind,
+          idleMs: turnWatchTimeoutIdleMs,
+          timeoutMs: turnWatchTimeoutMs,
+        },
+      );
+      trajectoryRecorder?.recordEvent("turn.watch_timeout_recovered", {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        timeoutKind: turnWatchTimeoutKind,
+        idleMs: turnWatchTimeoutIdleMs,
+        timeoutMs: turnWatchTimeoutMs,
+      });
+    }
+    const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const effectiveTimedOut = timedOut && !recoveredTurnWatchTimeout;
+    const effectiveTurnCompletionIdleTimedOut =
+      turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
+    const isFinalAborted = () =>
+      result.aborted ||
+      explicitCancellationObserved ||
+      (runAbortController.signal.aborted && !clientClosedAbort && !recoveredTurnWatchTimeout);
     const clientClosedPromptErrorForFinal =
-      clientClosedPromptError && canUseCompletedAssistantTextAfterClientClose
+      clientClosedPromptError && hasRecoverableCompletedAssistant
         ? undefined
         : clientClosedPromptError;
     let finalPromptError =
       clientClosedPromptErrorForFinal ??
-      (turnCompletionIdleTimedOut
+      (effectiveTurnCompletionIdleTimedOut
         ? turnCompletionIdleTimeoutMessage
-        : timedOut
+        : effectiveTimedOut
           ? "codex app-server attempt timed out"
           : result.promptError);
     const finalPromptErrorMessage =
@@ -3002,10 +3069,10 @@ export async function runCodexAppServerAttempt(
       finalPromptError = refreshedUsageLimitPromptError;
     }
     const finalPromptErrorSource =
-      timedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+      effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
     const codexAppServerFailureKind = clientClosedPromptErrorForFinal
       ? "client_closed_before_turn_completed"
-      : turnCompletionIdleTimedOut
+      : effectiveTurnCompletionIdleTimedOut
         ? "turn_completion_idle_timeout"
         : undefined;
     const codexAppServerReplayBlockedReason = codexAppServerFailureKind
@@ -3013,7 +3080,7 @@ export async function runCodexAppServerAttempt(
       : undefined;
     const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome({
       result,
-      turnCompletionIdleTimedOut,
+      turnCompletionIdleTimedOut: effectiveTurnCompletionIdleTimedOut,
       turnWatchTimeoutKind,
     });
     const codexAppServerFailureDiagnostics =
@@ -3026,13 +3093,17 @@ export async function runCodexAppServerAttempt(
             details: turnWatchTimeoutDetails,
           })
         : undefined;
+    // Terminal diagnostics, transcript mirroring, hooks, and lifecycle events
+    // must all observe one immutable outcome.
+    freezeRunTerminalOutcome();
+    const finalAborted = isFinalAborted();
     const modelCallFailureKind =
       classifyCodexModelCallFailureKind({
         error: finalPromptError,
-        timedOut,
-        turnCompletionIdleTimedOut,
-        runAborted: runAbortController.signal.aborted,
-        abortReason: runAbortController.signal.reason,
+        timedOut: effectiveTimedOut,
+        turnCompletionIdleTimedOut: effectiveTurnCompletionIdleTimedOut,
+        runAborted: finalAborted,
+        abortReason: explicitCancellationReason ?? runAbortController.signal.reason,
         clientClosedAbort,
         formatError: formatErrorMessage,
       }) ?? (finalAborted ? "aborted" : undefined);
@@ -3048,23 +3119,6 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    recordCodexTrajectoryCompletion(trajectoryRecorder, {
-      attempt: params,
-      result,
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-      timedOut,
-      yieldDetected,
-    });
-    trajectoryRecorder?.recordEvent("session.ended", {
-      status: finalPromptError ? "error" : finalAborted || timedOut ? "interrupted" : "success",
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-      timedOut,
-      yieldDetected,
-      promptError: normalizeCodexTrajectoryError(finalPromptError),
-    });
-    markTrajectoryEndRecorded();
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -3075,29 +3129,6 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
-    const terminalAssistantText = collectTerminalAssistantText(result);
-    if (
-      terminalAssistantText &&
-      (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
-      !finalAborted &&
-      !finalPromptError
-    ) {
-      void emitCodexAppServerEvent(params, {
-        stream: "assistant",
-        data: { text: terminalAssistantText },
-      });
-    }
-    if (finalPromptError) {
-      emitLifecycleTerminal({
-        phase: "error",
-        error: formatErrorMessage(finalPromptError),
-      });
-    } else {
-      emitLifecycleTerminal({
-        phase: "end",
-        ...(finalAborted ? { aborted: true } : {}),
-      });
-    }
     if (activeContextEngine) {
       const activeContextEnginePluginIdLocal =
         resolveContextEngineOwnerPluginId(activeContextEngine);
@@ -3175,22 +3206,89 @@ export async function runCodexAppServerAttempt(
     const completedTurnStatus = activeProjector.getCompletedTurnStatus();
     shouldDelayNativeHookRelayUnregister =
       completedTurnStatus === "completed" &&
-      !timedOut &&
+      !effectiveTimedOut &&
       !runAbortController.signal.aborted &&
       !finalAborted &&
       !finalPromptError;
     if (shouldDelayNativeHookRelayUnregister) {
-      await markCodexAppServerBindingCoveredThroughTurn({
-        sessionFile: params.sessionFile,
-        threadId: thread.threadId,
-        authProfileStore: params.authProfileStore,
-        agentDir: params.agentDir,
-        config: params.config,
+      try {
+        await markCodexAppServerBindingCoveredThroughTurn({
+          sessionFile: params.sessionFile,
+          threadId: thread.threadId,
+          authProfileStore: params.authProfileStore,
+          agentDir: params.agentDir,
+          config: params.config,
+        });
+      } catch (error) {
+        const clearedStaleBinding = await clearCodexAppServerBindingForThread(
+          params.sessionFile,
+          thread.threadId,
+          {
+            authProfileStore: params.authProfileStore,
+            agentDir: params.agentDir,
+            config: params.config,
+          },
+        );
+        if (!clearedStaleBinding) {
+          throw error;
+        }
+        embeddedAgentLog.warn(
+          "codex app-server binding coverage update failed after completed turn; cleared stale binding",
+          {
+            threadId: thread.threadId,
+            turnId: activeTurnId,
+            error,
+          },
+        );
+      }
+    }
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt: params,
+      result,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut: effectiveTimedOut,
+      yieldDetected,
+    });
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: finalPromptError
+        ? "error"
+        : finalAborted || effectiveTimedOut
+          ? "interrupted"
+          : "success",
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut: effectiveTimedOut,
+      yieldDetected,
+      promptError: normalizeCodexTrajectoryError(finalPromptError),
+    });
+    markTrajectoryEndRecorded();
+    const terminalAssistantText = collectTerminalAssistantText(result);
+    if (
+      terminalAssistantText &&
+      (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
+      !finalAborted &&
+      !finalPromptError
+    ) {
+      void emitCodexAppServerEvent(params, {
+        stream: "assistant",
+        data: { text: terminalAssistantText },
+      });
+    }
+    if (finalPromptError) {
+      emitLifecycleTerminal({
+        phase: "error",
+        error: formatErrorMessage(finalPromptError),
+      });
+    } else {
+      emitLifecycleTerminal({
+        phase: "end",
+        ...(finalAborted ? { aborted: true } : {}),
       });
     }
     return {
       ...result,
-      timedOut,
+      timedOut: effectiveTimedOut,
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
@@ -3280,8 +3378,9 @@ export async function runCodexAppServerAttempt(
     }
     await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueueRef.current?.cancel();
+    freezeRunTerminalOutcome();
+    params.replyOperation?.detachBackend(handle);
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   }
 }

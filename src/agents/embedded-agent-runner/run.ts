@@ -3639,29 +3639,10 @@ async function runEmbeddedAgentInternal(
           const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
-          const promptTimeoutAssistantTextCandidate =
-            (finalAssistantVisibleText ?? finalAssistantRawText)?.trim() ||
-            (attempt.assistantTexts ?? []).join("\n\n").trim();
-          const promptTimeoutHasActiveCodexItem = attempt.itemLifecycle.activeCount > 0;
-          const promptTimeoutHasTerminalState = hasAttemptTerminalState(attempt);
-          const promptTimeoutHadUnsafeActivity =
-            promptTimeoutHasTerminalState ||
-            attempt.didSendViaMessagingTool ||
-            attempt.replayMetadata.hadPotentialSideEffects ||
-            promptTimeoutHasActiveCodexItem ||
-            (attempt.toolMetas?.length ?? 0) > 0;
-          const canRecoverCodexCompletionTimeoutAssistantText =
-            timedOutDuringPrompt &&
-            shouldSurfaceCodexCompletionTimeout &&
-            attempt.codexAppServerFailure?.turnWatchTimeoutKind === "completion" &&
-            attempt.codexAppServerFailure?.replayBlockedReason === "assistant_output" &&
-            !promptTimeoutHadUnsafeActivity &&
-            promptTimeoutAssistantTextCandidate.length > 0;
           const recoveredFinalAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
-            (["completed", "end_turn", "stop"].includes(finalAssistantStopReason) ||
-              canRecoverCodexCompletionTimeoutAssistantText)
-              ? promptTimeoutAssistantTextCandidate
+            ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
+              ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()
               : undefined;
           const payloadAlreadyContainsRecoveredFinalAssistant =
             recoveredFinalAssistantTextAfterPromptTimeout
@@ -3687,9 +3668,11 @@ async function runEmbeddedAgentInternal(
           const hasPartialAssistantTextAfterPromptTimeout =
             timedOutDuringPrompt &&
             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
-            !recoveredFinalAssistantTextAfterPromptTimeout &&
-            !promptTimeoutHasTerminalState &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
             !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,

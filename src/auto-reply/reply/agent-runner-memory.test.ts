@@ -53,6 +53,7 @@ function createReplyOperation(): TestReplyOperation {
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    freezeAbort: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
@@ -60,8 +61,8 @@ function createReplyOperation(): TestReplyOperation {
     }),
     completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
+    abortByUser: vi.fn(() => true),
+    abortForRestart: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
   };
 }
