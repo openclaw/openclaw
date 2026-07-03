@@ -142,8 +142,12 @@ export function listControlledSubagentRuns(controllerSessionKey: string): Subage
   const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) => {
     const controllerKey = entry.controllerSessionKey?.trim();
     const requesterKey = entry.requesterSessionKey?.trim();
-    if (controllerKey && controllerKey === key) return true;
-    if (requesterKey && requesterKey === key) return true;
+    if (controllerKey && controllerKey === key) {
+      return true;
+    }
+    if (requesterKey && requesterKey === key) {
+      return true;
+    }
     return false;
   });
   return sortSubagentRuns(filtered);
