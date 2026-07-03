@@ -42,7 +42,36 @@ import Testing
         #expect(summary.effectiveMode == .off)
         #expect(!summary.canUseLocationInBackground)
         #expect(!summary.needsAttention)
-        #expect(summary.detailText == "Location sharing is disabled.")
+        #expect(summary.detailText.contains("Location sharing is disabled"))
+        #expect(summary.detailText.contains("Location Services are off"))
+    }
+
+    @Test func `off desired still reports ios always grant`() {
+        let summary = LocationPermissionSummary(
+            desiredMode: .off,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedAlways,
+            accuracyAuthorization: .fullAccuracy)
+
+        #expect(summary.effectiveMode == .off)
+        #expect(!summary.canUseLocationInBackground)
+        #expect(!summary.needsAttention)
+        #expect(summary.detailText.contains("Location sharing is disabled"))
+        #expect(summary.detailText.contains("Always"))
+    }
+
+    @Test func `off desired still reports ios while using grant`() {
+        let summary = LocationPermissionSummary(
+            desiredMode: .off,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedWhenInUse,
+            accuracyAuthorization: .fullAccuracy)
+
+        #expect(summary.effectiveMode == .off)
+        #expect(!summary.canUseLocationInBackground)
+        #expect(!summary.needsAttention)
+        #expect(summary.detailText.contains("Location sharing is disabled"))
+        #expect(summary.detailText.contains("While Using"))
     }
 
     @Test func `disabled location services override app grant`() {

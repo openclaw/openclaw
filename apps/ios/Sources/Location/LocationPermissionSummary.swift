@@ -55,6 +55,12 @@ struct LocationPermissionSummary: Equatable {
             self.authorizationStatus,
             self.accuracyAuthorization)
         {
+        case (.off, false, _, _):
+            "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings."
+        case (.off, true, .authorizedAlways, _):
+            "Location sharing is disabled in OpenClaw. iOS currently allows Always."
+        case (.off, true, .authorizedWhenInUse, _):
+            "Location sharing is disabled in OpenClaw. iOS currently allows While Using."
         case (.off, _, _, _):
             "Location sharing is disabled."
         case (_, false, _, _):
