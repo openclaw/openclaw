@@ -3154,6 +3154,11 @@
       "translated": "Kirim"
     },
     {
+      "id": "native.android.ff4e568bce360d5f",
+      "source": "No commands found",
+      "translated": "Tidak ada perintah yang ditemukan"
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "Gambar tidak tersedia"
@@ -3229,6 +3234,11 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "Chat baru"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Segarkan chat"
@@ -3289,6 +3299,11 @@
       "translated": "Berhenti"
     },
     {
+      "id": "native.android.5953c956ff208e6e",
+      "source": "No commands found",
+      "translated": "Tidak ada perintah yang ditemukan"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway offline"
@@ -3312,11 +3327,6 @@
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "Hapus lampiran"
-    },
-    {
-      "id": "native.android.326caa6b92aa9bdf",
-      "source": "New chat",
-      "translated": "Chat baru"
     },
     {
       "id": "native.android.5fa853a957713a56",

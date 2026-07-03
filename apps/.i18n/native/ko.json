@@ -3154,6 +3154,11 @@
       "translated": "보내기"
     },
     {
+      "id": "native.android.ff4e568bce360d5f",
+      "source": "No commands found",
+      "translated": "명령을 찾을 수 없습니다"
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "이미지를 사용할 수 없음"
@@ -3229,6 +3234,11 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "새 채팅"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "채팅 새로고침"
@@ -3289,6 +3299,11 @@
       "translated": "중지"
     },
     {
+      "id": "native.android.5953c956ff208e6e",
+      "source": "No commands found",
+      "translated": "명령을 찾을 수 없습니다"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway 오프라인"
@@ -3312,11 +3327,6 @@
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "첨부 파일 제거"
-    },
-    {
-      "id": "native.android.326caa6b92aa9bdf",
-      "source": "New chat",
-      "translated": "새 채팅"
     },
     {
       "id": "native.android.5fa853a957713a56",
