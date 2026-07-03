@@ -452,6 +452,25 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves text-only tool result content arrays as renderable text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        toolCallId: "call_probe",
+        toolName: "exec",
+        content: [{ type: "text", text: "PLAIN_TEXT_PROBE_1841" }],
+      });
+
+      expect(result.role).toBe("toolResult");
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "PLAIN_TEXT_PROBE_1841",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+    });
+
     it("detects tool result by toolCallId", () => {
       const result = normalizeMessage({
         role: "assistant",

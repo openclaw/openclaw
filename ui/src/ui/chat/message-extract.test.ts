@@ -148,4 +148,15 @@ describe("extractThinkingCached", () => {
     expect(extractThinkingCached(message)).toBe("Plan A");
     expect(extractThinkingCached(message)).toBe("Plan A");
   });
+
+  it("extracts text-only tool result content without media placeholders", () => {
+    const text = extractText({
+      role: "toolResult",
+      toolCallId: "call_probe",
+      content: [{ type: "text", text: "PLAIN_TEXT_PROBE_1841" }],
+    });
+
+    expect(text).toBe("PLAIN_TEXT_PROBE_1841");
+    expect(text).not.toBe("(see attached image)");
+  });
 });

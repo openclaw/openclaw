@@ -1205,6 +1205,82 @@ describe("grouped chat rendering", () => {
     ]);
   });
 
+  it("renders text-only standalone tool results as text, not an image placeholder", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            id: "tool-plain-text-probe",
+            role: "toolResult",
+            toolCallId: "call_plain_text_probe",
+            toolName: "exec",
+            content: [{ type: "text", text: "PLAIN_TEXT_PROBE_1841" }],
+            timestamp: Date.now(),
+          },
+          "tool",
+        ),
+      ],
+      {
+        isToolMessageExpanded: () => true,
+      },
+    );
+
+    expect(container.textContent).toContain("PLAIN_TEXT_PROBE_1841");
+    expect(container.textContent).not.toContain("(see attached image)");
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+  });
+
+  it("keeps image-only standalone tool results media-only while mixed results show text", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            id: "tool-image-only-probe",
+            role: "toolResult",
+            toolCallId: "call_image_only_probe",
+            toolName: "screenshot",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AAAA" },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          "tool",
+        ),
+        createMessageGroup(
+          {
+            id: "tool-mixed-probe",
+            role: "toolResult",
+            toolCallId: "call_mixed_probe",
+            toolName: "screenshot",
+            content: [
+              { type: "text", text: "Screenshot captured" },
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AAAA" },
+              },
+            ],
+            timestamp: Date.now() + 1,
+          },
+          "tool",
+        ),
+      ],
+      {
+        isToolMessageExpanded: () => true,
+      },
+    );
+
+    expect(container.textContent).not.toContain("(see attached image)");
+    expect(container.textContent).toContain("Screenshot captured");
+    expect(container.querySelectorAll("img")).toHaveLength(2);
+  });
+
   it("renders expanded standalone tool-call rows", () => {
     const container = document.createElement("div");
     const message = {

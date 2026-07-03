@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   formatCollapsedToolPreviewText,
+  extractToolCards,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
   renderToolCard,
@@ -26,6 +27,38 @@ function requireFirstMockArg(
 }
 
 describe("tool-cards", () => {
+  it("extracts text-only and mixed tool result output without image placeholders", () => {
+    const textOnly = extractToolCards({
+      role: "toolResult",
+      toolCallId: "call_text",
+      toolName: "exec",
+      content: [{ type: "text", text: "PLAIN_TEXT_PROBE_1841" }],
+    });
+    const imageOnly = extractToolCards({
+      role: "toolResult",
+      toolCallId: "call_image",
+      toolName: "image",
+      content: [{ type: "image", source: { type: "base64", data: "AAAA" } }],
+    });
+    const mixed = extractToolCards({
+      role: "toolResult",
+      toolCallId: "call_mixed",
+      toolName: "image",
+      content: [
+        { type: "text", text: "Screenshot captured" },
+        { type: "image", source: { type: "base64", data: "AAAA" } },
+      ],
+    });
+
+    expect(textOnly).toHaveLength(1);
+    expect(textOnly[0]?.outputText).toBe("PLAIN_TEXT_PROBE_1841");
+    expect(textOnly[0]?.outputText).not.toBe("(see attached image)");
+    expect(imageOnly).toHaveLength(1);
+    expect(imageOnly[0]?.outputText).toBeUndefined();
+    expect(mixed).toHaveLength(1);
+    expect(mixed[0]?.outputText).toBe("Screenshot captured");
+  });
+
   it("renders expanded cards with inline input and output sections", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
