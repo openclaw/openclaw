@@ -561,6 +561,62 @@ describe("crabline transport", () => {
     });
   });
 
+  it("normalizes native Matrix room message sends into outbound state", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("matrix"),
+        state: createQaBusState(),
+      });
+
+      try {
+        const roomId = "!qa:matrix.test";
+        await transport.state.addInboundMessage({
+          conversation: { id: roomId, kind: "group" },
+          senderId: "@alice:matrix.test",
+          senderName: "Alice",
+          text: "Matrix baseline marker check.",
+        });
+        const delivery = transport.buildAgentDelivery({ target: `group:${roomId}` });
+        const providerRoomId = delivery.to.replace(/^room:/u, "");
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          accessToken: string;
+          endpoints: { clientApiRoot: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${manifest.endpoints.clientApiRoot}/rooms/${encodeURIComponent(providerRoomId)}/send/m.room.message/qa-matrix-send`,
+          init: {
+            body: JSON.stringify({ body: "assistant via fake matrix", msgtype: "m.text" }),
+            headers: {
+              authorization: `Bearer ${manifest.accessToken}`,
+              "content-type": "application/json",
+            },
+            method: "PUT",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-matrix-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: roomId, kind: "group" },
+            textIncludes: "assistant via fake matrix",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: roomId, kind: "group" },
+          text: "assistant via fake matrix",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("injects inbound messages through Crabline and mirrors Telegram sends into normalized state", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
