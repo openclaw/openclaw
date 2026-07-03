@@ -160,6 +160,11 @@ export function renderSkillWorkshopPage(
         const selectedIndex = visibleProposals.findIndex(
           (proposal) => proposal.key === state.skillWorkshopSelectedKey,
         );
+        const selectProposal = (key: string) => {
+          state.skillWorkshopFilePreviewKey = null;
+          void selectSkillWorkshopProposal(state, context, key).finally(requestUpdate);
+          requestUpdate();
+        };
         const selectRelativeProposal = (delta: -1 | 1) => {
           if (visibleProposals.length === 0) {
             return;
@@ -168,8 +173,7 @@ export function renderSkillWorkshopPage(
             selectedIndex < 0
               ? 0
               : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
-          selectSkillWorkshopProposal(state, context, visibleProposals[nextIndex].key);
-          requestUpdate();
+          selectProposal(visibleProposals[nextIndex].key);
         };
         const selectVisibleFallback = (proposals: typeof visibleProposals) => {
           if (
@@ -178,9 +182,7 @@ export function renderSkillWorkshopPage(
           ) {
             return;
           }
-          state.skillWorkshopFilePreviewKey = null;
-          selectSkillWorkshopProposal(state, context, proposals[0].key);
-          requestUpdate();
+          selectProposal(proposals[0].key);
         };
         return renderSkillWorkshop({
           loading: state.skillWorkshopLoading,
@@ -232,11 +234,7 @@ export function renderSkillWorkshopPage(
             requestUpdate();
           },
           onModeChange: (mode) => setSkillWorkshopMode(state, mode, requestUpdate),
-          onSelect: (key) => {
-            state.skillWorkshopFilePreviewKey = null;
-            selectSkillWorkshopProposal(state, context, key);
-            requestUpdate();
-          },
+          onSelect: selectProposal,
           onPrev: () => selectRelativeProposal(-1),
           onNext: () => selectRelativeProposal(1),
           onApply: (key) => {

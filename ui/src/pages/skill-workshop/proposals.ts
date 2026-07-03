@@ -436,15 +436,15 @@ export async function loadSkillWorkshopProposalDetail(
   context: SkillWorkshopContext,
   proposalId: string,
   options?: { force?: boolean },
-): Promise<void> {
+): Promise<boolean> {
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
   if (!client || !snapshot.connected || state.skillWorkshopInspectingKey === proposalId) {
-    return;
+    return false;
   }
   const existing = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
   if (existing?.body && !options?.force) {
-    return;
+    return true;
   }
   const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
   if (state.skillWorkshopAgentId === null) {
@@ -458,14 +458,19 @@ export async function loadSkillWorkshopProposalDetail(
       "skills.proposals.inspect",
       requestParams,
     );
-    if (state.skillWorkshopAgentId !== requestAgentId) {
-      return;
+    if (
+      state.skillWorkshopAgentId !== requestAgentId ||
+      state.skillWorkshopInspectingKey !== proposalId
+    ) {
+      return false;
     }
     mergeProposal(state, proposalFromInspect(result, existing));
+    return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
       state.skillWorkshopError = getErrorMessage(err);
     }
+    return false;
   } finally {
     if (
       state.skillWorkshopAgentId === requestAgentId &&
@@ -476,13 +481,19 @@ export async function loadSkillWorkshopProposalDetail(
   }
 }
 
-export function selectSkillWorkshopProposal(
+export async function selectSkillWorkshopProposal(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,
-): void {
+): Promise<void> {
+  const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  if (!current?.body) {
+    const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId);
+    if (!loaded) {
+      return;
+    }
+  }
   state.skillWorkshopSelectedKey = proposalId;
-  void loadSkillWorkshopProposalDetail(state, context, proposalId);
 }
 
 async function refreshAfterMutation(
