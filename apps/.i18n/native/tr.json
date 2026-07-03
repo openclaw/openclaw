@@ -1764,6 +1764,26 @@
       "translated": "Güncelle"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Lisanslar"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw, açık kaynak topluluğundaki iş ortaklarına teşekkür eder."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Bu derlemede lisans bildirimleri paketlenmemiştir."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} öğesini aç"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "Kontrol et"
@@ -6329,9 +6349,9 @@
       "translated": "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw, asistanınızla paylaşmak üzere mevcut fotoğrafları seçtiğinizde fotoğraf arşivi erişimine ihtiyaç duyar."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6964,6 +6984,11 @@
       "translated": "Asistandan kişi arayın ve ekleyin."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Fotoğraflar"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Takvim (Etkinlik Ekle)"
@@ -6992,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Asistan için seçtiğiniz fotoğrafları okuyun."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Asistan için son fotoğrafları okuyun."
     },
     {
       "id": "native.apple.22b335bddf72e453",

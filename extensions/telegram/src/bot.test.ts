@@ -2082,6 +2082,109 @@ describe("createTelegramBot", () => {
     ]);
   });
 
+  it("excludes ambient transcript rows from live group conversation context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["111", "222", "333", "444"],
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    const previousReadAmbient = telegramBotDepsForTest.readAmbientTranscriptWatermark;
+    const previousResolveAmbientKey = telegramBotDepsForTest.resolveAmbientTranscriptWatermarkKey;
+    telegramBotDepsForTest.resolveAmbientTranscriptWatermarkKey = vi.fn(
+      () => "telegram:default:42",
+    );
+    telegramBotDepsForTest.readAmbientTranscriptWatermark = vi.fn(() => ({
+      messageId: "502",
+      timestampMs: 1_736_380_860_000,
+      updatedAt: 1_736_380_900_000,
+    }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      for (const message of [
+        {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "persisted ambient one",
+          date: 1_736_380_800,
+          message_id: 501,
+          from: { id: 111, is_bot: false, first_name: "Requester" },
+        },
+        {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "persisted ambient two",
+          date: 1_736_380_860,
+          message_id: 502,
+          from: { id: 222, is_bot: false, first_name: "Operator" },
+        },
+        {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "unpersisted gap",
+          date: 1_736_380_920,
+          message_id: 503,
+          from: { id: 333, is_bot: false, first_name: "Mira" },
+        },
+      ]) {
+        await handler({ ...baseCtx, message });
+      }
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "@openclaw_bot what changed?",
+          date: 1_736_380_980,
+          message_id: 504,
+          from: { id: 444, is_bot: false, first_name: "Pat" },
+          entities: [{ type: "mention", offset: 0, length: 13 }],
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      const [conversationContext] = requireArray(
+        payload.UntrustedStructuredContext,
+        "structured context",
+      );
+      const contextPayload = requireRecord(
+        requireRecord(conversationContext, "conversation context").payload,
+        "conversation context payload",
+      );
+      const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+        (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+      );
+      expect(messages.map((message) => message.body)).toEqual(["unpersisted gap"]);
+    } finally {
+      telegramBotDepsForTest.readAmbientTranscriptWatermark = previousReadAmbient;
+      telegramBotDepsForTest.resolveAmbientTranscriptWatermarkKey = previousResolveAmbientKey;
+    }
+  });
+
   it("honors historyLimit zero for group chat-window context", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

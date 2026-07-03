@@ -1764,6 +1764,26 @@
       "translated": "Cập nhật"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Giấy phép"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw trân trọng các đối tác của mình trong cộng đồng mã nguồn mở."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Không có thông báo giấy phép nào được đóng gói trong bản dựng này."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Mở ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "Kiểm tra"
@@ -5294,6 +5314,11 @@
       "translated": "Giới thiệu"
     },
     {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Giấy phép"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -5472,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Không có giấy phép đi kèm"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Các tệp giấy phép không có sẵn trong bản dựng này."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw trân trọng các đối tác của mình trong cộng đồng mã nguồn mở."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6309,9 +6349,9 @@
       "translated": "OpenClaw có thể sử dụng dữ liệu chuyển động để hỗ trợ các tương tác và tự động hóa nhận biết thiết bị."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw cần quyền truy cập thư viện ảnh khi bạn chọn ảnh hiện có để chia sẻ với trợ lý của mình."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw cho phép trợ lý của bạn đọc những ảnh bạn cho phép và cho phép bạn chọn ảnh để chia sẻ."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6944,6 +6984,11 @@
       "translated": "Tìm kiếm và thêm liên hệ từ trợ lý."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Ảnh"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Lịch (Thêm sự kiện)"
@@ -6972,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Liệt kê, thêm và hoàn tất lời nhắc."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Giới hạn"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Đọc ảnh bạn chọn cho trợ lý."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Đọc ảnh gần đây cho trợ lý."
     },
     {
       "id": "native.apple.22b335bddf72e453",

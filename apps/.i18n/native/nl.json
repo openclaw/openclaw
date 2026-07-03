@@ -1764,6 +1764,26 @@
       "translated": "Bijwerken"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Licenties"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw waardeert zijn partners in de open-sourcecommunity."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Er zijn geen licentiekennisgevingen in deze build opgenomen."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} openen"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "Controleren"
@@ -5294,6 +5314,11 @@
       "translated": "Over"
     },
     {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Licenties"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -5472,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Geen licenties meegeleverd"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Licentiebestanden zijn niet beschikbaar in deze build."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw waardeert zijn partners in de opensourcecommunity."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6309,9 +6349,9 @@
       "translated": "OpenClaw kan bewegingsgegevens gebruiken ter ondersteuning van apparaatafhankelijke interacties en automatiseringen."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw heeft toegang tot je fotobibliotheek nodig wanneer je bestaande foto's kiest om met je assistent te delen."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw laat je assistent foto’s lezen die je toestaat en laat je foto’s kiezen om te delen."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6944,6 +6984,11 @@
       "translated": "Zoek en voeg contacten toe vanuit de assistent."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Foto’s"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Agenda (gebeurtenissen toevoegen)"
@@ -6972,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Geef herinneringen weer, voeg ze toe en voltooi ze."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Beperkt"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Lees foto’s die je voor de assistent selecteert."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Lees recente foto’s voor de assistent."
     },
     {
       "id": "native.apple.22b335bddf72e453",

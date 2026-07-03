@@ -140,4 +140,170 @@ describe("buildTelegramMessageContext prompt context", () => {
       }),
     ]);
   });
+
+  it("excludes ambient transcript rows from the group history window", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 13,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot what happened?",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "10",
+              sender: "Sam",
+              timestamp: 1_700_000_000_000,
+              body: "persisted ambient one",
+            },
+            {
+              messageId: "11",
+              sender: "Lee",
+              timestamp: 1_700_000_001_000,
+              body: "persisted ambient two",
+            },
+            {
+              messageId: "12",
+              sender: "Mira",
+              timestamp: 1_700_000_002_000,
+              body: "unpersisted gap",
+            },
+          ],
+        ],
+      ]),
+      sessionRuntime: {
+        readAmbientTranscriptWatermark: ({ key }) =>
+          key === '["telegram","default","-1001234567890",""]'
+            ? {
+                messageId: "11",
+                timestampMs: 1_700_000_001_000,
+                updatedAt: 1_700_000_003_000,
+              }
+            : undefined,
+      },
+    });
+
+    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              message_id: "12",
+              body: "unpersisted gap",
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+      "persisted ambient",
+    );
+  });
+
+  it("applies the ambient watermark before truncating the history window", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 13,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot what happened?",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 1,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "12",
+              sender: "Mira",
+              timestamp: 1_700_000_002_000,
+              body: "unpersisted gap",
+            },
+            {
+              messageId: "11",
+              sender: "Lee",
+              timestamp: 1_700_000_001_000,
+              body: "late persisted ambient",
+            },
+          ],
+        ],
+      ]),
+      sessionRuntime: {
+        readAmbientTranscriptWatermark: () => ({
+          messageId: "11",
+          timestampMs: 1_700_000_001_000,
+          updatedAt: 1_700_000_003_000,
+        }),
+      },
+    });
+
+    expect(ctx?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ messageId: "12", body: "unpersisted gap" }),
+    ]);
+  });
+
+  it("omits transcript-owned ambient rows from steady-state room-event prompt text", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 12,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "current ambient",
+        date: 1_700_000_002,
+      },
+      cfg: {
+        messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      },
+      historyLimit: 10,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "10",
+              sender: "Sam",
+              timestamp: 1_700_000_000_000,
+              body: "persisted ambient one",
+            },
+            {
+              messageId: "11",
+              sender: "Lee",
+              timestamp: 1_700_000_001_000,
+              body: "persisted ambient two",
+            },
+          ],
+        ],
+      ]),
+      sessionRuntime: {
+        readAmbientTranscriptWatermark: ({ key }) =>
+          key === '["telegram","default","-1001234567890",""]'
+            ? {
+                messageId: "11",
+                timestampMs: 1_700_000_001_000,
+                updatedAt: 1_700_000_003_000,
+              }
+            : undefined,
+      },
+    });
+
+    if (!ctx) {
+      throw new Error("Expected room-event context");
+    }
+    expect(ctx.ctxPayload).toMatchObject({
+      BodyForAgent: "current ambient",
+      InboundEventKind: "room_event",
+      MessageSid: "12",
+      SenderName: "Pat",
+    });
+    expect(ctx.ctxPayload.InboundHistory).toBeUndefined();
+    expect(ctx.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+  });
 });

@@ -1188,6 +1188,82 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ]);
   });
 
+  it("omits transcript-owned ambient rows from recovered room-event prompt text", async () => {
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [
+        oldHistoryKey,
+        [{ sender: "Cara", body: "ambient current", timestamp: 3, messageId: "27787" }],
+      ],
+      [
+        recoveredHistoryKey,
+        [
+          {
+            sender: "Alice",
+            body: "persisted recovered ambient one",
+            timestamp: 1,
+            messageId: "199",
+          },
+          {
+            sender: "Bob",
+            body: "persisted recovered ambient two",
+            timestamp: 2,
+            messageId: "200",
+          },
+        ],
+      ],
+    ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          InboundEventKind: "room_event",
+          BodyForAgent: "ambient current",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageSid: "27787",
+          MessageThreadId: 1,
+          RawBody: "ambient current",
+          SenderName: "Cara",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          TransportThreadId: 1,
+          AmbientTranscriptPreviousMessageId: "200",
+          AmbientTranscriptPreviousTimestampMs: 2,
+        } as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27787,
+        } as TelegramMessageContext["msg"],
+        chatId: -1003774691294,
+        isGroup: true,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const dispatchParams = mockCallArg(
+      dispatchReplyWithBufferedBlockDispatcher,
+    ) as DispatchReplyWithBufferedBlockDispatcherArgs;
+    expect(dispatchParams.ctx).toMatchObject({
+      BodyForAgent: "ambient current",
+      InboundEventKind: "room_event",
+      MessageSid: "27787",
+      SenderName: "Cara",
+    });
+    expect(dispatchParams.ctx.InboundHistory).toBeUndefined();
+    expect(dispatchParams.ctx.UntrustedStructuredContext).toBeUndefined();
+  });
+
   it("moves recovered user-request history out of the original topic", async () => {
     const oldHistoryKey = "-1003774691294:topic:1";
     const recoveredHistoryKey = "-1003774691294:topic:3731";
@@ -3446,14 +3522,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
     // Only the cosmetic bar send throws; the real final "Done" still delivers.
-    deliverReplies.mockImplementation(
-      async (params: { replies?: Array<{ text?: string }> }) => {
-        if (params.replies?.some((reply) => reply.text?.includes("⏱️"))) {
-          throw new Error("Too Many Requests: retry after 5");
-        }
-        return { delivered: true };
-      },
-    );
+    deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
+      if (params.replies?.some((reply) => reply.text?.includes("⏱️"))) {
+        throw new Error("Too Many Requests: retry after 5");
+      }
+      return { delivered: true };
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
@@ -4580,9 +4654,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith(
-      "🧠 _Reading_\n\n_Checking_",
-    );
+    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith("🧠 _Reading_\n\n_Checking_");
     const updates = reasoningDraftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("CheckingReading");
   });

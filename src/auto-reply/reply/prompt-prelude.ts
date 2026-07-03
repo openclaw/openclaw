@@ -56,12 +56,12 @@ export function buildReplyPromptBodies(params: {
     ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
-  const includeMediaOnlyTranscript = mediaNote && params.inboundEventKind !== "room_event";
+  const includeMediaTranscript = mediaNote && params.inboundEventKind !== "room_event";
   const transcriptCommandBodyRaw = transcriptBody
-    ? mediaNote
+    ? includeMediaTranscript
       ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
       : transcriptBody
-    : includeMediaOnlyTranscript
+    : includeMediaTranscript
       ? mediaNote
       : "";
   return {
@@ -139,8 +139,16 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
   );
 }
 
+function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): string {
+  return (
+    normalizeOptionalString(params.sessionCtx.AmbientTranscriptBody) ??
+    normalizeOptionalString(params.ctx.AmbientTranscriptBody) ??
+    formatRoomEventLine(params.sessionCtx, resolveRoomEventBody(params))
+  );
+}
+
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
-  const roomEventBody = resolveRoomEventBody(params);
+  const roomEventBody = resolveRoomEventTranscriptBody(params);
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
   const deliveryDirective =
     params.sourceReplyDeliveryMode === "message_tool_only"
@@ -150,7 +158,7 @@ function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContex
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",
     roomContextBlock,
-    `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
+    `Current event:\n${roomEventBody}`,
     deliveryDirective,
   ]
     .filter(Boolean)
@@ -196,12 +204,14 @@ export function buildReplyPromptEnvelopeBase(
     : params.hasUserBody
       ? resetModelBody
       : "[User sent media without caption]";
+  // Room-event transcript rows are plain chat lines; replay treats them as
+  // conversation, while the OpenClaw marker remains current-turn context only.
   const transcriptBody = params.isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : isRoomEvent
-        ? ""
+        ? resolveRoomEventTranscriptBody(params)
         : params.hasUserBody
           ? params.baseBody
           : "[User sent media without caption]";
