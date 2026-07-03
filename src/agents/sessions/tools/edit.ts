@@ -173,11 +173,23 @@ function didEditLikelyApply(params: {
   );
 }
 
+function createMismatchHintSnippet(currentContent: string): string {
+  let snippet = "";
+  let length = 0;
+
+  for (const char of currentContent) {
+    if (length === EDIT_MISMATCH_HINT_LIMIT) {
+      return `${snippet}\n... (truncated)`;
+    }
+    snippet += char;
+    length += 1;
+  }
+
+  return snippet;
+}
+
 function appendMismatchHint(error: Error, currentContent: string): Error {
-  const snippet =
-    currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
-      ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+  const snippet = createMismatchHintSnippet(currentContent);
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });
