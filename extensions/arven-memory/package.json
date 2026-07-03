@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "OpenClaw Arven Memory MCP adapter",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

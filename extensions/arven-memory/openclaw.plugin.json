@@ -1,0 +1,83 @@
+{
+  "id": "arven-memory",
+  "kind": "memory",
+  "contracts": {
+    "tools": [
+      "arven_memory_recall",
+      "arven_memory_get",
+      "arven_memory_store",
+      "arven_memory_status",
+      "memory_search",
+      "memory_get"
+    ]
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Arven MCP URL",
+      "placeholder": "http://127.0.0.1:8765/mcp",
+      "help": "HTTP MCP endpoint for the Arven Memory bridge."
+    },
+    "authHeaderEnv": {
+      "label": "Auth Header Env",
+      "placeholder": "ARVEN_MEMORY_AUTH_HEADER",
+      "help": "Optional environment variable containing a full Authorization header value.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "recallTool": {
+      "label": "Recall Tool",
+      "placeholder": "memory_search",
+      "advanced": true
+    },
+    "getTool": {
+      "label": "Get Tool",
+      "placeholder": "memory_get",
+      "advanced": true
+    },
+    "storeTool": {
+      "label": "Store Tool",
+      "placeholder": "memory_store",
+      "advanced": true
+    },
+    "statusTool": {
+      "label": "Status Tool",
+      "placeholder": "memory_status",
+      "advanced": true
+    },
+    "timeoutMs": {
+      "label": "Timeout",
+      "placeholder": "10000",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "authHeaderEnv": {
+        "type": "string"
+      },
+      "recallTool": {
+        "type": "string"
+      },
+      "getTool": {
+        "type": "string"
+      },
+      "storeTool": {
+        "type": "string"
+      },
+      "statusTool": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000
+      }
+    },
+    "required": ["baseUrl"]
+  }
+}

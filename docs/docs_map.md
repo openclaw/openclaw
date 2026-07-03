@@ -2381,6 +2381,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common gotchas
   - H2: Related
 
+## concepts/memory-arven.md
+
+- Route: /concepts/memory-arven
+- Headings:
+  - H1: Arven Memory
+  - H2: Configuration
+  - H2: Bridge tool names
+  - H2: Legacy provider compatibility
+
 ## concepts/memory-builtin.md
 
 - Route: /concepts/memory-builtin
@@ -5785,6 +5794,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/arven-memory.md
+
+- Route: /plugins/reference/arven-memory
+- Headings:
+  - H1: Arven Memory plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/azure-speech.md
 
