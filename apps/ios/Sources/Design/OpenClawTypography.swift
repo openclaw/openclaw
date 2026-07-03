@@ -165,6 +165,9 @@ enum OpenClawType {
         let tabBarSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 11, relativeTo: .caption2)
         let segmentedNormalFont = self.scaledBodyUIFont(weight: Body.medium, size: 13, relativeTo: .footnote)
         let segmentedSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 13, relativeTo: .footnote)
+        let barButtonFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 17, relativeTo: .body)
+        let disabledBarButtonFont = self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body)
+        let textInputFont = self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body)
 
         let navigationBar = UINavigationBar.appearance()
         var titleAttributes = navigationBar.titleTextAttributes ?? [:]
@@ -182,6 +185,16 @@ enum OpenClawType {
         let segmentedControl = UISegmentedControl.appearance()
         segmentedControl.setTitleTextAttributes([.font: segmentedNormalFont], for: .normal)
         segmentedControl.setTitleTextAttributes([.font: segmentedSelectedFont], for: .selected)
+
+        let barButtonItem = UIBarButtonItem.appearance()
+        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .normal)
+        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .highlighted)
+        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .selected)
+        barButtonItem.setTitleTextAttributes([.font: disabledBarButtonFont], for: .disabled)
+
+        UITextField.appearance().font = textInputFont
+        UITextView.appearance().font = textInputFont
+        UISearchTextField.appearance().font = textInputFont
     }
 
     private enum Display {
