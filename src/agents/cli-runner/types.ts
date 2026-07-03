@@ -22,6 +22,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
@@ -92,6 +93,7 @@ export type RunCliAgentParams = {
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
+  cliSessionBindingFacts?: CliSessionBindingFacts;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -105,7 +107,7 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
@@ -158,6 +160,7 @@ export type RunCliAgentParams = {
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -175,6 +178,12 @@ export type CliReusableSession = {
     | "mcp"
     | "missing-transcript"
     | "orphaned-tool-use";
+};
+
+export type CliSessionBindingFacts = {
+  extraSystemPromptStatic?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
 };
 
 /** Fully prepared execution context consumed by the CLI runner executor. */

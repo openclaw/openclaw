@@ -55,6 +55,7 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   params: {
     cfg?: OpenClawConfig;
     forceLoad?: boolean;
+    providerId?: string;
     requiredPluginIds?: readonly string[];
   } = {},
 ): void {
@@ -64,6 +65,7 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
+    ...(params.providerId ? { value: params.providerId } : {}),
   });
   const pluginIds = [
     ...new Set([...resolution.pluginIds, ...(params.requiredPluginIds ?? [])]),

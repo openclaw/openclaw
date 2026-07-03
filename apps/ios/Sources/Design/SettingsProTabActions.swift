@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -80,6 +81,9 @@ extension SettingsProTab {
                     detail: self.appModel.voiceWake.statusText,
                     value: self.voiceWakeEnabled ? "on" : "off",
                     color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("diagnostics-voice-wake-status")
+                    .accessibilityValue(self.appModel.voiceWake.statusText)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -167,10 +171,49 @@ extension SettingsProTab {
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        self.refreshLocationPermissionSummary()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
+        let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let manager = CLLocationManager()
+        self.locationPermissionRefreshID &+= 1
+        let refreshID = self.locationPermissionRefreshID
+        let currentSummary = self.locationPermissionSummary
+        self.locationPermissionSummary = LocationPermissionSummary(
+            desiredMode: mode,
+            locationServicesEnabled: currentSummary.locationServicesEnabled,
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            guard refreshID == self.locationPermissionRefreshID else { return }
+            let latestManager = CLLocationManager()
+            let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+            self.locationPermissionSummary = LocationPermissionSummary(
+                desiredMode: latestMode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: latestManager.authorizationStatus,
+                accuracyAuthorization: latestManager.accuracyAuthorization)
+        }
+    }
+
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
+    func syncAfterOnboardingReset() {
+        self.connectingGatewayID = nil
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = nil
+        self.pendingManualAuthOverride = nil
+        self.syncSettingsState()
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -188,11 +231,11 @@ extension SettingsProTab {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
     }
@@ -286,11 +329,11 @@ extension SettingsProTab {
 
     func connectAfterScannedGatewayLink() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         await self.connectManual()
     }
 
@@ -319,7 +362,7 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int) async -> Bool {
+    func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
@@ -327,12 +370,7 @@ extension SettingsProTab {
             return false
         }
         self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
-        self.setupStatusText = "Checking gateway reachability..."
-        let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
-        if !ok {
-            self.setupStatusText = "Can't reach gateway at \(trimmed):\(port). Check Tailscale or LAN."
-        }
-        return ok
+        return true
     }
 
     func resetOnboarding() {
@@ -350,31 +388,6 @@ extension SettingsProTab {
         self.manualGatewayEnabled = false
         self.manualGatewayHost = ""
         self.onboardingRequestID += 1
-    }
-
-    func retryGatewayConnectionFromProblem() async {
-        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
-            await self.connectManual()
-        } else {
-            await self.gatewayController.connectLastKnown()
-        }
-    }
-
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
-    }
-
-    func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
-        if problem.suggestsOnboardingReset {
-            self.resetOnboarding()
-            return
-        }
-        if problem.canTrustRotatedCertificate {
-            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
-            return
-        }
-        await self.retryGatewayConnectionFromProblem()
     }
 
     func handleLocationModeChange(_ newValue: String) {
@@ -395,15 +408,19 @@ extension SettingsProTab {
     {
         self.isChangingLocationMode = true
         self.locationStatusText = nil
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
+            _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
+            self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -411,6 +428,8 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
+            self.refreshLocationPermissionSummary(
+                desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }
     }
 
@@ -503,21 +522,8 @@ extension SettingsProTab {
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
+        case .licenses: "Licenses"
         case .about: "About"
-        }
-    }
-
-    func subtitle(for route: SettingsRoute) -> String {
-        switch route {
-        case .gateway: "Pairing, diagnostics, and Tailscale checks."
-        case .approvals: "Review pending agent actions."
-        case .permissions: "Control device capabilities."
-        case .channels: "Message routing and external clients."
-        case .voice: "Talk mode and wake phrase settings."
-        case .diagnostics: "Run local health checks."
-        case .privacy: "Data and device privacy controls."
-        case .notifications: "Alert permissions and delivery."
-        case .about: "Version and support details."
         }
     }
 
@@ -556,6 +562,12 @@ extension SettingsProTab {
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if self.isTransientSetupStatus(trimmedSetup),
+           !gatewayStatus.isEmpty,
+           gatewayStatus != "Offline"
+        {
+            return gatewayStatus
+        }
         if !trimmedSetup.isEmpty { return trimmedSetup }
         if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
@@ -580,6 +592,11 @@ extension SettingsProTab {
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Check Tailscale, then connect again."
         }
+        if lower.contains("tls fingerprint verification timed out")
+            || lower.contains("no tls endpoint detected")
+        {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if lower.contains("timed out") {
             return "Connection timed out. Make sure Tailscale is connected, then try again."
         }
@@ -587,6 +604,13 @@ extension SettingsProTab {
             return "Connected, but some controls are restricted for nodes. This is expected."
         }
         return nil
+    }
+
+    func isTransientSetupStatus(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "setup code applied. connecting..."
+            || lower.hasPrefix("qr loaded. connecting to ")
+            || lower == "checking gateway reachability..."
     }
 
     var shouldShowRealtimeVoicePicker: Bool {
@@ -728,13 +752,6 @@ extension SettingsProTab {
         self.appModel.pendingExecApprovalPrompt
     }
 
-    var approvalsDetail: String {
-        if self.notificationsNeedAttention {
-            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
-        }
-        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
-    }
-
     var notificationsNeedAttention: Bool {
         switch self.notificationStatus {
         case .allowed, .checking:
@@ -794,15 +811,35 @@ extension SettingsProTab {
 
     var privacyDetail: String {
         let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
+        return switch (location, self.locationPermissionSummary.effectiveMode) {
+        case (.off, _):
+            "Location off"
+        case (.whileUsing, .whileUsing):
+            "Location While Using"
+        case (.whileUsing, .off):
+            "Location While Using, effective Off"
+        case (.whileUsing, .always):
+            "Location While Using, effective Always"
+        case (.always, .always):
+            "Location Always"
+        case (.always, .whileUsing):
+            "Location Always, effective While Using"
+        case (.always, .off):
+            "Location Always, effective Off"
+        }
     }
 
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
+    var locationPermissionDetailText: String {
+        if self.isChangingLocationMode {
+            return "Requesting iOS location permission…"
         }
+        return self.locationPermissionSummary.detailText
+    }
+
+    var locationPermissionWarningText: String? {
+        guard let locationStatusText else { return nil }
+        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        return locationStatusText
     }
 
     var notificationStatusText: String {

@@ -56,7 +56,8 @@ vi.mock("../commands/migrate/context.js", () => ({
   createMigrationLogger: vi.fn(() => ({ debug: vi.fn() })),
 }));
 
-vi.mock("../config/paths.js", () => ({
+vi.mock("../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/paths.js")>()),
   resolveStateDir,
 }));
 
@@ -110,6 +111,38 @@ describe("setup migration import freshness", () => {
     });
 
     expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
+  it("allows the persisted first-launch security acknowledgement", async () => {
+    const root = await makeTempRoot();
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {
+        wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
+      },
+      stateDir: path.join(root, "state"),
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result).toEqual({ fresh: true, reasons: [] });
+  });
+
+  it("rejects other wizard config during freshness checks", async () => {
+    const root = await makeTempRoot();
+    const result = await inspectSetupMigrationFreshness({
+      baseConfig: {
+        wizard: {
+          securityAcknowledgedAt: "2026-06-30T00:00:00.000Z",
+          lastRunMode: "local",
+        },
+      },
+      stateDir: path.join(root, "state"),
+      workspaceDir: path.join(root, "workspace"),
+    });
+
+    expect(result).toMatchObject({
+      fresh: false,
+      reasons: ["existing config values are loaded"],
+    });
   });
 
   it("rejects existing config, workspace files, and state", async () => {
@@ -303,13 +336,16 @@ describe("setup migration import", () => {
       detections: [],
     });
 
-    expect(options).toEqual([
-      {
-        providerId: "codex",
-        label: "Codex",
-        hint: "OpenClaw Codex harness and model provider plugin",
-      },
-    ]);
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "codex",
+          label: "Codex",
+        }),
+        expect.objectContaining({ providerId: "claude", label: "Claude" }),
+        expect.objectContaining({ providerId: "hermes", label: "Hermes" }),
+      ]),
+    );
   });
 
   it("lists detected providers first and keeps other providers available", async () => {
@@ -324,18 +360,21 @@ describe("setup migration import", () => {
       ],
     });
 
-    expect(options).toEqual([
-      {
-        providerId: "hermes",
-        label: "Hermes",
-        hint: "/tmp/hermes-home",
-      },
-      {
-        providerId: "codex",
-        label: "Codex",
-        hint: "Import Codex auth and skills.",
-      },
-    ]);
+    expect(options[0]).toEqual({
+      providerId: "hermes",
+      label: "Hermes",
+      hint: "/tmp/hermes-home",
+    });
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "codex",
+          label: "Codex",
+          hint: "Import Codex auth and skills.",
+        }),
+        expect.objectContaining({ providerId: "claude", label: "Claude" }),
+      ]),
+    );
   });
 
   it("asks before including supported credentials and replans before apply", async () => {

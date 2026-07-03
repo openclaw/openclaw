@@ -1660,7 +1660,7 @@ describe("runCopilotAttempt", () => {
       };
       expect(cfg.systemMessage?.mode).toBe("append");
       expect(cfg.systemMessage?.content).toBe(
-        "## Group Chat Context\nTool and file actions are disabled for this sender.",
+        "## Conversation Context\nTool and file actions are disabled for this sender.",
       );
     });
 
@@ -1748,7 +1748,7 @@ describe("runCopilotAttempt", () => {
         systemMessage?: { mode?: string; content?: string };
       };
       expect(cfg.systemMessage?.content).toBe(
-        `${rendered}\n\n## Group Chat Context\nOnly answer in the current group thread.`,
+        `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
       );
     });
 

@@ -5,10 +5,16 @@ struct OpenClawDocsScreen: View {
     private let gatewayURL = URL(string: "https://docs.openclaw.ai/gateway")!
     private let pairingURL = URL(string: "https://docs.openclaw.ai/channels/pairing")!
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let gatewayAction: (() -> Void)?
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, gatewayAction: (() -> Void)? = nil) {
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        gatewayAction: (() -> Void)? = nil)
+    {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.gatewayAction = gatewayAction
     }
 
@@ -17,15 +23,27 @@ struct OpenClawDocsScreen: View {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    self.headerCard
+                    if !self.usesNativeNavigationChrome {
+                        self.headerCard
+                    }
                     self.linkCard
-                    self.versionCard
                 }
                 .padding(.vertical, 18)
             }
         }
         .navigationTitle("Docs")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome, let gatewayAction {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: gatewayAction) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
+        }
     }
 
     private var headerCard: some View {
@@ -55,7 +73,8 @@ struct OpenClawDocsScreen: View {
             Button(action: gatewayAction) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()
@@ -82,22 +101,6 @@ struct OpenClawDocsScreen: View {
                     detail: "Mobile setup codes, QR, and node approval.",
                     icon: "qrcode",
                     url: self.pairingURL)
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    private var versionCard: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
-            HStack(spacing: 10) {
-                Text("Version")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)

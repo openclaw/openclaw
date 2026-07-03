@@ -9,10 +9,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstEventTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
+const CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_MS;
+const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -445,6 +451,73 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
       30_000,
     );
+  });
+});
+
+describe("resolveLlmFirstEventTimeoutMs", () => {
+  it("uses the cloud first-event timeout by default", () => {
+    expect(resolveLlmFirstEventTimeoutMs()).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("uses the longer local first-event timeout for loopback providers", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "lmstudio", baseUrl: "http://127.0.0.1:1234/v1" },
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("uses the longer local first-event timeout for self-hosted bare hostnames", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "vllm", baseUrl: "http://gpu-box:8000/v1" },
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("keeps Ollama cloud models on the cloud first-event timeout", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "ollama", id: "ollama/kimi-k2.6:cloud", baseUrl: "http://127.0.0.1" },
+      }),
+    ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("honors explicit provider request timeouts", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("caps first-event timeout by explicit run timeout", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        runTimeoutMs: 45_000,
+      }),
+    ).toBe(45_000);
+  });
+
+  it("does not treat the no-timeout run sentinel as an unlimited first-event wait", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("caps first-event timeout by agents.defaults.timeoutSeconds when no explicit run timeout exists", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 20 } } } as OpenClawConfig;
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        cfg,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(20_000);
   });
 });
 

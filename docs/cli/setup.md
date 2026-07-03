@@ -18,6 +18,9 @@ the same flags and runs the same minimal-first onboarding flow.
 `--wizard` remains accepted for compatibility and selects the advanced flow.
 See [`openclaw onboard`](/cli/onboard) for the full option reference.
 
+`--baseline` initializes config, workspace, and session folders without running
+onboarding.
+
 `--skip-ui` by itself, optionally with `--workspace`, preserves the baseline
 setup path for source checkouts and scripts. It prepares config, workspace,
 sessions, and `gateway.mode` without writing quickstart Gateway defaults. Add
@@ -28,6 +31,7 @@ local agent.
 
 ```bash
 openclaw setup
+openclaw setup --baseline
 openclaw setup --workspace ~/.openclaw/workspace
 openclaw setup --flow advanced
 openclaw setup --import-from hermes --import-source ~/.hermes
@@ -38,7 +42,7 @@ openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://
 
 - Plain `openclaw setup` runs the same minimal flow as `openclaw onboard`.
 - Use `--flow advanced` or explicit Gateway/daemon flags for the full infrastructure wizard.
-- Use `--skip-ui` when a script or source-checkout workflow should finish without opening the local agent.
+- Use `--baseline` or bare `--skip-ui` for baseline-only script and source-checkout workflows.
 - If Hermes state is detected, interactive onboarding can offer migration automatically. Import onboarding requires a fresh setup; use [Migrate](/cli/migrate) for dry-run plans, backups, and overwrite mode outside onboarding.
 
 ## Related

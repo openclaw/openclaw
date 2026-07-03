@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -134,7 +135,7 @@ function coerceDisplayValue(
     const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
       const half = Math.floor((maxStringChars - 1) / 2);
-      return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
     }
     return firstLine;
   }

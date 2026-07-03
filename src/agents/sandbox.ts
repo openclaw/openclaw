@@ -53,7 +53,6 @@ export {
   runSshSandboxCommand,
   shellEscape,
   uploadDirectoryToSshTarget,
-  VALIDATE_REMOTE_WORKDIR_SCRIPT,
 } from "./sandbox/ssh.js";
 export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";

@@ -52,10 +52,17 @@ openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
+openclaw plugins marketplace entries
+openclaw plugins marketplace entries --offline
+openclaw plugins marketplace entries --json
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
-openclaw plugins init <id>
-openclaw plugins init <id> --directory ./my-plugin --name "My Plugin"
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile clawhub-public --json
+openclaw plugins marketplace refresh --feed-url https://clawhub.ai/v1/feeds/plugins --expected-sha256 <sha256>
+openclaw plugins init my-tool --name "My Tool"
+openclaw plugins init my-provider --name "My Provider" --type provider
+openclaw plugins init my-provider --name "My Provider" --type provider --directory ./my-provider
 openclaw plugins build --entry ./dist/index.js
 openclaw plugins build --entry ./dist/index.js --check
 openclaw plugins validate --entry ./dist/index.js
@@ -86,18 +93,44 @@ npm run plugin:build
 npm run plugin:validate
 ```
 
-`plugins init` creates a minimal TypeScript tool plugin that uses
-`defineToolPlugin`. `plugins build` imports that entry, reads its static tool
-metadata, writes `openclaw.plugin.json`, and keeps `package.json`
-`openclaw.extensions` aligned. `plugins validate` checks that the generated
-manifest, package metadata, and current entry export still agree. See
-[Tool Plugins](/plugins/tool-plugins) for the full authoring workflow.
+`plugins init` creates a minimal TypeScript tool plugin by default. The first
+argument is the plugin id; pass `--name` for the display name. OpenClaw uses the
+id for the default output directory and package naming. Tool scaffolds use
+`defineToolPlugin`.
+`plugins build` imports the built entry, reads its static tool metadata, writes
+`openclaw.plugin.json`, and keeps `package.json` `openclaw.extensions` aligned.
+`plugins validate` checks that the generated manifest, package metadata, and
+current entry export still agree. See [Tool Plugins](/plugins/tool-plugins) for
+the full tool-authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry so the workflow also works with the published CLI. Use
 `--entry <path>` when the entry is not the default package entry. Use
 `plugins build --check` in CI to fail when generated metadata is stale without
 rewriting files.
+
+### Provider Scaffold
+
+```bash
+openclaw plugins init acme-models --name "Acme Models" --type provider
+cd acme-models
+npm install
+npm run build
+npm test
+npm run validate
+```
+
+Provider scaffolds create a generic text/model provider plugin with OpenAI-compatible
+API-key plumbing, a built-in `npm run validate` script for `clawhub package
+validate`, ClawHub package metadata, and a manually dispatched GitHub workflow
+for future trusted publishing through GitHub Actions OIDC. Provider scaffolds do
+not generate skills and do not use `openclaw plugins build` or
+`openclaw plugins validate`; those commands are for the tool scaffold's
+generated metadata path.
+
+Before publishing, replace the placeholder API base URL, model catalog, docs
+route, credential text, and README copy with real provider details. Use the
+generated README for first-time ClawHub publishing and trusted publisher setup.
 
 ### Install
 
@@ -111,6 +144,7 @@ openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
@@ -162,6 +196,12 @@ is available, then fall back to `latest`.
     Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
+
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk">
+    Community ClawHub installs check the selected release trust record before downloading the package. If ClawHub disables download for the release, reports malicious scan findings, or puts the release in a blocking moderation state such as quarantine, OpenClaw refuses the release. For non-blocking risky scan statuses, risky moderation states, or registry reasons, OpenClaw shows the trust details and asks for confirmation before continuing.
+
+    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale clean trust records warn but do not require acknowledgement. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -390,6 +430,7 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
+openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
@@ -398,6 +439,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
+
+    During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
 
     That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
 
@@ -420,6 +463,9 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
     `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk on update">
+    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
   </Accordion>
 </AccordionGroup>
 
@@ -481,11 +527,36 @@ Use `plugins registry` to inspect whether the persisted registry is present, cur
 ### Marketplace
 
 ```bash
+openclaw plugins marketplace entries
+openclaw plugins marketplace entries --offline
+openclaw plugins marketplace entries --json
+openclaw plugins marketplace entries --feed-profile <name>
+openclaw plugins marketplace entries --feed-url <url>
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
+openclaw plugins marketplace refresh
+openclaw plugins marketplace refresh --feed-profile <name>
+openclaw plugins marketplace refresh --feed-url <url>
+openclaw plugins marketplace refresh --expected-sha256 <sha256> --json
 ```
 
-Marketplace list accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
+`plugins marketplace entries` lists entries from the configured OpenClaw marketplace feed. By default it attempts the hosted feed and falls back to the latest accepted snapshot or bundled data. Use `--feed-profile <name>` to read a specific configured profile, `--feed-url <url>` to read an explicit hosted feed URL, and `--offline` to read the latest accepted snapshot without fetching the feed.
+
+`plugins marketplace refresh` refreshes the configured hosted feed snapshot and reports whether OpenClaw accepted hosted data, a hosted snapshot, or bundled fallback data. Use `--expected-sha256` when a caller needs the command to fail unless a fresh hosted payload matches a pinned checksum.
+
+Marketplace `list` accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
+
+Marketplace refresh loads a hosted OpenClaw marketplace feed and persists the
+validated response as the local hosted-feed snapshot. Without options, it uses
+the configured default feed profile. Use `--feed-profile <name>` to refresh a
+specific configured profile, `--feed-url <url>` to refresh an explicit hosted
+feed URL, `--expected-sha256 <sha256>` to require a matching payload checksum
+(`sha256:<hex>` or a bare 64-character hex digest), and `--json` for
+machine-readable output. Explicit hosted feed URLs must not include
+credentials, query strings, or fragments. Unpinned refreshes can report a
+hosted snapshot or bundled fallback result without failing the command. Pinned
+refreshes fail unless they accept a fresh hosted payload, and successful hosted
+refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 ## Related
 

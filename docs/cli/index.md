@@ -16,6 +16,7 @@ Use the setup commands by intent:
 - `openclaw` starts minimal onboarding on first run, then opens the normal local agent.
 - `openclaw onboard` is the canonical minimal-first setup path; use `--flow advanced` for the full infrastructure wizard.
 - `openclaw setup` is an alias for `openclaw onboard`.
+- `openclaw setup --baseline` creates baseline config/workspace/session folders without onboarding.
 - `openclaw configure` changes targeted parts of an existing setup, such as model auth, gateway, channels, plugins, or skills.
 - `openclaw channels add` configures channel accounts after the baseline exists; run it without flags for guided channel setup or with channel-specific flags for scripts.
 

@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -84,7 +85,6 @@ const loadManifestCommandAliasesRuntimeModule = async () =>
   await import("../plugins/manifest-command-aliases.runtime.js");
 const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
-const loadTuiLaunchModule = async () => await import("../tui/tui-launch.js");
 const loadProgressModule = async () => await import("./progress.js");
 
 function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
@@ -282,85 +282,230 @@ function isUnconfiguredConfigSnapshot(
   );
 }
 
-type BareRootDestination =
-  | { kind: "local-agent" }
-  | { kind: "remote-agent" }
-  | { kind: "crestodian" }
-  | { kind: "onboard"; agentId?: string };
+type BareRootLaunchTarget =
+  | { kind: "onboarding" }
+  | { kind: "tui"; local: boolean; gatewayUrl?: string; authSource?: "config" }
+  | { kind: "crestodian" };
 
-async function resolveBareRootDestination(
-  argv: string[],
-  options: { probeLocalAgent?: boolean } = {},
-): Promise<BareRootDestination | null> {
+async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
   if (!shouldHandleBareRoot(argv)) {
     return null;
-  }
-  if (normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL)) {
-    return { kind: "remote-agent" };
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (isUnconfiguredConfigSnapshot(snapshot)) {
-    return { kind: "onboard" };
+    return { kind: "onboarding" };
   }
   if (!snapshot.valid) {
     return { kind: "crestodian" };
   }
-  if (snapshot.config.gateway?.mode === "remote") {
-    if (!normalizeOptionalString(snapshot.config.gateway.remote?.url)) {
-      return { kind: "crestodian" };
+  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig);
+}
+
+async function resolveConfiguredTuiLaunchTarget(
+  config: OpenClawConfig,
+): Promise<BareRootLaunchTarget> {
+  const gateway = await resolveReachableGateway(config);
+  if (gateway) {
+    const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
+    if (gateway.authSource) {
+      target.authSource = gateway.authSource;
     }
-    // Remote profiles use the configured Gateway and do not require local model
-    // readiness before opening the normal TUI connection path.
-    return { kind: "remote-agent" };
+    return target;
   }
-  if (options.probeLocalAgent === false) {
-    return { kind: "local-agent" };
+  return { kind: "tui", local: true };
+}
+
+type GatewayProbeTarget = {
+  url: string;
+  auth: "local" | "remote";
+  scope: "local-loopback" | "local-configured" | "remote";
+};
+
+type ReachableGateway = {
+  url: string;
+  authSource?: "config";
+};
+
+type GatewayProbeAuth = {
+  token?: string;
+  password?: string;
+  authSource?: "config";
+};
+
+async function resolveReachableGateway(config: OpenClawConfig): Promise<ReachableGateway | null> {
+  const targets = await resolveGatewayProbeTargets(config);
+  if (targets.length === 0) {
+    return null;
   }
+  const usesRemoteAuth = targets.some((target) => target.auth === "remote");
+  const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
+  const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
+  for (const target of targets) {
+    if (!isSafeGatewayProbeTarget(target)) {
+      continue;
+    }
+    const probeOptions: { url: string; token?: string; password?: string } = { url: target.url };
+    if (auth.token) {
+      probeOptions.token = auth.token;
+    }
+    if (auth.password) {
+      probeOptions.password = auth.password;
+    }
+    const probe = await probeGatewayReachable(probeOptions);
+    if (probe.ok) {
+      const reachable: ReachableGateway = { url: target.url };
+      if (auth.authSource) {
+        reachable.authSource = auth.authSource;
+      }
+      return reachable;
+    }
+  }
+  return null;
+}
+
+async function resolveGatewayProbeAuth(
+  config: OpenClawConfig,
+  auth: "local" | "remote",
+): Promise<GatewayProbeAuth> {
+  const gateway = config.gateway;
+  const remoteAuth = auth === "remote";
+  const [configToken, configPassword] = await Promise.all([
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
+      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
+    }),
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
+      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
+    }),
+  ]);
+  const resolved: GatewayProbeAuth = {};
+  const token = configToken ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = configPassword ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
+  if (token) {
+    resolved.token = token;
+  }
+  if (password) {
+    resolved.password = password;
+  }
+  if (configToken || configPassword) {
+    resolved.authSource = "config";
+  }
+  return resolved;
+}
+
+async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<GatewayProbeTarget[]> {
+  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
+  if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
+    const url = await resolveValidatedRemoteGatewayUrl(config);
+    return url ? [{ url, auth: "remote", scope: "remote" }] : [];
+  }
+  return (await resolveLocalGatewayWebSocketUrls(config)).map((url, index) => ({
+    url,
+    auth: "local",
+    scope: index === 0 ? "local-loopback" : "local-configured",
+  }));
+}
+
+function isSafeGatewayProbeTarget(target: GatewayProbeTarget): boolean {
+  if (target.scope === "remote") {
+    return isSafeRemoteGatewayProbeUrl(target.url);
+  }
+  return isSecureWebSocketUrl(target.url, {
+    allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+  });
+}
+
+function isSafeRemoteGatewayProbeUrl(url: string): boolean {
+  let parsed: URL;
   try {
-    const { resolveAgentIdFromSessionOrWorkspace, resolveDefaultAgentId } =
-      await import("../agents/agent-scope.js");
-    const defaultAgentId = resolveDefaultAgentId(snapshot.config);
-    const agentId = resolveAgentIdFromSessionOrWorkspace({
-      cfg: snapshot.config,
-      fallbackAgentId: defaultAgentId,
-      workspacePath: process.cwd(),
-    });
-    const { hasRunnableLocalAgent } = await import("../wizard/setup.assisted.js");
-    if (await hasRunnableLocalAgent(snapshot.config, { agentId })) {
-      return { kind: "local-agent" };
-    }
-    return {
-      kind: "onboard",
-      ...(agentId !== defaultAgentId ? { agentId } : {}),
-    };
+    parsed = new URL(url);
   } catch {
-    return { kind: "crestodian" };
+    return false;
+  }
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isLoopbackGatewayHost(parsed.hostname)) {
+    return true;
+  }
+  return (
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1" &&
+    isSecureWebSocketUrl(url, { allowPrivateWs: true })
+  );
+}
+
+function isLoopbackGatewayHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.+$/, "");
+  if (normalized === "localhost") {
+    return true;
+  }
+  const hostForIpCheck =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return isLoopbackAddress(hostForIpCheck);
+}
+
+async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise<string | null> {
+  try {
+    const { buildGatewayConnectionDetailsWithResolvers } =
+      await import("../gateway/connection-details.js");
+    return buildGatewayConnectionDetailsWithResolvers({
+      config,
+      ignoreEnvUrlOverride: true,
+    }).url;
+  } catch {
+    return null;
   }
 }
 
-async function runBareRootCrestodian(): Promise<void> {
-  const { runCrestodian } = await loadCrestodianModule();
-  const { createCliProgress } = await loadProgressModule();
-  const progress = createCliProgress({
-    label: "Starting Crestodian…",
-    indeterminate: true,
-    delayMs: 0,
-    fallback: "none",
-  });
-  let progressStopped = false;
-  const stopProgress = () => {
-    if (progressStopped) {
-      return;
-    }
-    progressStopped = true;
-    progress.done();
-  };
+async function resolveGatewayProbeSecret(params: {
+  config: OpenClawConfig;
+  value: unknown;
+  path: string;
+}): Promise<string | undefined> {
   try {
-    await runCrestodian({ onReady: stopProgress });
-  } finally {
-    stopProgress();
+    const { resolveSetupSecretInputString } = await import("../wizard/setup.secret-input.js");
+    return await resolveSetupSecretInputString(params);
+  } catch {
+    return undefined;
   }
+}
+
+async function resolveLocalGatewayWebSocketUrls(config: OpenClawConfig): Promise<string[]> {
+  const [{ resolveGatewayPort }, { resolveControlUiLinks }] = await Promise.all([
+    import("../config/paths.js"),
+    import("../gateway/control-ui-links.js"),
+  ]);
+  const gateway = config.gateway;
+  const baseParams = {
+    port: resolveGatewayPort(config),
+    basePath: gateway?.controlUi?.basePath,
+    tlsEnabled: gateway?.tls?.enabled === true,
+  };
+  const loopbackLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind: "loopback",
+  });
+  const bind = gateway?.bind;
+  if (bind !== "tailnet" && bind !== "custom") {
+    return [loopbackLinks.wsUrl];
+  }
+  const configuredLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind,
+    customBindHost: gateway?.customBindHost,
+  });
+  return configuredLinks.wsUrl === loopbackLinks.wsUrl
+    ? [loopbackLinks.wsUrl]
+    : [loopbackLinks.wsUrl, configuredLinks.wsUrl];
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -909,21 +1054,18 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    const shouldRunBareRoot = shouldHandleBareRoot(normalizedArgv);
+    const shouldRunBareRootCommand = shouldHandleBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
-    if (shouldRunBareRoot || shouldRunModernOnboardCrestodian) {
+    if (shouldRunBareRootCommand || shouldRunModernOnboardCrestodian) {
       await ensureCliEnvProxyDispatcher();
     }
+    const bareRootLaunchTarget = shouldRunBareRootCommand
+      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      : null;
 
-    if (shouldRunBareRoot) {
-      const hasInteractiveTty =
-        (process.stdin as { isTTY?: boolean }).isTTY === true &&
-        (process.stdout as { isTTY?: boolean }).isTTY === true;
-      const destination = await resolveBareRootDestination(normalizedArgv, {
-        probeLocalAgent: hasInteractiveTty,
-      });
-      if (destination?.kind === "onboard") {
-        if (!hasInteractiveTty) {
+    if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "onboarding") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(
             "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
           );
@@ -931,35 +1073,59 @@ export async function runCli(argv: string[] = process.argv) {
           return;
         }
         const { setupWizardCommand } = await import("../commands/onboard.js");
-        await setupWizardCommand(destination.agentId ? { agentId: destination.agentId } : {});
+        await setupWizardCommand({});
         return;
       }
-      if (destination?.kind === "crestodian") {
-        if (!hasInteractiveTty) {
+      if (bareRootLaunchTarget.kind === "tui") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(
-            'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
+            "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
           );
           process.exitCode = 1;
           return;
         }
-        await runBareRootCrestodian();
+        const { launchTuiCli } = await import("../tui/tui-launch.js");
+        const tuiOptions = bareRootLaunchTarget.local
+          ? { deliver: false, local: true }
+          : { deliver: false };
+        const tuiLaunchOptions: { gatewayUrl?: string; authSource?: "config" } = {};
+        if (bareRootLaunchTarget.gatewayUrl) {
+          tuiLaunchOptions.gatewayUrl = bareRootLaunchTarget.gatewayUrl;
+        }
+        if (bareRootLaunchTarget.authSource) {
+          tuiLaunchOptions.authSource = bareRootLaunchTarget.authSource;
+        }
+        await launchTuiCli(tuiOptions, tuiLaunchOptions);
         return;
       }
-      if (!hasInteractiveTty) {
-        const agentCommand =
-          destination?.kind === "remote-agent"
-            ? "openclaw agent --message <text>"
-            : "openclaw agent --local --message <text>";
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
-          `OpenClaw chat needs an interactive TTY. Use \`${agentCommand}\` for one command.`,
+          'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
         );
         process.exitCode = 1;
         return;
       }
-      const { launchTuiCli } = await loadTuiLaunchModule();
-      await launchTuiCli(
-        destination?.kind === "local-agent" ? { local: true, deliver: false } : { deliver: false },
-      );
+      const { runCrestodian } = await loadCrestodianModule();
+      const { createCliProgress } = await loadProgressModule();
+      const progress = createCliProgress({
+        label: "Starting Crestodian…",
+        indeterminate: true,
+        delayMs: 0,
+        fallback: "none",
+      });
+      let progressStopped = false;
+      const stopProgress = () => {
+        if (progressStopped) {
+          return;
+        }
+        progressStopped = true;
+        progress.done();
+      };
+      try {
+        await runCrestodian({ onReady: stopProgress });
+      } finally {
+        stopProgress();
+      }
       return;
     }
 

@@ -9,6 +9,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  listAvailableManifestContractPlugins,
+  loadManifestContractSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
+import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../plugins/official-external-install-records.js";
@@ -50,7 +54,14 @@ type InstallableSetupMigrationProvider = {
   description?: string;
 };
 
+type ManifestSetupMigrationProvider = {
+  providerId: string;
+  label: string;
+  description?: string;
+};
+
 const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
   "AGENTS.md",
   "SOUL.md",
@@ -101,11 +112,13 @@ async function hasDirectoryEntries(candidate: string): Promise<boolean> {
 }
 
 function hasMeaningfulConfig(config: OpenClawConfig): boolean {
-  const meaningfulKeys = Object.keys(config as Record<string, unknown>).filter(
-    (key) => !MEANINGFUL_CONFIG_IGNORED_KEYS.has(key),
+  const meaningfulEntries = Object.entries(config as Record<string, unknown>).filter(
+    ([key, value]) =>
+      !MEANINGFUL_CONFIG_IGNORED_KEYS.has(key) &&
+      (key !== "wizard" || hasMeaningfulWizardConfig(value)),
   );
-  if (meaningfulKeys.length !== 1 || meaningfulKeys[0] !== "plugins") {
-    return meaningfulKeys.length > 0;
+  if (meaningfulEntries.length !== 1 || meaningfulEntries[0]?.[0] !== "plugins") {
+    return meaningfulEntries.length > 0;
   }
   const pluginKeys = Object.keys(config.plugins ?? {});
   const entries = Object.entries(config.plugins?.entries ?? {});
@@ -141,6 +154,15 @@ function hasMeaningfulConfig(config: OpenClawConfig): boolean {
         resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record: installRecord })
       );
     })
+  );
+}
+
+function hasMeaningfulWizardConfig(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return true;
+  }
+  return Object.keys(value as Record<string, unknown>).some(
+    (key) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(key),
   );
 }
 
@@ -283,6 +305,44 @@ function resolveInstallableSetupMigrationProviders(): InstallableSetupMigrationP
   return providers;
 }
 
+function formatMigrationProviderId(providerId: string): string {
+  return providerId
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function resolveManifestMigrationProviderLabel(params: {
+  providerId: string;
+  pluginName?: string;
+}): string {
+  const pluginName = params.pluginName?.trim().replace(/\s+Migration$/i, "");
+  return pluginName || formatMigrationProviderId(params.providerId) || params.providerId;
+}
+
+function resolveManifestSetupMigrationProviders(
+  baseConfig: OpenClawConfig,
+): ManifestSetupMigrationProvider[] {
+  const snapshot = loadManifestContractSnapshot({ config: baseConfig });
+  return listAvailableManifestContractPlugins({
+    snapshot,
+    contract: "migrationProviders",
+    config: baseConfig,
+  }).flatMap((plugin) =>
+    (plugin.contracts?.migrationProviders ?? []).map((providerId) => {
+      const provider: ManifestSetupMigrationProvider = {
+        providerId,
+        label: resolveManifestMigrationProviderLabel({ providerId, pluginName: plugin.name }),
+      };
+      if (plugin.description) {
+        provider.description = plugin.description;
+      }
+      return provider;
+    }),
+  );
+}
+
 export async function listSetupMigrationOptions(params: {
   baseConfig: OpenClawConfig;
   detections: readonly SetupMigrationDetection[];
@@ -291,34 +351,47 @@ export async function listSetupMigrationOptions(params: {
     await loadMigrationProviderRuntimeModule();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
   const providers = resolvePluginMigrationProviders({ cfg: params.baseConfig });
-  const detectedProviderIds = new Set(params.detections.map((detection) => detection.providerId));
-  const availableProviderIds = new Set([
-    ...detectedProviderIds,
-    ...providers.map((provider) => provider.id),
-  ]);
-  return [
-    ...params.detections.map((detection) => ({
+  const options: SetupMigrationOption[] = [];
+  const providerIds = new Set<string>();
+  const addOption = (option: SetupMigrationOption) => {
+    if (providerIds.has(option.providerId)) {
+      return;
+    }
+    providerIds.add(option.providerId);
+    options.push(option);
+  };
+
+  for (const detection of params.detections) {
+    addOption({
       providerId: detection.providerId,
       label: detection.label,
       ...(detection.source || detection.message
         ? { hint: detection.source ?? detection.message }
         : {}),
-    })),
-    ...providers
-      .filter((provider) => !detectedProviderIds.has(provider.id))
-      .map((provider) => ({
-        providerId: provider.id,
-        label: provider.label,
-        hint: provider.description ?? t("wizard.migration.sourcePathHint"),
-      })),
-    ...resolveInstallableSetupMigrationProviders()
-      .filter((provider) => !availableProviderIds.has(provider.providerId))
-      .map((provider) => ({
-        providerId: provider.providerId,
-        label: provider.entry.label,
-        hint: provider.description ?? t("wizard.migration.sourcePathHint"),
-      })),
-  ];
+    });
+  }
+  for (const provider of providers) {
+    addOption({
+      providerId: provider.id,
+      label: provider.label,
+      hint: provider.description ?? t("wizard.migration.sourcePathHint"),
+    });
+  }
+  for (const provider of resolveManifestSetupMigrationProviders(params.baseConfig)) {
+    addOption({
+      providerId: provider.providerId,
+      label: provider.label,
+      hint: provider.description ?? t("wizard.migration.sourcePathHint"),
+    });
+  }
+  for (const provider of resolveInstallableSetupMigrationProviders()) {
+    addOption({
+      providerId: provider.providerId,
+      label: provider.entry.label,
+      hint: provider.description ?? t("wizard.migration.sourcePathHint"),
+    });
+  }
+  return options;
 }
 
 async function selectSetupMigrationProvider(params: {
@@ -366,7 +439,10 @@ async function resolveSetupMigrationProvider(params: {
 }): Promise<{ provider: MigrationProviderPlugin; baseConfig: OpenClawConfig }> {
   const { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProvider } =
     await loadMigrationProviderRuntimeModule();
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
+  ensureStandaloneMigrationProviderRegistryLoaded({
+    cfg: params.baseConfig,
+    providerId: params.providerId,
+  });
   const existing = resolvePluginMigrationProvider({
     providerId: params.providerId,
     cfg: params.baseConfig,

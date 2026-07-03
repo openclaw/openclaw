@@ -480,6 +480,10 @@ describe("runSetupWizard", () => {
         },
       ],
       initialValue: "__setup_model_separately__",
+      navigation: {
+        canGoBack: false,
+        canGoForward: false,
+      },
     });
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({ includeSkip: false }),
@@ -1559,9 +1563,20 @@ describe("runSetupWizard", () => {
 
     await runSetupWizard({ acceptRisk: true }, runtime, prompter);
 
-    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(remoteConfig, prompter, {
-      secretInputMode: undefined,
-    });
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...remoteConfig,
+        wizard: expect.objectContaining({
+          securityAcknowledgedAt: expect.any(String),
+        }),
+      }),
+      expect.objectContaining({
+        select: expect.any(Function),
+      }),
+      {
+        secretInputMode: undefined,
+      },
+    );
     expect(configureGatewayForSetup).not.toHaveBeenCalled();
     expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
     vi.clearAllMocks();
@@ -1886,7 +1901,7 @@ describe("runSetupWizard", () => {
     }) as unknown as WizardPrompter["select"];
 
     const prompter = buildWizardPrompter({ select });
-    const runtime = createRuntime({ throwsOnExit: true });
+    const runtime = createRuntime();
 
     await runSetupWizard(
       {
@@ -1914,6 +1929,7 @@ describe("runSetupWizard", () => {
       },
       "tui launch options",
     );
+    expect(runtime.exit).toHaveBeenCalledWith(0);
   }
 
   it("launches TUI without auto-delivery when hatching", async () => {

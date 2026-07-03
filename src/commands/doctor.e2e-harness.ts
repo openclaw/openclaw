@@ -215,6 +215,13 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
+      preserveAmbiguousKeys: false,
+      preserveForeignMainAliases: false,
+      targetStoreAliases: {
+        hasDistinctAliases: false,
+        hasFinalSymlink: false,
+        hasUnresolvedIdentity: false,
+      },
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",
@@ -521,9 +528,9 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,

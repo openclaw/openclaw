@@ -36,6 +36,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
+import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import {
   finishAgentAssistedSetup,
@@ -287,23 +288,53 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
-}) {
+  config: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  if (params.config.wizard?.securityAcknowledgedAt) {
+    return params.config;
+  }
   if (params.opts.acceptRisk === true) {
-    return;
+    return applySecurityAcknowledgement(params.config);
   }
 
   await params.prompter.note(getSecurityNoteMessage(), getSecurityNoteTitle());
 
   const ok = await params.prompter.confirm({
     message: getSecurityConfirmMessage(),
-    initialValue: false,
+    initialValue: true,
+    layout: "vertical",
   });
   if (!ok) {
     throw new WizardCancelledError(t("wizard.setup.riskNotAccepted"));
   }
+  return applySecurityAcknowledgement(params.config);
+}
+
+function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
+  if (config.wizard?.securityAcknowledgedAt) {
+    return config;
+  }
+  return {
+    ...config,
+    wizard: {
+      ...config.wizard,
+      securityAcknowledgedAt: new Date().toISOString(),
+    },
+  };
 }
 
 export async function runSetupWizard(
+  opts: OnboardOptions,
+  runtimeInput: RuntimeEnv | undefined,
+  prompter: WizardPrompter,
+) {
+  await runWizardWithPromptNavigation(
+    prompter,
+    async (navigationPrompter) => await runSetupWizardOnce(opts, runtimeInput, navigationPrompter),
+  );
+}
+
+async function runSetupWizardOnce(
   opts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
@@ -313,7 +344,6 @@ export async function runSetupWizard(
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
-  await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readSetupConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid
@@ -321,6 +351,7 @@ export async function runSetupWizard(
       ? (snapshot.sourceConfig ?? snapshot.config)
       : {}
     : {};
+  baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
@@ -1185,14 +1216,18 @@ export async function runSetupWizard(
   });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
-  await finalizeSetupWizard({
+  const finalizeResult = await finalizeSetupWizard({
     flow: wizardFlow,
     opts,
     baseConfig,
+    hadExistingConfig: snapshot.exists,
     nextConfig,
     workspaceDir,
     settings,
     prompter,
     runtime,
   });
+  if (finalizeResult.launchedTui) {
+    runtime.exit(0);
+  }
 }

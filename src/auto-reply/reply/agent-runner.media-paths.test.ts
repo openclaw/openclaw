@@ -260,6 +260,7 @@ function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
     setPhase: vi.fn(),
+    freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn(),
@@ -407,7 +408,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
   });
 
-  it("steers active prompts in steer queue mode", async () => {
+  it("steers active non-streaming prompts in steer queue mode", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -420,7 +421,8 @@ describe("runReplyAgent media path normalization", () => {
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
-        isStreaming: true,
+        isActive: true,
+        isStreaming: false,
       }),
     );
 

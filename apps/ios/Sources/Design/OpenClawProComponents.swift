@@ -1,25 +1,17 @@
 import SwiftUI
 
 enum OpenClawProMetric {
-    static let pagePadding: CGFloat = 18
-    static let cardRadius: CGFloat = 10
-    static let controlRadius: CGFloat = 8
+    static let pagePadding: CGFloat = 16
+    static let cardRadius: CGFloat = 16
+    static let controlRadius: CGFloat = 12
+    static let compactControlSize: CGFloat = 36
     static let bottomScrollInset: CGFloat = 96
 }
 
 struct OpenClawProBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        Color(uiColor: self.colorScheme == .dark ? .systemBackground : .systemGroupedBackground)
+        Color(uiColor: .systemGroupedBackground)
             .ignoresSafeArea()
-            .overlay(alignment: .top) {
-                if self.colorScheme == .light {
-                    Color.white.opacity(0.22)
-                        .frame(height: 140)
-                        .ignoresSafeArea()
-                }
-            }
     }
 }
 
@@ -32,18 +24,18 @@ struct ProSectionHeader: View {
     var body: some View {
         HStack {
             Text(self.title)
-                .font(.caption.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
                 .textCase(self.uppercase ? .uppercase : nil)
             Spacer()
             if let actionTitle {
                 if let action {
                     Button(actionTitle, action: action)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(OpenClawBrand.accent)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                 } else {
                     Text(actionTitle)
-                        .font(.caption.weight(.medium))
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -83,76 +75,87 @@ private struct ProPanelBackground: View {
             .overlay {
                 shape.strokeBorder(self.borderStyle, lineWidth: 1)
             }
-            .overlay {
-                if self.isProminent {
-                    shape.strokeBorder(
-                        OpenClawBrand.accent.opacity(self.colorScheme == .dark ? 0.12 : 0.07),
-                        lineWidth: 1)
-                        .padding(1)
-                }
-            }
     }
 
     private var fill: AnyShapeStyle {
-        let base = self.isProminent
-            ? Color(uiColor: .systemBackground)
-            : Color(uiColor: .secondarySystemGroupedBackground)
-        if let tint {
-            let gradient = LinearGradient(
-                colors: [
-                    base,
-                    tint.opacity(self.colorScheme == .dark ? 0.08 : 0.045),
-                    base,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-            return AnyShapeStyle(gradient)
-        }
-        return AnyShapeStyle(base)
+        let color = self.isProminent ? UIColor.systemBackground : UIColor.secondarySystemGroupedBackground
+        return AnyShapeStyle(Color(uiColor: color))
     }
 
     private var borderStyle: AnyShapeStyle {
-        AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.26 : 0.30))
+        if let tint {
+            return AnyShapeStyle(tint.opacity(self.isProminent ? 0.18 : 0.10))
+        }
+        return AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12))
     }
 }
 
-private struct ProLightGlassModifier: ViewModifier {
+private struct ProInsetSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    let tint: Color
     let radius: CGFloat
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), self.colorScheme == .light {
-            content.glassEffect(.regular, in: .rect(cornerRadius: self.radius))
+        let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
+        content.background {
+            shape
+                .fill(Color(uiColor: .tertiarySystemGroupedBackground))
+                .overlay {
+                    shape.strokeBorder(
+                        self.tint.opacity(self.colorScheme == .dark ? 0.18 : 0.10),
+                        lineWidth: 1)
+                }
+        }
+    }
+}
+
+private struct OpenClawGlassButtonModifier: ViewModifier {
+    let prominent: Bool
+    let tint: Color?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if self.prominent {
+                content
+                    .buttonStyle(.glassProminent)
+                    .tint(self.tint ?? OpenClawBrand.accent)
+            } else {
+                content
+                    .buttonStyle(.glass)
+                    .tint(self.tint)
+            }
+        } else if self.prominent {
+            content
+                .buttonStyle(.borderedProminent)
+                .tint(self.tint ?? OpenClawBrand.accent)
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .tint(self.tint)
+        }
+    }
+}
+
+private struct OpenClawTabBarBehaviorModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.tabBarMinimizeBehavior(.onScrollDown)
         } else {
             content
         }
     }
 }
 
-private struct ProGlassSurfaceModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    let fill: Color
-    let stroke: Color
+private struct OpenClawGlassSurfaceModifier: ViewModifier {
     let radius: CGFloat
-    let isProminent: Bool
-    var interactive = false
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
-        let surfaced = content.background {
-            shape
-                .fill(self.fill)
-                .overlay {
-                    shape.strokeBorder(self.stroke, lineWidth: self.isProminent ? 1.2 : 1)
-                }
-        }
-
-        if #available(iOS 26.0, *), self.colorScheme == .light {
-            surfaced.glassEffect(
-                self.interactive ? .regular.interactive() : .regular,
-                in: .rect(cornerRadius: self.radius))
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: .rect(cornerRadius: self.radius))
         } else {
-            surfaced
+            content.background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: self.radius, style: .continuous))
         }
     }
 }
@@ -169,19 +172,20 @@ extension View {
             isProminent: isProminent))
     }
 
-    func proGlassSurface(
-        fill: Color,
-        stroke: Color,
-        radius: CGFloat,
-        isProminent: Bool = false,
-        interactive: Bool = false) -> some View
-    {
-        self.modifier(ProGlassSurfaceModifier(
-            fill: fill,
-            stroke: stroke,
-            radius: radius,
-            isProminent: isProminent,
-            interactive: interactive))
+    func proInsetSurface(tint: Color, radius: CGFloat) -> some View {
+        self.modifier(ProInsetSurfaceModifier(tint: tint, radius: radius))
+    }
+
+    func openClawGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
+        self.modifier(OpenClawGlassButtonModifier(prominent: prominent, tint: tint))
+    }
+
+    func openClawTabBarBehavior() -> some View {
+        self.modifier(OpenClawTabBarBehaviorModifier())
+    }
+
+    func openClawGlassSurface(radius: CGFloat = OpenClawProMetric.controlRadius) -> some View {
+        self.modifier(OpenClawGlassSurfaceModifier(radius: radius))
     }
 }
 
@@ -199,11 +203,12 @@ private struct ProPanelSurfaceModifier: ViewModifier {
                     tint: self.tint,
                     isProminent: self.isProminent)
             }
-            .modifier(ProLightGlassModifier(radius: self.radius))
             .shadow(
-                color: self.colorScheme == .dark ? .black.opacity(0.22) : .black.opacity(0.028),
-                radius: self.isProminent ? 9 : 4,
-                y: self.isProminent ? 4 : 1)
+                color: self.isProminent
+                    ? (self.colorScheme == .dark ? .black.opacity(0.14) : .black.opacity(0.045))
+                    : .clear,
+                radius: self.isProminent ? 5 : 0,
+                y: self.isProminent ? 2 : 0)
     }
 }
 
@@ -253,11 +258,13 @@ struct OpenClawSidebarRevealButton: View {
         let button = Button(action: self.headerAction.action) {
             Image(systemName: self.headerAction.systemName)
                 .font(.system(size: 16, weight: .semibold))
-                .frame(width: 38, height: 38)
+                .frame(
+                    width: OpenClawProMetric.compactControlSize,
+                    height: OpenClawProMetric.compactControlSize)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(OpenClawBrand.accent)
+        .buttonBorderShape(.circle)
+        .openClawGlassButton(tint: OpenClawBrand.accent)
         .accessibilityLabel(self.headerAction.accessibilityLabel)
 
         if let accessibilityIdentifier = self.headerAction.accessibilityIdentifier {
@@ -277,9 +284,105 @@ struct OpenClawSidebarHeaderLeadingSlot: View {
     }
 }
 
+struct OpenClawGlassControlGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) {
+                self.content
+            }
+        } else {
+            self.content
+        }
+    }
+}
+
+enum OpenClawNoticeDetail {
+    case accent(String)
+    case requestID(String)
+}
+
+struct OpenClawNoticeBanner: View {
+    let icon: String
+    let title: String
+    let message: String
+    let ownerLabel: String
+    let tint: Color
+    var detail: OpenClawNoticeDetail?
+    var primaryActionTitle: String?
+    var onPrimaryAction: (() -> Void)?
+    var secondaryActionTitle: String?
+    var onSecondaryAction: (() -> Void)?
+
+    var body: some View {
+        ProCard(tint: self.tint, padding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    ProIconBadge(systemName: self.icon, color: self.tint)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(self.title)
+                                .font(.subheadline.weight(.semibold))
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            Text(self.ownerLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text(self.message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        self.detailView
+                    }
+                }
+
+                if self.onPrimaryAction != nil || self.onSecondaryAction != nil {
+                    OpenClawGlassControlGroup {
+                        HStack(spacing: 10) {
+                            if let primaryActionTitle, let onPrimaryAction {
+                                Button(primaryActionTitle, action: onPrimaryAction)
+                                    .openClawGlassButton(prominent: true)
+                                    .controlSize(.small)
+                            }
+                            if let secondaryActionTitle, let onSecondaryAction {
+                                Button(secondaryActionTitle, action: onSecondaryAction)
+                                    .openClawGlassButton()
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        if let detail {
+            switch detail {
+            case let .accent(value):
+                Text(value)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(self.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            case let .requestID(value):
+                Text("Request ID: \(value)")
+                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
 struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     let title: String
-    let subtitle: String
+    let subtitle: String?
     var titleFont: Font = .title3.weight(.semibold)
     var subtitleFont: Font = .subheadline
     var subtitleLineLimit: Int? = 2
@@ -288,7 +391,7 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
 
     init(
         title: String,
-        subtitle: String,
+        subtitle: String? = nil,
         titleFont: Font = .title3.weight(.semibold),
         subtitleFont: Font = .subheadline,
         subtitleLineLimit: Int? = 2,
@@ -351,11 +454,13 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.86)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(self.subtitle)
-                .font(self.subtitleFont)
-                .foregroundStyle(.secondary)
-                .lineLimit(self.subtitleLineLimit)
-                .fixedSize(horizontal: false, vertical: true)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(self.subtitleFont)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(self.subtitleLineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -377,7 +482,7 @@ struct ProValuePill: View {
 
     var body: some View {
         Text(self.value)
-            .font(.caption.weight(.semibold))
+            .font(.footnote.weight(.semibold))
             .foregroundStyle(self.color)
             .lineLimit(1)
             .padding(.horizontal, 8)
@@ -422,47 +527,22 @@ struct ProProgressBar: View {
     }
 }
 
-struct ProCapsule: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let color: Color
-    var icon: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.caption.weight(.semibold))
-            }
-            Text(self.title)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .foregroundStyle(self.color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            Capsule()
-                .fill(self.color.opacity(self.colorScheme == .dark ? 0.16 : 0.10))
-                .overlay {
-                    Capsule()
-                        .strokeBorder(self.color.opacity(self.colorScheme == .dark ? 0.30 : 0.18), lineWidth: 1)
-                }
-        }
-    }
-}
-
 struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        ProCapsule(
-            title: self.title,
-            color: self.color,
-            icon: self.icon)
-            .accessibilityLabel("Gateway \(self.title)")
+        HStack(spacing: 6) {
+            Image(systemName: self.icon)
+                .font(.caption.weight(.semibold))
+            Text(self.title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(self.color)
+        .padding(.horizontal, 4)
+        .frame(minHeight: 30)
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityLabel("Gateway \(self.title)")
     }
 
     private var title: String {
@@ -536,10 +616,7 @@ struct ProMetricTile: View {
         }
         .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .proGlassSurface(
-            fill: self.colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.52),
-            stroke: self.color.opacity(self.colorScheme == .dark ? 0.18 : 0.10),
-            radius: 16)
+        .proInsetSurface(tint: self.color, radius: OpenClawProMetric.controlRadius)
     }
 }
 

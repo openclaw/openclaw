@@ -24,6 +24,7 @@ import {
   updateNpmInstalledPlugins,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import {
   containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
@@ -101,7 +102,12 @@ function projectUpdaterResultOntoSourceConfig(params: {
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
+  opts: {
+    all?: boolean;
+    acknowledgeClawHubRisk?: boolean;
+    dryRun?: boolean;
+    dangerouslyForceUnsafeInstall?: boolean;
+  };
 }) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -143,7 +149,7 @@ export async function runPluginUpdateCommand(params: {
   );
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
-    warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+    warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
   if (params.opts.dangerouslyForceUnsafeInstall) {
     defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
@@ -266,6 +272,11 @@ export async function runPluginUpdateCommand(params: {
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+          ...resolveClawHubRiskAcknowledgementCliOptions({
+            acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
+            action: "updating",
+            allowPrompt: !params.opts.dryRun,
+          }),
           logger,
           onIntegrityDrift: async (drift) => {
             const specLabel = drift.resolvedSpec ?? drift.spec;

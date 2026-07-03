@@ -279,8 +279,10 @@ openclaw configure
 openclaw agents add <name>
 ```
 
-Use `openclaw setup` as an alias for this command. Use `openclaw configure`
-later for targeted changes and `openclaw channels add` for channel-only setup.
+Use `openclaw setup` as an alias for this command, or `openclaw setup --baseline`
+when you only need baseline config/workspace initialization. Use `openclaw
+configure` later for targeted changes and `openclaw channels add` for
+channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.
