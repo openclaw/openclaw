@@ -17,6 +17,7 @@ import {
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
+  listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
 } from "./subagent-control.js";
@@ -1509,5 +1510,64 @@ describe("steerControlledSubagentRun", () => {
     expect(result.sessionId).not.toBe("old-child-session");
     const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
     expect(agentParams?.sessionId).toBe(result.sessionId);
+  });
+});
+
+describe("listControlledSubagentRuns", () => {
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it("returns runs when controllerSessionKey matches (existing path)", () => {
+    addSubagentRunForTests({
+      runId: "run-list-controller-match",
+      childSessionKey: "agent:main:subagent:list-ctrl-match",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:telegram:direct:abc123",
+      requesterDisplayKey: "main",
+      task: "controller key match test",
+      cleanup: "keep",
+      createdAt: Date.now() - 30_000,
+      startedAt: Date.now() - 30_000,
+    });
+
+    const results = listControlledSubagentRuns("agent:main:main");
+    expect(results).toHaveLength(1);
+    expect(results[0].childSessionKey).toBe("agent:main:subagent:list-ctrl-match");
+  });
+
+  it("returns runs when requesterSessionKey matches via OR (new fix path)", () => {
+    addSubagentRunForTests({
+      runId: "run-list-requester-match",
+      childSessionKey: "agent:main:subagent:list-req-match",
+      controllerSessionKey: "agent:main:telegram:direct:abc123",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "requester key match test",
+      cleanup: "keep",
+      createdAt: Date.now() - 10_000,
+      startedAt: Date.now() - 10_000,
+    });
+
+    const results = listControlledSubagentRuns("agent:main:main");
+    expect(results).toHaveLength(1);
+    expect(results[0].childSessionKey).toBe("agent:main:subagent:list-req-match");
+  });
+
+  it("excludes runs when neither key matches (scope isolation preserved)", () => {
+    addSubagentRunForTests({
+      runId: "run-list-unrelated",
+      childSessionKey: "agent:main:subagent:list-unrelated",
+      controllerSessionKey: "agent:other:discord:direct:xyz",
+      requesterSessionKey: "agent:other:discord:direct:xyz",
+      requesterDisplayKey: "other",
+      task: "unrelated run",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+
+    const results = listControlledSubagentRuns("agent:main:main");
+    expect(results).toHaveLength(0);
   });
 });
