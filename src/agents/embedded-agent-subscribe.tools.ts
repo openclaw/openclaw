@@ -284,9 +284,12 @@ export function sanitizeToolResult(result: unknown): unknown {
   return out;
 }
 
+const INLINE_DATA_URI_VALUE_PATTERN =
+  /^data:(?:[a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)?(?:;[a-z0-9.+-]+(?:=[^,;"'\s]+)?)*,/i;
+
 function redactInlineDataUriValue(value: string): string {
   const trimmed = value.trimStart();
-  if (!trimmed.toLowerCase().startsWith("data:")) {
+  if (!INLINE_DATA_URI_VALUE_PATTERN.test(trimmed)) {
     return value;
   }
   return `[inline data URI: ${value.length} chars]`;
@@ -389,7 +392,7 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
 
 export function extractToolResultText(result: unknown): string | undefined {
   if (typeof result === "string") {
-    const trimmed = redactToolPayloadText(result).trim();
+    const trimmed = redactToolPayloadText(redactInlineDataUriValue(result)).trim();
     return trimmed ? truncateToolText(trimmed) : undefined;
   }
   if (!result || typeof result !== "object") {
@@ -860,7 +863,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   if (fromRootStatus) {
     return fromRootStatus;
   }
-  return text && isToolResultError(result) ? normalizeToolErrorText(text) : undefined;
+  const status = readToolResultStatus(result);
+  if (status && !isToolResultError(result)) {
+    return undefined;
+  }
+  return text ? normalizeToolErrorText(text) : undefined;
 }
 
 function resolveMessageToolTarget(params: {

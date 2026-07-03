@@ -25,8 +25,10 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorMessage({ details: { status: "ok" } })).toBeUndefined();
   });
 
-  it("does not promote successful structured output as an error message", () => {
-    expect(extractToolErrorMessage({ ok: true, value: 42 })).toBeUndefined();
+  it("keeps text-only errors classified by the agent-core event", () => {
+    expect(
+      extractToolErrorMessage({ content: [{ type: "text", text: "plugin execution failed" }] }),
+    ).toBe("plugin execution failed");
   });
 
   it("keeps error-like status values", () => {
@@ -451,6 +453,16 @@ describe("sanitizeToolArgs", () => {
 describe("extractToolResultText", () => {
   it("keeps primitive string tool results for visible output", () => {
     expect(extractToolResultText("plain result")).toBe("plain result");
+  });
+
+  it("omits primitive inline data URI payloads", () => {
+    const result = "data:text/plain;base64,abcdefghijklmnopqrstuvwxyz0123456789";
+
+    expect(extractToolResultText(result)).toBe(`[inline data URI: ${result.length} chars]`);
+  });
+
+  it("keeps primitive data-prefixed text that is not a data URI", () => {
+    expect(extractToolResultText('data: {"status":"ok"}')).toBe('data: {"status":"ok"}');
   });
 
   it("serializes structured non-image tool result blocks for visible output", () => {
