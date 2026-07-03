@@ -166,18 +166,48 @@ enum OpenClawType {
             inlineNavigationTitleFont: self.scaledDisplayUIFont(
                 weight: Display.opticalSemiBold,
                 size: 17,
-                relativeTo: .headline),
+                relativeTo: .headline,
+                maximumPointSize: 22),
             largeNavigationTitleFont: self.scaledDisplayUIFont(
                 weight: Display.heavyTitle,
                 size: 34,
-                relativeTo: .largeTitle),
-            tabBarNormalFont: self.scaledBodyUIFont(weight: Body.medium, size: 11, relativeTo: .caption2),
-            tabBarSelectedFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 11, relativeTo: .caption2),
-            segmentedNormalFont: self.scaledBodyUIFont(weight: Body.medium, size: 13, relativeTo: .footnote),
-            segmentedSelectedFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 13, relativeTo: .footnote),
-            barButtonFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 17, relativeTo: .body),
-            disabledBarButtonFont: self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body),
-            textInputFont: self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body))
+                relativeTo: .largeTitle,
+                maximumPointSize: 44),
+            tabBarNormalFont: self.scaledBodyUIFont(
+                weight: Body.medium,
+                size: 11,
+                relativeTo: .caption2,
+                maximumPointSize: 13),
+            tabBarSelectedFont: self.scaledBodyUIFont(
+                weight: Body.semiBold,
+                size: 11,
+                relativeTo: .caption2,
+                maximumPointSize: 13),
+            segmentedNormalFont: self.scaledBodyUIFont(
+                weight: Body.medium,
+                size: 13,
+                relativeTo: .footnote,
+                maximumPointSize: 16),
+            segmentedSelectedFont: self.scaledBodyUIFont(
+                weight: Body.semiBold,
+                size: 13,
+                relativeTo: .footnote,
+                maximumPointSize: 16),
+            barButtonFont: self.scaledBodyUIFont(
+                weight: Body.semiBold,
+                size: 17,
+                relativeTo: .body,
+                maximumPointSize: 22),
+            disabledBarButtonFont: self.scaledBodyUIFont(
+                weight: Body.regular,
+                size: 17,
+                relativeTo: .body,
+                maximumPointSize: 22),
+            textInputFont: self.scaledBodyUIFont(
+                weight: Body.regular,
+                size: 17,
+                relativeTo: .body,
+                maximumPointSize: 22))
     }
 
     @MainActor
@@ -349,24 +379,28 @@ enum OpenClawType {
     private static func scaledDisplayUIFont(
         weight: CGFloat,
         size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle) -> UIFont
+        relativeTo textStyle: UIFont.TextStyle,
+        maximumPointSize: CGFloat? = nil) -> UIFont
     {
         self.scaledVariableUIFont(
             name: Display.postScriptName,
             size: size,
             relativeTo: textStyle,
+            maximumPointSize: maximumPointSize,
             variations: [self.fontWeightAxis: weight])
     }
 
     private static func scaledBodyUIFont(
         weight: CGFloat,
         size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle) -> UIFont
+        relativeTo textStyle: UIFont.TextStyle,
+        maximumPointSize: CGFloat? = nil) -> UIFont
     {
         self.scaledVariableUIFont(
             name: Body.postScriptName,
             size: size,
             relativeTo: textStyle,
+            maximumPointSize: maximumPointSize,
             variations: [
                 self.fontWeightAxis: weight,
                 self.opticalSizeAxis: min(max(size, 14), 32),
@@ -377,11 +411,12 @@ enum OpenClawType {
         name: String,
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle,
+        maximumPointSize: CGFloat? = nil,
         variations: [NSNumber: CGFloat]) -> UIFont
     {
         guard UIFont(name: name, size: size) != nil else {
             let fallback = UIFont.systemFont(ofSize: size)
-            return UIFontMetrics(forTextStyle: textStyle).scaledFont(for: fallback)
+            return self.scaledUIFont(fallback, relativeTo: textStyle, maximumPointSize: maximumPointSize)
         }
 
         let descriptor = UIFontDescriptor(fontAttributes: [
@@ -389,7 +424,7 @@ enum OpenClawType {
             kCTFontVariationAttribute as UIFontDescriptor.AttributeName: variations,
         ])
         let base = UIFont(descriptor: descriptor, size: size)
-        return UIFontMetrics(forTextStyle: textStyle).scaledFont(for: base)
+        return self.scaledUIFont(base, relativeTo: textStyle, maximumPointSize: maximumPointSize)
     }
 
     private static func scaledFont(
@@ -400,5 +435,17 @@ enum OpenClawType {
         let base = UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size)
         let scaled = UIFontMetrics(forTextStyle: textStyle).scaledFont(for: base)
         return Font(scaled)
+    }
+
+    private static func scaledUIFont(
+        _ base: UIFont,
+        relativeTo textStyle: UIFont.TextStyle,
+        maximumPointSize: CGFloat?) -> UIFont
+    {
+        let metrics = UIFontMetrics(forTextStyle: textStyle)
+        if let maximumPointSize {
+            return metrics.scaledFont(for: base, maximumPointSize: maximumPointSize)
+        }
+        return metrics.scaledFont(for: base)
     }
 }
