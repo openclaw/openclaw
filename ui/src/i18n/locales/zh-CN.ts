@@ -1312,6 +1312,9 @@ export const zh_CN: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
+    sidebar: {
+      allSessions: "所有会话",
+    },
     welcome: {
       ready: "准备好聊天",
       hintBeforeShortcut: "在下方输入消息 · 输入",

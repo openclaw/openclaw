@@ -10,6 +10,7 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
@@ -42,18 +43,9 @@ import {
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
-let googleMeetCreateModulePromise: Promise<typeof import("./src/create.js")> | null = null;
-let googleMeetCliModulePromise: Promise<typeof import("./src/cli.js")> | null = null;
+const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./src/create.js"));
 
-const loadGoogleMeetCreateModule = async () => {
-  googleMeetCreateModulePromise ??= import("./src/create.js");
-  return await googleMeetCreateModulePromise;
-};
-
-const loadGoogleMeetCliModule = async () => {
-  googleMeetCliModulePromise ??= import("./src/cli.js");
-  return await googleMeetCliModulePromise;
-};
+const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./src/cli.js"));
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {

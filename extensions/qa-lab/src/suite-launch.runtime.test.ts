@@ -728,7 +728,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "isolated"),
         concurrency: 3,
-        workerStartStaggerMs: 500,
+        workerStartStaggerMs: 1_500,
         scenarioIds: [
           "runtime-tool-image-generate",
           "runtime-inventory-drift-check",

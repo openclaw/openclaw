@@ -817,6 +817,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (behavior)
   - H2: Media + limits
   - H2: Typing + read receipts
+  - H2: Lifecycle status reactions
   - H2: Reactions (message tool)
   - H2: Approval reactions
   - H2: Delivery targets (CLI/cron)
@@ -4712,6 +4713,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Pair + name
   - H3: Allowlist the commands
   - H3: Point exec at the node
+  - H3: Local model inference
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -5664,6 +5666,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Renderer contract
   - H2: Core render flow
   - H2: Degradation rules
+  - H3: Button value fallback visibility
   - H2: Provider mapping
   - H2: Presentation vs InteractiveReply
   - H2: Delivery pin
@@ -7612,6 +7615,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Cloud models
   - H2: Model discovery (implicit provider)
+  - H2: Node-local inference
   - H2: Vision and image description
   - H2: Configuration
   - H2: Common recipes

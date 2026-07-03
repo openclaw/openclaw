@@ -66,6 +66,10 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
+  loadModelAuthStatusState,
+  type ModelAuthStatusState,
+} from "./controllers/model-auth-status.ts";
+import {
   applySessionsChangedEvent,
   loadSessions,
   subscribeSessions,
@@ -716,6 +720,10 @@ function prepareHelloScopedComposerRestore(host: GatewayHost) {
 
 async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
+  // The sidebar footer quota pill is a cross-tab surface; only chat/overview
+  // refreshes load auth status, so hydrate it once per connect for direct
+  // loads of other tabs. The gateway caches the probe, so this stays cheap.
+  void loadModelAuthStatusState(host as unknown as ModelAuthStatusState).catch(() => undefined);
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
   const agentsListBeforeStartup = host.agentsList;
   const initialRefresh = refreshBeforeAgents

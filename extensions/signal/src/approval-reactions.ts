@@ -13,6 +13,7 @@ import {
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -75,7 +76,7 @@ type SignalApprovalDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
-let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
+const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
 
 const signalApprovalReactionTargets =
   createApprovalReactionTargetStore<SignalApprovalReactionTarget>({
@@ -87,10 +88,7 @@ const signalApprovalReactionTargets =
     readPersistedTarget,
   });
 
-function loadApprovalResolver(): Promise<typeof import("./approval-resolver.js")> {
-  resolverRuntimePromise ??= import("./approval-resolver.js");
-  return resolverRuntimePromise;
-}
+const loadApprovalResolver = resolverRuntimeLoader;
 
 function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
   return approvalId.startsWith("plugin:") ? "plugin" : "exec";
@@ -756,5 +754,5 @@ export async function maybeResolveSignalApprovalReaction(params: {
 
 export function clearSignalApprovalReactionTargetsForTest(): void {
   signalApprovalReactionTargets.clearForTest();
-  resolverRuntimePromise = undefined;
+  resolverRuntimeLoader.clear();
 }
