@@ -21,10 +21,6 @@ enum WatchClawType {
         .system(size: size, weight: weight)
     }
 
-    static var caption: Font {
-        body(size: 12)
-    }
-
     static var captionSemiBold: Font {
         body(size: 12, weight: .semibold)
     }

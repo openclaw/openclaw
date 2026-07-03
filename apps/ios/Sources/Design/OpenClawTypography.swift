@@ -87,10 +87,6 @@ enum OpenClawType {
         scaledBody(weight: Body.bold, size: 12, relativeTo: .caption1)
     }
 
-    static func body(size: CGFloat, weight: CGFloat, relativeTo textStyle: UIFont.TextStyle) -> Font {
-        self.scaledBody(weight: weight, size: size, relativeTo: textStyle)
-    }
-
     static func avatar(size: CGFloat) -> Font {
         self.scaledBody(weight: Body.bold, size: size, relativeTo: .caption1)
     }
