@@ -8,7 +8,7 @@ const GEMINI_DIR = ".gemini";
 const OAUTH_FILE = "oauth_creds.json";
 const GOOGLE_ACCOUNTS_FILE = "google_accounts.json";
 
-export type GeminiCliOfficialOAuthCredentials = GeminiCliOAuthCredentials & {
+type GeminiCliOfficialOAuthCredentials = GeminiCliOAuthCredentials & {
   idToken?: string;
   sourcePath: string;
 };
@@ -61,7 +61,7 @@ function resolveGeminiCliHome(): string {
   return envHome ?? officialOAuthCacheFs.homedir();
 }
 
-export function resolveOfficialGeminiCliOAuthCachePath(): string {
+function resolveOfficialGeminiCliOAuthCachePath(): string {
   return join(resolveGeminiCliHome(), GEMINI_DIR, OAUTH_FILE);
 }
 
@@ -132,10 +132,6 @@ export function setOfficialGeminiCliOAuthCacheFsForTest(
 ): void {
   officialOAuthCacheFs = overrides ? { ...defaultFs, ...overrides } : defaultFs;
   clearOfficialGeminiCliOAuthCacheImportForTest();
-}
-
-export function getOfficialGeminiCliOAuthCacheImportError(): string | null {
-  return officialOAuthCacheImportError;
 }
 
 export function importOfficialGeminiCliOAuthCredentials(): GeminiCliOfficialOAuthCredentials | null {
