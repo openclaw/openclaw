@@ -20,6 +20,8 @@ export const TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS = 6 * 60 * 60 * 1000;
 export const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES = 1000;
+const TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES = 1000;
 const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = `${process.pid}:${randomUUID()}`;
 
 type TelegramSpooledUpdateClaimOwner = {
@@ -131,6 +133,8 @@ async function pruneTelegramIngressQueue(
   now?: number,
 ): Promise<void> {
   await queue.prune({
+    completedTtlMs: TELEGRAM_SPOOLED_UPDATE_COMPLETED_TTL_MS,
+    completedMaxEntries: TELEGRAM_SPOOLED_UPDATE_COMPLETED_MAX_ENTRIES,
     failedTtlMs: TELEGRAM_SPOOLED_UPDATE_FAILED_TTL_MS,
     failedMaxEntries: TELEGRAM_SPOOLED_UPDATE_FAILED_MAX_ENTRIES,
     ...(now === undefined ? {} : { now }),
@@ -284,8 +288,11 @@ export async function listTelegramSpooledUpdates(params: {
   );
 }
 
-export async function deleteTelegramSpooledUpdate(update: TelegramSpooledUpdate): Promise<void> {
-  await createTelegramIngressQueue(path.dirname(update.path)).delete(queueMutationTarget(update));
+export async function completeTelegramSpooledUpdate(update: TelegramSpooledUpdate): Promise<void> {
+  const queue = createTelegramIngressQueue(path.dirname(update.path));
+  // Successful rows stay as bounded tombstones: Telegram can refetch an update
+  // after dispatch, and callbacks have side effects that plain delete would rerun.
+  await queue.complete(queueMutationTarget(update));
 }
 
 export async function claimTelegramSpooledUpdate(

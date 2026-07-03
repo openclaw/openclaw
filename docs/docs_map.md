@@ -1245,6 +1245,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## cli/attach.md
+
+- Route: /cli/attach
+- Headings: none
+
 ## cli/backup.md
 
 - Route: /cli/backup
@@ -1707,6 +1712,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Locale
   - H3: Non-interactive Z.AI endpoint choices
+  - H2: Additional non-interactive flags
   - H2: Flow notes
   - H2: Common follow-up commands
 
@@ -1887,7 +1893,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw setup
   - H2: Options
-  - H3: Wizard auto-trigger
+  - H3: Baseline mode
   - H2: Examples
   - H2: Notes
   - H2: Related
@@ -2829,6 +2835,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel mapping
   - H3: Runtime behavior
   - H3: Tool-progress preview updates
+  - H3: Commentary progress lane
   - H2: Related
 
 ## concepts/system-prompt.md
@@ -5657,6 +5664,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Renderer contract
   - H2: Core render flow
   - H2: Degradation rules
+  - H3: Button value fallback visibility
   - H2: Provider mapping
   - H2: Presentation vs InteractiveReply
   - H2: Delivery pin
@@ -7621,6 +7629,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick choice
   - H2: Naming map
+  - H2: GPT-5.6 limited preview
   - H2: OpenClaw feature coverage
   - H2: Memory embeddings
   - H2: Getting started
@@ -8448,12 +8457,36 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What the wizard writes
   - H2: Related docs
 
+## releases/2026.6.11.md
+
+- Route: /releases/2026.6.11
+- Headings:
+  - H1: OpenClaw v2026.6.11 Release Notes (2026-06-30)
+  - H2: Highlights
+  - H3: Channel delivery reliability
+  - H3: Provider and model recovery
+  - H3: Session, memory, and trust continuity
+  - H3: Slack router relay mode
+  - H3: Raft External Agent wake bridge
+  - H3: Official plugin installation and repair
+  - H2: Channels and Messaging
+  - H3: Additional channel fixes
+  - H2: Gateway, Security, and Trust
+  - H3: Restart and readiness recovery
+  - H3: Remote result and media delivery
+  - H2: Clients and Interfaces
+  - H3: Client sends and reconnects
+  - H3: Interface, settings, and onboarding fixes
+  - H2: Docs and Admin Tools
+  - H3: Setup and command reliability
+  - H3: Tools and scheduled work
+
 ## releases/index.md
 
 - Route: /releases
 - Headings:
   - H1: Release notes
-  - H2: Coming soon
+  - H2: Releases
   - H2: Raw release history
 
 ## security/CONTRIBUTING-THREAT-MODEL.md

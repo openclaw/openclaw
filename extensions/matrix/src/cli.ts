@@ -1,6 +1,7 @@
 // Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
@@ -37,21 +38,14 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
-type MatrixActionClientModule = typeof import("./matrix/actions/client.js");
-type MatrixDirectManagementModule = typeof import("./matrix/direct-management.js");
 
-let matrixActionClientModulePromise: Promise<MatrixActionClientModule> | undefined;
-let matrixDirectManagementModulePromise: Promise<MatrixDirectManagementModule> | undefined;
+const loadMatrixActionClientModule = createLazyRuntimeModule(
+  () => import("./matrix/actions/client.js"),
+);
 
-function loadMatrixActionClientModule(): Promise<MatrixActionClientModule> {
-  matrixActionClientModulePromise ??= import("./matrix/actions/client.js");
-  return matrixActionClientModulePromise;
-}
-
-function loadMatrixDirectManagementModule(): Promise<MatrixDirectManagementModule> {
-  matrixDirectManagementModulePromise ??= import("./matrix/direct-management.js");
-  return matrixDirectManagementModulePromise;
-}
+const loadMatrixDirectManagementModule = createLazyRuntimeModule(
+  () => import("./matrix/direct-management.js"),
+);
 
 export function resetMatrixCliStateForTests(): void {
   matrixCliExitScheduled = false;

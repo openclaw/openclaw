@@ -179,6 +179,12 @@ describe("qa suite runtime flow", () => {
         supportedActions: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
+        reset: vi.fn(),
+        sendInbound: vi.fn(),
+        sendNativeCommand: vi.fn(),
+        waitForNoOutbound: vi.fn(),
+        waitForOutbound: vi.fn(),
+        waitForOutboundSequence: vi.fn(),
         state: {
           reset: vi.fn(),
           getSnapshot: vi.fn(),

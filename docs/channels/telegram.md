@@ -280,22 +280,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Group history context defaults to `mention-only`: prior group messages are
-    included only when they were addressed to the bot, are replies to the bot,
-    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
-    include recent room history for trusted groups. Set
-    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
-    with the next turn.
-
-```json5
-{
-  channels: {
-    telegram: {
-      includeGroupHistoryContext: "recent",
-    },
-  },
-}
-```
+    Group history context is always on for groups and bounded by
+    `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the
+    Telegram group history window. The retired `includeGroupHistoryContext`
+    key is removed by `openclaw doctor --fix`.
 
     Getting the group chat ID:
 
@@ -598,7 +586,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Telegram `web_app` buttons work only in private chats between a user and the
     bot.
 
-    Callback clicks are passed to the agent as text:
+    Callback clicks that are not claimed by a registered plugin interactive
+    handler are passed to the agent as text:
     `callback_data: <value>`
 
   </Accordion>

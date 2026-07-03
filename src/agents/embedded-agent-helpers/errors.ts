@@ -453,6 +453,8 @@ const AUTH_INVALID_TOKEN_HINT_RE =
   /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
+const CLOUDFLARE_CHALLENGE_RE =
+  /Enable\s+JavaScript\s+and\s+cookies\s+to\s+continue|cf-browser-verification|__cf_challenge|cdn-cgi\/challenge-platform|challenge-error-text/i;
 const PROXY_ERROR_RE =
   /\bproxyconnect\b|\bhttps?_proxy\b|\b407\b|\bproxy authentication required\b|\btunnel connection failed\b|\bconnect tunnel\b|\bsocks proxy\b|\bproxy error\b/i;
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
@@ -518,6 +520,10 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   }
   const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+
+function isCloudflareChallengeResponse(message: string): boolean {
+  return CLOUDFLARE_CHALLENGE_RE.test(message);
 }
 
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
@@ -725,7 +731,10 @@ function toReasonClassification(reason: FailoverReason): FailoverClassification 
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 export function isTransientHttpError(raw: string): boolean {
@@ -1265,6 +1274,13 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
+    // Cloudflare challenge pages block programmatic requests at the CDN layer.
+    // These are upstream gateway blocks, not authentication failures — surface
+    // the more accurate "upstream_html" message, which already mentions
+    // "CDN or gateway (e.g. Cloudflare) blocked the request".
+    if (status === 403 && isCloudflareChallengeResponse(message)) {
+      return "upstream_html";
+    }
     return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({

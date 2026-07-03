@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.GatewayConnectionProblem
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -26,11 +27,38 @@ internal fun gatewayStatusHasDiagnostics(statusText: String): Boolean {
   return lower != "offline" && !lower.contains("connecting")
 }
 
+/** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
+internal fun gatewayDiagnosticsEndpoint(
+  remoteAddress: String?,
+  manualHost: String,
+  manualPort: Int,
+  manualTls: Boolean,
+): String {
+  remoteAddress?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+  return composeGatewayManualUrl(manualHost, manualPort.toString(), manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } ?: "Not set"
+}
+
 /** Detects pairing/approval status text so UI can offer pairing-specific actions. */
 internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower.contains("pair") || lower.contains("approve")
 }
+
+/** Maps structured gateway auth failures to the compact labels used by status surfaces. */
+internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): String? =
+  when (problem?.code) {
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired"
+    "AUTH_TOKEN_MISSING" -> "Gateway token needed"
+    "AUTH_PASSWORD_MISSING" -> "Gateway password needed"
+    "AUTH_PASSWORD_MISMATCH" -> "Gateway password invalid"
+    "AUTH_TOKEN_MISMATCH",
+    "AUTH_DEVICE_TOKEN_MISMATCH",
+    -> "Saved auth invalid"
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> "Device identity required"
+    else -> null
+  }
 
 /** Builds the copyable support prompt with device, endpoint, and exact status context. */
 internal fun buildGatewayDiagnosticsReport(
@@ -56,7 +84,7 @@ internal fun buildGatewayDiagnosticsReport(
     Please:
     - pick one route only: same machine, same LAN, Tailscale, or public URL
     - classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down
-    - remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, the Android emulator, and private LAN IPs
+    - remember: public routes require wss:// or Tailscale Serve; ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs
     - quote the exact app status/error below
     - tell me whether `openclaw devices list` should show a pending pairing request
     - if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`

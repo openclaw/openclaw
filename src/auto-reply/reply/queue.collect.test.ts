@@ -2768,7 +2768,7 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.currentInboundEventKind).toBeUndefined();
+    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
     expect(calls[0]?.currentInboundContext).toBeUndefined();
     expect(calls[0]?.abortSignal).toBeUndefined();
     expect(calls[1]?.prompt).toBe("live ambient");
@@ -2778,6 +2778,50 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.abortSignal).toBe(controller.signal);
     expect(calls[1]?.queuedLifecycle?.onComplete).toBe(onComplete);
     expect(calls[1]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
+  });
+
+  it("keeps mixed overflow summaries as normal followups", async () => {
+    const key = `test-overflow-summary-mixed-kind-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped ambient" }),
+        currentInboundEventKind: "room_event",
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped request" }),
+        currentInboundEventKind: "user_request",
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+    expect(calls[0]?.currentInboundEventKind).toBeUndefined();
+    expect(calls[1]?.prompt).toBe("live followup");
   });
 
   it("keeps summarized room-event lifecycle until the overflow summary drains", async () => {
@@ -2820,7 +2864,7 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.currentInboundEventKind).toBeUndefined();
+    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
     expect(calls[0]?.currentInboundContext).toBeUndefined();
     expect(calls[0]?.abortSignal).toBeUndefined();
     expect(calls[1]?.prompt).toBe("live followup");
@@ -2872,6 +2916,9 @@ describe("followup queue collect routing", () => {
 
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(1);
+    expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundEventKind).toBe(
+      "room_event",
+    );
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.queuedLifecycle).toBeUndefined();
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundContext).toBeUndefined();
 
@@ -2881,6 +2928,7 @@ describe("followup queue collect routing", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[1]?.prompt).toContain("- dropped ambient");
+    expect(calls[1]?.currentInboundEventKind).toBe("room_event");
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });

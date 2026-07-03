@@ -1,6 +1,7 @@
 // Slack plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { ResolvedSlackAccount } from "./accounts.js";
@@ -32,20 +33,10 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
-type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
 
-let slackActionsRuntimePromise: Promise<SlackActionsRuntimeModule> | undefined;
-let slackAccountsRuntimePromise: Promise<SlackAccountsRuntimeModule> | undefined;
+const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.runtime.js"));
 
-function loadSlackActionsRuntime(): Promise<SlackActionsRuntimeModule> {
-  slackActionsRuntimePromise ??= import("./actions.runtime.js");
-  return slackActionsRuntimePromise;
-}
-
-function loadSlackAccountsRuntime(): Promise<SlackAccountsRuntimeModule> {
-  slackAccountsRuntimePromise ??= import("./accounts.runtime.js");
-  return slackAccountsRuntimePromise;
-}
+const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 
 function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
   key: K,
