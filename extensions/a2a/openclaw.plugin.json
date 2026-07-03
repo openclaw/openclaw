@@ -1,0 +1,39 @@
+{
+  "id": "a2a",
+  "name": "A2A Protocol",
+  "description": "Standard A2A protocol support: agent card discovery, JSON-RPC task execution, and cross-framework agent interoperability.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the A2A protocol endpoints on the gateway."
+      },
+      "agents": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expose": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Agent IDs to expose in the Agent Card. Empty = all agents."
+          }
+        }
+      },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["none", "gateway_token"],
+            "default": "gateway_token",
+            "description": "Authentication mode for A2A endpoints."
+          }
+        }
+      }
+    }
+  }
+}

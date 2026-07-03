@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/a2a",
+  "version": "0.1.0",
+  "description": "OpenClaw A2A protocol plugin — agent card discovery and JSON-RPC task execution",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
