@@ -16,6 +16,14 @@ class InvokeErrorParserTest {
   }
 
   @Test
+  fun parseInvokeErrorMessage_parsesNumericCodePrefix() {
+    val parsed = parseInvokeErrorMessage("A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable")
+    assertEquals("A2UI_HOST_UNAVAILABLE", parsed.code)
+    assertEquals("bundled A2UI host not reachable", parsed.message)
+    assertTrue(parsed.hadExplicitCode)
+  }
+
+  @Test
   fun parseInvokeErrorMessage_rejectsNonCanonicalCodePrefix() {
     val parsed = parseInvokeErrorMessage("IllegalStateException: boom")
     assertEquals("UNAVAILABLE", parsed.code)

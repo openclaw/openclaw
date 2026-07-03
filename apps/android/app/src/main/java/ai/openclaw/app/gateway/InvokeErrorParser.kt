@@ -24,7 +24,7 @@ fun parseInvokeErrorMessage(raw: String): ParsedInvokeError {
   if (parts.size == 2) {
     val code = parts[0].trim()
     val rest = parts[1].trim()
-    if (code.isNotEmpty() && code.all { it.isUpperCase() || it == '_' }) {
+    if (code.isNotEmpty() && code.all { it.isUpperCase() || it.isDigit() || it == '_' }) {
       return ParsedInvokeError(
         code = code,
         message = rest.ifEmpty { trimmed },
