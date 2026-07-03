@@ -1261,7 +1261,6 @@ describe("session cost usage", () => {
       }
 
       // Round-trip: load the cache and verify fingerprint is restored to entries
-      const { loadCostUsageSummaryFromCache } = await import("./session-cost-usage.js");
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
