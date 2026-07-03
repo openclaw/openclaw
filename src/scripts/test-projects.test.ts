@@ -972,6 +972,7 @@ describe("test-projects args", () => {
           "src/agents/cli-runner.reliability.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
+          "src/agents/sessions/tools/find.test.ts",
         ],
         watchMode: false,
       },
