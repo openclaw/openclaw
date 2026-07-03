@@ -51,7 +51,7 @@ export function resolveToolNameCandidates(
     ? [...aliases, trimmed, ...normalizedCandidates]
     : [trimmed, ...aliases, ...normalizedCandidates];
   return candidates.filter(
-    (candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index,
+    (candidate, index, list) => candidate && list.indexOf(candidate) === index,
   );
 }
 
