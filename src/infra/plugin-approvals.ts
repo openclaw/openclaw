@@ -115,6 +115,12 @@ export function buildPluginApprovalRequestMessage(
   if (request.request.agentId) {
     lines.push(`Agent: ${request.request.agentId}`);
   }
+  if (request.request.sessionKey) {
+    // Disambiguates concurrent sessions of the same agent; the sessionKey
+    // already ships on the delivered payload envelope, so rendering it
+    // discloses nothing new to this recipient.
+    lines.push(`Session: ${request.request.sessionKey}`);
+  }
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);

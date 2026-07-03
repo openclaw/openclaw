@@ -208,6 +208,7 @@ describe("plugin approval forwarding", () => {
       const text = payload?.text ?? "";
       expect(text).toContain("Plugin approval required");
       expect(text).toContain("Sensitive tool call");
+      expect(text).toContain("Session: agent:main:main");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
       expect(payload?.presentation).toEqual({

@@ -268,6 +268,12 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   if (request.request.agentId) {
     lines.push(`Agent: ${request.request.agentId}`);
   }
+  if (request.request.sessionKey) {
+    // Disambiguates concurrent sessions of the same agent (main vs subagent vs
+    // cron); the same sessionKey already ships on the delivered payload
+    // envelope, so rendering it discloses nothing new to this recipient.
+    lines.push(`Session: ${request.request.sessionKey}`);
+  }
   if (request.request.security) {
     lines.push(`Security: ${request.request.security}`);
   }
