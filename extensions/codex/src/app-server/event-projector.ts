@@ -111,7 +111,8 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
-const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
+const TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX = "...(OpenClaw truncated Codex native tool output";
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -1630,7 +1631,7 @@ export class CodexAppServerEventProjector {
     finalOutput?: boolean;
     isError?: boolean;
   }): void {
-    const text = params.text.trim();
+    const text = truncateToolTranscriptText(params.text.trim());
     if (!text) {
       return;
     }
@@ -2684,16 +2685,20 @@ function itemOutputText(
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   if (item.type === "commandExecution") {
-    return item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim() || undefined;
+    const output = item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim();
+    return output ? truncateToolTranscriptText(output) : undefined;
   }
   if (item.type === "dynamicToolCall") {
-    return collectDynamicToolContentText(item.contentItems).trim() || undefined;
+    const output = collectDynamicToolContentText(item.contentItems).trim();
+    return output ? truncateToolTranscriptText(output) : undefined;
   }
   if (item.type === "mcpToolCall") {
-    if (item.error) {
-      return stringifyJsonValue(item.error);
-    }
-    return item.result ? stringifyJsonValue(item.result) : undefined;
+    const output = item.error
+      ? stringifyJsonValue(item.error)
+      : item.result
+        ? stringifyJsonValue(item.result)
+        : undefined;
+    return output ? truncateToolTranscriptText(output) : undefined;
   }
   return undefined;
 }
@@ -2707,7 +2712,8 @@ function itemTranscriptResultText(
     return output;
   }
   const result = itemToolResult(item).result;
-  return result ? stringifyJsonValue(result) : itemStatus(item);
+  const resultText = result ? stringifyJsonValue(result) : undefined;
+  return resultText ? truncateToolTranscriptText(resultText) : itemStatus(item);
 }
 
 function appendToolOutputDeltaText(
@@ -2716,12 +2722,10 @@ function appendToolOutputDeltaText(
   delta: string,
 ): void {
   const current = outputTextByItem.get(itemId) ?? "";
-  if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+  if (current.includes(TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX)) {
     return;
   }
-  const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
-  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
-  outputTextByItem.set(itemId, next);
+  outputTextByItem.set(itemId, truncateToolTranscriptText(current + delta));
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
@@ -2750,7 +2754,13 @@ function truncateToolTranscriptText(text: string): string {
   if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  const noticeText = `${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original ${text.length} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
+  const notice = `\n${noticeText}`;
+  if (notice.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return noticeText.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+  }
+  const textBudget = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - notice.length;
+  return `${text.slice(0, textBudget)}${notice}`;
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {

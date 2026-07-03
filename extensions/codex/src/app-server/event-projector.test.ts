@@ -2043,6 +2043,63 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("caps oversized native command output before transcript, trajectory, and progress projection", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+      },
+      {
+        trajectoryRecorder,
+      },
+    );
+    const largeOutput = "x".repeat(12_345);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-large",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: largeOutput,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const output = (
+      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
+        | { output?: string }
+        | undefined
+    )?.output;
+    expect(output).toHaveLength(10_000);
+    expect(output).toContain("OpenClaw truncated Codex native tool output");
+    expect(output).toContain("original 12345 chars");
+    expect(output).toContain("showing 10000");
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = result.messagesSnapshot.find(
+      (message) => requireRecord(message, "message").role === "toolResult",
+    );
+    const toolResultContent = requireArray(
+      requireRecord(toolResultMessage, "tool result message").content,
+      "tool result content",
+    );
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toHaveLength(10_000);
+    expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
+  });
+
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
@@ -2238,6 +2295,63 @@ describe("CodexAppServerEventProjector", () => {
       name: "bash",
     }).data;
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
+  });
+
+  it("caps streamed command output used for replay when snapshots omit aggregated output", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), {
+      trajectoryRecorder,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-stream-large",
+        delta: "s".repeat(12_345),
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-stream-large",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const output = (
+      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
+        | { output?: string }
+        | undefined
+    )?.output;
+    expect(output).toHaveLength(10_000);
+    expect(output).toContain("OpenClaw truncated Codex native tool output");
+    expect(output).toContain("original 12345 chars");
+    expect(output).toContain("showing 10000");
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = result.messagesSnapshot.find(
+      (message) => requireRecord(message, "message").role === "toolResult",
+    );
+    const toolResultContent = requireArray(
+      requireRecord(toolResultMessage, "tool result message").content,
+      "tool result content",
+    );
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toHaveLength(10_000);
+    expect(toolResultContentItem.content).toContain("OpenClaw truncated Codex native tool output");
   });
 
   it("uses streamed command output for failed native tool errors", async () => {
