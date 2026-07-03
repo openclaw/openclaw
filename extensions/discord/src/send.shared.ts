@@ -328,7 +328,7 @@ async function sendDiscordText(
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+      replyTo: isFirst ? replyTo : undefined,
     });
     return (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
@@ -424,7 +424,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      undefined,
       request,
       maxLinesPerMessage,
       undefined,
