@@ -141,6 +141,10 @@ type UsageCostCacheFileEntry = {
 type UsageCostCacheFile = {
   version: number;
   updatedAt: number;
+  /** Pricing fingerprint stored once at file level.  On load,
+   *  normalizeUsageCostCache lifts it from entries; on write,
+   *  writeUsageCostCache strips it from entries. */
+  pricingFingerprint?: string;
   files: Record<string, UsageCostCacheFileEntry>;
 };
 
@@ -316,10 +320,36 @@ function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
   ) {
     return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
   }
+  const files = record.files as Record<string, UsageCostCacheFileEntry>;
+  // Lift the pricing fingerprint from entries to file level so it is
+  // stored once instead of duplicated on every entry (#99511).
+  let pricingFingerprint =
+    typeof record.pricingFingerprint === "string" && record.pricingFingerprint
+      ? record.pricingFingerprint
+      : undefined;
+  if (!pricingFingerprint) {
+    for (const entry of Object.values(files)) {
+      if (entry.pricingFingerprint) {
+        pricingFingerprint = entry.pricingFingerprint;
+        break;
+      }
+    }
+  }
+  // Restore fingerprint to entries that lack it (new-format cache files
+  // store it at file level only), so internal code can read
+  // entry.pricingFingerprint without changes.
+  if (pricingFingerprint) {
+    for (const entry of Object.values(files)) {
+      if (!entry.pricingFingerprint) {
+        entry.pricingFingerprint = pricingFingerprint;
+      }
+    }
+  }
   return {
     version: USAGE_COST_CACHE_VERSION,
     updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
-    files: record.files as Record<string, UsageCostCacheFileEntry>,
+    pricingFingerprint,
+    files,
   };
 }
 
@@ -333,9 +363,16 @@ async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile
 }
 
 async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile): Promise<void> {
+  // Strip pricingFingerprint from every entry before serializing so it is
+  // stored once at the file level instead of duplicated (#99511).
+  const stripped: Record<string, Omit<UsageCostCacheFileEntry, "pricingFingerprint">> = {};
+  for (const [key, entry] of Object.entries(cache.files)) {
+    const { pricingFingerprint: _, ...rest } = entry;
+    stripped[key] = rest;
+  }
   await replaceFileAtomic({
     filePath: cachePath,
-    content: `${JSON.stringify(cache)}\n`,
+    content: `${JSON.stringify({ ...cache, files: stripped })}\n`,
     tempPrefix: ".usage-cost-cache",
   });
 }
