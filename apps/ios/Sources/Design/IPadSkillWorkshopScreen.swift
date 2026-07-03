@@ -110,7 +110,9 @@ struct IPadSkillWorkshopScreen: View {
                 self.proposalSearchField
                 Picker("Status", selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -167,7 +169,9 @@ struct IPadSkillWorkshopScreen: View {
                 self.agentScopeMenu
                 Picker("Status", selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
                 }
                 .pickerStyle(.segmented)

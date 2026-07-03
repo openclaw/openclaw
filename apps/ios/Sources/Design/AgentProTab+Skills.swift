@@ -157,7 +157,7 @@ extension AgentProTab {
     }
 
     func clawHubResultRow(_ result: ClawHubSearchResultLite) -> some View {
-        let installing = self.clawHubInstallSlug == result.slug
+        let installing = clawHubInstallSlug == result.slug
         return HStack(alignment: .top, spacing: 10) {
             ProIconBadge(systemName: "sparkles", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
@@ -212,20 +212,20 @@ extension AgentProTab {
     }
 
     var activeAgentName: String {
-        if let agent = self.appModel.gatewayAgents.first(where: { $0.id == self.activeAgentID }) {
-            return self.agentName(for: agent)
+        if let agent = appModel.gatewayAgents.first(where: { $0.id == self.activeAgentID }) {
+            return agentName(for: agent)
         }
-        return self.activeAgentID
+        return activeAgentID
     }
 
     var agentSkillFilter: Set<String>? {
-        self.overview?.agentSkillFilter.map { Set($0) }
+        overview?.agentSkillFilter.map { Set($0) }
     }
 
     var skillPolicySummary: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode keeps live skill changes disabled." }
-        guard self.gatewayConnected else { return "Connect a gateway to edit skills." }
-        guard let filter = self.agentSkillFilter else {
+        if appModel.isAppleReviewDemoModeEnabled { return "Demo mode keeps live skill changes disabled." }
+        guard gatewayConnected else { return "Connect a gateway to edit skills." }
+        guard let filter = agentSkillFilter else {
             return "All available skills are allowed for this agent."
         }
         if filter.isEmpty {
@@ -235,12 +235,12 @@ extension AgentProTab {
     }
 
     var skillMutationBusy: Bool {
-        !self.skillMutationBusyKeys.isEmpty
+        !skillMutationBusyKeys.isEmpty
     }
 
     var filteredSkills: [SkillStatusEntryLite] {
-        let skills = self.overview?.skills?.skills ?? []
-        let filter = self.skillFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let skills = overview?.skills?.skills ?? []
+        let filter = skillFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return skills
             .filter { skill in
                 self.matchesSkillStatusFilter(skill)
@@ -260,7 +260,7 @@ extension AgentProTab {
     }
 
     func matchesSkillStatusFilter(_ skill: SkillStatusEntryLite) -> Bool {
-        switch self.skillStatusFilter {
+        switch skillStatusFilter {
         case .all:
             true
         case .enabled:
@@ -283,7 +283,7 @@ extension AgentProTab {
 
     func skillRow(_ skill: SkillStatusEntryLite) -> some View {
         let status = self.skillStatus(skill)
-        let busy = self.skillMutationBusyKeys.contains(skill.name)
+        let busy = skillMutationBusyKeys.contains(skill.name)
         return HStack(alignment: .top, spacing: 12) {
             ProIconBadge(systemName: self.isSkillAllowed(skill) ? "checkmark.circle" : "nosign", color: status.color)
             VStack(alignment: .leading, spacing: 4) {
@@ -356,13 +356,13 @@ extension AgentProTab {
     }
 
     func isSkillAllowed(_ skill: SkillStatusEntryLite) -> Bool {
-        guard let filter = self.agentSkillFilter else { return true }
+        guard let filter = agentSkillFilter else { return true }
         return filter.contains(skill.name)
     }
 
     func isSkillConfigBusy(_ skill: SkillStatusEntryLite) -> Bool {
-        self.skillConfigBusyKeys.contains(skill.effectiveSkillKey)
-            || self.clawHubInstallSlug != nil
+        skillConfigBusyKeys.contains(skill.effectiveSkillKey)
+            || clawHubInstallSlug != nil
     }
 
     func canInstallSkillRequirements(_ skill: SkillStatusEntryLite) -> Bool {
@@ -371,13 +371,13 @@ extension AgentProTab {
     }
 
     func skillByKey(_ key: String) -> SkillStatusEntryLite? {
-        (self.overview?.skills?.skills ?? []).first { skill in
+        (overview?.skills?.skills ?? []).first { skill in
             skill.effectiveSkillKey == key || skill.name == key
         }
     }
 
     func openSkillEditor(_ skill: SkillStatusEntryLite) {
-        self.skillEditorSelection = SkillEditorSelection(id: skill.effectiveSkillKey)
+        skillEditorSelection = SkillEditorSelection(id: skill.effectiveSkillKey)
     }
 
     func skillAPIKeyBinding(for skill: SkillStatusEntryLite) -> Binding<String> {
@@ -388,18 +388,30 @@ extension AgentProTab {
 
     var missingSkillEditorSheet: some View {
         NavigationStack {
-            ContentUnavailableView("Skill unavailable", systemImage: "sparkles")
-                .navigationTitle("Skill")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button {
-                            self.skillEditorSelection = nil
-                        } label: {
-                            Text("Close")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
+            ZStack {
+                OpenClawProBackground()
+                VStack(spacing: 12) {
+                    ProIconBadge(systemName: "sparkles", color: .secondary)
+                    Text("Skill unavailable")
+                        .font(OpenClawType.headline)
+                    Text("Return to the skills list and choose another skill.")
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(OpenClawSpacing.space6)
+            }
+            .navigationTitle("Skill")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        self.skillEditorSelection = nil
+                    } label: {
+                        Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
+            }
         }
     }
 
@@ -472,6 +484,7 @@ extension AgentProTab {
                         SecureField(primaryEnv, text: self.skillAPIKeyBinding(for: skill))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .font(OpenClawType.subhead)
                         Button {
                             Task { await self.saveSkillAPIKey(skill) }
                         } label: {
@@ -511,6 +524,7 @@ extension AgentProTab {
         } label: {
             HStack {
                 Text(title)
+                    .font(OpenClawType.subhead)
                 Spacer(minLength: 8)
                 OpenClawToggleIndicator(isOn: isOn)
             }
@@ -600,7 +614,7 @@ extension AgentProTab {
     }
 
     var allSkillNames: [String] {
-        (self.overview?.skills?.skills ?? [])
+        (overview?.skills?.skills ?? [])
             .map(\.name)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .sorted()
@@ -608,25 +622,25 @@ extension AgentProTab {
 
     @MainActor
     func patchAgentSkills(_ skills: [String]?, busyKey: String) async {
-        guard self.liveGatewayConnected else { return }
-        self.skillMutationBusyKeys.insert(busyKey)
-        self.skillMutationErrorText = nil
-        self.skillMutationStatusText = nil
+        guard liveGatewayConnected else { return }
+        skillMutationBusyKeys.insert(busyKey)
+        skillMutationErrorText = nil
+        skillMutationStatusText = nil
         defer { self.skillMutationBusyKeys.remove(busyKey) }
 
         do {
-            let config = try await self.requestConfigSnapshot()
-            guard let baseHash = self.normalized(config.hash) else {
+            let config = try await requestConfigSnapshot()
+            guard let baseHash = normalized(config.hash) else {
                 throw SkillMutationError.missingConfigHash
             }
             if skills == nil,
-               config.agentConfig(id: self.activeAgentID) == nil
+               config.agentConfig(id: activeAgentID) == nil
             {
-                self.skillMutationStatusText = "This agent already inherits the default skill policy."
+                skillMutationStatusText = "This agent already inherits the default skill policy."
                 return
             }
 
-            let raw = try Self.agentSkillsPatchRaw(agentId: self.activeAgentID, skills: skills)
+            let raw = try Self.agentSkillsPatchRaw(agentId: activeAgentID, skills: skills)
             let params = ConfigPatchParams(
                 raw: raw,
                 baseHash: baseHash,
@@ -635,15 +649,15 @@ extension AgentProTab {
             guard let json = String(data: data, encoding: .utf8) else {
                 throw SkillMutationError.invalidPatchPayload
             }
-            _ = try await self.appModel.operatorSession.request(
+            _ = try await appModel.operatorSession.request(
                 method: "config.patch",
                 paramsJSON: json,
                 timeoutSeconds: 20)
-            self.skillMutationStatusText = skills == nil ? "Skill policy reset." : "Skill policy saved."
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            skillMutationStatusText = skills == nil ? "Skill policy reset." : "Skill policy saved."
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.skillMutationErrorText = Self.skillMutationMessage(error)
+            skillMutationErrorText = Self.skillMutationMessage(error)
         }
     }
 
@@ -686,33 +700,33 @@ extension AgentProTab {
 
     @MainActor
     func installClawHubSkill(_ result: ClawHubSearchResultLite) async {
-        guard self.liveGatewayConnected else { return }
-        self.clawHubInstallSlug = result.slug
-        self.clawHubErrorText = nil
+        guard liveGatewayConnected else { return }
+        clawHubInstallSlug = result.slug
+        clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
         do {
             let params = ClawHubInstallParams(slug: result.slug)
             _ = try await self.requestGateway(method: "skills.install", params: params, timeoutSeconds: 125)
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.clawHubErrorText = Self.skillMutationMessage(error)
+            clawHubErrorText = Self.skillMutationMessage(error)
         }
     }
 
     @MainActor
     func searchClawHubSkills() async {
-        guard self.liveGatewayConnected else { return }
-        self.clawHubLoading = true
-        self.clawHubErrorText = nil
+        guard liveGatewayConnected else { return }
+        clawHubLoading = true
+        clawHubErrorText = nil
         defer { self.clawHubLoading = false }
         do {
-            let query = self.clawHubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            let query = clawHubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             let params = ClawHubSearchParams(query: query.isEmpty ? nil : query, limit: 20)
-            let data = try await self.requestGateway(method: "skills.search", params: params, timeoutSeconds: 20)
-            self.clawHubResults = try JSONDecoder().decode(ClawHubSearchResponseLite.self, from: data).results
+            let data = try await requestGateway(method: "skills.search", params: params, timeoutSeconds: 20)
+            clawHubResults = try JSONDecoder().decode(ClawHubSearchResponseLite.self, from: data).results
         } catch {
-            self.clawHubErrorText = Self.skillMutationMessage(error)
+            clawHubErrorText = Self.skillMutationMessage(error)
         }
     }
 
@@ -721,19 +735,19 @@ extension AgentProTab {
         _ skill: SkillStatusEntryLite,
         action: () async throws -> String) async
     {
-        guard self.liveGatewayConnected else { return }
+        guard liveGatewayConnected else { return }
         let key = skill.effectiveSkillKey
-        self.skillConfigBusyKeys.insert(key)
-        self.skillConfigMessages[key] = nil
+        skillConfigBusyKeys.insert(key)
+        skillConfigMessages[key] = nil
         defer { self.skillConfigBusyKeys.remove(key) }
 
         do {
             let message = try await action()
-            self.skillConfigMessages[key] = SkillEditorMessage(kind: .success, text: message)
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            skillConfigMessages[key] = SkillEditorMessage(kind: .success, text: message)
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.skillConfigMessages[key] = SkillEditorMessage(
+            skillConfigMessages[key] = SkillEditorMessage(
                 kind: .error,
                 text: Self.skillMutationMessage(error))
         }
@@ -744,24 +758,24 @@ extension AgentProTab {
         params: some Encodable,
         timeoutSeconds: Int) async throws -> Data
     {
-        guard self.liveGatewayConnected else {
+        guard liveGatewayConnected else {
             throw SkillMutationError.liveGatewayUnavailable
         }
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else {
             throw SkillMutationError.invalidPatchPayload
         }
-        return try await self.appModel.operatorSession.request(
+        return try await appModel.operatorSession.request(
             method: method,
             paramsJSON: json,
             timeoutSeconds: timeoutSeconds)
     }
 
     func requestConfigSnapshot() async throws -> ConfigSnapshotLite {
-        guard self.liveGatewayConnected else {
+        guard liveGatewayConnected else {
             throw SkillMutationError.liveGatewayUnavailable
         }
-        let data = try await self.appModel.operatorSession.request(
+        let data = try await appModel.operatorSession.request(
             method: "config.get",
             paramsJSON: "{}",
             timeoutSeconds: 12)

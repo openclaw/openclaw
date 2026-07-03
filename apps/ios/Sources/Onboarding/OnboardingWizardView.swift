@@ -14,7 +14,7 @@ private enum OnboardingStep: Int, CaseIterable {
     case success
 
     var previous: Self? {
-        Self(rawValue: self.rawValue - 1)
+        Self(rawValue: rawValue - 1)
     }
 
     /// Progress label for the manual setup flow (mode → connect → auth → success).
@@ -142,21 +142,28 @@ struct OnboardingWizardView: View {
                             self.navigateBack()
                         } label: {
                             Label("Back", systemImage: "chevron.left")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     } else if self.allowSkip {
-                        Button("Close") {
+                        Button {
                             self.onClose()
+                        } label: {
+                            Text("Close")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") {
+                    Button {
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
                             to: nil,
                             from: nil,
                             for: nil)
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }
@@ -192,11 +199,17 @@ struct OnboardingWizardView: View {
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+                                Button {
+                                    self.showQRScanner = false
+                                } label: {
+                                    Text("Cancel")
+                                        .font(OpenClawType.subheadSemiBold)
+                                }
                             }
                             ToolbarItem(placement: .topBarTrailing) {
                                 PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
                                     Label("Photos", systemImage: "photo")
+                                        .font(OpenClawType.subheadSemiBold)
                                 }
                             }
                         }
@@ -296,7 +309,7 @@ struct OnboardingWizardView: View {
     }
 
     private var introStep: some View {
-        OnboardingIntroStep(onContinue: self.advanceFromIntro)
+        OnboardingIntroStep(onContinue: advanceFromIntro)
     }
 
     private var welcomeStep: some View {
@@ -313,9 +326,9 @@ struct OnboardingWizardView: View {
 
     @ViewBuilder
     private var modeStep: some View {
-        self.setupCodeSection
+        setupCodeSection
 
-        Section("Connection Mode") {
+        Section {
             OnboardingModeRow(
                 title: OnboardingConnectionMode.homeNetwork.title,
                 subtitle: "LAN or Tailscale host",
@@ -343,11 +356,17 @@ struct OnboardingWizardView: View {
                     self.selectMode(.developerLocal)
                 }
             }
+        } header: {
+            Text("Connection Mode")
+                .font(OpenClawType.captionSemiBold)
         }
 
         Section {
-            Button("Continue") {
+            Button {
                 self.step = .connect
+            } label: {
+                Text("Continue")
+                    .font(OpenClawType.subheadSemiBold)
             }
             .disabled(self.selectedMode == nil)
         }
@@ -373,6 +392,7 @@ struct OnboardingWizardView: View {
         } label: {
             HStack {
                 Text(title)
+                    .font(OpenClawType.subhead)
                 Spacer(minLength: 8)
                 OpenClawToggleIndicator(isOn: isOn.wrappedValue)
             }
@@ -387,15 +407,17 @@ struct OnboardingWizardView: View {
     private var connectStep: some View {
         if let selectedMode {
             Section {
-                LabeledContent("Mode", value: selectedMode.title)
-                LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
-                LabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
-                LabeledContent("Progress", value: self.statusLine)
+                self.onboardingLabeledContent("Mode", value: selectedMode.title)
+                self.onboardingLabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
+                self.onboardingLabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
+                self.onboardingLabeledContent("Progress", value: self.statusLine)
             } header: {
                 Text("Status")
+                    .font(OpenClawType.captionSemiBold)
             } footer: {
                 if let connectMessage {
                     Text(connectMessage)
+                        .font(OpenClawType.caption)
                 }
             }
 
@@ -410,8 +432,12 @@ struct OnboardingWizardView: View {
         } else {
             Section {
                 Text("Choose a mode first.")
-                Button("Back to Mode Selection") {
+                    .font(OpenClawType.subhead)
+                Button {
                     self.step = .mode
+                } label: {
+                    Text("Back to Mode Selection")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             }
         }
@@ -419,9 +445,10 @@ struct OnboardingWizardView: View {
 
     private var homeNetworkConnectSection: some View {
         Group {
-            Section("Discovered Gateways") {
+            Section {
                 if self.gatewayController.gateways.isEmpty {
                     Text("No gateways found yet.")
+                        .font(OpenClawType.subhead)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
@@ -430,6 +457,7 @@ struct OnboardingWizardView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(gateway.name)
+                                    .font(OpenClawType.subheadSemiBold)
                                 if let host = gateway.lanHost ?? gateway.tailnetDns {
                                     Text(host)
                                         .font(OpenClawType.footnote)
@@ -445,8 +473,10 @@ struct OnboardingWizardView: View {
                                         .progressViewStyle(.circular)
                                 } else if !hasHost {
                                     Text("Resolving…")
+                                        .font(OpenClawType.subheadSemiBold)
                                 } else {
                                     Text("Connect")
+                                        .font(OpenClawType.subheadSemiBold)
                                 }
                             }
                             .disabled(self.connectingGatewayID != nil || !hasHost)
@@ -454,10 +484,16 @@ struct OnboardingWizardView: View {
                     }
                 }
 
-                Button("Restart Discovery") {
+                Button {
                     self.gatewayController.restartDiscovery()
+                } label: {
+                    Text("Restart Discovery")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.connectingGatewayID != nil)
+            } header: {
+                Text("Discovered Gateways")
+                    .font(OpenClawType.captionSemiBold)
             }
 
             self.manualConnectionFieldsSection(title: "Manual Fallback")
@@ -465,7 +501,7 @@ struct OnboardingWizardView: View {
     }
 
     private var remoteDomainConnectSection: some View {
-        self.manualConnectionFieldsSection(title: "Domain Settings")
+        manualConnectionFieldsSection(title: "Domain Settings")
     }
 
     private var developerConnectSection: some View {
@@ -473,24 +509,30 @@ struct OnboardingWizardView: View {
             TextField("Host", text: self.$manualHost)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .font(OpenClawType.subhead)
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
+                .font(OpenClawType.subhead)
             self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
             self.manualConnectButton
         } header: {
             Text("Developer Local")
+                .font(OpenClawType.captionSemiBold)
         } footer: {
             Text("Default host is localhost. Use your Mac LAN IP if simulator networking requires it.")
+                .font(OpenClawType.caption)
         }
     }
 
     private var authStep: some View {
         Group {
-            Section("Authentication") {
+            Section {
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .font(OpenClawType.subhead)
                 SecureField("Gateway Password", text: self.$gatewayPassword)
+                    .font(OpenClawType.subhead)
 
                 if let problem = self.currentProblem {
                     GatewayProblemBanner(
@@ -511,6 +553,9 @@ struct OnboardingWizardView: View {
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Authentication")
+                    .font(OpenClawType.captionSemiBold)
             }
 
             if self.issue.needsPairing {
@@ -519,10 +564,12 @@ struct OnboardingWizardView: View {
                         self.resumeAfterPairingApproval()
                     } label: {
                         Label("Resume After Approval", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                     .disabled(self.connectingGatewayID != nil)
                 } header: {
                     Text("Pairing Approval")
+                        .font(OpenClawType.captionSemiBold)
                 } footer: {
                     let requestLine: String = {
                         if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
@@ -537,6 +584,7 @@ struct OnboardingWizardView: View {
                             + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
                             + "OpenClaw will also retry automatically when you return to this app.")
+                        .font(OpenClawType.caption)
                 }
             }
 
@@ -545,6 +593,7 @@ struct OnboardingWizardView: View {
                     self.openQRScannerFromOnboarding()
                 } label: {
                     Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.connectingGatewayID != nil)
 
@@ -556,6 +605,7 @@ struct OnboardingWizardView: View {
                             .progressViewStyle(.circular)
                     } else {
                         Text("Retry Connection")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
                 .disabled(self.connectingGatewayID != nil)
@@ -609,6 +659,7 @@ extension OnboardingWizardView {
             TextField("Paste setup code", text: self.$setupCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .font(OpenClawType.subhead)
                 .onSubmit {
                     Task { await self.applySetupCodeAndConnect() }
                 }
@@ -621,9 +672,11 @@ extension OnboardingWizardView {
                         ProgressView()
                             .progressViewStyle(.circular)
                         Text("Applying...")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 } else {
                     Text("Apply Setup Code")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             }
             .disabled(
@@ -637,29 +690,50 @@ extension OnboardingWizardView {
             }
         } header: {
             Text("Setup Code")
+                .font(OpenClawType.captionSemiBold)
         } footer: {
             Text("Use this if you received a setup code instead of a QR code.")
+                .font(OpenClawType.caption)
         }
     }
 
     private func manualConnectionFieldsSection(title: String) -> some View {
-        Section(title) {
+        Section {
             TextField("Host", text: self.$manualHost)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .font(OpenClawType.subhead)
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
+                .font(OpenClawType.subhead)
             self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .font(OpenClawType.subhead)
             if self.selectedMode == .remoteDomain {
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .font(OpenClawType.subhead)
                 SecureField("Gateway Password", text: self.$gatewayPassword)
+                    .font(OpenClawType.subhead)
             }
             self.manualConnectButton
+        } header: {
+            Text(title)
+                .font(OpenClawType.captionSemiBold)
+        }
+    }
+
+    private func onboardingLabeledContent(_ title: String, value: String) -> some View {
+        LabeledContent {
+            Text(value)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(.secondary)
+        } label: {
+            Text(title)
+                .font(OpenClawType.subheadSemiBold)
         }
     }
 
@@ -672,9 +746,11 @@ extension OnboardingWizardView {
                     ProgressView()
                         .progressViewStyle(.circular)
                     Text("Connecting…")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             } else {
                 Text("Connect")
+                    .font(OpenClawType.subheadSemiBold)
             }
         }
         .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
@@ -795,7 +871,7 @@ extension OnboardingWizardView {
         guard self.connectingGatewayID == nil else { return }
 
         let now = Date()
-        if let last = self.lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
+        if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
             return
         }
         self.lastPairingAutoResumeAttemptAt = now
@@ -873,7 +949,7 @@ extension OnboardingWizardView {
     }
 
     private func navigateBack() {
-        guard let target = self.step.previous else { return }
+        guard let target = step.previous else { return }
         self.connectingGatewayID = nil
         self.connectMessage = nil
         self.step = target

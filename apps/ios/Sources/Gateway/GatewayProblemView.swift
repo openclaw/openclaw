@@ -102,7 +102,7 @@ struct GatewayProblemDetailsSheet: View {
                 }
 
                 if let requestId = self.problem.requestId {
-                    Section("Request") {
+                    Section {
                         Text(verbatim: requestId)
                             .font(OpenClawType.mono)
                             .textSelection(.enabled)
@@ -113,11 +113,14 @@ struct GatewayProblemDetailsSheet: View {
                             Text("Copy request ID")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                    } header: {
+                        Text("Request")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let actionCommand = self.problem.actionCommand {
-                    Section("Gateway command") {
+                    Section {
                         Text(verbatim: actionCommand)
                             .font(OpenClawType.mono)
                             .textSelection(.enabled)
@@ -128,11 +131,14 @@ struct GatewayProblemDetailsSheet: View {
                             Text("Copy command")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                    } header: {
+                        Text("Gateway command")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let docsURL = self.problem.docsURL {
-                    Section("Help") {
+                    Section {
                         Link(destination: docsURL) {
                             Label("Open docs", systemImage: "book")
                                 .font(OpenClawType.subheadSemiBold)
@@ -141,15 +147,21 @@ struct GatewayProblemDetailsSheet: View {
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                    } header: {
+                        Text("Help")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let technicalDetails = self.problem.technicalDetails {
-                    Section("Technical details") {
+                    Section {
                         Text(verbatim: technicalDetails)
                             .font(OpenClawType.monoFootnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                    } header: {
+                        Text("Technical details")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 

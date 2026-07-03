@@ -96,22 +96,27 @@ extension AgentProTab {
             Picker("Agent status", selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
                     Label(filter.title, systemImage: filter.systemImage)
+                        .font(OpenClawType.subhead)
                         .tag(filter)
                 }
             }
             if self.agentFiltersActive {
                 Divider()
-                Button("Clear Filters", systemImage: "xmark.circle") {
+                Button {
                     self.agentRosterFilter = .all
                     self.agentSearchText = ""
+                } label: {
+                    Label("Clear Filters", systemImage: "xmark.circle")
+                        .font(OpenClawType.subhead)
                 }
             }
         } label: {
             Label("Filter agents", systemImage: "line.3.horizontal.decrease")
+                .font(OpenClawType.subheadSemiBold)
                 .labelStyle(.iconOnly)
         }
         .accessibilityIdentifier("agent-status-filter-menu")
-        .accessibilityValue(self.agentRosterFilter.title)
+        .accessibilityValue(agentRosterFilter.title)
     }
 
     @ViewBuilder
@@ -127,8 +132,8 @@ extension AgentProTab {
     }
 
     var agentFiltersActive: Bool {
-        self.agentRosterFilter != .all
-            || !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        agentRosterFilter != .all
+            || !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var agentsSection: some View {
@@ -258,7 +263,7 @@ extension AgentProTab {
 
     func agentRow(_ agent: AgentSummary) -> some View {
         let isActive = agent.id == self.activeAgentID
-        let state = self.agentRosterState(for: agent)
+        let state = agentRosterState(for: agent)
         return Button {
             guard !isActive else { return }
             self.appModel.setSelectedAgentId(agent.id)
@@ -293,7 +298,7 @@ extension AgentProTab {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(self.agentAccessibilityLabel(agent, isActive: isActive, state: state))
+        .accessibilityLabel(agentAccessibilityLabel(agent, isActive: isActive, state: state))
         .accessibilityHint(isActive ? "Selected agent" : "Selects this agent")
     }
 
@@ -472,7 +477,7 @@ extension AgentProTab {
     }
 
     var sortedAgents: [AgentSummary] {
-        self.appModel.gatewayAgents.sorted { lhs, rhs in
+        appModel.gatewayAgents.sorted { lhs, rhs in
             if lhs.id == self.activeAgentID { return true }
             if rhs.id == self.activeAgentID { return false }
             return self.agentName(for: lhs)
@@ -481,7 +486,7 @@ extension AgentProTab {
     }
 
     var filteredAgents: [AgentSummary] {
-        let query = self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return self.sortedAgents.filter { agent in
             let matchesFilter: Bool = switch self.agentRosterFilter {
             case .all:
@@ -507,58 +512,58 @@ extension AgentProTab {
     }
 
     var activeAgentID: String {
-        self.normalized(self.appModel.selectedAgentId)
-            ?? self.normalized(self.appModel.gatewayDefaultAgentId)
+        normalized(appModel.selectedAgentId)
+            ?? normalized(appModel.gatewayDefaultAgentId)
             ?? "main"
     }
 
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        GatewayStatusBuilder.build(appModel: appModel) == .connected
     }
 
     var liveGatewayConnected: Bool {
-        !self.appModel.isLocalGatewayFixtureEnabled &&
+        !appModel.isLocalGatewayFixtureEnabled &&
             self.gatewayConnected &&
-            self.appModel.isOperatorGatewayConnected
+            appModel.isOperatorGatewayConnected
     }
 
     var emptyAgentsTitle: String {
         if !self.gatewayConnected { return "Agents unavailable" }
-        if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }
-        if self.agentRosterFilter != .all { return "No \(self.agentRosterFilter.title.lowercased()) agents" }
+        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }
+        if agentRosterFilter != .all { return "No \(agentRosterFilter.title.lowercased()) agents" }
         return "No agents reported"
     }
 
     var emptyAgentsDetail: String {
         if !self.gatewayConnected { return "Connect a gateway to load the live agent roster." }
-        if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Try another search or clear the agent filters."
         }
-        if self.agentRosterFilter != .all { return "Clear the filter to view the full roster." }
+        if agentRosterFilter != .all { return "Clear the filter to view the full roster." }
         return "The connected gateway did not return an agent list."
     }
 
     var overviewTaskID: String {
         [
             self.gatewayConnected ? "connected" : "offline",
-            self.appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
+            appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
             self.activeAgentID,
-            self.scenePhase == .active ? "active" : "inactive",
+            scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
     }
 
     var skillsValue: String {
         guard self.gatewayConnected else { return "offline" }
-        guard let skills = self.overview?.skills else {
-            return self.overviewLoading ? "..." : "live"
+        guard let skills = overview?.skills else {
+            return overviewLoading ? "..." : "live"
         }
         return "\(skills.enabledCount)/\(skills.totalCount)"
     }
 
     var skillsDetail: String {
         guard self.gatewayConnected else { return "Connect a gateway to load skills." }
-        guard let skills = self.overview?.skills else {
-            return self.overviewLoading ? "Loading skill status." : "Skill status is available from the gateway."
+        guard let skills = overview?.skills else {
+            return overviewLoading ? "Loading skill status." : "Skill status is available from the gateway."
         }
         if skills.blockedCount > 0 {
             return "\(skills.enabledCount) enabled, \(skills.blockedCount) blocked"
@@ -571,18 +576,18 @@ extension AgentProTab {
 
     var instancesValue: String {
         guard self.gatewayConnected else { return "offline" }
-        guard let count = self.overview?.presence.count else {
-            return self.overviewLoading ? "..." : "live"
+        guard let count = overview?.presence.count else {
+            return overviewLoading ? "..." : "live"
         }
         return "\(count)"
     }
 
     var instancesDetail: String {
         guard self.gatewayConnected else { return "Connect a gateway to load instances." }
-        guard let presence = self.overview?.presence else {
-            return self.overviewLoading ? "Loading instance presence." : "Instance presence is available."
+        guard let presence = overview?.presence else {
+            return overviewLoading ? "Loading instance presence." : "Instance presence is available."
         }
-        let labels = presence.prefix(2).compactMap(self.presenceLabel)
+        let labels = presence.prefix(2).compactMap(presenceLabel)
         if labels.isEmpty {
             return "No live instances reported."
         }
@@ -591,21 +596,21 @@ extension AgentProTab {
 
     var instancesColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return (self.overview?.presence.isEmpty == false) ? OpenClawBrand.accent : .secondary
+        return (overview?.presence.isEmpty == false) ? OpenClawBrand.accent : .secondary
     }
 
     var cronValue: String {
         guard self.gatewayConnected else { return "offline" }
-        guard let cronStatus = self.overview?.cronStatus else {
-            return self.overviewLoading ? "..." : "live"
+        guard let cronStatus = overview?.cronStatus else {
+            return overviewLoading ? "..." : "live"
         }
         return cronStatus.enabled ? "\(cronStatus.jobs)" : "off"
     }
 
     var cronDetail: String {
         guard self.gatewayConnected else { return "Connect a gateway to load cron." }
-        guard let cronStatus = self.overview?.cronStatus else {
-            return self.overviewLoading ? "Loading cron status." : "Cron status is available."
+        guard let cronStatus = overview?.cronStatus else {
+            return overviewLoading ? "Loading cron status." : "Cron status is available."
         }
         if let nextWakeAtMs = cronStatus.nextwakeatms {
             return "Next wake \(Self.relativeTime(fromMilliseconds: nextWakeAtMs))"
@@ -615,13 +620,13 @@ extension AgentProTab {
 
     var cronColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return self.overview?.cronStatus?.enabled == true ? OpenClawBrand.accent : .secondary
+        return overview?.cronStatus?.enabled == true ? OpenClawBrand.accent : .secondary
     }
 
     var usageValue: String {
         guard self.gatewayConnected else { return "offline" }
-        guard let usage = self.overview?.usage else {
-            return self.overviewLoading ? "..." : "7d"
+        guard let usage = overview?.usage else {
+            return overviewLoading ? "..." : "7d"
         }
         if let cost = usage.totalCost {
             return Self.currency(cost)
@@ -634,8 +639,8 @@ extension AgentProTab {
 
     var usageDetail: String {
         guard self.gatewayConnected else { return "Connect a gateway to load usage." }
-        guard let usage = self.overview?.usage else {
-            return self.overviewLoading ? "Loading recent usage." : "Recent usage is available."
+        guard let usage = overview?.usage else {
+            return overviewLoading ? "Loading recent usage." : "Recent usage is available."
         }
         if let tokens = usage.totalTokens, tokens > 0 {
             return "\(Self.compactNumber(tokens)) tokens in \(usage.days ?? 7)d"
@@ -645,16 +650,16 @@ extension AgentProTab {
 
     var dreamingValue: String {
         guard self.gatewayConnected else { return "offline" }
-        guard let dreaming = self.overview?.dreaming else {
-            return self.overviewLoading ? "..." : "live"
+        guard let dreaming = overview?.dreaming else {
+            return overviewLoading ? "..." : "live"
         }
         return dreaming.enabled ? "on" : "off"
     }
 
     var dreamingDetail: String {
         guard self.gatewayConnected else { return "Connect a gateway to load dreaming." }
-        guard let dreaming = self.overview?.dreaming else {
-            return self.overviewLoading ? "Loading dreaming status." : "Background memory status is available."
+        guard let dreaming = overview?.dreaming else {
+            return overviewLoading ? "Loading dreaming status." : "Background memory status is available."
         }
         if let nextRunAtMs = dreaming.nextRunAtMs {
             return "Next cycle \(Self.relativeTime(fromMilliseconds: nextRunAtMs))"
@@ -664,11 +669,11 @@ extension AgentProTab {
 
     var dreamingColor: Color {
         guard self.gatewayConnected else { return .secondary }
-        return self.overview?.dreaming?.enabled == true ? OpenClawBrand.accent : .secondary
+        return overview?.dreaming?.enabled == true ? OpenClawBrand.accent : .secondary
     }
 
     var recentCronJobs: [CronJob] {
-        (self.overview?.cronJobs ?? [])
+        (overview?.cronJobs ?? [])
             .sorted { lhs, rhs in
                 let lhsNext = AgentProValueReader.intValue(lhs.state["nextRunAtMs"])
                 let rhsNext = AgentProValueReader.intValue(rhs.state["nextRunAtMs"])

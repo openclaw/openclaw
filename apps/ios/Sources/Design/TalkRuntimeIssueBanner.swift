@@ -55,7 +55,7 @@ struct TalkRuntimeIssueDetailsSheet: View {
                     .padding(.vertical, 4)
                 }
 
-                Section("Technical details") {
+                Section {
                     Text(verbatim: self.issue.technicalDetails)
                         .font(OpenClawType.monoFootnote)
                         .foregroundStyle(.secondary)
@@ -67,6 +67,9 @@ struct TalkRuntimeIssueDetailsSheet: View {
                         Text("Copy diagnostics")
                             .font(OpenClawType.subheadSemiBold)
                     }
+                } header: {
+                    Text("Technical details")
+                        .font(OpenClawType.captionSemiBold)
                 }
 
                 if let copyFeedback {

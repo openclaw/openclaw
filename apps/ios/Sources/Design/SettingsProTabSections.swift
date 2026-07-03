@@ -3,7 +3,7 @@ import SwiftUI
 
 extension SettingsProTab {
     var currentAppearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
+        AppAppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
     }
 
     var appearanceRow: some View {
@@ -20,7 +20,7 @@ extension SettingsProTab {
         .accessibilityHint("Choose system, light, or dark appearance")
         .confirmationDialog(
             "Appearance",
-            isPresented: self.$isShowingAppearanceDialog,
+            isPresented: $isShowingAppearanceDialog,
             titleVisibility: .visible)
         {
             ForEach(AppAppearancePreference.allCases) { preference in
@@ -91,9 +91,9 @@ extension SettingsProTab {
     }
 
     var gatewaySummaryDetail: String {
-        let agentCount = self.appModel.gatewayAgents.count
+        let agentCount = appModel.gatewayAgents.count
         let agents = agentCount == 1 ? "1 agent" : "\(agentCount) agents"
-        return "\(self.gatewayStatusDetail) • \(agents)"
+        return "\(gatewayStatusDetail) • \(agents)"
     }
 
     var gatewayActions: some View {
@@ -244,7 +244,7 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
             }
         }
-        .navigationTitle(self.title(for: route))
+        .navigationTitle(title(for: route))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let headerLeadingAction {
@@ -1113,6 +1113,7 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 TextField("Device Name", text: self.$displayName)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 self.detailRow("Instance ID", value: self.instanceId)
             }

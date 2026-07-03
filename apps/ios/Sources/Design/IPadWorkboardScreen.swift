@@ -125,9 +125,13 @@ struct IPadWorkboardScreen: View {
                     self.statusMenu
                 } else {
                     Picker("Scope", selection: self.$selectedStatus) {
-                        Text("Active").tag("active")
+                        Text("Active")
+                            .font(OpenClawType.captionSemiBold)
+                            .tag("active")
                         ForEach(self.statuses, id: \.self) { status in
-                            Text(IPadWorkboardDefaults.label(for: status)).tag(status)
+                            Text(IPadWorkboardDefaults.label(for: status))
+                                .font(OpenClawType.captionSemiBold)
+                                .tag(status)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -142,6 +146,7 @@ struct IPadWorkboardScreen: View {
                         Task { await self.dispatchCards() }
                     } label: {
                         Label("Dispatch", systemImage: "bolt.fill")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -151,6 +156,7 @@ struct IPadWorkboardScreen: View {
                         Task { await self.loadCards(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -198,6 +204,7 @@ struct IPadWorkboardScreen: View {
                             Task { await self.dispatchCards() }
                         } label: {
                             Label("Dispatch", systemImage: "bolt.fill")
+                                .font(OpenClawType.captionSemiBold)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -245,6 +252,7 @@ struct IPadWorkboardScreen: View {
             self.beginCreateCard()
         } label: {
             Label("New Card", systemImage: "plus")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: expands ? .infinity : nil)
         }
         .buttonStyle(.borderedProminent)
@@ -255,12 +263,18 @@ struct IPadWorkboardScreen: View {
 
     private var compactBoardScopeMenu: some View {
         Menu {
-            Button("All boards") {
+            Button {
                 self.selectedBoardID = ""
+            } label: {
+                Text("All boards")
+                    .font(OpenClawType.subhead)
             }
             ForEach(self.boardScopeOptions, id: \.self) { boardID in
-                Button(Self.boardScopeLabel(for: boardID)) {
+                Button {
                     self.selectedBoardID = boardID
+                } label: {
+                    Text(Self.boardScopeLabel(for: boardID))
+                        .font(OpenClawType.subhead)
                 }
             }
         } label: {
@@ -344,12 +358,18 @@ struct IPadWorkboardScreen: View {
                 .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("All boards") {
+                Button {
                     self.selectedBoardID = ""
+                } label: {
+                    Text("All boards")
+                        .font(OpenClawType.subhead)
                 }
                 ForEach(self.boardScopeOptions, id: \.self) { boardID in
-                    Button(Self.boardScopeLabel(for: boardID)) {
+                    Button {
                         self.selectedBoardID = boardID
+                    } label: {
+                        Text(Self.boardScopeLabel(for: boardID))
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
@@ -375,12 +395,18 @@ struct IPadWorkboardScreen: View {
                 .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Active") {
+                Button {
                     self.selectedStatus = "active"
+                } label: {
+                    Text("Active")
+                        .font(OpenClawType.subhead)
                 }
                 ForEach(self.statuses, id: \.self) { status in
-                    Button(IPadWorkboardDefaults.label(for: status)) {
+                    Button {
                         self.selectedStatus = status
+                    } label: {
+                        Text(IPadWorkboardDefaults.label(for: status))
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
@@ -481,17 +507,23 @@ struct IPadWorkboardScreen: View {
 
     private var createCardSheet: some View {
         Form {
-            Section("Card") {
+            Section {
                 TextField("Title", text: self.$draftTitle)
                     .textInputAutocapitalization(.sentences)
+                    .font(OpenClawType.subhead)
                     .submitLabel(.next)
                 TextField("Notes", text: self.$draftNotes, axis: .vertical)
                     .lineLimit(3...6)
                     .textInputAutocapitalization(.sentences)
+                    .font(OpenClawType.subhead)
+            } header: {
+                Text("Card")
+                    .font(OpenClawType.captionSemiBold)
             }
             if let errorText {
                 Section {
                     Text(errorText)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -500,8 +532,11 @@ struct IPadWorkboardScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                Button {
                     self.presentedSheet = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
@@ -513,6 +548,7 @@ struct IPadWorkboardScreen: View {
                     }
                 } label: {
                     Text(self.isCreatingCard ? "Creating..." : "Create")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.isCreatingCard)
                 .accessibilityHint(self.createUnavailableMessage ?? "Creates a workboard card")
@@ -1202,39 +1238,76 @@ private struct IPadWorkboardCardDetailSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Card") {
-                    LabeledContent("Title", value: self.card.title)
-                    LabeledContent("Status", value: IPadWorkboardDefaults.label(for: self.card.status))
+                Section {
+                    self.detailRow("Title", value: self.card.title)
+                    self.detailRow("Status", value: IPadWorkboardDefaults.label(for: self.card.status))
                     if let notes = self.card.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
                         Text(notes)
+                            .font(OpenClawType.subhead)
                     }
+                } header: {
+                    Text("Card")
+                        .font(OpenClawType.captionSemiBold)
                 }
 
-                Section("Actions") {
+                Section {
                     if self.card.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                        Button("Open Session", action: self.openSession)
-                    }
-                    Menu("Move") {
-                        ForEach(self.statuses, id: \.self) { status in
-                            Button(IPadWorkboardDefaults.label(for: status)) {
-                                self.move(status)
-                            }
+                        Button {
+                            self.openSession()
+                        } label: {
+                            Text("Open Session")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
+                    Menu {
+                        ForEach(self.statuses, id: \.self) { status in
+                            Button {
+                                self.move(status)
+                            } label: {
+                                Text(IPadWorkboardDefaults.label(for: status))
+                                    .font(OpenClawType.subhead)
+                            }
+                        }
+                    } label: {
+                        Text("Move")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
                     .disabled(!self.canWrite || self.isBusy)
-                    Button(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive", action: self.archive)
-                        .disabled(!self.canWrite || self.isBusy)
+                    Button {
+                        self.archive()
+                    } label: {
+                        Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    .disabled(!self.canWrite || self.isBusy)
+                } header: {
+                    Text("Actions")
+                        .font(OpenClawType.captionSemiBold)
                 }
             }
             .navigationTitle("Card")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
+                    Button {
                         self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }
+        }
+    }
+
+    private func detailRow(_ title: String, value: String) -> some View {
+        LabeledContent {
+            Text(value)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(.secondary)
+        } label: {
+            Text(title)
+                .font(OpenClawType.subheadSemiBold)
         }
     }
 }
@@ -1369,7 +1442,7 @@ struct IPadWorkboardDispatchSummary: Decodable {
     var summaryText: String {
         let total = max(
             dispatchCount,
-            self.startedCount + self.promotedCount + self.reclaimedCount + self.orchestratedCount +
+            startedCount + self.promotedCount + self.reclaimedCount + self.orchestratedCount +
                 self.blockedCount + self.startFailureCount)
         if total == 0, self.startFailureCount == 0, self.blockedCount == 0 {
             return "No cards dispatched."

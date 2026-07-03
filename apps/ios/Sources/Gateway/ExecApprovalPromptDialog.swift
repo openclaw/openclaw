@@ -110,6 +110,7 @@ private struct ExecApprovalPromptCard: View {
                     self.onAllowOnce()
                 } label: {
                     Text("Allow Once")
+                        .font(OpenClawType.subheadSemiBold)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -120,6 +121,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onAllowAlways()
                     } label: {
                         Text("Allow Always")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -131,6 +133,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onDeny()
                     } label: {
                         Text("Deny")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -140,6 +143,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onCancel()
                     } label: {
                         Text("Cancel")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -194,6 +198,6 @@ private struct ExecApprovalPromptMetadataRow: View {
 
 extension View {
     func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
+        modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
     }
 }

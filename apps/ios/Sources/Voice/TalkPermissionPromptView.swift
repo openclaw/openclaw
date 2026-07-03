@@ -40,7 +40,7 @@ struct TalkPermissionPromptView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(self.titleText)
-                        .font(self.style == .sheet ? .title3.weight(.semibold) : .headline)
+                        .font(self.style == .sheet ? OpenClawType.title3SemiBold : OpenClawType.headline)
                     Text(self.messageText)
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
@@ -56,11 +56,14 @@ struct TalkPermissionPromptView: View {
             }
 
             if let requestId = self.state.requestId {
-                LabeledContent("Request ID") {
+                LabeledContent {
                     Text(requestId)
                         .font(OpenClawType.monoSmall)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                } label: {
+                    Text("Request ID")
+                        .font(OpenClawType.footnoteSemiBold)
                 }
             }
 
@@ -71,11 +74,13 @@ struct TalkPermissionPromptView: View {
                     if case .requestingUpgrade = self.state {
                         Label {
                             Text("Sending...")
+                                .font(OpenClawType.subheadSemiBold)
                         } icon: {
                             ProgressView()
                         }
                     } else {
                         Label(self.primaryButtonTitle, systemImage: self.primaryButtonSystemImage)
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -85,6 +90,7 @@ struct TalkPermissionPromptView: View {
                     Task { await self.appModel.talkMode.reloadConfig() }
                 } label: {
                     Label("Retry", systemImage: "arrow.triangle.2.circlepath")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.bordered)
             }
