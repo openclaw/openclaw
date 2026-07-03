@@ -249,12 +249,11 @@ export async function preflightCronModelProvider(params: {
   });
 
   // When the sanitized request has no auth override, try the provider credential
-  // profile as fallback. Provider-level headers carry through via defaultHeaders;
-  // request-level headers are dropped in the fallback call since we only pass
-  // { auth } as the request override — acceptable for a connectivity probe.
-  // Skip when request auth was provided — the resolver already handled it, and
-  // adding a Bearer token from the credential profile would incorrectly override
-  // custom header-mode auth.
+  // profile as fallback. Preserve request-level headers from the sanitized
+  // requestOverrides so proxy/tenant headers are not lost when fallback auth
+  // is applied. Skip when request auth was provided — the resolver already
+  // handled it, and adding a Bearer token from the credential profile would
+  // incorrectly override custom header-mode auth.
   if (!requestOverrides?.auth) {
     try {
       const resolved = await resolveApiKeyForProvider({
@@ -273,7 +272,10 @@ export async function preflightCronModelProvider(params: {
           api,
           baseUrl,
           defaultHeaders: providerHeaders,
-          request: { auth: { mode: "authorization-bearer", token: resolved.apiKey } },
+          request: {
+            ...requestOverrides,
+            auth: { mode: "authorization-bearer", token: resolved.apiKey },
+          },
         });
       }
     } catch (err) {

@@ -70,6 +70,22 @@ describe("preflightCronModelProvider", () => {
       }
       let hasContent = false;
       const result: any = {};
+      if (
+        request.headers &&
+        typeof request.headers === "object" &&
+        !Array.isArray(request.headers)
+      ) {
+        const sanitized: Record<string, string> = {};
+        for (const [key, val] of Object.entries(request.headers)) {
+          if (typeof val === "string") {
+            sanitized[key] = val;
+          }
+        }
+        if (Object.keys(sanitized).length > 0) {
+          result.headers = sanitized;
+          hasContent = true;
+        }
+      }
       if (request.auth) {
         const auth = request.auth;
         if (auth.mode === "authorization-bearer") {
@@ -97,10 +113,14 @@ describe("preflightCronModelProvider", () => {
     });
 
     // Default: resolveProviderRequestHeaders builds headers from auth config
-    // Merges defaultHeaders (provider-level headers) with auth headers on top.
+    // Merges request.headers, defaultHeaders, then auth on top.
     resolveProviderRequestHeadersMock.mockImplementation((params: any) => {
       const headers: Record<string, string> = {};
+      if (params.request?.headers) {
+        Object.assign(headers, params.request.headers);
+      }
       if (params.defaultHeaders) {
+        // defaultHeaders override request.headers for matching keys
         Object.assign(headers, params.defaultHeaders);
       }
       if (params.request?.auth) {
@@ -1111,6 +1131,65 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.init?.headers).toHaveProperty("X-Proxy-Route", "us-east");
     expect(request.init?.headers).toHaveProperty("Authorization", "Bearer fallback-provider-key");
+  });
+
+  it("preserves request.headers in fallback call when resolveApiKeyForProvider resolves", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "fallback-key-with-headers",
+      mode: "api-key",
+      source: "config",
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            test: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              headers: { "X-Proxy-Route": "us-east" },
+              request: {
+                headers: { "X-Tenant-Id": "tenant-xyz" },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "test",
+      model: "test-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    // Primary call: request headers passed through
+    expect(resolveProviderRequestHeadersMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        defaultHeaders: { "X-Proxy-Route": "us-east" },
+        request: {
+          headers: { "X-Tenant-Id": "tenant-xyz" },
+        },
+      }),
+    );
+    // Fallback call: request headers preserved alongside resolved bearer auth
+    expect(resolveProviderRequestHeadersMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        defaultHeaders: { "X-Proxy-Route": "us-east" },
+        request: {
+          headers: { "X-Tenant-Id": "tenant-xyz" },
+          auth: { mode: "authorization-bearer", token: "fallback-key-with-headers" },
+        },
+      }),
+    );
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("X-Tenant-Id", "tenant-xyz");
+    expect(request.init?.headers).toHaveProperty("X-Proxy-Route", "us-east");
+    expect(request.init?.headers).toHaveProperty(
+      "Authorization",
+      "Bearer fallback-key-with-headers",
+    );
   });
 
   // ── Provider-level headers (P1) — verify providerConfig.headers pass through defaultHeaders ──
