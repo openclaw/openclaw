@@ -246,13 +246,29 @@ export function shouldCompact(
 
 const IMAGE_BLOCK_CHARS = 4800;
 
-function countContentBlockChars(content: Array<{ type: string; text?: string }>): number {
+function countContentBlockChars(
+  content: Array<{ type: string; text?: string; content?: unknown }>,
+): number {
   let chars = 0;
   for (const block of content) {
     if (block.type === "text" && block.text) {
       chars += block.text.length;
     } else if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
+    } else if (block.type === "toolResult") {
+      // Some runtimes (e.g. the codex app-server) persist tool results as nested
+      // "toolResult" blocks that carry their payload in `text`/`content` rather
+      // than a plain "text" block. Count that payload so tool-heavy sessions are
+      // not estimated at ~0 tokens, which collapses the compaction cut point and
+      // makes compaction a permanent no-op (issue #99375). Prefer `text` and only
+      // fall back to `content` so the same payload is not counted twice.
+      if (typeof block.text === "string" && block.text.length > 0) {
+        chars += block.text.length;
+      } else if (typeof block.content === "string") {
+        chars += block.content.length;
+      } else if (Array.isArray(block.content)) {
+        chars += countContentBlockChars(block.content as Array<{ type: string; text?: string }>);
+      }
     }
   }
   return chars;
