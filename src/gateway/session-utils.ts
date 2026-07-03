@@ -244,17 +244,17 @@ export function deriveSessionTitle(
     return undefined;
   }
 
+  const label = normalizeOptionalString(entry.label);
+  if (label) {
+    return label;
+  }
+
   if (normalizeOptionalString(entry.displayName)) {
     return normalizeOptionalString(entry.displayName);
   }
 
   if (normalizeOptionalString(entry.subject)) {
     return normalizeOptionalString(entry.subject);
-  }
-
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
   }
 
   if (firstUserMessage?.trim()) {

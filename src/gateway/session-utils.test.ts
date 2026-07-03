@@ -2519,10 +2519,14 @@ describe("deriveSessionTitle", () => {
       expected: "Label via /name",
     },
     {
-      name: "keeps subject precedence over a label",
-      fields: { subject: "Subject Text", label: "Label via /name" },
+      name: "prefers an explicit label over display and group metadata",
+      fields: {
+        displayName: "Display Name",
+        subject: "Group Subject",
+        label: "Label via /name",
+      },
       firstUserMessage: undefined,
-      expected: "Subject Text",
+      expected: "Label via /name",
     },
     {
       name: "ignores a blank label",
