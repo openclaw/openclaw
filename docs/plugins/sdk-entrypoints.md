@@ -90,6 +90,25 @@ export default defineToolPlugin({
   `openclaw.plugin.json` and `package.json` `openclaw.extensions`; OpenClaw does
   not execute plugin code to infer missing manifest data.
 
+## Tool result helpers
+
+**Import:** `openclaw/plugin-sdk/tool-results`
+
+Use `textResult(text, details)` when model-facing text and structured details
+differ. Use `jsonResult(payload)` when the model should receive pretty-printed
+JSON and `details` should preserve the typed payload.
+
+```typescript
+import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
+
+return jsonResult({ ok: true, messageId });
+return textResult("Message sent.", { ok: true, messageId });
+```
+
+These helpers build portable agent tool results only. MCP `structuredContent`,
+transport envelopes, media blocks, approval actions, and channel presentation
+remain owned by their specific contracts.
+
 ## `definePluginEntry`
 
 **Import:** `openclaw/plugin-sdk/plugin-entry`

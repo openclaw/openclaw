@@ -6949,6 +6949,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-entrypoints
 - Headings:
   - H2: defineToolPlugin
+  - H2: Tool result helpers
   - H2: definePluginEntry
   - H2: defineChannelPluginEntry
   - H2: defineSetupPluginEntry
