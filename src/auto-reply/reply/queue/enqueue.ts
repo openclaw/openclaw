@@ -104,6 +104,9 @@ export function enqueueFollowupRun(
   if (isFollowupRunAborted(run)) {
     return false;
   }
+  if (options.position === "front") {
+    run.protectFromQueueOverflow = true;
+  }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
@@ -134,6 +137,10 @@ export function enqueueFollowupRun(
       for (const item of dropped) {
         completeFollowupRunLifecycle(item);
       }
+    },
+    selectDropIndex: (items) => {
+      const unprotectedIndex = items.findIndex((item) => item.protectFromQueueOverflow !== true);
+      return Math.max(unprotectedIndex, 0);
     },
   });
   if (queue.dropPolicy === "summarize") {

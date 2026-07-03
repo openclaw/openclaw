@@ -1716,6 +1716,35 @@ describe("followup queue collect routing", () => {
       "queued later one",
       "queued later two",
     ]);
+    expect(getExistingFollowupQueue(key)?.items[0]?.protectFromQueueOverflow).toBe(true);
+  });
+
+  it("preserves prepended priority followups during old-item overflow eviction", () => {
+    const key = `test-priority-followup-overflow-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "old",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "queued later three" }), settings);
+
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "queued later three",
+    ]);
   });
 
   it("carries image payloads across collected batches", async () => {

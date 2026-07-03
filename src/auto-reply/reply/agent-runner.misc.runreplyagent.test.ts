@@ -3270,7 +3270,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   async function runPrivateFinalCase(params: {
     messagingToolSentTargets?: unknown[];
+    messagingToolSourceReplyPayloads?: Array<{ text?: string }>;
+    didDeliverSourceReplyViaMessageTool?: boolean;
     finalAssistantText?: string;
+    finalAssistantRawText?: string;
     payloadText?: string;
     successfulCronAdds?: number;
     resolvedVerboseLevel?: VerboseLevel;
@@ -3300,9 +3303,21 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       // payloads (verbose notices, usage line) that must NOT trigger the warn —
       // detection keys off the assistant final text, not the payload bundle.
       payloads: [{ text: params.payloadText ?? finalAssistantText }],
-      meta: { agentMeta: {}, finalAssistantVisibleText: finalAssistantText },
+      meta: {
+        agentMeta: {},
+        finalAssistantVisibleText: finalAssistantText,
+        ...(params.finalAssistantRawText
+          ? { finalAssistantRawText: params.finalAssistantRawText }
+          : {}),
+      },
       ...(params.messagingToolSentTargets
         ? { messagingToolSentTargets: params.messagingToolSentTargets }
+        : {}),
+      ...(params.messagingToolSourceReplyPayloads
+        ? { messagingToolSourceReplyPayloads: params.messagingToolSourceReplyPayloads }
+        : {}),
+      ...(params.didDeliverSourceReplyViaMessageTool
+        ? { didDeliverSourceReplyViaMessageTool: true }
         : {}),
       ...(params.successfulCronAdds === undefined
         ? {}
@@ -3394,6 +3409,20 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.prompt).toContain(finalAssistantText);
   });
 
+  it("uses visible final text, not raw assistant text, in the recovery retry prompt", async () => {
+    const visibleFinal =
+      "Visible answer that has already been normalized for the user-facing final response and is long enough to trigger recovery. It includes a second complete sentence so the substantive-final detector treats it as a real reply.";
+    await runPrivateFinalCase({
+      finalAssistantText: visibleFinal,
+      finalAssistantRawText: `<final>${visibleFinal}</final>`,
+    });
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(retryRun?.prompt).toContain(visibleFinal);
+    expect(retryRun?.prompt).not.toContain("<final>");
+  });
+
   it("suppresses retry prompt persistence and keeps the retry out of collect batches", async () => {
     await runPrivateFinalCase({ transcriptPrompt: "original user question" });
 
@@ -3474,6 +3503,18 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(getReplyPayloadMetadata(diagnostic ?? {})?.deliverDespiteSourceReplySuppression).toBe(
       true,
     );
+  });
+
+  it("does not emit retry-failure diagnostic after internal source reply delivery", async () => {
+    const { result } = await runPrivateFinalCase({
+      summaryLine: "stranded-reply-retry",
+      messagingToolSourceReplyPayloads: [{ text: "visible recovered reply" }],
+      finalAssistantText: "",
+      payloadText: "",
+    });
+
+    const payloads = result === undefined ? [] : normalizeReplyPayloads(result);
+    expect(payloads.some((payload) => payload.text === strandedDiagnosticText)).toBe(false);
   });
 
   it("emits the sanitized diagnostic when a stranded-reply retry produces no source delivery", async () => {

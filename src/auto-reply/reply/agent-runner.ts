@@ -1990,11 +1990,18 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
+    const committedMessagingToolSourceReplyDelivery =
+      runResult.didDeliverSourceReplyViaMessageTool === true ||
+      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
       if (!sessionKey || !storePath || followupRun.summaryLine !== STRANDED_REPLY_RETRY_MARKER) {
         return undefined;
       }
-      if (sessionCtx.InboundEventKind === "room_event" || successfulSourceReplyDelivery) {
+      if (
+        sessionCtx.InboundEventKind === "room_event" ||
+        successfulSourceReplyDelivery ||
+        committedMessagingToolSourceReplyDelivery
+      ) {
         return undefined;
       }
       const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -2013,9 +2020,6 @@ export async function runReplyAgent(params: {
       }
       return buildStrandedReplyDeliveryFailurePayload();
     };
-    const committedMessagingToolSourceReplyDelivery =
-      runResult.didDeliverSourceReplyViaMessageTool === true ||
-      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
@@ -2520,7 +2524,10 @@ export async function runReplyAgent(params: {
       // #85714: warn only for unusually substantive private final text. In
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
-      const assistantFinalText = rawAssistantText ?? "";
+      const assistantFinalText =
+        typeof runResult.meta?.finalAssistantVisibleText === "string"
+          ? runResult.meta.finalAssistantVisibleText
+          : (finalDeliveryText || rawAssistantText || "");
       const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
       const isStrandedReply =
         !isRoomEvent &&

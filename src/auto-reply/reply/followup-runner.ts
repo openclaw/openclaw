@@ -11,6 +11,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
@@ -113,42 +114,13 @@ function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
   );
 }
 
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
-}
-
-function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
-    }
-    return true;
-  });
-}
-
 function hasSuccessfulFollowupSourceReplyDelivery(params: {
   didDeliverSourceReplyViaMessageTool?: boolean;
-  didSendViaMessagingTool?: boolean;
-  messagingToolSentTexts?: string[];
-  messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
+  messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
 }): boolean {
   return (
     params.didDeliverSourceReplyViaMessageTool === true ||
-    params.didSendViaMessagingTool === true ||
-    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+    hasVisibleAgentPayload({ payloads: params.messagingToolSourceReplyPayloads })
   );
 }
 
@@ -1465,10 +1437,7 @@ export function createFollowupRunner(params: {
         if (
           hasSuccessfulFollowupSourceReplyDelivery({
             didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
-            didSendViaMessagingTool: runResult.didSendViaMessagingTool,
-            messagingToolSentTexts: runResult.messagingToolSentTexts,
-            messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-            messagingToolSentTargets: runResult.messagingToolSentTargets,
+            messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
           })
         ) {
           return false;

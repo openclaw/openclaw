@@ -74,6 +74,8 @@ export type FollowupRun = {
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
+  /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
+  protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
