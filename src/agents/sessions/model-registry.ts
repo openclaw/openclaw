@@ -557,7 +557,13 @@ export class ModelRegistry {
           input: modelDef.input ?? ["text"],
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
-          maxTokens: modelDef.maxTokens ?? 16384,
+          // Clamp maxTokens to contextWindow so custom models without explicit
+          // maxTokens never generate max_completion_tokens beyond the effective
+          // context limit (#98295).
+          maxTokens:
+            modelDef.maxTokens != null
+              ? Math.min(modelDef.maxTokens, modelDef.contextWindow ?? 128000)
+              : 16384,
           params: modelDef.params,
           headers: undefined,
           compat,
