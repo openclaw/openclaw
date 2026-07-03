@@ -144,3 +144,18 @@ internal fun compactSessionChoices(
     .take(maxOptions)
     .map { it.value }
 }
+
+internal fun hasAdditionalSessionChoices(
+  sessions: List<ChatSessionEntry>,
+  displayedChoices: List<ChatSessionEntry>,
+  mainSessionKey: String,
+): Boolean {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val aliasKey = if (mainKey == "main") null else "main"
+  val displayedKeys = displayedChoices.mapTo(mutableSetOf()) { it.key }
+  return sessions.any { entry ->
+    entry.key != aliasKey &&
+      entry.key !in displayedKeys &&
+      (entry.key == mainKey || isSelectableChatSession(entry.key, mainKey))
+  }
+}

@@ -286,7 +286,15 @@ private fun ChatSessionSwitcher(
         mainSessionKey = mainSessionKey,
       )
     }
-  if (allChoices.size <= 1) return
+  val hasMoreSessions =
+    remember(sessions, choices, mainSessionKey) {
+      hasAdditionalSessionChoices(
+        sessions = sessions,
+        displayedChoices = choices,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  if (choices.size <= 1 && !hasMoreSessions) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -300,7 +308,7 @@ private fun ChatSessionSwitcher(
         onClick = { onSelectSession(entry.key) },
       )
     }
-    if (allChoices.size > choices.size) {
+    if (hasMoreSessions) {
       Surface(
         onClick = onOpenSessions,
         modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),

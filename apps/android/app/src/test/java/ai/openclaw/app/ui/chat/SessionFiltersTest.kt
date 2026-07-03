@@ -84,6 +84,21 @@ class SessionFiltersTest {
   }
 
   @Test
+  fun additionalChoicesIgnoreHiddenSessionsButIncludeStaleChats() {
+    val displayed = listOf(ChatSessionEntry(key = "main", updatedAtMs = null))
+    val hiddenOnly =
+      listOf(
+        ChatSessionEntry(key = "main", updatedAtMs = null),
+        ChatSessionEntry(key = "agent:main:node-android", updatedAtMs = null),
+        ChatSessionEntry(key = "agent:main:onboarding", updatedAtMs = null),
+      )
+    assertFalse(hasAdditionalSessionChoices(hiddenOnly, displayed, mainSessionKey = "main"))
+
+    val withStaleChat = hiddenOnly + ChatSessionEntry(key = "old-channel", updatedAtMs = 1L)
+    assertTrue(hasAdditionalSessionChoices(withStaleChat, displayed, mainSessionKey = "main"))
+  }
+
+  @Test
   fun isSelectableChatSession_matchesIosRecentSessionFilter() {
     val hidden =
       listOf(
