@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const deliverSpy = vi.fn(
-  async (_params: Record<string, unknown>): Promise<{ delivered: boolean; path: string }> => ({
+  async (
+    _params: Record<string, unknown>,
+  ): Promise<{ delivered: boolean; path: string; terminal?: boolean; reason?: string }> => ({
     delivered: true,
     path: "direct",
   }),
@@ -331,15 +333,64 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliverSpy).not.toHaveBeenCalled();
   });
 
-  it("returns false when delivery fails without throwing", async () => {
+  it("retries a transiently failed wake with a fresh idempotency suffix", async () => {
+    // The wake is the only event after a drained fan-out; a wake turn lost to
+    // a provider stall must not re-park the requester. The gateway dedupe
+    // caches terminal outcomes per key, so each retry needs a fresh suffix.
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),
       makeSettledChild({ runId: "run-b" }),
     ]);
     deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct" });
 
+    vi.useFakeTimers();
+    try {
+      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+      await vi.advanceTimersByTimeAsync(30_000);
+      const woke = await wakePromise;
+
+      expect(woke).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
+      const keys = deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey);
+      expect(keys[0]).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b`);
+      expect(keys[1]).toBe(`announce:requester-settle:${REQUESTER}:run-a,run-b:retry-1`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after bounded retries when the wake keeps failing", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+    deliverSpy.mockResolvedValue({ delivered: false, path: "direct" });
+
+    vi.useFakeTimers();
+    try {
+      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
+      const woke = await wakePromise;
+
+      expect(woke).toBe(false);
+      expect(deliverSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+      deliverSpy.mockReset().mockResolvedValue({ delivered: true, path: "direct" });
+    }
+  });
+
+  it("does not retry a terminal delivery failure", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+    deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct", terminal: true });
+
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
     expect(woke).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
   });
 });

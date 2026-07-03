@@ -241,6 +241,22 @@ type SettledRunSummary = Pick<
   "runId" | "childSessionKey" | "createdAt" | "startedAt" | "endedAt"
 >;
 
+// The settle wake is the only thing that ever fires after a fan-out drains,
+// so a wake turn lost to a transient infra failure (provider stall, model
+// timeout) would re-park the requester permanently. Bounded retries with a
+// fresh idempotency suffix per attempt (the gateway dedupe caches terminal
+// run outcomes, so re-dispatching the same key would no-op) keep the wake
+// exactly-once per batch in the success path while surviving flaky turns.
+const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
+const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
+
+function waitForRequesterSettleWakeRetry(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 // Two runs are part of the same parallel wave when their lifetimes overlap.
 // A strictly sequential child (spawned after its predecessor ended) never
 // overlaps, which keeps the settle wake away from one-at-a-time usage.
@@ -401,27 +417,51 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     .join(",");
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
+  const wakeKeyBase = `requester-settle:${requesterSessionKey}:${batchSignature}`;
 
-  const delivery = await deliverSubagentAnnouncement({
-    requesterSessionKey,
-    triggerMessage: wakeMessage,
-    steerMessage: wakeMessage,
-    summaryLine: "all spawned subagents settled",
-    requesterSessionOrigin,
-    requesterOrigin: requesterSessionOrigin,
-    directOrigin,
-    sourceSessionKey: params.settledEntry.childSessionKey,
-    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-    sourceTool: "subagent_announce",
-    targetRequesterSessionKey: requesterSessionKey,
-    requesterIsSubagent: false,
-    expectsCompletionMessage: false,
-    directIdempotencyKey: buildAnnounceIdempotencyKey(
-      `requester-settle:${requesterSessionKey}:${batchSignature}`,
-    ),
-    signal: params.signal,
-  });
-  return delivery.delivered;
+  for (let attempt = 0; attempt < REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS; attempt += 1) {
+    if (params.signal?.aborted) {
+      return false;
+    }
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey,
+      triggerMessage: wakeMessage,
+      steerMessage: wakeMessage,
+      summaryLine: "all spawned subagents settled",
+      requesterSessionOrigin,
+      requesterOrigin: requesterSessionOrigin,
+      directOrigin,
+      sourceSessionKey: params.settledEntry.childSessionKey,
+      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+      sourceTool: "subagent_announce",
+      targetRequesterSessionKey: requesterSessionKey,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: buildAnnounceIdempotencyKey(
+        attempt === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attempt}`,
+      ),
+      signal: params.signal,
+    });
+    if (delivery.delivered) {
+      return true;
+    }
+    // A legitimately silent wake reply counts as delivered above; only real
+    // delivery failures reach here. Terminal failures and an abandoned
+    // requester will not improve on retry.
+    if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
+      return false;
+    }
+    const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attempt];
+    if (retryDelayMs === undefined) {
+      break;
+    }
+    logWarn(
+      `requester settle wake attempt ${attempt + 1} failed for ${requesterSessionKey}; ` +
+        `retrying in ${Math.round(retryDelayMs / 1000)}s: ${delivery.error ?? delivery.reason ?? "undelivered"}`,
+    );
+    await waitForRequesterSettleWakeRetry(retryDelayMs);
+  }
+  return false;
 }
 
 export async function runSubagentAnnounceFlow(params: {
