@@ -2208,13 +2208,12 @@ export async function dispatchReplyFromConfig(
             ctx.WasMentioned === false &&
             !isExplicitSourceReplyCommand(ctx, cfg)
           ) {
-            markIdle("plugin_binding_fallback_unmentioned");
-            recordProcessed("completed", { reason: pluginFallbackReason });
-            commitInboundDedupeIfClaimed();
-            return attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-            });
+            // Don't send a plugin-unavailable notice for unmentioned group
+            // traffic, and let normal agent dispatch process the message.
+            // For always-on routes where mention gating is disabled the
+            // message should still reach the agent; for mention-required
+            // routes the normal dispatch path applies its own mention gate.
+            break;
           }
           if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
             const didSendNotice = await sendBindingNotice(
