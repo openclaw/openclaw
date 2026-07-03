@@ -779,6 +779,51 @@
       "translated": "연결할 유효한 수동 엔드포인트를 입력하세요."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "설정 코드가 만료되었습니다"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway 토큰이 필요합니다"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway 토큰이 구성되지 않았습니다"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway 비밀번호가 필요합니다"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway 비밀번호가 올바르지 않습니다"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway 비밀번호가 구성되지 않았습니다"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway 액세스 검토가 필요합니다"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "저장된 인증이 올바르지 않습니다"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "기기 ID가 필요합니다"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Gateway 진단이 복사되었습니다"
@@ -929,6 +974,16 @@
       "translated": "페어링 후 연결된 휴대폰과 노드 호스트가 여기에 표시됩니다."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "노드 승인이 필요합니다"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Gateway 호스트에서 실행:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "대기 중인 요청"
@@ -1064,11 +1119,6 @@
       "translated": "마지막 Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "연결 재시도"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "연결 편집"
@@ -1129,9 +1179,24 @@
       "translated": "계속"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "새 설정 코드 스캔"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "연결 재시도"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "설정 코드가 만료되었습니다. 새 설정 QR을 스캔하세요."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway 액세스 검토가 필요합니다. Gateway 인증 범위를 확인한 후 다시 시도하세요."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "저장된 인증이 올바르지 않습니다. 다시 인증하거나 이 gateway 연결을 재설정하세요."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway 인증이 구성되지 않았습니다. 이 연결을 편집한 후 다시 시도하세요."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway 인증이 구성되지 않았습니다. Gateway 호스트에서 구성한 후 다시 시도하세요."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

@@ -1355,7 +1355,7 @@ export const ja_JP: TranslationMap = {
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "すべてのセッション",
     },
     welcome: {
       ready: "Ready to chat",

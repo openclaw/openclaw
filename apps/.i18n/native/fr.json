@@ -779,6 +779,51 @@
       "translated": "Saisissez un endpoint manuel valide pour vous connecter."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Le code de configuration a expiré"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Jeton Gateway requis"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Jeton Gateway non configuré"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Mot de passe Gateway requis"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Mot de passe Gateway invalide"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Mot de passe Gateway non configuré"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "L’accès à Gateway doit être vérifié"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Authentification enregistrée invalide"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Identité de l’appareil requise"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Diagnostics du gateway copiés"
@@ -929,6 +974,16 @@
       "translated": "Les téléphones liés et les hôtes de nœud apparaîtront ici après l’association."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Approbation du nœud requise"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Exécutez sur l’hôte Gateway :"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Demandes en attente"
@@ -1064,11 +1119,6 @@
       "translated": "Dernière Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Réessayer la connexion"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Modifier la connexion"
@@ -1129,9 +1179,24 @@
       "translated": "Continuer"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Scanner un nouveau code de configuration"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Réessayer la connexion"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Le code de configuration a expiré. Scannez un nouveau QR de configuration."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "L’accès à Gateway doit être vérifié. Vérifiez les périmètres d’authentification de la gateway, puis réessayez."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "L’authentification enregistrée n’est pas valide. Authentifiez-vous à nouveau ou réinitialisez cette connexion au Gateway."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "L’authentification du Gateway n’est pas configurée. Modifiez cette connexion et réessayez."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "L’authentification Gateway n’est pas configurée. Configurez-la sur l’hôte Gateway, puis réessayez."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

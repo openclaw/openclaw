@@ -1358,7 +1358,7 @@ export const es: TranslationMap = {
     dismissUpdateBanner: "Descartar banner de actualización",
     switchedSession: "Se cambió a {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Todas las sesiones",
     },
     welcome: {
       ready: "Ready to chat",

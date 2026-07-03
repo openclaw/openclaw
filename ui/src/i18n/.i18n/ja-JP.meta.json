@@ -1,13 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.sidebar.allSessions"
-  ],
-  "generatedAt": "2026-07-02T21:47:27.169Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-03T07:37:27.370Z",
   "locale": "ja-JP",
-  "model": "claude-opus-4-8",
-  "provider": "anthropic",
+  "model": "gpt-5.5",
+  "provider": "openai",
   "sourceHash": "f457ef4a415e1348150b8bb0850858d69fb802331e8ce40ea905872b06f33f35",
   "totalKeys": 1422,
-  "translatedKeys": 1421,
+  "translatedKeys": 1422,
   "workflow": 1
 }

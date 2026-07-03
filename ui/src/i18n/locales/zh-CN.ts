@@ -1313,7 +1313,7 @@ export const zh_CN: TranslationMap = {
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "所有会话",
     },
     welcome: {
       ready: "准备好聊天",
