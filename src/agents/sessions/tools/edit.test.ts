@@ -519,4 +519,24 @@ describe("edit tool", () => {
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
+
+  it("does not normalize unrelated lines when a real edit uses fuzzy matching", async () => {
+    const filePath = await createTempFile(
+      `const x = "hello";\nconst y = "world";  \nconst z = "foo–bar";  \n`,
+    );
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: 'const z = "foo-bar"', newText: 'const z = "baz"' }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+      `const x = "hello";\nconst y = "world";  \nconst z = "baz";  \n`,
+    );
+  });
 });

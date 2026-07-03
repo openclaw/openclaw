@@ -58,20 +58,13 @@ function normalizeForFuzzyMatch(text: string): string {
   );
 }
 
-interface FuzzyMatchResult {
-  /** Whether a match was found */
-  found: boolean;
-  /** The index where the match starts (in the content that should be used for replacement) */
+interface EditMatch {
+  /** The index where the match starts in the original content */
   index: number;
-  /** Length of the matched text */
-  matchLength: number;
+  /** Length of the matched text in the original content */
+  length: number;
   /** Whether fuzzy matching was used (false = exact match) */
   usedFuzzyMatch: boolean;
-  /**
-   * The content to use for replacement operations.
-   * When exact match: original content. When fuzzy match: normalized content.
-   */
-  contentForReplacement: string;
 }
 
 export interface Edit {
@@ -94,49 +87,91 @@ interface MatchedEdit {
 }
 
 /**
- * Find oldText in content, trying exact match first, then fuzzy match.
- * When fuzzy matching is used, the returned contentForReplacement is the
- * fuzzy-normalized version of the content (trailing whitespace stripped,
- * Unicode quotes/dashes normalized to ASCII).
+ * Map a normalized fuzzy-match span back to the corresponding span in the
+ * original content. The normalized string is produced by normalizeForFuzzyMatch,
+ * which preserves newlines and mostly preserves per-character positions except
+ * for trailing-whitespace removal and NFKC expansions/contractions. We search
+ * the original line range that produced the normalized match.
  */
-function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+function recoverOriginalSpan(
+  original: string,
+  normalized: string,
+  normalizedIndex: number,
+  normalizedLength: number,
+): { originalIndex: number; originalLength: number } | undefined {
+  const normalizedTarget = normalized.slice(normalizedIndex, normalizedIndex + normalizedLength);
+
+  // Fast path: if the exact same indices normalize to the target, use them.
+  // This handles the common ASCII case and avoids a full line-range search.
+  const directCandidate = original.slice(normalizedIndex, normalizedIndex + normalizedLength);
+  if (normalizeForFuzzyMatch(directCandidate) === normalizedTarget) {
+    return { originalIndex: normalizedIndex, originalLength: normalizedLength };
+  }
+
+  // Determine the line range in normalized space that produced the match.
+  const startLine = normalized.slice(0, normalizedIndex).split("\n").length - 1;
+  const endLine = normalized.slice(0, normalizedIndex + normalizedLength).split("\n").length - 1;
+
+  const originalLines = original.split("\n");
+
+  // Compute the original byte range for those lines.
+  let originalLineStart = 0;
+  for (let i = 0; i < startLine && i < originalLines.length; i++) {
+    originalLineStart += originalLines[i].length + 1; // +1 for the newline
+  }
+
+  let originalLineEnd = originalLineStart;
+  for (let i = startLine; i <= endLine && i < originalLines.length; i++) {
+    originalLineEnd += originalLines[i].length + 1;
+  }
+  originalLineEnd = Math.min(originalLineEnd, original.length);
+
+  const searchStart = originalLineStart;
+  const searchEnd = originalLineEnd;
+  const minLen = Math.max(1, normalizedLength - 20);
+  const maxLen = Math.min(searchEnd - searchStart, normalizedLength + 100);
+
+  // Brute-force search within the original line range for a substring whose
+  // normalization equals the normalized match target. Edits are typically
+  // small, so this bounded search is cheap in practice.
+  for (let length = minLen; length <= maxLen; length++) {
+    for (let i = searchStart; i + length <= searchEnd; i++) {
+      const candidate = original.slice(i, i + length);
+      if (normalizeForFuzzyMatch(candidate) === normalizedTarget) {
+        return { originalIndex: i, originalLength: length };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Find oldText in content, trying exact match first, then fuzzy match.
+ * Returns the matching span in the original content so replacements can be
+ * applied without rewriting the rest of the file.
+ */
+function findEditMatch(content: string, oldText: string): EditMatch | undefined {
   // Try exact match first
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
-    return {
-      found: true,
-      index: exactIndex,
-      matchLength: oldText.length,
-      usedFuzzyMatch: false,
-      contentForReplacement: content,
-    };
+    return { index: exactIndex, length: oldText.length, usedFuzzyMatch: false };
   }
 
-  // Try fuzzy match - work entirely in normalized space
+  // Try fuzzy match in normalized space, then recover the original span.
   const fuzzyContent = normalizeForFuzzyMatch(content);
   const fuzzyOldText = normalizeForFuzzyMatch(oldText);
   const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
-
   if (fuzzyIndex === -1) {
-    return {
-      found: false,
-      index: -1,
-      matchLength: 0,
-      usedFuzzyMatch: false,
-      contentForReplacement: content,
-    };
+    return undefined;
   }
 
-  // When fuzzy matching, we work in the normalized space for replacement.
-  // This means the output will have normalized whitespace/quotes/dashes,
-  // which is acceptable since we're fixing minor formatting differences anyway.
-  return {
-    found: true,
-    index: fuzzyIndex,
-    matchLength: fuzzyOldText.length,
-    usedFuzzyMatch: true,
-    contentForReplacement: fuzzyContent,
-  };
+  const span = recoverOriginalSpan(content, fuzzyContent, fuzzyIndex, fuzzyOldText.length);
+  if (!span) {
+    return undefined;
+  }
+
+  return { index: span.originalIndex, length: span.originalLength, usedFuzzyMatch: true };
 }
 
 /** Strip UTF-8 BOM if present, return both the BOM (if any) and the text without it */
@@ -201,9 +236,9 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space to
- * preserve current single-edit behavior.
+ * then applied in reverse order so offsets remain stable. Fuzzy matching is
+ * used only to locate oldText; the replacement is applied to the original
+ * content span so unrelated lines are not rewritten.
  */
 export function applyEditsToNormalizedContent(
   normalizedContent: string,
@@ -221,22 +256,15 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  const initialMatches = normalizedEdits.map((edit) =>
-    fuzzyFindText(normalizedContent, edit.oldText),
-  );
-  const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
-    ? normalizeForFuzzyMatch(normalizedContent)
-    : normalizedContent;
-
   const matchedEdits: MatchedEdit[] = [];
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i];
-    const matchResult = fuzzyFindText(baseContent, edit.oldText);
-    if (!matchResult.found) {
+    const matchResult = findEditMatch(normalizedContent, edit.oldText);
+    if (!matchResult) {
       throw getNotFoundError(path, i, normalizedEdits.length);
     }
 
-    const occurrences = countOccurrences(baseContent, edit.oldText);
+    const occurrences = countOccurrences(normalizedContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
@@ -244,7 +272,7 @@ export function applyEditsToNormalizedContent(
     matchedEdits.push({
       editIndex: i,
       matchIndex: matchResult.index,
-      matchLength: matchResult.matchLength,
+      matchLength: matchResult.length,
       newText: edit.newText,
     });
   }
@@ -260,7 +288,7 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  let newContent = baseContent;
+  let newContent = normalizedContent;
   for (let i = matchedEdits.length - 1; i >= 0; i--) {
     const edit = matchedEdits[i];
     newContent =
@@ -269,11 +297,11 @@ export function applyEditsToNormalizedContent(
       newContent.slice(edit.matchIndex + edit.matchLength);
   }
 
-  if (baseContent === newContent) {
+  if (normalizedContent === newContent) {
     throw getNoChangeError(path, normalizedEdits.length);
   }
 
-  return { baseContent, newContent };
+  return { baseContent: normalizedContent, newContent };
 }
 
 /** Generate a standard unified patch. */
