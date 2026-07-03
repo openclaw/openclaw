@@ -128,11 +128,11 @@ export function validateStableNpmReleaseRequest(request) {
   ) {
     throw new Error("Protected main package version must be an exact final YYYY.M.P version.");
   }
-  const expectedMainYear = taggedVersion.month === 12 ? taggedVersion.year + 1 : taggedVersion.year;
-  const expectedMainMonth = taggedVersion.month === 12 ? 1 : taggedVersion.month + 1;
-  if (mainVersion.year !== expectedMainYear || mainVersion.month !== expectedMainMonth) {
+  const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
+  const releaseCalendarMonth = taggedVersion.year * 12 + taggedVersion.month;
+  if (mainCalendarMonth <= releaseCalendarMonth) {
     throw new Error(
-      `Protected main must be in the next calendar month (${expectedMainYear}.${expectedMainMonth}); got ${request.mainPackageVersion}.`,
+      `Protected main must be in a later calendar month than ${taggedVersion.year}.${taggedVersion.month}; got ${request.mainPackageVersion}.`,
     );
   }
   if (mainVersion.patch >= 33) {

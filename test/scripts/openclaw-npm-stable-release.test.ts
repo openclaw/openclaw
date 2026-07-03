@@ -131,7 +131,7 @@ describe("stable npm release request", () => {
     mainPackageVersion: "2026.7.2",
   };
 
-  it("accepts .33, later patches, and December rollover", () => {
+  it("accepts .33, later patches, and any later protected-main calendar month", () => {
     expect(validateStableNpmReleaseRequest(valid)).toEqual({
       stable: true,
       releaseVersion: "2026.6.33",
@@ -153,6 +153,15 @@ describe("stable npm release request", () => {
         mainPackageVersion: "2027.1.1",
       }),
     ).toMatchObject({ stable: true, stableBranch: "stable/2026.12.33" });
+    expect(() =>
+      validateStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2026.8.1" }),
+    ).not.toThrow();
+    expect(() =>
+      validateStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2027.1.1" }),
+    ).not.toThrow();
+    expect(() =>
+      validateStableNpmReleaseRequest({ ...valid, mainPackageVersion: "2028.12.32" }),
+    ).not.toThrow();
   });
 
   it.each([
@@ -165,7 +174,9 @@ describe("stable npm release request", () => {
     ["tag mismatch", { tagSha: "b".repeat(40) }],
     ["branch tip mismatch", { stableBranchSha: "b".repeat(40) }],
     ["package mismatch", { packageVersion: "2026.6.34" }],
-    ["main month mismatch", { mainPackageVersion: "2026.8.1" }],
+    ["main same month", { mainPackageVersion: "2026.6.1" }],
+    ["main earlier month", { mainPackageVersion: "2026.5.32" }],
+    ["main earlier year", { mainPackageVersion: "2025.12.32" }],
     ["main stable patch", { mainPackageVersion: "2026.7.33" }],
   ])("rejects %s", (_label, changes) => {
     expect(() => validateStableNpmReleaseRequest({ ...valid, ...changes })).toThrow();

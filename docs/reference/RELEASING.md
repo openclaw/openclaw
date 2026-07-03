@@ -77,8 +77,9 @@ This is a dedicated exception to the regular release procedure below. For a
 completed month `YYYY.M`, create `stable/YYYY.M.33`; publish `vYYYY.M.33` and
 later maintenance patches from that same branch. The release tag, branch tip,
 checkout, package version, npm preflight, and Full Release Validation run must
-all identify the same commit. Protected `main` must already contain the next
-calendar month's final version below patch `33`.
+all identify the same commit. Protected `main` must already contain a strictly
+later calendar month's final version below patch `33`; maintenance patches stay
+eligible after `main` advances by more than one month.
 
 Run the npm preflight and Full Release Validation from the exact stable branch,
 then save both run IDs:
