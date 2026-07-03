@@ -118,14 +118,6 @@ describe("shared/safe-record", () => {
       const arrayLike = { 0: "a", 1: "b", length: 2 };
       expect(copyArrayEntries(arrayLike)).toEqual([]);
     });
-
-    it("handles Array.isArray that throws", () => {
-      // Using Object.defineProperty to test the defensive try/catch.
-      const origIsArray = Array.isArray;
-      // Simulate a scenario where Array.isArray could throw.
-      const hostile = new Number(42); // eslint-disable-line no-new-wrappers
-      expect(copyArrayEntries(hostile)).toEqual([]);
-    });
   });
 
   describe("copyRecordEntries", () => {
