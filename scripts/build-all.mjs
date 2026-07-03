@@ -172,6 +172,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   },
   ciArtifacts: {
     tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
