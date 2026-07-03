@@ -813,15 +813,22 @@ fun OnboardingFlow(
           permissionState = permissionState,
           onBack = ::goBack,
           onContinue = {
+            val requiresNodeSurfaceRefresh = permissionState.requiresNodeApprovalAfterApply
             permissionState.applyToViewModel()
             if (
               permissionContinueNeedsNodeApproval(
                 ready = ready,
-                requiresNodeApprovalAfterApply = permissionState.requiresNodeApprovalAfterApply,
+                requiresNodeApprovalAfterApply = requiresNodeSurfaceRefresh,
                 nodeCapabilityApprovalState = nodeCapabilityApprovalState,
               )
             ) {
-              nodeApprovalBackStep = OnboardingStep.Permissions
+              val reapprovalBackSteps =
+                permissionReapprovalBackSteps(
+                  currentNodeApprovalBackStep = nodeApprovalBackStep,
+                  currentPermissionsBackStep = permissionsBackStep,
+                )
+              nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep
+              permissionsBackStep = reapprovalBackSteps.permissionsBackStep
               nodeApprovalCheckRequested = false
               nodeApprovalCheckRefreshStarted = false
               nodeApprovalAutoContinueEnabled = false
@@ -829,6 +836,9 @@ fun OnboardingFlow(
               viewModel.refreshGatewayConnection()
               step = OnboardingStep.NodeApproval
             } else {
+              if (requiresNodeSurfaceRefresh) {
+                viewModel.refreshGatewayConnection()
+              }
               viewModel.setOnboardingCompleted(true)
             }
           },
@@ -1707,6 +1717,37 @@ private fun GatewayRecoveryScreen(
       connectSettling = connectSettling,
     )
   val primaryAction = gatewayRecoveryPrimaryAction(recoveryState)
+  val showDiagnosticAction =
+    gatewayRecoveryShowsDiagnosticAction(
+      state = recoveryState,
+      gatewayConnectionProblem = gatewayConnectionProblem,
+    )
+  val diagnosticText =
+    remember(
+      statusText,
+      serverName,
+      attemptedGatewayName,
+      gatewayPaired,
+      gatewayPairingCanContinue,
+      gatewayConnectionProblem,
+    ) {
+      gatewayRecoveryDiagnosticText(
+        statusText = statusText,
+        gatewayName = recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName),
+        gatewayPaired = gatewayPaired,
+        gatewayPairingCanContinue = gatewayPairingCanContinue,
+        gatewayConnectionProblem = gatewayConnectionProblem,
+      )
+    }
+  var diagnosticDialogVisible by rememberSaveable { mutableStateOf(false) }
+
+  if (diagnosticDialogVisible) {
+    GatewayRecoveryDiagnosticDialog(
+      diagnosticText = diagnosticText,
+      onDismiss = { diagnosticDialogVisible = false },
+      onCopy = { copyGatewayDiagnostic(context = context, diagnosticText = diagnosticText) },
+    )
+  }
 
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1747,6 +1788,12 @@ private fun GatewayRecoveryScreen(
           Spacer(modifier = Modifier.height(20.dp))
           GatewayRecoveryProgress(items = recoveryProgressItems)
         }
+        if (showDiagnosticAction) {
+          Spacer(modifier = Modifier.height(14.dp))
+          TextButton(onClick = { diagnosticDialogVisible = true }) {
+            Text("View details", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+          }
+        }
       }
 
       primaryAction?.let { action ->
@@ -1766,6 +1813,47 @@ private fun GatewayRecoveryScreen(
       }
     }
   }
+}
+
+@Composable
+private fun GatewayRecoveryDiagnosticDialog(
+  diagnosticText: String,
+  onDismiss: () -> Unit,
+  onCopy: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text("Connection details", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = {
+      SelectionContainer {
+        Text(
+          text = diagnosticText,
+          style = ClawTheme.type.mono,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onCopy) {
+        Text("Copy")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Close")
+      }
+    },
+  )
+}
+
+private fun copyGatewayDiagnostic(
+  context: Context,
+  diagnosticText: String,
+) {
+  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostic", diagnosticText))
+  Toast.makeText(context, "Details copied", Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -2295,6 +2383,34 @@ internal fun gatewayRecoveryPrimaryAction(state: GatewayRecoveryUiState): Gatewa
     GatewayRecoveryUiState.TakingLonger -> GatewayRecoveryPrimaryAction.Retry
   }
 
+internal fun gatewayRecoveryShowsDiagnosticAction(
+  state: GatewayRecoveryUiState,
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+): Boolean =
+  state == GatewayRecoveryUiState.Failed ||
+    state == GatewayRecoveryUiState.TakingLonger ||
+    gatewayConnectionProblem != null
+
+internal fun gatewayRecoveryDiagnosticText(
+  statusText: String,
+  gatewayName: String,
+  gatewayPaired: Boolean,
+  gatewayPairingCanContinue: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+): String =
+  listOf(
+    "OpenClaw Android gateway diagnostic",
+    "Gateway: $gatewayName",
+    "Status: ${gatewayStatusForDisplay(statusText)}",
+    "Gateway paired: $gatewayPaired",
+    "Ready to continue: $gatewayPairingCanContinue",
+    "Error code: ${gatewayConnectionProblem?.code ?: "n/a"}",
+    "Reason: ${gatewayConnectionProblem?.reason ?: "n/a"}",
+    "Request ID: ${gatewayConnectionProblem?.requestId ?: "n/a"}",
+    "Next step: ${gatewayConnectionProblem?.recommendedNextStep ?: "n/a"}",
+    "Retryable: ${gatewayConnectionProblem?.retryable ?: false}",
+  ).joinToString("\n")
+
 internal fun gatewayPairingUiState(
   gatewayPaired: Boolean,
   gatewayPairingCanContinue: Boolean,
@@ -2304,12 +2420,13 @@ internal fun gatewayPairingUiState(
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
+    gatewayPairingCanContinue -> GatewayRecoveryUiState.Connected
     gatewayConnectionProblem?.isPairingRequired == true &&
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
-    gatewayPairingCanContinue -> GatewayRecoveryUiState.Connected
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
+    gatewayStatusLooksLikeFailure(statusText) -> GatewayRecoveryUiState.Failed
     gatewayPaired -> if (connectTimedOut) GatewayRecoveryUiState.TakingLonger else GatewayRecoveryUiState.Finishing
     connectSettling -> GatewayRecoveryUiState.Finishing
     connectTimedOut -> GatewayRecoveryUiState.TakingLonger
@@ -2388,6 +2505,12 @@ private fun finishingGatewayProgressItems(
 internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower.contains("operator offline") || lower.contains("node offline")
+}
+
+/** Detects explicit endpoint/auth failures surfaced as status text without structured details. */
+internal fun gatewayStatusLooksLikeFailure(statusText: String): Boolean {
+  val lower = gatewayStatusForDisplay(statusText).lowercase()
+  return lower.startsWith("failed:") || lower.startsWith("error:") || lower.startsWith("gateway error:")
 }
 
 internal fun recoveryGatewayName(
@@ -2548,6 +2671,27 @@ internal fun gatewayPairingContinueDestination(
     else -> null
   }
 
+internal data class OnboardingPermissionReapprovalBackSteps(
+  val nodeApprovalBackStep: OnboardingStep,
+  val permissionsBackStep: OnboardingStep,
+)
+
+internal fun permissionReapprovalBackSteps(
+  currentNodeApprovalBackStep: OnboardingStep,
+  currentPermissionsBackStep: OnboardingStep,
+): OnboardingPermissionReapprovalBackSteps {
+  val originalPermissionsBackStep =
+    if (currentNodeApprovalBackStep == OnboardingStep.Permissions) {
+      currentPermissionsBackStep
+    } else {
+      currentNodeApprovalBackStep
+    }
+  return OnboardingPermissionReapprovalBackSteps(
+    nodeApprovalBackStep = OnboardingStep.Permissions,
+    permissionsBackStep = originalPermissionsBackStep,
+  )
+}
+
 internal fun nodeApprovalCheckingInProgress(
   checkRequested: Boolean,
   refreshStarted: Boolean,
@@ -2572,6 +2716,7 @@ internal fun nodeApprovalCheckCanContinue(
   ready: Boolean,
 ): Boolean =
   checkRequested &&
+    refreshStarted &&
     !nodesDevicesRefreshing &&
     ready
 
@@ -2663,6 +2808,11 @@ internal fun cameraPermissionRowStatusText(
     else -> "Not allowed"
   }
 
+internal fun cameraCapabilityAfterRowTap(
+  currentCapabilityEnabled: Boolean,
+  androidCameraPermissionGranted: Boolean,
+): Boolean? = if (androidCameraPermissionGranted) !currentCapabilityEnabled else null
+
 private fun permissionRowStatusText(granted: Boolean): String = if (granted) "Granted" else "Not granted"
 
 internal fun permissionChangesRequireNodeApproval(
@@ -2670,9 +2820,12 @@ internal fun permissionChangesRequireNodeApproval(
   requestedCameraEnabled: Boolean,
   currentLocationMode: LocationMode,
   requestedLocationMode: LocationMode,
+  currentSmsGranted: Boolean,
+  requestedSmsGranted: Boolean,
 ): Boolean =
   currentCameraEnabled != requestedCameraEnabled ||
-    currentLocationMode != requestedLocationMode
+    currentLocationMode != requestedLocationMode ||
+    currentSmsGranted != requestedSmsGranted
 
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
@@ -2707,17 +2860,15 @@ private fun rememberPermissionState(
       SensitiveFeatureConfig.smsEnabled &&
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val currentSmsGranted =
+    !smsAvailable ||
+      (
+        hasPermission(context, Manifest.permission.SEND_SMS) &&
+          hasPermission(context, Manifest.permission.READ_SMS)
+      )
   val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
   var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
-  var smsGranted by rememberSaveable {
-    mutableStateOf(
-      !smsAvailable ||
-        (
-          hasPermission(context, Manifest.permission.SEND_SMS) &&
-            hasPermission(context, Manifest.permission.READ_SMS)
-        ),
-    )
-  }
+  var smsGranted by rememberSaveable { mutableStateOf(currentSmsGranted) }
   var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
   val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -2774,8 +2925,13 @@ private fun rememberPermissionState(
   }
 
   fun requestCameraCapability() {
-    if (hasPermission(context, Manifest.permission.CAMERA)) {
-      cameraGranted = true
+    val nextCapabilityEnabled =
+      cameraCapabilityAfterRowTap(
+        currentCapabilityEnabled = cameraGranted,
+        androidCameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+      )
+    if (nextCapabilityEnabled != null) {
+      cameraGranted = nextCapabilityEnabled
     } else {
       request(Manifest.permission.CAMERA)
     }
@@ -2850,6 +3006,8 @@ private fun rememberPermissionState(
         requestedCameraEnabled = cameraGranted,
         currentLocationMode = currentLocationMode,
         requestedLocationMode = if (locationGranted) LocationMode.WhileUsing else LocationMode.Off,
+        currentSmsGranted = currentSmsGranted,
+        requestedSmsGranted = smsGranted,
       ),
     applyToViewModel = {
       viewModel.setCameraEnabled(cameraGranted)

@@ -431,13 +431,26 @@ class ConnectionManagerTest {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
-      listOf(
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ),
+      ConnectionManager.nativeClientOperatorScopes,
       options.scopes,
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_preservesRecordedScopes() {
+    assertEquals(
+      listOf("operator.read", "operator.write"),
+      ConnectionManager.operatorScopesForStoredDeviceToken(
+        listOf("operator.read", "operator.write", "operator.read", " "),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_fallsBackToLegacyScopesWhenMetadataMissing() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      ConnectionManager.operatorScopesForStoredDeviceToken(emptyList()),
     )
   }
 

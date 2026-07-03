@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
@@ -1856,10 +1857,13 @@ class NodeRuntime(
   ) {
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
+    val storedOperatorEntry = loadStoredRoleDeviceAuthEntry("operator")
+    val usesStoredOperatorDeviceToken =
+      operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
     val operatorAuth =
       resolveOperatorSessionConnectAuth(
         auth = auth,
-        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
+        storedOperatorToken = storedOperatorEntry?.token,
       )
     if (operatorAuth == null) {
       updateStatus {
@@ -1874,7 +1878,13 @@ class NodeRuntime(
         operatorAuth.token,
         operatorAuth.bootstrapToken,
         operatorAuth.password,
-        connectionManager.buildOperatorConnectOptions(),
+        connectionManager.buildOperatorConnectOptions(
+          scopes =
+            operatorConnectScopesForAuth(
+              usesStoredDeviceToken = usesStoredOperatorDeviceToken,
+              storedOperatorScopes = storedOperatorEntry?.scopes,
+            ),
+        ),
         tls,
       )
     }
@@ -2019,9 +2029,9 @@ class NodeRuntime(
     connect(GatewayEndpoint.manual(host = host, port = port))
   }
 
-  private fun loadStoredRoleDeviceToken(role: String): String? {
+  private fun loadStoredRoleDeviceAuthEntry(role: String): DeviceAuthEntry? {
     val deviceId = identityStore.loadOrCreate().deviceId
-    return deviceAuthStore.loadToken(deviceId, role)
+    return deviceAuthStore.loadEntry(deviceId, role)
   }
 
   private fun maybeStartOperatorSessionAfterNodeConnect(
@@ -2031,10 +2041,13 @@ class NodeRuntime(
     if (operatorConnected) {
       return
     }
+    val storedOperatorEntry = loadStoredRoleDeviceAuthEntry("operator")
+    val usesStoredOperatorDeviceToken =
+      operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
     val operatorAuth =
       resolveOperatorSessionConnectAuth(
         auth = auth,
-        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
+        storedOperatorToken = storedOperatorEntry?.token,
       ) ?: return
     updateStatus {
       operatorStatusText = "Connecting…"
@@ -2045,7 +2058,13 @@ class NodeRuntime(
       operatorAuth.token,
       operatorAuth.bootstrapToken,
       operatorAuth.password,
-      connectionManager.buildOperatorConnectOptions(),
+      connectionManager.buildOperatorConnectOptions(
+        scopes =
+          operatorConnectScopesForAuth(
+            usesStoredDeviceToken = usesStoredOperatorDeviceToken,
+            storedOperatorScopes = storedOperatorEntry?.scopes,
+          ),
+      ),
       connectionManager.resolveTlsParams(endpoint),
     )
   }
@@ -3385,6 +3404,27 @@ internal fun resolveOperatorSessionConnectAuth(
     bootstrapToken = null,
     password = null,
   )
+}
+
+internal fun operatorSessionUsesStoredDeviceToken(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): Boolean {
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken == null) return false
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  return explicitToken == null && explicitPassword == null
+}
+
+internal fun operatorConnectScopesForAuth(
+  usesStoredDeviceToken: Boolean,
+  storedOperatorScopes: List<String>?,
+): List<String> {
+  if (usesStoredDeviceToken && storedOperatorScopes != null) {
+    return ConnectionManager.operatorScopesForStoredDeviceToken(storedOperatorScopes)
+  }
+  return ConnectionManager.nativeClientOperatorScopes
 }
 
 private enum class HomeCanvasGatewayState {

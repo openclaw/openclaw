@@ -67,6 +67,51 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun permissionReapprovalBackStepsReturnThroughPermissionsWithoutLooping() {
+    val reapprovalBackSteps =
+      permissionReapprovalBackSteps(
+        currentNodeApprovalBackStep = OnboardingStep.Recovery,
+        currentPermissionsBackStep = OnboardingStep.NodeApproval,
+      )
+
+    assertEquals(OnboardingStep.Permissions, reapprovalBackSteps.nodeApprovalBackStep)
+    assertEquals(OnboardingStep.Recovery, reapprovalBackSteps.permissionsBackStep)
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Permissions),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+
+    val repeatedReapprovalBackSteps =
+      permissionReapprovalBackSteps(
+        currentNodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        currentPermissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      )
+
+    assertEquals(OnboardingStep.Permissions, repeatedReapprovalBackSteps.nodeApprovalBackStep)
+    assertEquals(OnboardingStep.Recovery, repeatedReapprovalBackSteps.permissionsBackStep)
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        nodeApprovalBackStep = repeatedReapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = repeatedReapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+  }
+
+  @Test
   fun setupCodeEntryBackRestoresInlineScannerOnlyWhenOpenedFromScanner() {
     assertEquals(
       OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true),
@@ -135,6 +180,13 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun cameraPermissionRowTogglesCapabilityWhenAndroidPermissionAlreadyGranted() {
+    assertNull(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = false))
+    assertTrue(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = true)!!)
+    assertFalse(cameraCapabilityAfterRowTap(currentCapabilityEnabled = true, androidCameraPermissionGranted = true)!!)
+  }
+
+  @Test
   fun permissionChangesRequireNodeApprovalWhenAdvertisedSurfaceChanges() {
     assertTrue(
       permissionChangesRequireNodeApproval(
@@ -142,6 +194,8 @@ class OnboardingFlowLogicTest {
         requestedCameraEnabled = true,
         currentLocationMode = LocationMode.Off,
         requestedLocationMode = LocationMode.Off,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
       ),
     )
     assertTrue(
@@ -150,6 +204,18 @@ class OnboardingFlowLogicTest {
         requestedCameraEnabled = false,
         currentLocationMode = LocationMode.Off,
         requestedLocationMode = LocationMode.WhileUsing,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
+      ),
+    )
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = false,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Off,
+        currentSmsGranted = false,
+        requestedSmsGranted = true,
       ),
     )
     assertFalse(
@@ -158,6 +224,8 @@ class OnboardingFlowLogicTest {
         requestedCameraEnabled = true,
         currentLocationMode = LocationMode.WhileUsing,
         requestedLocationMode = LocationMode.WhileUsing,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
       ),
     )
   }
@@ -522,11 +590,19 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun nodeApprovalCheckContinuesWhenRequestedCheckFindsGatewayReady() {
-    assertTrue(
+    assertFalse(
       nodeApprovalCheckCanContinue(
         checkRequested = true,
         refreshStarted = false,
         nodesDevicesRefreshing = false,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = true,
         ready = true,
       ),
     )
@@ -602,6 +678,29 @@ class OnboardingFlowLogicTest {
         statusText = "Waiting for node approval",
         connectSettling = false,
         connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingContinueWinsOverStaleNodePairingRequiredProblem() {
+    assertEquals(
+      GatewayRecoveryUiState.Connected,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = true,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
       ),
     )
   }
@@ -696,6 +795,40 @@ class OnboardingFlowLogicTest {
         statusText = "Connecting…",
         connectSettling = false,
         connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingPreservesExplicitFailureStatusText() {
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+        connectSettling = false,
+        connectTimedOut = false,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Gateway error: unauthorized: gateway token missing",
+        connectSettling = false,
+        connectTimedOut = false,
       ),
     )
   }
@@ -907,6 +1040,61 @@ class OnboardingFlowLogicTest {
     ).forEach { state ->
       assertEquals(null, gatewayRecoveryPrimaryAction(state))
     }
+  }
+
+  @Test
+  fun recoveryDiagnosticActionAppearsForFailuresSlowStatesAndGatewayProblems() {
+    assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Failed, gatewayConnectionProblem = null))
+    assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.TakingLonger, gatewayConnectionProblem = null))
+    assertTrue(
+      gatewayRecoveryShowsDiagnosticAction(
+        GatewayRecoveryUiState.Pairing,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = "wait_then_retry",
+            pauseReconnect = false,
+            retryable = true,
+          ),
+      ),
+    )
+    assertFalse(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Finishing, gatewayConnectionProblem = null))
+    assertFalse(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Connected, gatewayConnectionProblem = null))
+  }
+
+  @Test
+  fun recoveryDiagnosticTextIncludesRecoveryStateWithoutCredentials() {
+    val diagnostic =
+      gatewayRecoveryDiagnosticText(
+        statusText = "Gateway closed: token mismatch",
+        gatewayName = "Home Gateway",
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "AUTH_TOKEN_MISMATCH",
+            message = "token mismatch",
+            reason = "bad-token",
+            requestId = "request-1",
+            recommendedNextStep = "update_auth_credentials",
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      )
+
+    assertTrue(diagnostic.contains("OpenClaw Android gateway diagnostic"))
+    assertTrue(diagnostic.contains("Gateway: Home Gateway"))
+    assertTrue(diagnostic.contains("Status: Gateway closed: token mismatch"))
+    assertTrue(diagnostic.contains("Gateway paired: false"))
+    assertTrue(diagnostic.contains("Ready to continue: false"))
+    assertTrue(diagnostic.contains("Error code: AUTH_TOKEN_MISMATCH"))
+    assertTrue(diagnostic.contains("Reason: bad-token"))
+    assertTrue(diagnostic.contains("Request ID: request-1"))
+    assertTrue(diagnostic.contains("Next step: update_auth_credentials"))
+    assertFalse(diagnostic.contains("secret"))
   }
 
   @Test
