@@ -14,9 +14,40 @@ type SessionHeaderEntry = {
 };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
+const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+
+async function readFirstSessionFileLine(sessionFile: string): Promise<string | undefined> {
+  const handle = await fs.open(sessionFile, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes < MAX_SESSION_HEADER_BYTES) {
+      const buffer = Buffer.alloc(
+        Math.min(SESSION_HEADER_READ_CHUNK_BYTES, MAX_SESSION_HEADER_BYTES - totalBytes),
+      );
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, totalBytes);
+      if (bytesRead === 0) {
+        break;
+      }
+      const chunk = buffer.subarray(0, bytesRead);
+      const newlineIndex = chunk.indexOf(0x0a);
+      if (newlineIndex >= 0) {
+        chunks.push(chunk.subarray(0, newlineIndex));
+        break;
+      }
+      chunks.push(chunk);
+      totalBytes += bytesRead;
+    }
+    const firstLine = Buffer.concat(chunks).toString("utf-8").trim();
+    return firstLine || undefined;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 async function assertExistingHeaderIsReadable(sessionFile: string): Promise<void> {
-  const content = await fs.readFile(sessionFile, "utf-8");
-  const firstLine = content.split("\n").find((line) => line.trim());
+  const firstLine = await readFirstSessionFileLine(sessionFile);
   if (!firstLine) {
     return;
   }

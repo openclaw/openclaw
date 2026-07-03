@@ -1,6 +1,7 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -104,6 +105,7 @@ const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CACHE_LIMIT = 16;
 
 type TrimBootstrapResult = {
   content: string;
@@ -116,6 +118,8 @@ type PolicyDigest = {
   text: string;
   omittedLines: number;
 };
+
+const agentsPolicyDigestCache = new Map<string, PolicyDigest>();
 
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
   const raw =
@@ -175,9 +179,32 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
+function agentsPolicyDigestCacheKey(content: string, budget: number): string {
+  return `${budget}:${content.length}:${createHash("sha256").update(content).digest("base64url")}`;
+}
+
+function rememberAgentsPolicyDigest(key: string, digest: PolicyDigest): PolicyDigest {
+  agentsPolicyDigestCache.delete(key);
+  agentsPolicyDigestCache.set(key, digest);
+  while (agentsPolicyDigestCache.size > AGENTS_POLICY_DIGEST_CACHE_LIMIT) {
+    const oldestKey = agentsPolicyDigestCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    agentsPolicyDigestCache.delete(oldestKey);
+  }
+  return digest;
+}
+
 function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
+  }
+
+  const cacheKey = agentsPolicyDigestCacheKey(content, budget);
+  const cached = agentsPolicyDigestCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   const candidates = content
@@ -212,10 +239,10 @@ function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest 
     .filter((candidate) => selected.has(candidate.index))
     .toSorted((a, b) => a.index - b.index)
     .map((candidate) => candidate.line);
-  return {
+  return rememberAgentsPolicyDigest(cacheKey, {
     text: lines.join("\n"),
     omittedLines: Math.max(0, candidates.length - lines.length),
-  };
+  });
 }
 
 function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBootstrapResult {

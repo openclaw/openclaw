@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../sessions/session-manager.js";
 import { prepareSessionManagerForRun } from "./session-manager-init.js";
 
@@ -46,6 +46,7 @@ describe("prepareSessionManagerForRun", () => {
       labelsById: new Map([["old", {}]]),
       leafId: "old",
     };
+    const readFileSpy = vi.spyOn(fs, "readFile");
 
     await prepareSessionManagerForRun({
       sessionManager,
@@ -68,6 +69,8 @@ describe("prepareSessionManagerForRun", () => {
     expect(sessionManager.labelsById.size).toBe(0);
     expect(sessionManager.leafId).toBeNull();
     expect(sessionManager.flushed).toBe(false);
+    expect(readFileSpy).not.toHaveBeenCalled();
+    readFileSpy.mockRestore();
     expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
   });
 
