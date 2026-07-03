@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
+import { isCompactionStampCurrent } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
@@ -277,11 +278,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
-    // A run-time compaction landed: record the outcome and clear any stale
-    // failure/skip reason so /status reflects the latest attempt.
-    next.lastCompactionAt = now;
-    next.lastCompactionOutcome = "compacted";
-    next.lastCompactionReason = undefined;
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
@@ -295,7 +291,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       storePath,
       sessionKey,
     },
-    (_currentEntry, context) => {
+    (currentEntry, context) => {
       if (
         (!preserveUserFacingRunState &&
           context.existingEntry &&
@@ -305,6 +301,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // A normal run may rotate its session id, so compare to the pre-run entry.
         // Do not merge stale finalizer metadata after a delete or a competing reset.
         return null;
+      }
+      if (
+        compactionsThisRun > 0 &&
+        !preserveUserFacingRunState &&
+        isCompactionStampCurrent(currentEntry, now)
+      ) {
+        // A run-time compaction landed: record the outcome and clear any stale
+        // failure/skip reason. Guarded at write time so this finalizer, which
+        // captured `now` before awaiting the store writer, cannot regress a
+        // newer outcome stamped while it waited.
+        return {
+          ...metadataPatch,
+          lastCompactionAt: now,
+          lastCompactionOutcome: "compacted",
+          lastCompactionReason: undefined,
+        };
       }
       return metadataPatch;
     },
@@ -378,10 +390,8 @@ export async function recordCliCompactionInStore(params: {
   const next = { ...entry };
   clearCliSession(next, provider);
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
-  next.lastCompactionAt = Date.now();
-  next.lastCompactionOutcome = "compacted";
-  next.lastCompactionReason = undefined;
   next.updatedAt = Date.now();
+  const compactedAt = next.updatedAt;
   const newSessionId = normalizeOptionalString(params.newSessionId);
   const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
@@ -434,7 +444,16 @@ export async function recordCliCompactionInStore(params: {
       ) {
         return null;
       }
-      return next;
+      // Stamp the outcome at write time so a newer stamp recorded while this
+      // call waited on the store writer cannot be regressed.
+      return isCompactionStampCurrent(currentEntry, compactedAt)
+        ? {
+            ...next,
+            lastCompactionAt: compactedAt,
+            lastCompactionOutcome: "compacted" as const,
+            lastCompactionReason: undefined,
+          }
+        : next;
     },
     { fallbackEntry: entry },
   );
