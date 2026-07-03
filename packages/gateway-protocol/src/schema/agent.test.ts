@@ -80,4 +80,27 @@ describe("AgentParamsSchema", () => {
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
   });
+
+  it("accepts the Paperclip adapter's paperclip metadata field", () => {
+    const params = {
+      message: "Heartbeat dispatch from Paperclip adapter.",
+      idempotencyKey: "paperclip:heartbeat:001",
+      paperclip: {
+        adapterVersion: "1.2.3",
+        deploymentId: "deploy-xyz",
+      },
+    };
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("still rejects other unknown top-level properties", () => {
+    const params = {
+      message: "Heartbeat dispatch from Paperclip adapter.",
+      idempotencyKey: "paperclip:heartbeat:002",
+      unknownVendorField: "should be rejected",
+    };
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(false);
+  });
 });

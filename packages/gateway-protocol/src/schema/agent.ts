@@ -234,6 +234,10 @@ export const AgentParamsSchema = Type.Object(
     ),
     disableMessageTool: Type.Optional(Type.Boolean()),
     voiceWakeTrigger: Type.Optional(Type.String()),
+    // Adapter-injected metadata tolerated at the gateway boundary without
+    // affecting runtime routing. Paperclip's gateway adapter sends this field
+    // on every heartbeat dispatch; rejecting it breaks that integration.
+    paperclip: Type.Optional(Type.Unknown()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
