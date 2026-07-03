@@ -264,6 +264,9 @@ fun OnboardingFlow(
     val serverName by viewModel.serverName.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
     val savedToken by viewModel.gatewayToken.collectAsState()
+    val savedManualHost by viewModel.manualHost.collectAsState()
+    val savedManualPort by viewModel.manualPort.collectAsState()
+    val savedManualTls by viewModel.manualTls.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     val ready =
@@ -446,7 +449,7 @@ fun OnboardingFlow(
     }
 
     fun connectGateway(
-      config: GatewayConnectConfig,
+      plan: GatewayConnectPlan,
       inputSource: OnboardingGatewayInputSource,
       attemptedName: String? = null,
     ) {
@@ -456,15 +459,7 @@ fun OnboardingFlow(
       attemptedConnect = true
       lastGatewayInputSource = inputSource
       connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-      viewModel.saveGatewayConfigAndConnect(
-        host = config.host,
-        port = config.port,
-        tls = config.tls,
-        token = config.token,
-        bootstrapToken = config.bootstrapToken,
-        password = config.password,
-        resetSetupAuth = true,
-      )
+      viewModel.saveGatewayConfigAndConnect(plan)
       step = OnboardingStep.Recovery
     }
 
@@ -515,8 +510,8 @@ fun OnboardingFlow(
         setupError = "Enter the setup code from openclaw qr."
         return
       }
-      val config =
-        resolveGatewayConnectConfig(
+      val plan =
+        resolveGatewayConnectPlan(
           useSetupCode = true,
           setupCode = trimmed,
           savedManualHost = manualHost,
@@ -525,15 +520,15 @@ fun OnboardingFlow(
           manualHostInput = manualHost,
           manualPortInput = manualPort,
           manualTlsInput = manualTls,
-          fallbackBootstrapToken = "",
-          fallbackToken = token,
-          fallbackPassword = password,
+          bootstrapTokenInput = "",
+          tokenInput = token,
+          passwordInput = password,
         )
-      if (config == null) {
+      if (plan == null) {
         setupError = "Setup code was not accepted. Generate a fresh code with openclaw qr."
         return
       }
-      connectGateway(config = config, inputSource = inputSource)
+      connectGateway(plan = plan, inputSource = inputSource)
     }
 
     fun handleScannedSetupCode(
@@ -561,25 +556,25 @@ fun OnboardingFlow(
         setupError = "That looks like a setup code. Go back and choose Setup Gateway, then Use setup code."
         return
       }
-      val config =
-        resolveGatewayConnectConfig(
+      val plan =
+        resolveGatewayConnectPlan(
           useSetupCode = false,
           setupCode = "",
-          savedManualHost = manualHost,
-          savedManualPort = manualPort,
-          savedManualTls = manualTls,
+          savedManualHost = savedManualHost,
+          savedManualPort = savedManualPort.toString(),
+          savedManualTls = savedManualTls,
           manualHostInput = manualHost,
           manualPortInput = manualPort,
           manualTlsInput = manualTls,
-          fallbackBootstrapToken = "",
-          fallbackToken = token,
-          fallbackPassword = password,
+          bootstrapTokenInput = "",
+          tokenInput = token,
+          passwordInput = password,
         )
-      if (config == null) {
+      if (plan == null) {
         setupError = "Enter a valid Gateway URL and any required auth details."
         return
       }
-      connectGateway(config = config, inputSource = OnboardingGatewayInputSource.Manual)
+      connectGateway(plan = plan, inputSource = OnboardingGatewayInputSource.Manual)
     }
 
     fun prefillManualFromNearby(endpoint: GatewayEndpoint) {
@@ -2407,27 +2402,30 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-/** Resolves onboarding setup-code or manual fields into the gateway config used for connect. */
-internal fun resolveOnboardingGatewayConnectConfig(
+/** Resolves onboarding setup-code or manual fields into the gateway plan used for connect. */
+internal fun resolveOnboardingGatewayConnectPlan(
   setupCode: String,
+  savedManualHost: String,
+  savedManualPort: String,
+  savedManualTls: Boolean,
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-): GatewayConnectConfig? =
-  resolveGatewayConnectConfig(
+): GatewayConnectPlan? =
+  resolveGatewayConnectPlan(
     useSetupCode = setupCode.isNotBlank(),
     setupCode = setupCode,
-    savedManualHost = manualHost,
-    savedManualPort = manualPort,
-    savedManualTls = manualTls,
+    savedManualHost = savedManualHost,
+    savedManualPort = savedManualPort,
+    savedManualTls = savedManualTls,
     manualHostInput = manualHost,
     manualPortInput = manualPort,
     manualTlsInput = manualTls,
-    fallbackBootstrapToken = "",
-    fallbackToken = token,
-    fallbackPassword = password,
+    bootstrapTokenInput = "",
+    tokenInput = token,
+    passwordInput = password,
   )
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
