@@ -1257,6 +1257,11 @@ describe("google-gemini-cli provider auth setup", () => {
       openUrl: async () => {
         throw new Error("provider setup must not open OpenClaw-owned OAuth URL");
       },
+      oauth: {
+        createVpsAwareHandlers: (() => {
+          throw new Error("provider setup must not create OpenClaw-owned OAuth handlers");
+        }) as Parameters<typeof method.run>[0]["oauth"]["createVpsAwareHandlers"],
+      },
       runtime: {
         log: () => {
           throw new Error("provider setup must not log OpenClaw-owned OAuth URL");
@@ -1273,7 +1278,7 @@ describe("google-gemini-cli provider auth setup", () => {
           throw new Error("provider setup must not prompt for an OpenClaw OAuth redirect URL");
         },
       },
-    } as Parameters<typeof method.run>[0]);
+    } as unknown as Parameters<typeof method.run>[0]);
 
     expect(result.profiles).toHaveLength(1);
     expect(result.profiles[0]?.credential).toMatchObject({

@@ -1,9 +1,9 @@
 ---
-summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, TTS, web search)"
+summary: "Google Gemini setup (API key + official Gemini CLI cache import, image generation, media understanding, TTS, web search)"
 title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
-  - You need the API key or OAuth auth flow
+  - You need Gemini API-key setup or official Gemini CLI cache import
 ---
 
 The Google plugin provides access to Gemini models through Google AI Studio, plus
@@ -64,12 +64,11 @@ Choose your preferred auth method and follow the setup steps.
   </Tab>
 
   <Tab title="Gemini CLI (OAuth)">
-    **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
+    **Best for:** importing an existing official Gemini CLI **Sign in with Google** cache instead of using a separate API key.
 
-    <Warning>
-    The `google-gemini-cli` provider is an unofficial integration. Some users
-    report account restrictions when using OAuth this way. Use at your own risk.
-    </Warning>
+    <Note>
+    OpenClaw does not start its own Google OAuth browser/callback flow for `google-gemini-cli`. Run the official `gemini` CLI first, choose **Sign in with Google**, complete the browser flow, then import the resulting cache with OpenClaw.
+    </Note>
 
     <Steps>
       <Step title="Install the Gemini CLI">
@@ -86,7 +85,16 @@ Choose your preferred auth method and follow the setup steps.
         OpenClaw supports both Homebrew installs and global npm installs, including
         common Windows/npm layouts.
       </Step>
-      <Step title="Log in via OAuth">
+      <Step title="Sign in with the official Gemini CLI">
+        ```bash
+        gemini
+        ```
+
+        Choose **Sign in with Google**. Gemini CLI writes its OAuth cache to
+        `GEMINI_CLI_HOME/.gemini/oauth_creds.json` when `GEMINI_CLI_HOME` is set,
+        otherwise to `~/.gemini/oauth_creds.json`.
+      </Step>
+      <Step title="Import the Gemini CLI cache">
         ```bash
         openclaw models auth login --provider google-gemini-cli --set-default
         ```
@@ -101,31 +109,28 @@ Choose your preferred auth method and follow the setup steps.
     - Default model: `google/gemini-3.1-pro-preview`
     - Runtime: `google-gemini-cli`
     - Alias: `gemini-cli`
+    - Imported cache source: `GEMINI_CLI_HOME/.gemini/oauth_creds.json` or `~/.gemini/oauth_creds.json`
 
     Gemini 3.1 Pro's Gemini API model id is `gemini-3.1-pro-preview`. OpenClaw accepts the shorter `google/gemini-3.1-pro` as a convenience alias and normalizes it before provider calls.
 
-    **Environment variables:**
-
-    - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
-    - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
-
-    (Or the `GEMINI_CLI_*` variants.)
+    <Warning>
+    Retired OpenClaw-owned Gemini CLI OAuth env vars are not the setup path anymore: `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`, `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`, `GEMINI_CLI_OAUTH_CLIENT_ID`, and `GEMINI_CLI_OAUTH_CLIENT_SECRET`. Do not add OAuth client ids or secrets to `openclaw.json`.
+    </Warning>
 
     <Note>
-    If Gemini CLI OAuth requests fail after login, set `GOOGLE_CLOUD_PROJECT` or
-    `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and retry.
+    If Gemini CLI requests fail after import, set `GOOGLE_CLOUD_PROJECT` or
+    `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and import the cache again.
     </Note>
 
     <Note>
-    If login fails before the browser flow starts, make sure the local `gemini`
-    command is installed and on `PATH`.
+    For headless setups, use the `google` provider with `GEMINI_API_KEY`, or configure `google-vertex` separately for Vertex auth.
     </Note>
 
     `google-gemini-cli/*` model refs are legacy compatibility aliases. New
     configs should use `google/*` model refs plus the `google-gemini-cli`
     runtime when they want local Gemini CLI execution.
 
-  </Tab>
+</Tab>>
 </Tabs>
 
 ## Capabilities
