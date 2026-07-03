@@ -712,6 +712,31 @@ describe("sendMessageDiscord", () => {
     expect(postMock).toHaveBeenCalledTimes(2);
     expect(result?.messageId).toBe("fallback-1");
   });
+
+  it("does not fallback when media succeeded but a trailing chunk fails", async () => {
+    // sendDiscordMedia sends media first, then trailing text chunks.
+    // If media succeeds but a trailing chunk fails, we must not resend the
+    // whole text — result is already set and the original error should propagate.
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    const trailingError = new Error("trailing chunk network error");
+    postMock
+      .mockResolvedValueOnce({ id: "media-ok", channel_id: "789" })
+      .mockRejectedValueOnce(trailingError);
+
+    await expect(
+      sendMessageDiscord("channel:789", "text\nthat\nchunks\ninto\nmultiple\nmessages", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/song.mp3",
+        maxLinesPerMessage: 1,
+      }),
+    ).rejects.toThrow("trailing chunk network error");
+
+    // 2 calls: media (ok) + first trailing text chunk (failed)
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("reactMessageDiscord", () => {

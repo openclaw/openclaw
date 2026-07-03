@@ -358,7 +358,7 @@ export async function sendMessageDiscord(
       );
     }
   } catch (err) {
-    if (opts.mediaUrl && textWithMentions.trim()) {
+    if (opts.mediaUrl && !result && textWithMentions.trim()) {
       result = await sendDiscordText(
         rest,
         channelId,
