@@ -46,7 +46,14 @@ private fun JsonElement?.asStringOrNull(): String? =
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
-  return primitive.booleanOrNull
+  primitive.booleanOrNull?.let { return it }
+  val content = primitive.content.trim().lowercase()
+  // Accept gateway config-style booleans in addition to strict JSON literals.
+  return when (content) {
+    "true", "yes", "1" -> true
+    "false", "no", "0" -> false
+    else -> null
+  }
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
