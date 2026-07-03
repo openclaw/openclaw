@@ -60,9 +60,9 @@ describe("durable intake envelope", () => {
       runId: "run-3",
       sourceType: "agent.turn",
       sessionKey: "agent:bo:main",
-      message: "summarize the linked work",
+      message: "summarize the linked task",
       messageHash: "hash-3",
-      contextRefs: [{ type: "work_unit", id: "wu-1" }],
+      contextRefs: [{ type: "task", id: "task-1" }],
       contextManifestRef: "ctx-manifest:run-3",
       env: {
         OPENCLAW_DURABLE_INPUT_PREVIEW_CHARS: "0",
@@ -75,6 +75,6 @@ describe("durable intake envelope", () => {
       canReplay: false,
       contextManifestRef: "ctx-manifest:run-3",
     });
-    expect(envelope.contextRefs).toEqual([{ type: "work_unit", id: "wu-1" }]);
+    expect(envelope.contextRefs).toEqual([{ type: "task", id: "task-1" }]);
   });
 });

@@ -20,12 +20,12 @@ describe("durable agent turn lifecycle", () => {
     try {
       const lifecycle = startDurableAgentTurnLifecycle({
         runId: "agent-run-1",
-        message: "summarize this work unit",
+        message: "summarize this session task",
         agentId: "bo",
         sessionKey: "agent:bo:main",
         channel: "discord",
         transport: "gateway",
-        contextRefs: [{ type: "work_unit", id: "wu-1" }],
+        contextRefs: [{ type: "task", id: "task-1" }],
         env,
       });
       lifecycle.close();

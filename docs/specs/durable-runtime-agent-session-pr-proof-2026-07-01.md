@@ -15,7 +15,7 @@ The PR3 slice includes:
 - task completion contract metadata needed for durable parent/child lifecycle;
 - status-notice display metadata for durable/yield progress.
 
-This slice does not include Work module, Workboard UI/tools, Task Flow
+This slice does not include planner/product modules, board-style UI/tools,
 projection adapters, retention/compaction, or write controls.
 
 ## Dependency
@@ -77,6 +77,23 @@ push-based.``
   - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/system-prompt.test.ts`
     - 1 file, 92 tests passed.
   - `git diff --check`
+    - passed.
+- Reviewer follow-up validation after aligning durable context terminology,
+  rerun on 2026-07-03:
+  - Test-only cleanup keeps durable agent/session fixtures in task/session-task
+    terminology instead of module-specific work-unit examples.
+  - Runtime behavior and schema compatibility are unchanged; existing
+    `work_unit_id` handling remains a foundation-layer compatibility field.
+  - Durable proof covers bounded intake envelopes, yielded parent turns,
+    subagent terminal fan-in, failed continuation visibility, and parent
+    fan-in reopening for later children.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/intake-envelope.test.ts src/durable/agent-turn.test.ts src/durable/subagent.test.ts src/durable/fan-in.test.ts`
+    - 4 files, 17 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/agent.test.ts`
+    - 2 files, 358 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-tools.config.ts src/agents/tools/sessions-spawn-tool.test.ts src/agents/tools/gateway-tool.test.ts`
+    - 2 files, 67 tests passed.
+  - `npm run tsgo:core`
     - passed.
 - Reviewer follow-up validation after restoring current-main ACP task ownership
   and terminal session cleanup invariants, rerun on 2026-07-02:

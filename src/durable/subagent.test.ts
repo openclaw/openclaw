@@ -155,7 +155,7 @@ describe("durable subagent bridge", () => {
       OPENCLAW_STATE_DIR: dir,
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
-    const childSessionKey = "agent:bo:subagent:wu-default-card";
+    const childSessionKey = "agent:bo:subagent:task-default-card";
 
     const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
     try {
