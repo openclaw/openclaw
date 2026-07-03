@@ -344,6 +344,10 @@ class LocalEmbeddingWorkerClient {
   ): Promise<number[] | number[][] | undefined> {
     options?.signal?.throwIfAborted();
     const child = await this.ensureChild();
+    // Recheck after the async yield — the caller's signal may have aborted
+    // while resolveStableWorkerExecPath was awaiting fs.access. Without this
+    // recheck, the request would be sent and never rejected on abort.
+    options?.signal?.throwIfAborted();
     const id = this.nextRequestId++;
     const payload = { ...request, id } as LocalEmbeddingWorkerRequest;
     return await new Promise((resolve, reject) => {

@@ -17,12 +17,28 @@ describe("resolveStableWorkerExecPath", () => {
   });
 
   it("returns original path for non-Cellar execPath (/usr/bin/node)", async () => {
-    // The regex won't match /usr/bin/node, so it returns unchanged.
-    // For this test we need process.execPath to NOT be a Cellar path.
-    // We don't mock it — just run on whatever the test runner has.
-    const result = await resolveStableWorkerExecPath();
-    // Should match whatever process.execPath is (it's our test Node)
-    expect(result).toBe(process.execPath);
+    // Set a deterministic non-Cellar path so the test is not dependent on
+    // the test runner's actual process.execPath (which may be a Homebrew
+    // Cellar path on macOS runners).
+    const execPath = "/usr/bin/node";
+
+    const origExecPath = process.execPath;
+    Object.defineProperty(process, "execPath", {
+      value: execPath,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const result = await resolveStableWorkerExecPath();
+      expect(result).toBe(execPath);
+    } finally {
+      Object.defineProperty(process, "execPath", {
+        value: origExecPath,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 
   it("resolves to opt symlink when Homebrew Cellar path is detected and opt path exists", async () => {
