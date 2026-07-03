@@ -364,6 +364,13 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
       provider: "ducktape",
       profileId: "ducktape:mcp",
       profileType: "oauth",
+      credential: {
+        type: "oauth",
+        provider: "ducktape",
+        access: "fresh-access-token",
+        refresh: "refresh-token-must-not-project",
+        expires: Date.now() + 60_000,
+      },
     });
 
     const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
@@ -415,6 +422,13 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
       provider: "ducktape",
       profileId: "ducktape:mcp",
       profileType: "oauth",
+      credential: {
+        type: "oauth",
+        provider: "ducktape",
+        access: "fresh-access-token",
+        refresh: "refresh-token-must-not-project",
+        expires: Date.now() + 60_000,
+      },
     });
 
     const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({

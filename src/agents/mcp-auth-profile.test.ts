@@ -107,6 +107,58 @@ describe("mcp auth profile bearer projection", () => {
     ).rejects.toThrow("profiles are not refreshable");
   });
 
+  it("projects the raw OAuth access token even when provider formatting returns structured auth", async () => {
+    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "google:mcp": {
+          type: "oauth",
+          provider: "google",
+          access: "expired-access",
+          refresh: "refresh-token-must-not-project",
+          expires: 1,
+        },
+      },
+    });
+    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
+      apiKey: JSON.stringify({
+        token: "raw-google-access-token",
+        projectId: "demo-project",
+      }),
+      provider: "google",
+      profileId: "google:mcp",
+      profileType: "oauth",
+      credential: {
+        type: "oauth",
+        provider: "google",
+        access: "raw-google-access-token",
+        refresh: "refresh-token-must-not-project",
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    const resolved = await resolveMcpAuthProfileBundleConfig({
+      config: {
+        mcpServers: {
+          google: {
+            url: "https://mcp.google.test/mcp",
+            type: "http",
+            auth: "oauth",
+            oauth: { authProfileId: "google:mcp" },
+          },
+        },
+      },
+      tokenProjection: "literal",
+    });
+
+    expect(resolved.config.mcpServers.google?.headers).toEqual({
+      Authorization: "Bearer raw-google-access-token",
+    });
+    expect(resolved.env).toBeUndefined();
+    expect(JSON.stringify(resolved.config)).not.toContain("demo-project");
+    expect(JSON.stringify(resolved.config)).not.toContain('{"token"');
+  });
+
   it("injects fresh bearer headers only for same-origin embedded MCP requests", async () => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
       version: 1,
@@ -125,6 +177,13 @@ describe("mcp auth profile bearer projection", () => {
       provider: "ducktape",
       profileId: "ducktape:mcp",
       profileType: "oauth",
+      credential: {
+        type: "oauth",
+        provider: "ducktape",
+        access: "fresh-access-token",
+        refresh: "refresh-token-must-not-project",
+        expires: Date.now() + 60_000,
+      },
     });
     const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
     const wrapped = withMcpAuthProfileBearer({

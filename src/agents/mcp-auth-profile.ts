@@ -79,7 +79,17 @@ async function resolveMcpAuthProfileBearerToken(
       `MCP server "${params.serverName}" could not resolve refreshable OAuth auth profile "${params.profileId}". Re-authenticate the profile and retry.`,
     );
   }
-  return resolved.apiKey;
+  if (
+    !resolved.credential ||
+    resolved.credential.type !== "oauth" ||
+    typeof resolved.credential.access !== "string" ||
+    resolved.credential.access.trim().length === 0
+  ) {
+    throw new Error(
+      `MCP server "${params.serverName}" resolved OAuth auth profile "${params.profileId}", but no raw access token was available for bearer projection.`,
+    );
+  }
+  return resolved.credential.access;
 }
 
 /** Wraps HTTP MCP fetch with same-origin, refreshed bearer injection. */
