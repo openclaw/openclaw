@@ -314,6 +314,7 @@ describe("session cost usage", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
+        content: "deepseek answer",
         provider: "deepseek",
         model: "deepseek-v4-flash",
         usage: {
@@ -353,6 +354,9 @@ describe("session cost usage", () => {
       expect(summary.totals.totalTokens).toBe(15_000);
       expect(summary.totals.totalCost).toBeCloseTo(0.02, 8);
       expect(summary.totals.missingCostEntries).toBe(0);
+      const logs = await loadSessionLogs({ sessionId: "sess-1", config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBeCloseTo(0.02, 8);
     });
   });
 
@@ -366,6 +370,7 @@ describe("session cost usage", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
+        content: "openrouter answer",
         provider: "openrouter",
         model: "moonshotai/kimi-k2.6",
         usage: {
@@ -405,6 +410,9 @@ describe("session cost usage", () => {
       expect(summary.totals.totalTokens).toBe(15_000);
       expect(summary.totals.totalCost).toBe(0);
       expect(summary.totals.missingCostEntries).toBe(0);
+      const logs = await loadSessionLogs({ sessionId: "sess-1", config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBe(0);
     });
   });
 

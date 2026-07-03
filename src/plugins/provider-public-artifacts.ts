@@ -19,6 +19,13 @@ const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
 
 /** Provider policy hooks loaded from bundled plugin public artifacts. */
+export type ProviderRecordedZeroUsageCostContext = {
+  provider: string;
+  modelId?: string | null;
+  recordedTotal: 0;
+  totalTokens: number;
+};
+
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
@@ -28,6 +35,9 @@ export type BundledProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  shouldEstimateRecordedZeroUsageCost?: (
+    ctx: ProviderRecordedZeroUsageCostContext,
+  ) => boolean | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -37,7 +47,8 @@ function hasProviderPolicyHook(
     typeof mod.normalizeConfig === "function" ||
     typeof mod.applyConfigDefaults === "function" ||
     typeof mod.resolveConfigApiKey === "function" ||
-    typeof mod.resolveThinkingProfile === "function"
+    typeof mod.resolveThinkingProfile === "function" ||
+    typeof mod.shouldEstimateRecordedZeroUsageCost === "function"
   );
 }
 

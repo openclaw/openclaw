@@ -1,7 +1,11 @@
 // Deepseek tests cover provider policy api plugin behavior.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
-import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
+import {
+  normalizeConfig,
+  resolveThinkingProfile,
+  shouldEstimateRecordedZeroUsageCost,
+} from "./provider-policy-api.js";
 
 describe("deepseek provider-policy-api", () => {
   it("advertises max thinking levels for DeepSeek V4 models", () => {
@@ -31,6 +35,33 @@ describe("deepseek provider-policy-api", () => {
         modelId: "deepseek-v4-pro",
       }),
     ).toBe(null);
+  });
+
+  it("opts only DeepSeek V4 direct-provider zero usage totals into local estimates", () => {
+    expect(
+      shouldEstimateRecordedZeroUsageCost({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+        recordedTotal: 0,
+        totalTokens: 15_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldEstimateRecordedZeroUsageCost({
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+        recordedTotal: 0,
+        totalTokens: 15_000,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEstimateRecordedZeroUsageCost({
+        provider: "openrouter",
+        modelId: "deepseek-v4-flash",
+        recordedTotal: 0,
+        totalTokens: 15_000,
+      }),
+    ).toBe(false);
   });
 
   it("hydrates contextWindow and cost from catalog for known models", () => {

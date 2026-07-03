@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
@@ -1153,15 +1154,19 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
-const DEEPSEEK_V4_ZERO_COST_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+type UsageCostMutableEntry = {
+  provider?: string;
+  model?: string;
+  usage?: NormalizedUsage;
+  costTotal?: number;
+  costBreakdown?: CostBreakdown;
+};
 
-function isDeepSeekV4ZeroCostPlaceholder(entry: Pick<ParsedTranscriptEntry, "provider" | "model">) {
-  return (
-    entry.provider?.toLowerCase() === "deepseek" &&
-    entry.model !== undefined &&
-    DEEPSEEK_V4_ZERO_COST_MODEL_IDS.has(entry.model.toLowerCase())
-  );
-}
+type RecordedZeroCostPolicyResolver = (params: {
+  provider?: string;
+  model?: string;
+  totalTokens: number;
+}) => boolean;
 
 type UsageCostResolver = (params: {
   provider?: string;
@@ -1179,6 +1184,81 @@ function createUsageCostResolver(config?: OpenClawConfig): UsageCostResolver {
     cache.set(key, cost);
     return cost;
   };
+}
+
+function createRecordedZeroCostPolicyResolver(): RecordedZeroCostPolicyResolver {
+  const cache = new Map<string, boolean>();
+  return ({ provider, model, totalTokens }) => {
+    const providerId = normalizeOptionalString(provider);
+    const modelId = normalizeOptionalString(model);
+    if (!providerId || !modelId || totalTokens <= 0) {
+      return false;
+    }
+    const key = `${providerId}\0${modelId}`;
+    const cached = cache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const shouldEstimate =
+      resolveBundledProviderPolicySurface(providerId)?.shouldEstimateRecordedZeroUsageCost?.({
+        provider: providerId,
+        modelId,
+        recordedTotal: 0,
+        totalTokens,
+      }) === true;
+    cache.set(key, shouldEstimate);
+    return shouldEstimate;
+  };
+}
+
+function normalizeUsageCostEntry(params: {
+  entry: UsageCostMutableEntry;
+  resolveCost: UsageCostResolver;
+  resolveRecordedZeroCostPolicy: RecordedZeroCostPolicyResolver;
+}) {
+  const { entry } = params;
+  if (!entry.usage) {
+    return;
+  }
+  const cost = params.resolveCost({
+    provider: entry.provider,
+    model: entry.model,
+  });
+  const usageTotals = computeUsageTokenTotals(entry.usage);
+  const usageHasTokens = usageTotals.totalTokens > 0;
+  if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+    // When tiered pricing is configured, always recompute to override the
+    // flat-rate cost that the transport layer wrote into the transcript.
+    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+    entry.costBreakdown = undefined;
+  } else if (
+    isModelPricingKnown(cost) &&
+    entry.costTotal === 0 &&
+    usageHasTokens &&
+    params.resolveRecordedZeroCostPolicy({
+      provider: entry.provider,
+      model: entry.model,
+      totalTokens: usageTotals.totalTokens,
+    })
+  ) {
+    // Provider-owned policy can mark recorded $0 totals as placeholders while
+    // preserving authoritative free bills from providers that do not opt in.
+    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+    entry.costBreakdown = undefined;
+  } else if (
+    !isModelPricingKnown(cost) &&
+    (entry.costTotal === undefined || entry.costTotal === 0) &&
+    usageHasTokens
+  ) {
+    // Pricing for this model is unknown: it has no positive per-token rate and no
+    // trustworthy recorded cost. Surface this token-burning turn as missing-cost
+    // instead of a confident $0 so budget/spike safeguards are not left blind.
+    entry.costTotal = undefined;
+    entry.costBreakdown = undefined;
+  } else if (entry.costTotal === undefined) {
+    // Fill in missing cost estimates.
+    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+  }
 }
 
 async function canReadJsonlFromOffset(filePath: string, startOffset: number): Promise<boolean> {
@@ -1246,6 +1326,7 @@ async function scanTranscriptFile(params: {
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
   const resolveCost = params.resolveCost ?? createUsageCostResolver(params.config);
+  const resolveRecordedZeroCostPolicy = createRecordedZeroCostPolicyResolver();
   for await (const parsed of readJsonlRecords(
     params.filePath,
     params.startOffset,
@@ -1257,47 +1338,11 @@ async function scanTranscriptFile(params: {
     }
 
     if (entry.usage) {
-      const cost = resolveCost({
-        provider: entry.provider,
-        model: entry.model,
+      normalizeUsageCostEntry({
+        entry,
+        resolveCost,
+        resolveRecordedZeroCostPolicy,
       });
-      const usageHasTokens = computeUsageTokenTotals(entry.usage).totalTokens > 0;
-      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
-        // When tiered pricing is configured, always recompute to override
-        // the flat-rate cost that the transport layer wrote into the transcript.
-        // Clear costBreakdown so downstream aggregation uses the recomputed total
-        // instead of the stale flat-rate breakdown from the transport layer.
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-        entry.costBreakdown = undefined;
-      } else if (
-        isModelPricingKnown(cost) &&
-        entry.costTotal === 0 &&
-        usageHasTokens &&
-        isDeepSeekV4ZeroCostPlaceholder(entry)
-      ) {
-        // DeepSeek V4 currently writes usage.cost.total=0 despite token usage.
-        // Keep this explicit so authoritative zero bills from providers such as
-        // OpenRouter are not replaced by local estimates.
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-        entry.costBreakdown = undefined;
-      } else if (
-        !isModelPricingKnown(cost) &&
-        (entry.costTotal === undefined || entry.costTotal === 0) &&
-        usageHasTokens
-      ) {
-        // Pricing for this model is unknown: it has no positive per-token rate and no
-        // trustworthy recorded cost. The transport either recorded nothing or a
-        // fabricated $0 derived from an all-zero/default catalog entry. Surface this
-        // token-burning turn as a missing-cost entry instead of recording a confident
-        // $0, so budget and spike safeguards that read totalCost are not left blind to
-        // it. A turn carrying a real positive recorded cost is preserved by the guard
-        // above.
-        entry.costTotal = undefined;
-        entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-      }
     }
 
     params.onEntry(entry);
@@ -2659,6 +2704,7 @@ export async function loadSessionLogs(params: {
   const boundedLimit = Number.isInteger(limit);
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
+  const resolveRecordedZeroCostPolicy = createRecordedZeroCostPolicyResolver();
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
     try {
@@ -2769,16 +2815,19 @@ export async function loadSessionLogs(params: {
               (usage.output ?? 0) +
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
-          const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
-            cost = breakdown.total;
-          } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
-            cost = estimateUsageCost({ usage, cost: costConfig });
-          }
+          const usageCostEntry: UsageCostMutableEntry = {
+            provider: message.provider as string | undefined,
+            model: message.model as string | undefined,
+            usage,
+            costBreakdown: extractCostBreakdown(usageRaw),
+          };
+          usageCostEntry.costTotal = usageCostEntry.costBreakdown?.total;
+          normalizeUsageCostEntry({
+            entry: usageCostEntry,
+            resolveCost,
+            resolveRecordedZeroCostPolicy,
+          });
+          cost = usageCostEntry.costTotal;
         }
       }
 

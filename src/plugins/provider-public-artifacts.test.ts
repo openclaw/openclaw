@@ -73,6 +73,19 @@ describe("provider public artifacts", () => {
     });
   });
 
+  it("loads DeepSeek zero usage cost policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("deepseek");
+
+    expect(
+      surface?.shouldEstimateRecordedZeroUsageCost?.({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+        recordedTotal: 0,
+        totalTokens: 15_000,
+      }),
+    ).toBe(true);
+  });
+
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));
     const pluginDir = path.join(bundledPluginsDir, "openai");

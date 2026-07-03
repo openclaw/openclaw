@@ -1,7 +1,7 @@
 // Deepseek API module exposes the plugin public contract.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
+import { DEEPSEEK_MODEL_CATALOG, isDeepSeekV4ModelId } from "./models.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
@@ -102,4 +102,18 @@ export function resolveThinkingProfile(params: { provider: string; modelId: stri
   return params.provider.trim().toLowerCase() === "deepseek"
     ? resolveDeepSeekV4ThinkingProfile(params.modelId)
     : null;
+}
+
+export function shouldEstimateRecordedZeroUsageCost(params: {
+  provider: string;
+  modelId?: string | null;
+  recordedTotal: 0;
+  totalTokens: number;
+}): boolean {
+  return (
+    params.provider.trim().toLowerCase() === "deepseek" &&
+    typeof params.modelId === "string" &&
+    params.totalTokens > 0 &&
+    isDeepSeekV4ModelId(params.modelId)
+  );
 }
