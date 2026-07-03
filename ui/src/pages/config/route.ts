@@ -1,18 +1,13 @@
 import { definePage } from "@openclaw/uirouter";
-import type { RouteRenderContext } from "../../app-routes.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import { loadConfig, loadConfigSchema } from "../../lib/config/index.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
+import { html } from "lit";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { ConfigPageId } from "./config-page.ts";
 
-type ConfigLoadContext = { host: SettingsHost; app: SettingsAppHost };
-type ConfigRenderContext = RouteRenderContext;
-
-async function loadConfigRoute(host: SettingsHost, app: SettingsAppHost) {
-  const primaryRefresh = loadConfig(app);
+async function loadConfigRoute(context: ApplicationContext) {
+  const primaryRefresh = context.runtimeConfig.refresh();
   void primaryRefresh.then(
     () => {
-      void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+      void context.runtimeConfig.refreshSchema();
     },
     () => undefined,
   );
@@ -23,12 +18,11 @@ function configPage(id: ConfigPageId, path: string) {
   return definePage({
     id,
     path,
-    loader: ({ host, app }: ConfigLoadContext) => loadConfigRoute(host, app),
+    loader: (context: ApplicationContext) => loadConfigRoute(context),
     component: () =>
-      import("./config-page.ts").then((module) => ({
+      import("./config-page.ts").then(() => ({
         header: true,
-        render: ({ state, navigate }: ConfigRenderContext) =>
-          module.renderConfigRoute(state, id, navigate),
+        render: () => html`<openclaw-config-page .pageId=${id}></openclaw-config-page>`,
       })),
   });
 }

@@ -57,6 +57,14 @@ export type RuntimeConfigCapability = {
   readonly state: ConfigState;
   refresh: (options?: LoadConfigOptions) => Promise<void>;
   refreshSchema: () => Promise<void>;
+  patchForm: (path: Array<string | number>, value: unknown) => void;
+  setRaw: (value: string) => void;
+  resetDraft: () => void;
+  stagePreset: (patch: Record<string, unknown>) => void;
+  save: () => Promise<boolean>;
+  apply: () => Promise<boolean>;
+  openFile: () => Promise<void>;
+  setMcpServerEnabled: (name: string, enabled: boolean) => void;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
 };
@@ -360,16 +368,15 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     if (!Array.isArray(value)) {
       return value;
     }
-    if (Array.isArray(schema.items)) {
+    const items = schema.items;
+    if (Array.isArray(items)) {
       return value.map((item, index) => {
-        const itemSchema = index < schema.items.length ? schema.items[index] : undefined;
+        const itemSchema = index < items.length ? items[index] : undefined;
         return itemSchema ? coerceFormValues(item, itemSchema) : item;
       });
     }
-    return schema.items
-      ? value
-          .map((item) => coerceFormValues(item, schema.items as JsonSchema))
-          .filter((item) => item !== undefined)
+    return items
+      ? value.map((item) => coerceFormValues(item, items)).filter((item) => item !== undefined)
       : value;
   }
   return value;
@@ -732,6 +739,10 @@ export function createRuntimeConfigCapability(
       publish();
     }
   };
+  const mutate = (task: () => void) => {
+    task();
+    publish();
+  };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     state.client = snapshot.client;
@@ -751,6 +762,15 @@ export function createRuntimeConfigCapability(
     },
     refresh: (options) => run(() => loadConfig(state, options)),
     refreshSchema: () => run(() => loadConfigSchema(state)),
+    patchForm: (path, value) => mutate(() => updateConfigFormValue(state, path, value)),
+    setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
+    resetDraft: () => mutate(() => resetConfigPendingChanges(state)),
+    stagePreset: (patch) => mutate(() => stageConfigPreset(state, patch)),
+    save: () => run(() => saveConfig(state)),
+    apply: () => run(() => applyConfig(state)),
+    openFile: () => run(() => openConfigFile(state)),
+    setMcpServerEnabled: (name, enabled) =>
+      mutate(() => updateMcpServerEnabled(state, name, enabled)),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

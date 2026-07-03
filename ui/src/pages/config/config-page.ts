@@ -1,35 +1,25 @@
-import { html } from "lit";
+import { consume } from "@lit/context";
+import { html, LitElement } from "lit";
+import { property, state } from "lit/decorators.js";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteRenderContext } from "../../app-routes.ts";
-import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { importCustomThemeFromUrl, syncCustomThemeStyleTag } from "../../app/custom-theme.ts";
+import {
+  loadSettings,
+  normalizeTextScale,
+  saveSettings,
+  type UiSettings,
+} from "../../app/settings.ts";
+import { startThemeTransition } from "../../app/theme-transition.ts";
+import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import {
-  applyConfig,
-  loadConfig,
-  openConfigFile,
-  resetConfigPendingChanges,
-  saveConfig,
-  stageConfigPreset,
-  updateConfigFormValue,
-  updateConfigRawValue,
-  updateMcpServerEnabled,
-} from "../../lib/config/index.ts";
-import { requestSessionPatch, type SessionPatch } from "../../lib/sessions/index.ts";
-import {
-  buildAgentMainSessionKey,
-  isUiGlobalSessionKey,
-  parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-} from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
-import { renderMcp } from "../../ui/views/mcp.ts";
 import { getPresetById } from "./presets.ts";
-import { renderQuickSettings, type QuickSettingsChannel } from "./quick.ts";
-import { runUpdate } from "./update.ts";
+import {
+  renderQuickSettings,
+  type QuickSettingsChannel,
+  type QuickSettingsSecurity,
+} from "./quick.ts";
 import { renderConfig, type ConfigProps } from "./view.ts";
 
 export type ConfigPageId =
@@ -41,25 +31,8 @@ export type ConfigPageId =
   | "infrastructure"
   | "ai-agents";
 
-type ConfigRenderContext = {
-  state: AppViewState;
-  pageId: ConfigPageId;
-  navigate: RouteRenderContext["navigate"];
-};
-
-async function patchActiveSession(state: AppViewState, patch: SessionPatch): Promise<void> {
-  const key = state.sessionKey.trim();
-  if (!state.client || !state.connected || !key) {
-    return;
-  }
-  try {
-    await requestSessionPatch(state.client, key, patch, {
-      agentId: isUiGlobalSessionKey(key) ? resolveUiSelectedGlobalAgentId(state) : undefined,
-    });
-  } catch (error) {
-    state.sessionsError = String(error);
-  }
-}
+type ConfigFormMode = "form" | "raw";
+type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 
 const COMMUNICATION_SECTION_KEYS = [
   "messages",
@@ -106,11 +79,19 @@ const KNOWN_CHANNELS = [
   { id: "imessage", label: "iMessage" },
 ] as const;
 
+const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
+
+function asConfigRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function normalizeConfigSelection(
   pageId: ConfigPageId,
   activeSection: string | null,
   activeSubsection: string | null,
-): { activeSection: string | null; activeSubsection: string | null } {
+): ConfigSelection {
   const sections: readonly string[] | null =
     pageId === "communications"
       ? COMMUNICATION_SECTION_KEYS
@@ -133,89 +114,20 @@ function normalizeConfigSelection(
 }
 
 function mcpServerCount(config: unknown): number {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return 0;
-  }
-  const mcp = (config as Record<string, unknown>).mcp;
-  if (!mcp || typeof mcp !== "object" || Array.isArray(mcp)) {
-    return 0;
-  }
-  const servers = (mcp as Record<string, unknown>).servers;
+  const servers = asConfigRecord(asConfigRecord(config)?.mcp)?.servers;
   return servers && typeof servers === "object" && !Array.isArray(servers)
     ? Object.keys(servers).length
     : 0;
 }
 
-function countSchemaSections(
-  schema: unknown,
-  include?: readonly string[],
-  exclude?: readonly string[],
-) {
-  const properties =
-    schema && typeof schema === "object" && !Array.isArray(schema)
-      ? (schema as { properties?: unknown }).properties
-      : null;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
-    return 0;
-  }
-  const includeSet = include?.length ? new Set(include) : null;
-  const excludeSet = exclude?.length ? new Set(exclude) : null;
-  return Object.keys(properties).filter(
-    (key) => (!includeSet || includeSet.has(key)) && !excludeSet?.has(key),
-  ).length;
-}
-
-function assistantAvatarUrl(state: AppViewState): string | undefined {
-  const agentId =
-    parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main";
-  const identity = state.agentsList?.agents?.find((agent) => agent.id === agentId)?.identity;
-  const candidate = identity?.avatarUrl ?? identity?.avatar;
-  return typeof candidate === "string" && isRenderableControlUiAvatarUrl(candidate)
-    ? candidate
-    : undefined;
-}
-
-function assistantAvatarOverride(config: unknown): string | null {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return null;
-  }
-  const assistant = (config as { ui?: { assistant?: { avatar?: unknown } } }).ui?.assistant;
-  return normalizeOptionalString(assistant?.avatar) ?? null;
-}
-
-function assistantAvatarRoute(state: AppViewState, agentId: string): string {
-  const base = (state.basePath ?? "").replace(/\/+$/, "");
-  return `${base}/avatar/${encodeURIComponent(agentId)}`;
-}
-
-function activeAvatarAgentId(state: AppViewState): string {
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  if (parsed) {
-    return parsed.agentId;
-  }
-  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
-  if (sessionKey === "global" || sessionKey === "unknown") {
-    return normalizeOptionalString(state.assistantAgentId) ?? state.agentsList?.defaultId ?? "main";
-  }
-  return state.agentsList?.defaultId ?? "main";
-}
-
-function quickChannels(state: AppViewState): QuickSettingsChannel[] {
-  const config = state.configForm ?? state.configSnapshot?.config;
-  const channels =
-    config && typeof config === "object" && "channels" in config && config.channels
-      ? config.channels
-      : null;
-  const configured =
-    channels && typeof channels === "object" && !Array.isArray(channels)
-      ? (channels as Record<string, unknown>)
-      : {};
+function quickChannels(config: unknown): QuickSettingsChannel[] {
+  const configured = asConfigRecord(asConfigRecord(config)?.channels) ?? {};
   const configuredIds = Object.keys(configured).filter((id) => id.trim().length > 0);
   const channelIds =
     configuredIds.length > 0
       ? configuredIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
+  const labels = new Map<string, string>(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
   return channelIds.map((id) => {
     const value = configured[id];
     const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
@@ -230,15 +142,11 @@ function quickChannels(state: AppViewState): QuickSettingsChannel[] {
   });
 }
 
-export function extractQuickSettingsSecurity(state: AppViewState): {
-  gatewayAuth: string;
-  execPolicy: string;
-  deviceAuth: boolean;
-  browserEnabled: boolean;
-  toolProfile: string;
-} {
-  const config = state.configForm ?? state.configSnapshot?.config;
-  if (!config || typeof config !== "object") {
+export function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
+  const root =
+    asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
+    asConfigRecord(config);
+  if (!root) {
     return {
       gatewayAuth: "unknown",
       execPolicy: "unknown",
@@ -247,19 +155,12 @@ export function extractQuickSettingsSecurity(state: AppViewState): {
       toolProfile: "full",
     };
   }
-  const root = config as Record<string, unknown>;
-  const gateway =
-    root.gateway && typeof root.gateway === "object"
-      ? (root.gateway as Record<string, unknown>)
-      : null;
-  const auth =
-    gateway?.auth && typeof gateway.auth === "object"
-      ? (gateway.auth as Record<string, unknown>)
-      : null;
-  const tools =
-    root.tools && typeof root.tools === "object" ? (root.tools as Record<string, unknown>) : {};
-  const exec =
-    tools.exec && typeof tools.exec === "object" ? (tools.exec as Record<string, unknown>) : {};
+  const gateway = asConfigRecord(root.gateway);
+  const auth = asConfigRecord(gateway?.auth);
+  const tools = asConfigRecord(root.tools) ?? {};
+  const exec = asConfigRecord(tools.exec) ?? {};
+  const browser = asConfigRecord(root.browser);
+  const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
   if (auth) {
     const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
@@ -275,14 +176,6 @@ export function extractQuickSettingsSecurity(state: AppViewState): {
   }
   const profile = tools.profile;
   const security = exec.security;
-  const browser =
-    root.browser && typeof root.browser === "object"
-      ? (root.browser as Record<string, unknown>)
-      : null;
-  const controlUi =
-    gateway?.controlUi && typeof gateway.controlUi === "object"
-      ? (gateway.controlUi as Record<string, unknown>)
-      : null;
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
@@ -292,249 +185,265 @@ export function extractQuickSettingsSecurity(state: AppViewState): {
   };
 }
 
-function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
-  const requestUpdate = (state as AppViewState & { requestUpdate?: () => void }).requestUpdate;
-  const configObject =
-    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null) ?? {};
-  const localAvatar =
-    normalizeOptionalString(
-      loadLocalAssistantIdentity({ agentId: activeAvatarAgentId(state) }).avatar,
-    ) ?? null;
-  const configuredAvatar = localAvatar ?? assistantAvatarOverride(configObject);
-  const avatarStatus = localAvatar
-    ? "data"
-    : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
-  const avatarReason = localAvatar
-    ? null
-    : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
-  const missingAvatar = avatarStatus === "none" && avatarReason === "missing";
-  const currentAvatar = missingAvatar || avatarStatus === "local" ? null : state.assistantAvatar;
-  const currentAvatarUrl =
-    localAvatar ??
-    (avatarStatus === "local" && state.assistantAgentId
-      ? assistantAvatarRoute(state, state.assistantAgentId)
-      : (state.chatAvatarUrl ?? (missingAvatar ? null : (assistantAvatarUrl(state) ?? null))));
-  const activeSession = state.sessionsResult?.sessions.find((row) => row.key === state.sessionKey);
-  const agentsDefaults =
-    configObject && typeof configObject === "object" && !Array.isArray(configObject)
-      ? (((configObject as Record<string, unknown>).agents as Record<string, unknown> | undefined)
-          ?.defaults as Record<string, unknown> | undefined)
-      : undefined;
-  const currentModel =
-    typeof activeSession?.model === "string"
-      ? activeSession.model
-      : typeof agentsDefaults?.model === "string"
-        ? agentsDefaults.model
-        : "default";
-  const thinkingLevel =
-    typeof activeSession?.thinkingLevel === "string"
-      ? activeSession.thinkingLevel
-      : typeof agentsDefaults?.thinkingLevel === "string"
-        ? agentsDefaults.thinkingLevel
-        : "off";
-  const resolvedFastMode =
-    activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults?.fastMode;
-  const fastMode: FastMode =
-    resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean" ? resolvedFastMode : false;
+function applyBorderRadius(value: number) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = value / 50;
+  root.style.setProperty("--radius-sm", `${Math.round(BASE_RADII.sm * scale)}px`);
+  root.style.setProperty("--radius-md", `${Math.round(BASE_RADII.md * scale)}px`);
+  root.style.setProperty("--radius-lg", `${Math.round(BASE_RADII.lg * scale)}px`);
+  root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
+  root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
+  root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
 
-  const common: Omit<
-    ConfigProps,
-    | "formMode"
-    | "searchQuery"
-    | "activeSection"
-    | "activeSubsection"
-    | "onFormModeChange"
-    | "onSearchChange"
-    | "onSectionChange"
-    | "onSubsectionChange"
-    | "showModeToggle"
-    | "navRootLabel"
-    | "showRootTab"
-    | "includeSections"
-    | "excludeSections"
-    | "includeVirtualSections"
-  > = {
-    raw: state.configRaw,
-    originalRaw: state.configRawOriginal,
-    valid: state.configValid,
-    issues: state.configIssues,
-    loading: state.configLoading,
-    saving: state.configSaving,
-    applying: state.configApplying,
-    updating: state.updateRunning,
-    connected: state.connected,
-    schema: state.configSchema,
-    schemaLoading: state.configSchemaLoading,
-    uiHints: state.configUiHints,
-    formValue: state.configForm,
-    originalValue: state.configFormOriginal,
-    onRawChange: (next) => updateConfigRawValue(state, next),
-    onRequestUpdate: requestUpdate,
-    onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-    onReload: () => void loadConfig(state, { discardPendingChanges: true }),
-    onReset: () => resetConfigPendingChanges(state),
-    onSave: () => void saveConfig(state),
-    onApply: () => void applyConfig(state),
-    onUpdate: () => void runUpdate(state),
-    onOpenFile: () => void openConfigFile(state),
-    version: state.hello?.server?.version ?? "",
-    theme: state.theme,
-    themeMode: state.themeMode,
-    setTheme: (theme, context) => state.setTheme(theme, context),
-    setThemeMode: (mode, context) => state.setThemeMode(mode, context),
-    hasCustomTheme: Boolean(state.settings.customTheme),
-    customThemeLabel: state.settings.customTheme?.label ?? null,
-    customThemeSourceUrl: state.settings.customTheme?.sourceUrl ?? null,
-    customThemeImportUrl: state.customThemeImportUrl,
-    customThemeImportBusy: state.customThemeImportBusy,
-    customThemeImportMessage: state.customThemeImportMessage,
-    customThemeImportExpanded: state.customThemeImportExpanded,
-    customThemeImportFocusToken: state.customThemeImportFocusToken,
-    onCustomThemeImportUrlChange: (next) => state.setCustomThemeImportUrl(next),
-    onOpenCustomThemeImport: () => state.openCustomThemeImport(),
-    onImportCustomTheme: () => void state.importCustomTheme(),
-    onClearCustomTheme: () => state.clearCustomTheme(),
-    borderRadius: state.settings.borderRadius,
-    setBorderRadius: (value) => state.setBorderRadius(value),
-    textScale: state.settings.textScale ?? 100,
-    setTextScale: (value) => state.setTextScale(value),
-    gatewayUrl: state.settings.gatewayUrl,
-    assistantName: state.assistantName,
-    configPath: state.configSnapshot?.path ?? null,
-    rawAvailable: Boolean(state.configSnapshot?.config || state.configForm || state.configRaw),
-  };
-
-  const renderTab = (options: {
-    formMode: "form" | "raw";
-    searchQuery: string;
-    activeSection: string | null;
-    activeSubsection: string | null;
-    onFormModeChange: (mode: "form" | "raw") => void;
-    onSearchChange: (query: string) => void;
-    onSectionChange: (section: string | null) => void;
-    onSubsectionChange: (section: string | null) => void;
-    includeSections?: readonly string[];
-    excludeSections?: readonly string[];
-    navRootLabel?: string;
-    showModeToggle?: boolean;
-    includeVirtualSections?: boolean;
-    settingsLayout?: "tabs" | "accordion";
-    onBackToQuick?: () => void;
-    webPush?: ConfigProps["webPush"];
-    onWebPushSubscribe?: () => void;
-    onWebPushUnsubscribe?: () => void;
-    onWebPushTest?: () => void;
-  }) =>
-    renderConfig({
-      ...common,
-      ...options,
-      includeSections: options.includeSections ? [...options.includeSections] : undefined,
-      excludeSections: options.excludeSections ? [...options.excludeSections] : undefined,
-      includeVirtualSections: options.includeVirtualSections ?? false,
-      showRootTab: !options.includeSections?.length,
-      schemaSectionCount: countSchemaSections(
-        common.schema,
-        options.includeSections,
-        options.excludeSections,
-      ),
-    } as ConfigProps);
-
-  const config = state.configForm ?? state.configSnapshot?.config ?? {};
-  const statePrefix =
-    pageId === "ai-agents" ? "aiAgents" : pageId === "mcp" ? "infrastructure" : pageId;
-  const activeSelection = normalizeConfigSelection(
-    pageId,
-    state[`${statePrefix}ActiveSection` as "configActiveSection"],
-    state[`${statePrefix}ActiveSubsection` as "configActiveSubsection"],
+function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.style.setProperty(
+    "--control-ui-text-scale",
+    (normalizeTextScale(value) / 100).toFixed(2),
   );
-  const tabBody = renderTab({
-    formMode:
-      pageId === "config"
-        ? state.configFormMode
-        : pageId === "communications"
-          ? state.communicationsFormMode
-          : pageId === "appearance"
-            ? state.appearanceFormMode
-            : pageId === "automation"
-              ? state.automationFormMode
-              : pageId === "infrastructure" || pageId === "mcp"
-                ? state.infrastructureFormMode
-                : state.aiAgentsFormMode,
-    searchQuery:
-      pageId === "config"
-        ? state.configSearchQuery
-        : pageId === "communications"
-          ? state.communicationsSearchQuery
-          : pageId === "appearance"
-            ? state.appearanceSearchQuery
-            : pageId === "automation"
-              ? state.automationSearchQuery
-              : pageId === "infrastructure" || pageId === "mcp"
-                ? state.infrastructureSearchQuery
-                : state.aiAgentsSearchQuery,
-    activeSection: pageId === "mcp" ? "mcp" : activeSelection.activeSection,
-    activeSubsection: pageId === "mcp" ? null : activeSelection.activeSubsection,
-    onFormModeChange: (mode) => {
-      if (pageId === "config") state.configFormMode = mode;
-      else if (pageId === "communications") state.communicationsFormMode = mode;
-      else if (pageId === "appearance") state.appearanceFormMode = mode;
-      else if (pageId === "automation") state.automationFormMode = mode;
-      else if (pageId === "infrastructure" || pageId === "mcp") state.infrastructureFormMode = mode;
-      else state.aiAgentsFormMode = mode;
-    },
-    onSearchChange: (query) => {
-      if (pageId === "config") state.configSearchQuery = query;
-      else if (pageId === "communications") state.communicationsSearchQuery = query;
-      else if (pageId === "appearance") state.appearanceSearchQuery = query;
-      else if (pageId === "automation") state.automationSearchQuery = query;
-      else if (pageId === "infrastructure" || pageId === "mcp")
-        state.infrastructureSearchQuery = query;
-      else state.aiAgentsSearchQuery = query;
-    },
-    onSectionChange: (section) => {
-      if (pageId === "config") {
-        state.configActiveSection = section;
-        state.configActiveSubsection = null;
-      } else if (pageId === "communications") {
-        state.communicationsActiveSection = section;
-        state.communicationsActiveSubsection = null;
-      } else if (pageId === "appearance") {
-        state.appearanceActiveSection = section;
-        state.appearanceActiveSubsection = null;
-      } else if (pageId === "automation") {
-        state.automationActiveSection = section;
-        state.automationActiveSubsection = null;
-      } else if (pageId === "infrastructure" || pageId === "mcp") {
-        state.infrastructureActiveSection = section;
-        state.infrastructureActiveSubsection = null;
-      } else {
-        state.aiAgentsActiveSection = section;
-        state.aiAgentsActiveSubsection = null;
-      }
-    },
-    onSubsectionChange: (section) => {
-      if (pageId === "config") state.configActiveSubsection = section;
-      else if (pageId === "communications") state.communicationsActiveSubsection = section;
-      else if (pageId === "appearance") state.appearanceActiveSubsection = section;
-      else if (pageId === "automation") state.automationActiveSubsection = section;
-      else if (pageId === "infrastructure" || pageId === "mcp")
-        state.infrastructureActiveSubsection = section;
-      else state.aiAgentsActiveSubsection = section;
-    },
-    includeSections:
-      pageId === "communications"
-        ? COMMUNICATION_SECTION_KEYS
-        : pageId === "appearance"
-          ? APPEARANCE_SECTION_KEYS
-          : pageId === "automation"
-            ? AUTOMATION_SECTION_KEYS
-            : pageId === "mcp" || pageId === "infrastructure"
-              ? INFRASTRUCTURE_SECTION_KEYS
-              : pageId === "ai-agents"
-                ? AI_AGENTS_SECTION_KEYS
-                : undefined,
-    excludeSections:
-      pageId === "config"
+}
+
+function applyResolvedTheme(theme: ThemeName, mode: ThemeMode) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const resolved = resolveTheme(theme, mode);
+  const themeMode = resolved.endsWith("light") ? "light" : "dark";
+  const root = document.documentElement;
+  root.dataset.theme = resolved;
+  root.dataset.themeMode = themeMode;
+  root.style.colorScheme = themeMode;
+}
+
+function applyStoredPresentation(settings: UiSettings) {
+  syncCustomThemeStyleTag(settings.customTheme);
+  applyResolvedTheme(settings.theme, settings.themeMode);
+  applyBorderRadius(settings.borderRadius);
+  applyTextScale(settings.textScale);
+}
+
+export class ConfigPage extends LitElement {
+  @consume({ context: applicationContext, subscribe: false })
+  private context!: ApplicationContext;
+
+  @property({ attribute: "page-id" }) pageId: ConfigPageId = "config";
+
+  @state() private settings = loadSettings();
+  @state() private settingsMode: "quick" | "advanced" = "quick";
+  @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
+    config: "form",
+    communications: "form",
+    appearance: "form",
+    automation: "form",
+    mcp: "form",
+    infrastructure: "form",
+    "ai-agents": "form",
+  };
+  @state() private searchQueries: Record<ConfigPageId, string> = {
+    config: "",
+    communications: "",
+    appearance: "",
+    automation: "",
+    mcp: "",
+    infrastructure: "",
+    "ai-agents": "",
+  };
+  @state() private selections: Record<ConfigPageId, ConfigSelection> = {
+    config: { activeSection: null, activeSubsection: null },
+    communications: { activeSection: null, activeSubsection: null },
+    appearance: { activeSection: null, activeSubsection: null },
+    automation: { activeSection: null, activeSubsection: null },
+    mcp: { activeSection: "mcp", activeSubsection: null },
+    infrastructure: { activeSection: null, activeSubsection: null },
+    "ai-agents": { activeSection: null, activeSubsection: null },
+  };
+  @state() private customThemeImportUrl = "";
+  @state() private customThemeImportBusy = false;
+  @state() private customThemeImportMessage: { kind: "success" | "error"; text: string } | null =
+    null;
+  @state() private customThemeImportExpanded = false;
+  @state() private customThemeImportFocusToken = 0;
+  private customThemeImportSelectOnSuccess = false;
+  private stops: Array<() => void> = [];
+
+  override createRenderRoot() {
+    return this;
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.settings = loadSettings();
+    this.stops = [
+      this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
+      this.context.overlays.subscribe(() => this.requestUpdate()),
+      this.context.config.subscribe(() => this.requestUpdate()),
+      this.context.gateway.subscribe(() => this.requestUpdate()),
+    ];
+    const config = this.context.runtimeConfig.state;
+    if (!config.configSnapshot && !config.configLoading) {
+      void this.context.runtimeConfig
+        .refresh()
+        .then(() => this.context.runtimeConfig.refreshSchema());
+    } else if (!config.configSchema && !config.configSchemaLoading) {
+      void this.context.runtimeConfig.refreshSchema();
+    }
+  }
+
+  override disconnectedCallback() {
+    for (const stop of this.stops) {
+      stop();
+    }
+    this.stops = [];
+    super.disconnectedCallback();
+  }
+
+  private navigate(routeId: string) {
+    this.context.navigate(routeId);
+  }
+
+  private setFormMode(mode: ConfigFormMode) {
+    this.formModes = { ...this.formModes, [this.pageId]: mode };
+  }
+
+  private setSearchQuery(query: string) {
+    this.searchQueries = { ...this.searchQueries, [this.pageId]: query };
+  }
+
+  private setActiveSection(section: string | null) {
+    this.selections = {
+      ...this.selections,
+      [this.pageId]: { activeSection: section, activeSubsection: null },
+    };
+  }
+
+  private setActiveSubsection(section: string | null) {
+    this.selections = {
+      ...this.selections,
+      [this.pageId]: { ...this.selections[this.pageId], activeSubsection: section },
+    };
+  }
+
+  private applySettings(next: UiSettings) {
+    this.settings = next;
+    saveSettings(next);
+    applyStoredPresentation(next);
+  }
+
+  private setTheme(
+    theme: ThemeName,
+    context?: Parameters<typeof startThemeTransition>[0]["context"],
+  ) {
+    const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
+    const next = { ...this.settings, theme };
+    startThemeTransition({
+      currentTheme,
+      nextTheme: resolveTheme(next.theme, next.themeMode),
+      context,
+      applyTheme: () => this.applySettings(next),
+    });
+  }
+
+  private setThemeMode(
+    mode: ThemeMode,
+    context?: Parameters<typeof startThemeTransition>[0]["context"],
+  ) {
+    const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
+    const next = { ...this.settings, themeMode: mode };
+    startThemeTransition({
+      currentTheme,
+      nextTheme: resolveTheme(next.theme, next.themeMode),
+      context,
+      applyTheme: () => this.applySettings(next),
+    });
+  }
+
+  private setBorderRadius(value: number) {
+    this.applySettings({ ...this.settings, borderRadius: value });
+  }
+
+  private setTextScale(value: number) {
+    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
+  }
+
+  private openCustomThemeImport() {
+    this.customThemeImportExpanded = true;
+    this.customThemeImportFocusToken += 1;
+    if (!this.settings.customTheme) {
+      this.customThemeImportSelectOnSuccess = true;
+    }
+  }
+
+  private async importCustomTheme() {
+    if (this.customThemeImportBusy) {
+      return;
+    }
+    this.customThemeImportExpanded = true;
+    this.customThemeImportBusy = true;
+    this.customThemeImportMessage = null;
+    try {
+      const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
+      const selectTheme = !this.settings.customTheme || this.customThemeImportSelectOnSuccess;
+      this.applySettings({
+        ...this.settings,
+        customTheme,
+        theme: selectTheme ? "custom" : this.settings.theme,
+      });
+      this.customThemeImportUrl = "";
+      this.customThemeImportSelectOnSuccess = false;
+      this.customThemeImportMessage = {
+        kind: "success",
+        text: `Imported ${customTheme.label}.`,
+      };
+    } catch (error) {
+      this.customThemeImportMessage = {
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      this.customThemeImportBusy = false;
+    }
+  }
+
+  private clearCustomTheme() {
+    this.customThemeImportExpanded = true;
+    this.customThemeImportSelectOnSuccess = false;
+    this.applySettings({
+      ...this.settings,
+      theme: this.settings.theme === "custom" ? "claw" : this.settings.theme,
+      customTheme: undefined,
+    });
+    this.customThemeImportMessage = {
+      kind: "success",
+      text: "Custom theme removed.",
+    };
+  }
+
+  private includeSections(): readonly string[] | undefined {
+    return this.pageId === "communications"
+      ? COMMUNICATION_SECTION_KEYS
+      : this.pageId === "appearance"
+        ? APPEARANCE_SECTION_KEYS
+        : this.pageId === "automation"
+          ? AUTOMATION_SECTION_KEYS
+          : this.pageId === "mcp" || this.pageId === "infrastructure"
+            ? INFRASTRUCTURE_SECTION_KEYS
+            : this.pageId === "ai-agents"
+              ? AI_AGENTS_SECTION_KEYS
+              : undefined;
+  }
+
+  private renderAdvancedConfig(configObject: Record<string, unknown>) {
+    const runtimeConfig = this.context.runtimeConfig;
+    const state = runtimeConfig.state;
+    const includeSections = this.includeSections();
+    const excludeSections =
+      this.pageId === "config"
         ? [
             ...COMMUNICATION_SECTION_KEYS,
             ...AUTOMATION_SECTION_KEYS,
@@ -543,170 +452,219 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
             "ui",
             "wizard",
           ]
-        : undefined,
-    navRootLabel: pageId === "config" ? undefined : t(`tabs.${pageId}`),
-    showModeToggle: pageId === "config",
-    settingsLayout: pageId === "config" ? "accordion" : undefined,
-    includeVirtualSections: pageId === "communications" || pageId === "appearance",
-    onBackToQuick:
-      pageId === "config"
-        ? () => {
-            state.configSettingsMode = "quick";
-          }
-        : undefined,
-    webPush:
-      pageId === "communications"
-        ? {
-            supported: state.webPushSupported,
-            permission: state.webPushPermission,
-            subscribed: state.webPushSubscribed,
-            loading: state.webPushLoading,
-          }
-        : undefined,
-    onWebPushSubscribe:
-      pageId === "communications" ? () => void state.handleWebPushSubscribe() : undefined,
-    onWebPushUnsubscribe:
-      pageId === "communications" ? () => void state.handleWebPushUnsubscribe() : undefined,
-    onWebPushTest: pageId === "communications" ? () => void state.handleWebPushTest() : undefined,
-  });
-  const body =
-    pageId === "config" && state.configSettingsMode === "quick"
-      ? renderQuickSettings({
-          currentModel,
-          thinkingLevel,
-          fastMode,
-          channels: quickChannels(state),
-          automation: {
-            cronJobCount: state.cronJobs?.length ?? 0,
-            skillCount: state.skillsReport?.skills?.length ?? 0,
-            mcpServerCount: mcpServerCount(config),
-          },
-          security: extractQuickSettingsSecurity(state),
-          theme: state.theme,
-          themeMode: state.themeMode,
-          hasCustomTheme: Boolean(state.settings.customTheme),
-          customThemeLabel: state.settings.customTheme?.label,
-          borderRadius: state.settings.borderRadius,
-          textScale: state.settings.textScale ?? 100,
-          setTheme: (theme, context) => state.setTheme(theme, context),
-          setThemeMode: (mode, context) => state.setThemeMode(mode, context),
-          onModelChange: () => {
-            state.configSettingsMode = "advanced";
-            state.aiAgentsActiveSection = "models";
-            navigate("ai-agents");
-          },
-          setBorderRadius: (value) => state.setBorderRadius(value),
-          setTextScale: (value) => state.setTextScale(value),
-          onOpenCustomThemeImport: () => {
-            navigate("appearance");
-            state.appearanceFormMode = "form";
-            state.appearanceSearchQuery = "";
-            state.appearanceActiveSection = "__appearance__";
-            state.appearanceActiveSubsection = null;
-            state.openCustomThemeImport();
-            state.requestUpdate?.();
-          },
-          connected: state.connected,
-          gatewayUrl: state.settings.gatewayUrl,
-          assistantName: state.assistantName,
-          version: state.hello?.server?.version ?? "",
-          configObject: config as Record<string, unknown>,
-          configDirty: state.configFormDirty,
-          configSaving: state.configSaving,
-          configApplying: state.configApplying,
-          configReady: Boolean(state.configSnapshot?.hash),
-          onSelectPreset: (id) => {
-            const preset = getPresetById(id);
-            if (preset) {
-              stageConfigPreset(state, preset.patch);
-            }
-          },
-          onResetConfig: () => resetConfigPendingChanges(state),
-          onSaveConfig: () => void saveConfig(state),
-          onApplyConfig: () => void applyConfig(state),
-          onAdvancedSettings: () => {
-            state.configSettingsMode = "advanced";
-          },
-          onThinkingChange: (level) => void patchActiveSession(state, { thinkingLevel: level }),
-          onFastModeChange: (mode) => void patchActiveSession(state, { fastMode: mode }),
-          onChannelConfigure: () => navigate("channels"),
-          onManageCron: () => navigate("cron"),
-          onBrowseSkills: () => navigate("skills"),
-          onConfigureMcp: () => navigate("mcp"),
-          onSecurityConfigure: () => {
-            state.configSettingsMode = "advanced";
-            state.configActiveSection = "auth";
-          },
-          onBrowserEnabledToggle: (enabled) =>
-            updateConfigFormValue(state, ["browser", "enabled"], enabled),
-          onToolProfileChange: (profile) =>
-            updateConfigFormValue(state, ["tools", "profile"], profile),
-          assistantAvatar: currentAvatar,
-          assistantAvatarUrl: currentAvatarUrl,
-          assistantAvatarSource: state.assistantAvatarSource,
-          assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
-          assistantAvatarUploadError: state.assistantAvatarUploadError,
-          assistantAvatarStatus: avatarStatus,
-          assistantAvatarReason: avatarReason,
-          assistantAvatarOverride: configuredAvatar,
-          basePath: state.basePath,
-          userAvatar: state.userAvatar ?? null,
-          onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
-          onAssistantAvatarOverrideChange: (dataUrl) => {
-            setAssistantAvatarOverride(state, dataUrl, activeAvatarAgentId(state));
-            state.chatAvatarUrl = dataUrl;
-          },
-          onAssistantAvatarClearOverride: () => {
-            const agentId = activeAvatarAgentId(state);
-            setAssistantAvatarOverride(state, null, agentId);
-            state.chatAvatarUrl = null;
-            void state.loadAssistantIdentity?.({
-              sessionKey: buildAgentMainSessionKey({ agentId }),
-              expectedSessionKey: state.sessionKey,
-            });
-          },
+        : undefined;
+    const selection = normalizeConfigSelection(
+      this.pageId,
+      this.selections[this.pageId].activeSection,
+      this.selections[this.pageId].activeSubsection,
+    );
+    const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
+    const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
+    const props: ConfigProps = {
+      raw: state.configRaw,
+      originalRaw: state.configRawOriginal,
+      valid: state.configValid,
+      issues: state.configIssues,
+      loading: state.configLoading,
+      saving: state.configSaving,
+      applying: state.configApplying,
+      updating: this.context.overlays.snapshot.updateRunning,
+      connected: state.connected,
+      schema: state.configSchema,
+      schemaLoading: state.configSchemaLoading,
+      uiHints: state.configUiHints,
+      formMode: this.formModes[this.pageId],
+      rawAvailable: Boolean(state.configSnapshot?.config || state.configForm || state.configRaw),
+      showModeToggle: this.pageId === "config",
+      formValue: state.configForm,
+      originalValue: state.configFormOriginal,
+      searchQuery: this.searchQueries[this.pageId],
+      activeSection,
+      activeSubsection,
+      onRawChange: (next) => runtimeConfig.setRaw(next),
+      onFormModeChange: (mode) => this.setFormMode(mode),
+      onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
+      onSearchChange: (query) => this.setSearchQuery(query),
+      onSectionChange: (section) => this.setActiveSection(section),
+      onSubsectionChange: (section) => this.setActiveSubsection(section),
+      onReload: () => void runtimeConfig.refresh({ discardPendingChanges: true }),
+      onReset: () => runtimeConfig.resetDraft(),
+      onSave: () => void runtimeConfig.save(),
+      onApply: () => void runtimeConfig.apply(),
+      onUpdate: () => void this.context.overlays.runUpdate(),
+      onOpenFile: () => void runtimeConfig.openFile(),
+      version:
+        this.context.config.current.serverVersion ??
+        this.context.gateway.snapshot.hello?.server?.version ??
+        "",
+      theme: this.settings.theme,
+      themeMode: this.settings.themeMode,
+      setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
+      setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      hasCustomTheme: Boolean(this.settings.customTheme),
+      customThemeLabel: this.settings.customTheme?.label ?? null,
+      customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
+      customThemeImportUrl: this.customThemeImportUrl,
+      customThemeImportBusy: this.customThemeImportBusy,
+      customThemeImportMessage: this.customThemeImportMessage,
+      customThemeImportExpanded: this.customThemeImportExpanded,
+      customThemeImportFocusToken: this.customThemeImportFocusToken,
+      onCustomThemeImportUrlChange: (next) => {
+        this.customThemeImportUrl = next;
+        if (this.customThemeImportMessage?.kind === "error") {
+          this.customThemeImportMessage = null;
+        }
+      },
+      onImportCustomTheme: () => void this.importCustomTheme(),
+      onClearCustomTheme: () => this.clearCustomTheme(),
+      onOpenCustomThemeImport: () => this.openCustomThemeImport(),
+      borderRadius: this.settings.borderRadius,
+      setBorderRadius: (value) => this.setBorderRadius(value),
+      textScale: this.settings.textScale ?? 100,
+      setTextScale: (value) => this.setTextScale(value),
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      assistantName:
+        this.context.config.current.assistantIdentity.name || this.context.assistantName,
+      configPath: state.configSnapshot?.path ?? null,
+      navRootLabel: this.pageId === "config" ? undefined : t(`tabs.${this.pageId}`),
+      showRootTab: !includeSections?.length,
+      includeSections: includeSections ? [...includeSections] : undefined,
+      excludeSections,
+      includeVirtualSections: this.pageId === "communications" || this.pageId === "appearance",
+      settingsLayout: this.pageId === "config" ? "accordion" : undefined,
+      onBackToQuick: this.pageId === "config" ? () => (this.settingsMode = "quick") : undefined,
+      webPush: undefined,
+    };
+    return this.pageId === "mcp"
+      ? renderConfig({
+          ...props,
+          activeSection: "mcp",
+          showModeToggle: false,
         })
-      : pageId === "mcp"
-        ? renderMcp({
-            configObject: config as Record<string, unknown>,
-            configDirty: state.configFormDirty,
-            configSaving: state.configSaving,
-            configApplying: state.configApplying,
-            connected: state.connected,
-            onSaveConfig: () => void saveConfig(state),
-            onApplyConfig: () => void applyConfig(state),
-            onServerEnabledChange: (name, enabled) => {
-              updateMcpServerEnabled(state, name, enabled);
-              requestUpdate?.();
-            },
-            editor: tabBody,
-          })
-        : tabBody;
+      : renderConfig(props);
+  }
 
-  return html`
-    ${renderSettingsWorkspace(
-      state.basePath,
+  private renderQuickConfig(configObject: Record<string, unknown>) {
+    const runtimeConfig = this.context.runtimeConfig;
+    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
+    const thinkingLevel =
+      typeof agentsDefaults?.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+    const fastMode = agentsDefaults?.fastMode;
+    const appConfig = this.context.config.current;
+    return renderQuickSettings({
+      currentModel: model,
+      thinkingLevel,
+      fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
+      channels: quickChannels(configObject),
+      automation: {
+        cronJobCount: 0,
+        skillCount: 0,
+        mcpServerCount: mcpServerCount(configObject),
+      },
+      security: extractQuickSettingsSecurity(configObject),
+      theme: this.settings.theme,
+      themeMode: this.settings.themeMode,
+      hasCustomTheme: Boolean(this.settings.customTheme),
+      customThemeLabel: this.settings.customTheme?.label,
+      borderRadius: this.settings.borderRadius,
+      textScale: this.settings.textScale ?? 100,
+      setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
+      setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      onModelChange: () => {
+        this.settingsMode = "advanced";
+        this.selections = {
+          ...this.selections,
+          "ai-agents": { activeSection: "models", activeSubsection: null },
+        };
+        this.navigate("ai-agents");
+      },
+      setBorderRadius: (value) => this.setBorderRadius(value),
+      setTextScale: (value) => this.setTextScale(value),
+      onOpenCustomThemeImport: () => {
+        this.pageId = "appearance";
+        this.setFormMode("form");
+        this.setSearchQuery("");
+        this.selections = {
+          ...this.selections,
+          appearance: { activeSection: "__appearance__", activeSubsection: null },
+        };
+        this.openCustomThemeImport();
+      },
+      connected: runtimeConfig.state.connected,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      assistantName: appConfig.assistantIdentity.name || this.context.assistantName,
+      version:
+        appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
+      configObject,
+      configDirty: runtimeConfig.state.configFormDirty,
+      configSaving: runtimeConfig.state.configSaving,
+      configApplying: runtimeConfig.state.configApplying,
+      configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
+      onSelectPreset: (id) => {
+        const preset = getPresetById(id);
+        if (preset) {
+          runtimeConfig.stagePreset(preset.patch);
+        }
+      },
+      onResetConfig: () => runtimeConfig.resetDraft(),
+      onSaveConfig: () => void runtimeConfig.save(),
+      onApplyConfig: () => void runtimeConfig.apply(),
+      onAdvancedSettings: () => {
+        this.settingsMode = "advanced";
+      },
+      onThinkingChange: (level) =>
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
+      onFastModeChange: (mode: FastMode) =>
+        runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+      onChannelConfigure: () => this.navigate("communications"),
+      onManageCron: () => this.navigate("cron"),
+      onBrowseSkills: () => this.navigate("skills"),
+      onConfigureMcp: () => this.navigate("mcp"),
+      onSecurityConfigure: () => {
+        this.settingsMode = "advanced";
+        this.selections = {
+          ...this.selections,
+          config: { activeSection: "auth", activeSubsection: null },
+        };
+      },
+      onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
+      onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+      assistantAvatar: appConfig.assistantIdentity.avatar,
+      assistantAvatarUrl: appConfig.assistantIdentity.avatar,
+      assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
+      assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
+      assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
+      assistantAvatarOverride: null,
+      basePath: this.context.basePath,
+    });
+  }
+
+  override render() {
+    const configState = this.context.runtimeConfig.state;
+    const configObject =
+      asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
+    const body =
+      this.pageId === "config" && this.settingsMode === "quick"
+        ? this.renderQuickConfig(configObject)
+        : this.renderAdvancedConfig(configObject);
+    return renderSettingsWorkspace(
+      this.context.basePath,
       html`
         <section class="content-header">
           <div>
             <div class="page-title">
-              ${pageId === "config" ? t("nav.settings") : t(`tabs.${pageId}`)}
+              ${this.pageId === "config" ? t("nav.settings") : t(`tabs.${this.pageId}`)}
             </div>
-            <div class="page-sub">${t(`subtitles.${pageId}`)}</div>
+            <div class="page-sub">${t(`subtitles.${this.pageId}`)}</div>
           </div>
         </section>
         ${body}
       `,
-      pageId,
-      navigate,
-    )}
-  `;
+      this.pageId as never,
+      (routeId) => this.navigate(routeId),
+    );
+  }
 }
 
-export function renderConfigRoute(
-  state: AppViewState,
-  pageId: ConfigPageId,
-  navigate: RouteRenderContext["navigate"],
-) {
-  return renderConfigPage({ state, pageId, navigate });
-}
+customElements.define("openclaw-config-page", ConfigPage);
