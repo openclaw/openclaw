@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
@@ -10,6 +10,15 @@ import {
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
+
+const installCompletionMock = vi.hoisted(() => vi.fn());
+vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/completion-runtime.js")>();
+  return {
+    ...actual,
+    installCompletion: installCompletionMock,
+  };
+});
 
 const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
 const tempDirs: string[] = [];
@@ -100,5 +109,26 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+});
+
+describe("doctorShellCompletion EACCES handling", () => {
+  it("logs a friendly message and does not throw when installCompletion fails with EACCES", async () => {
+    installCompletionMock.mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied, open '/sandbox/.bashrc'"), {
+        code: "EACCES",
+      }),
+    );
+
+    const { doctorShellCompletion } = await import("./doctor-completion.js");
+
+    // Should not throw — the catch block logs the error and returns gracefully
+    await expect(
+      doctorShellCompletion(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
+        { confirm: vi.fn() } as never,
+        { nonInteractive: true },
+      ),
+    ).resolves.toBeUndefined();
   });
 });
