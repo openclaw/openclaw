@@ -19403,7 +19403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 854,
+      "line": 853,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Loading chat",
       "surface": "apple",
@@ -19411,7 +19411,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 952,
+      "line": 951,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Dismiss",
       "surface": "apple",
