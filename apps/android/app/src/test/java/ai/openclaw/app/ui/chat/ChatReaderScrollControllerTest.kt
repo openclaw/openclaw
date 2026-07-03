@@ -11,14 +11,14 @@ import org.junit.Test
 
 class ChatReaderScrollControllerTest {
   @Test
-  fun initialHistoryRestoresLatestUserWithoutFollowingFinishedReply() {
+  fun initialHistoryRestoresLatestUserAsReaderAnchor() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))
 
     val transition = initialChatReaderTransition(timeline)
 
     assertEquals(1, transition.scrollIndex)
     assertFalse(transition.animated)
-    assertNull(transition.state.followTarget)
+    assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
     assertEquals("user-1", transition.state.latestUserMessageId)
   }
 
@@ -41,10 +41,43 @@ class ChatReaderScrollControllerTest {
     val newTurn = previous.onTimelineChanged(active)
     val streamUpdate = newTurn.state.onTimelineChanged(activeTimeline(user("user-1"), stream = "reply"))
 
-    assertEquals(active.scrollTargetIndex, newTurn.scrollIndex)
+    assertEquals(active.readAnchorIndex, newTurn.scrollIndex)
     assertTrue(newTurn.animated)
-    assertEquals(activeTimeline(user("user-1"), stream = "reply").scrollTargetIndex, streamUpdate.scrollIndex)
+    assertEquals(activeTimeline(user("user-1"), stream = "reply").readAnchorIndex, streamUpdate.scrollIndex)
     assertTrue(streamUpdate.state.hasNewerContent)
+  }
+
+  @Test
+  fun completedReplyKeepsPromptAnchoredAndOffersLatestJump() {
+    val active = activeTimeline(user("user-1"), stream = "reply")
+    val followingPrompt = initialChatReaderTransition(active).state
+    val finished = timeline(user("user-1"), assistant("assistant-1"))
+
+    val transition = followingPrompt.onTimelineChanged(finished)
+
+    assertEquals(finished.readAnchorIndex, transition.scrollIndex)
+    assertTrue(transition.state.hasNewerContent)
+    assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
+  }
+
+  @Test
+  fun removedOptimisticPromptPreservesPositionWithoutOfferingJump() {
+    val active =
+      buildChatTimeline(
+        messages = listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")),
+        pendingRunCount = 1,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+    val followingPrompt = initialChatReaderTransition(active).state
+    val rejected = timeline(user("user-old"), assistant("assistant-old"))
+
+    val transition = followingPrompt.onTimelineChanged(rejected)
+
+    assertNull(transition.scrollIndex)
+    assertNull(transition.state.followTarget)
+    assertFalse(transition.state.hasNewerContent)
+    assertEquals("user-old", transition.state.latestUserMessageId)
   }
 
   @Test
@@ -54,7 +87,7 @@ class ChatReaderScrollControllerTest {
 
     val transition = previous.onTimelineChanged(active)
 
-    assertEquals(active.scrollTargetIndex, transition.scrollIndex)
+    assertEquals(active.readAnchorIndex, transition.scrollIndex)
     assertEquals("user-1", transition.state.latestUserMessageId)
   }
 
@@ -85,7 +118,7 @@ class ChatReaderScrollControllerTest {
 
     val moved =
       following.onViewportChanged(
-        index = checkNotNull(timeline.scrollTargetIndex),
+        index = checkNotNull(timeline.readAnchorIndex),
         offset = 0,
         timeline = timeline,
         targetTolerancePx = 24,

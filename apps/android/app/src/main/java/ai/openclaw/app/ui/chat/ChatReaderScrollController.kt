@@ -128,7 +128,7 @@ internal fun rememberChatReaderScrollController(
 }
 
 internal fun initialChatReaderTransition(timeline: ChatTimeline): ChatReaderTransition {
-  val initialIndex = timeline.initialScrollIndex ?: timeline.scrollTargetIndex ?: timeline.latestContentIndex
+  val initialIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex
   return ChatReaderTransition(
     state =
       ChatReaderState(
@@ -151,6 +151,18 @@ internal fun ChatReaderState.onTimelineChanged(
   if (timeline.latestContentVersion == latestContentVersion) {
     return ChatReaderTransition(state = this)
   }
+  val previousUserStillPresent = latestUserMessageId?.let(timeline::containsMessage) ?: true
+  if (!previousUserStillPresent) {
+    return ChatReaderTransition(
+      state =
+        copy(
+          followTarget = null,
+          hasNewerContent = false,
+          latestUserMessageId = timeline.latestUserMessageId,
+          latestContentVersion = timeline.latestContentVersion,
+        ),
+    )
+  }
   val hasNewUserTurn =
     timeline.latestUserMessageId != null && timeline.latestUserMessageId != latestUserMessageId
   if (hasNewUserTurn) {
@@ -162,7 +174,7 @@ internal fun ChatReaderState.onTimelineChanged(
           latestUserMessageId = timeline.latestUserMessageId,
           latestContentVersion = timeline.latestContentVersion,
         ),
-      scrollIndex = timeline.scrollTargetIndex ?: timeline.latestContentIndex,
+      scrollIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex,
       animated = true,
     )
   }
@@ -212,20 +224,25 @@ internal fun ChatReaderState.onViewportChanged(
 internal fun ChatReaderState.jumpToLatest(timeline: ChatTimeline): ChatReaderTransition =
   ChatReaderTransition(
     state = copy(followTarget = ChatScrollFollowTarget.LatestContent, hasNewerContent = false),
-    scrollIndex = timeline.latestContentIndex ?: timeline.scrollTargetIndex,
+    scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
     animated = true,
   )
 
 private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): Int? =
   when (target) {
-    ChatScrollFollowTarget.ReadAnchor -> scrollTargetIndex
+    ChatScrollFollowTarget.ReadAnchor -> readAnchorIndex
     ChatScrollFollowTarget.LatestContent -> latestContentIndex
   }
+
+private fun ChatTimeline.containsMessage(id: String): Boolean =
+  items
+    .filterIsInstance<ChatTimelineItem.Message>()
+    .any { item -> item.message.id == id }
 
 private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? =
   when (index) {
     latestContentIndex -> ChatScrollFollowTarget.LatestContent
-    scrollTargetIndex -> ChatScrollFollowTarget.ReadAnchor
+    readAnchorIndex -> ChatScrollFollowTarget.ReadAnchor
     else -> null
   }
 

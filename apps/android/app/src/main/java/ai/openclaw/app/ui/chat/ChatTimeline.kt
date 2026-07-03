@@ -21,9 +21,8 @@ internal sealed class ChatTimelineItem {
 
 internal data class ChatTimeline(
   val items: List<ChatTimelineItem>,
-  val scrollTargetIndex: Int?,
+  val readAnchorIndex: Int?,
   val latestContentIndex: Int?,
-  val initialScrollIndex: Int?,
   val latestUserMessageId: String?,
   val latestContentVersion: String,
 )
@@ -35,7 +34,6 @@ internal fun buildChatTimeline(
   streamingAssistantText: String?,
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
-  val hasActiveRun = pendingRunCount > 0 || pendingToolCalls.isNotEmpty() || stream != null
   val items =
     buildList {
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
@@ -46,27 +44,13 @@ internal fun buildChatTimeline(
   if (items.isEmpty()) {
     return ChatTimeline(
       items = items,
-      scrollTargetIndex = null,
+      readAnchorIndex = null,
       latestContentIndex = null,
-      initialScrollIndex = null,
       latestUserMessageId = null,
       latestContentVersion = "",
     )
   }
 
-  // In reverseLayout, index 0 is bottom-most. During an active run, keep the prompt
-  // anchored so streaming/tool rows do not immediately push the just-sent message away.
-  val activePromptIndex =
-    if (hasActiveRun) {
-      items.indexOfFirst { item ->
-        item is ChatTimelineItem.Message &&
-          item.message.role
-            .trim()
-            .equals("user", ignoreCase = true)
-      }
-    } else {
-      -1
-    }
   val latestUserMessage =
     items.firstNotNullOfOrNull { item ->
       val message = (item as? ChatTimelineItem.Message)?.message ?: return@firstNotNullOfOrNull null
@@ -78,13 +62,14 @@ internal fun buildChatTimeline(
         item.message.id == latestUserMessage?.id
     }
   val latestContentIndex = 0
-  val scrollTargetIndex = activePromptIndex.takeIf { it >= 0 } ?: latestContentIndex
+  // In reverseLayout, index 0 is bottom-most. Keep the latest prompt as a stable
+  // reader anchor even after streaming rows collapse into a finished reply.
+  val readAnchorIndex = latestUserIndex.takeIf { it >= 0 } ?: latestContentIndex
 
   return ChatTimeline(
     items = items,
-    scrollTargetIndex = scrollTargetIndex,
+    readAnchorIndex = readAnchorIndex,
     latestContentIndex = latestContentIndex,
-    initialScrollIndex = latestUserIndex.takeIf { it >= 0 } ?: scrollTargetIndex,
     latestUserMessageId = latestUserMessage?.id,
     latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream),
   )
