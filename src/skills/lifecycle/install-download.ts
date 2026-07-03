@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +18,8 @@ import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
+
+const MAX_SKILL_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 
@@ -112,7 +114,24 @@ async function downloadFile(params: {
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    let downloadedBytes = 0;
+    const sizeTracker = new Transform({
+      transform(chunk, _encoding, callback) {
+        downloadedBytes += Buffer.isBuffer(chunk)
+          ? chunk.byteLength
+          : Buffer.byteLength(String(chunk));
+        if (downloadedBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+          callback(
+            new Error(
+              `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES} byte limit (${downloadedBytes} bytes received)`,
+            ),
+          );
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(readable, sizeTracker, file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
