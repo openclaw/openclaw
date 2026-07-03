@@ -286,7 +286,13 @@ function buildTalkCatalog(config: OpenClawConfig) {
           configuredProviderId:
             provider.id === activeTranscriptionProvider ? transcriptionConfig.provider : undefined,
         });
-        const providerConfig = provider.resolveConfig?.({ cfg: config, rawConfig }) ?? rawConfig;
+        const rawConfigWithModel =
+          transcriptionConfig.model && rawConfig.model === undefined
+            ? { ...rawConfig, model: transcriptionConfig.model }
+            : rawConfig;
+        const providerConfig =
+          provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
+          rawConfigWithModel;
         const entry: Record<string, unknown> = {
           id: provider.id,
           label: provider.label,

@@ -92,7 +92,7 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun allUnconfiguredProvidersRequireSetupWithoutGuessingAnActiveProvider() {
+  fun allUnconfiguredProvidersStayUnverifiedWithoutAnActiveProvider() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog(
@@ -107,8 +107,8 @@ class GatewayTalkSetupReadinessTest {
         ),
       )
 
-    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.NeedsSetup)
-    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.Unverified)
+    assertTrue(!readiness.realtimeTalk.requiresSetup)
   }
 
   @Test

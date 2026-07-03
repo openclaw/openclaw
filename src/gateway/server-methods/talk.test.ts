@@ -362,8 +362,12 @@ describe("talk.catalog handler", () => {
     const transcriptionFast = {
       id: "transcription-fast",
       label: "Transcription Fast",
+      models: ["transcribe-model"],
       autoSelectOrder: 10,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+      isConfigured: vi.fn(
+        ({ providerConfig }) =>
+          providerConfig.enabled === true && providerConfig.model === "transcribe-model",
+      ),
     };
     const realtimeSlow = {
       id: "realtime-slow",
@@ -399,6 +403,11 @@ describe("talk.catalog handler", () => {
       context: {
         getRuntimeConfig: () =>
           ({
+            agents: {
+              defaults: {
+                voiceModel: { primary: "transcription-fast/transcribe-model" },
+              },
+            },
             talk: {
               realtime: {
                 providers: {
@@ -426,7 +435,13 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: { activeProvider: "transcription-fast" },
+      transcription: {
+        activeProvider: "transcription-fast",
+        providers: [
+          { id: "transcription-slow", configured: true },
+          { id: "transcription-fast", configured: true },
+        ],
+      },
       realtime: { activeProvider: "realtime-fast" },
     });
   });

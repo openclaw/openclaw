@@ -92,11 +92,9 @@ private fun parseTalkCatalogGroup(
   }
 
   if (activeProviderId == null) {
-    return if (providers.none { it.configured }) {
-      GatewayTalkSetupState.NeedsSetup("Configure a $title provider on the Gateway")
-    } else {
-      GatewayTalkSetupState.Unverified("Gateway did not identify the active $title provider")
-    }
+    // Older Gateways can omit the selected provider and report alias-backed rows as unconfigured
+    // even though session startup resolves them. Only an explicit selection is authoritative.
+    return GatewayTalkSetupState.Unverified("Gateway did not identify the active $title provider")
   }
   val selected =
     // Match Gateway registry precedence: canonical ids win before alias fallback.
