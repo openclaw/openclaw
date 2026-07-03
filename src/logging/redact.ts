@@ -95,6 +95,9 @@ const STRUCTURED_SECRET_FIELD_RE = new RegExp(
 const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password)$/i;
+const GENERIC_STRUCTURED_FIELD_RE =
+  /^(?:text|content|message|error|errorMessage|detail|details|reason)$/i;
+const APP_PASSWORD_CONTEXT_RE = /\b(?:apple|iCloud|app[- ]?specific[- ]?password)\b/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
 const BENIGN_APP_PASSWORD_WORDS = new Set([
   "case",
@@ -1057,7 +1060,10 @@ function redactSensitiveFieldValueWithOptions(
   const redacted = redactText(value, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
-  const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
+  const shouldRedactAppPassword =
+    redacted !== value ||
+    STRUCTURED_APP_PASSWORD_FIELD_RE.test(key) ||
+    (GENERIC_STRUCTURED_FIELD_RE.test(key) && APP_PASSWORD_CONTEXT_RE.test(value));
   if (shouldRedactAppPassword) {
     const appRedacted = redactAppSpecificPasswords(redacted);
     if (appRedacted !== value) {

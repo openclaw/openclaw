@@ -1092,7 +1092,7 @@ describe("redactSensitiveText", () => {
 });
 
 describe("redactSecrets", () => {
-  it("redacts app passwords in Apple/iCloud-specific fields but not in generic text fields", () => {
+  it("redacts app passwords in Apple/iCloud-specific fields and context-gated generic fields", () => {
     const input = {
       plugin: {
         config: {
@@ -1110,6 +1110,13 @@ describe("redactSecrets", () => {
           text: "standalone kube-node-pool-spec and help-desk-team-page identifiers survive",
           errorMessage: "module load-some-bare-init crashed",
         },
+        // Generic field with Apple/iCloud context keywords still gets redacted
+        {
+          text: "iCloud rejected abcd-efgh-ijkl-mnop for this account",
+        },
+        {
+          error: "apple app-specific-password abcd-efgh-ijkl-mnop is invalid",
+        },
       ],
       appleCredentials: {
         "app-specific-password": "abcd-efgh-ijkl-mnop",
@@ -1124,7 +1131,7 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     // App password in a password field is still redacted
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
-    // Generic text/errorMessage fields no longer trigger app password masking
+    // Generic text/errorMessage fields without context keywords no longer trigger masking
     expect(serialized).toContain("kube-node-pool-spec");
     expect(serialized).toContain("help-desk-team-page");
     expect(serialized).toContain("load-some-bare-init");
