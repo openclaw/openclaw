@@ -198,6 +198,40 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("suppresses MiniMax mm:think and antml:thinking namespaced reasoning tags", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<mm:think>MiniMax reasoning content</mm:think>" },
+        { text: "<antml:thinking>Anthropic reasoning</antml:thinking>" },
+        { text: "Visible answer" },
+      ],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toBe("Visible answer");
+  });
+
+  it("preserves mixed reasoning and visible content even with mm: namespace", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "<mm:think>hidden</mm:think> visible content here" }],
+      roomId: "room:5",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[1]).toContain("visible content here");
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {
