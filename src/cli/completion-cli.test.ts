@@ -34,6 +34,20 @@ function createCompletionProgram(): Command {
   return program;
 }
 
+function createAliasedCompletionProgram(): Command {
+  const program = new Command();
+  program.name("openclaw");
+
+  const infer = program.command("infer").alias("capability").description("Infer commands");
+  infer.command("status").description("Show infer status");
+
+  const cron = program.command("cron").description("Cron commands");
+  cron.command("add").alias("create").description("Add a cron job").option("--json", "JSON output");
+  cron.command("rm").alias("remove").alias("delete").description("Remove a cron job");
+
+  return program;
+}
+
 describe("completion-cli", () => {
   it("generates zsh functions for nested subcommands", () => {
     const script = getCompletionScript("zsh", createCompletionProgram());
@@ -44,6 +58,17 @@ describe("completion-cli", () => {
     expect(script).toContain("--force[Force the action]");
     expect(script).toContain("\\`models status --json\\`");
     expect(script).toContain("\\$OPENCLAW_STATE_DIR");
+  });
+
+  it("includes command aliases in zsh completion dispatch", () => {
+    const script = getCompletionScript("zsh", createAliasedCompletionProgram());
+
+    expect(script).toContain("'capability[Infer commands]'");
+    expect(script).toContain("(infer|capability) _openclaw_infer ;;");
+    expect(script).toContain("'create[Add a cron job]'");
+    expect(script).toContain("(add|create) _openclaw_cron_add ;;");
+    expect(script).toContain("'remove[Remove a cron job]'");
+    expect(script).toContain("'delete[Remove a cron job]'");
   });
 
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
@@ -122,6 +147,18 @@ describe("completion-cli", () => {
     expect(script).not.toContain("'-t,'");
   });
 
+  it("includes command aliases in PowerShell completion paths", () => {
+    const script = getCompletionScript("powershell", createAliasedCompletionProgram());
+
+    expect(script).toContain("$completions = @('infer','capability','cron')");
+    expect(script).toContain("if ($commandPath -eq 'infer') {");
+    expect(script).toContain("if ($commandPath -eq 'capability') {");
+    expect(script).toContain("$completions = @('status')");
+    expect(script).toContain("if ($commandPath -eq 'cron add') {");
+    expect(script).toContain("if ($commandPath -eq 'cron create') {");
+    expect(script).toContain("$completions = @('--json')");
+  });
+
   it("generates valid PowerShell root arrays when commands or options are empty", () => {
     const commandsOnly = new Command().name("openclaw");
     commandsOnly.command("status");
@@ -152,6 +189,23 @@ describe("completion-cli", () => {
     expect(script).toContain("if contains -- $flag $value_options");
   });
 
+  it("includes command aliases in fish completion paths", () => {
+    const script = getCompletionScript("fish", createAliasedCompletionProgram());
+
+    expect(script).toContain(
+      'complete -c openclaw -n "__fish_use_subcommand" -a "capability" -d \'Infer commands\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches capability --" -a "status" -d \'Show infer status\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches cron --" -a "create" -d \'Add a cron job\'',
+    );
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches cron create --\" -l json -d 'JSON output'",
+    );
+  });
+
   it("scopes fish value-taking option skips to the active command path", () => {
     const script = getCompletionScript("fish", createCompletionProgram());
 
@@ -168,5 +222,15 @@ describe("completion-cli", () => {
 
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
+  });
+
+  it("includes command aliases in Bash completion paths", () => {
+    const script = getCompletionScript("bash", createAliasedCompletionProgram());
+
+    expect(script).toContain('opts="infer capability cron"');
+    expect(script).toContain('"infer"|"capability")');
+    expect(script).toContain('opts="status"');
+    expect(script).toContain('"cron add"|"cron create")');
+    expect(script).toContain('opts="--json"');
   });
 });
