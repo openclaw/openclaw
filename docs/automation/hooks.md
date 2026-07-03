@@ -45,6 +45,10 @@ openclaw hooks info session-memory
 
 ## Event types
 
+Event names outside this table never fire. The hook loader logs a warning for
+unknown names (typos like `command:nwe`), and `openclaw hooks info <name>`
+flags them, so a hook that silently never runs is diagnosable.
+
 | Event                    | When it fires                                              |
 | ------------------------ | ---------------------------------------------------------- |
 | `command:new`            | `/new` command issued                                      |

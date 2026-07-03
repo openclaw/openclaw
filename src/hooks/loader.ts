@@ -16,6 +16,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { shouldIncludeHook } from "./config.js";
 import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
 import { buildImportUrl } from "./import-url.js";
+import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";
@@ -166,6 +167,18 @@ export async function loadInternalHooks(
         if (events.length === 0) {
           log.warn(`Hook '${safeLogValue(entry.hook.name)}' has no events defined in metadata`);
           continue;
+        }
+
+        // Core is the only emitter of internal hook events, so a key outside
+        // the known set can never fire — surface the typo instead of letting
+        // the hook register silently dead. Still registered: advisory only.
+        const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
+        if (unknownEvents.length > 0) {
+          log.warn(
+            `Hook '${safeLogValue(entry.hook.name)}' subscribes to unknown event${unknownEvents.length === 1 ? "" : "s"} ` +
+              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} that will never fire. ` +
+              `Known events: https://docs.openclaw.ai/automation/hooks`,
+          );
         }
 
         for (const event of events) {
