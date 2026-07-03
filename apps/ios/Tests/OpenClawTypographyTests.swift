@@ -155,6 +155,11 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
+        let chatTypography = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift"),
+            encoding: .utf8)
         let chatMessageViews = try String(
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
@@ -232,6 +237,12 @@ struct OpenClawTypographyTests {
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
+        #expect(chatTypography
+            .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))
+        #expect(chatTypography.contains(
+            "Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)"))
+        #expect(!chatTypography.contains("Font.system(textStyle, design: .default)"))
+        #expect(!chatTypography.contains("Font.system(textStyle, design: .monospaced)"))
     }
 
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
