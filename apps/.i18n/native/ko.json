@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "설정 필요"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "확인되지 않음"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "Gateway 릴레이를 통한 ${state.provider.label}"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Gateway 토크 카탈로그가 로드되지 않음"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Gateway 토크 카탈로그를 로드할 수 없음"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway에서 ${issue.target.title} 설정을 반환하지 않았습니다"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Gateway에 ${issue.target.title} 제공자가 구성되어 있지 않습니다"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway에서 알 수 없는 제공자 ${issue.providerId}을(를) 선택했습니다"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway에서 ${issue.target.title} 준비 상태를 반환하지 않았습니다"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway에서 ${issue.target.title} 제공자를 구성하세요"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway에서 활성 ${issue.target.title} 제공자를 식별하지 않았습니다"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway에서 지원되는 ${issue.target.title} 제공자를 선택하세요"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Gateway에서 ${issue.providerLabel} 구성"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -709,6 +779,51 @@
       "translated": "연결할 유효한 수동 엔드포인트를 입력하세요."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "설정 코드가 만료되었습니다"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway 토큰이 필요합니다"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway 토큰이 구성되지 않았습니다"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway 비밀번호가 필요합니다"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway 비밀번호가 올바르지 않습니다"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway 비밀번호가 구성되지 않았습니다"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway 액세스 검토가 필요합니다"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "저장된 인증이 올바르지 않습니다"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "기기 ID가 필요합니다"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Gateway 진단이 복사되었습니다"
@@ -859,6 +974,16 @@
       "translated": "페어링 후 연결된 휴대폰과 노드 호스트가 여기에 표시됩니다."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "노드 승인이 필요합니다"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Gateway 호스트에서 실행:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "대기 중인 요청"
@@ -994,11 +1119,6 @@
       "translated": "마지막 Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "연결 재시도"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "연결 편집"
@@ -1059,9 +1179,24 @@
       "translated": "계속"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "새 설정 코드 스캔"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "연결 재시도"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "설정 코드가 만료되었습니다. 새 설정 QR을 스캔하세요."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway 액세스 검토가 필요합니다. Gateway 인증 범위를 확인한 후 다시 시도하세요."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1089,9 +1224,9 @@
       "translated": "저장된 인증이 올바르지 않습니다. 다시 인증하거나 이 gateway 연결을 재설정하세요."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway 인증이 구성되지 않았습니다. 이 연결을 편집한 후 다시 시도하세요."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway 인증이 구성되지 않았습니다. Gateway 호스트에서 구성한 후 다시 시도하세요."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1479,24 +1614,14 @@
       "translated": "완료"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Realtime Provider"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "실시간 토크"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "Live"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "음성"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "전송"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "받아쓰기"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -2649,9 +2774,9 @@
       "translated": "받아쓰기 중지"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "제공업체"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "음성 설정"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3109,11 +3234,6 @@
       "translated": "대기 중인 음성 보내는 중"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "꺼짐"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "듣는 중"
@@ -3122,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "준비됨"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "토크 실패: 실시간 제공자가 예기치 않게 닫혔습니다."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "토크 실패: 실시간 제공자가 닫혔습니다: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",

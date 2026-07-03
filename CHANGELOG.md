@@ -36,13 +36,15 @@ Docs: https://docs.openclaw.ai
 - **Mobile and UI stability:** preserve iOS chat line breaks and final replies, improve Android pairing and TLS recovery, hide expired pairing cards, and keep workspace file rails scrollable. (#98304, #98117, #98366, #98439, #98483, #98049, #98646, #98611) Thanks @joshavant, @Jabato01, @ooiuuii, @wuqxuan, @645648406-max, and @zw-xysk.
 - **Codex and approval flows:** report ChatGPT authentication correctly, rename destructive approval mode to `ask`, classify dynamic goal and session tool results accurately, and derive terminal-idle timeouts from the explicit run deadline. (#91240, #98501, #98659, #96856, #85296) Thanks @849261680, @ukstem, @kevinslin, @yetval, @nxmxbbd, @alkor2000, and @vincentkoc.
 - **Configuration and plugin health:** surface unloadable channel plugins, preserve defaulted provider base URLs during patches, validate bundled plugin updates by manifest contract, and retain legacy ClawHub families where required. (#96397, #98396, #98010, #98249) Thanks @849261680, @momothemage, @weltmaister, @LiLan0125, @herove, and @Patrick-Erichsen.
+- **QQBot media delivery:** scope sandbox-generated media sends to the active session's workspace so `/workspace/...` and relative generated-file paths resolve safely across QQBot media tags, structured payloads, and streaming delivery. (#92872) Thanks @zhangguiping-xydt.
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..3e50f41dd6ea3446b5c98a2f19ec70982ac908e6 history: 211 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..3e50f41dd6ea3446b5c98a2f19ec70982ac908e6 history: 212 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
+- **PR #92872** fix(qqbot): allow scoped sandbox media sends. Thanks @zhangguiping-xydt.
 - **PR #96502** fix(moonshot): bound video description JSON response reads. Thanks @hugenshen and @cursoragent.
 - **PR #98249** Preserve legacy ClawHub family for selected plugins. Thanks @Patrick-Erichsen.
 - **PR #93767** fix(reasoning-tags): strip MiniMax `mm:` namespaced reasoning tags. Thanks @DrHack1.

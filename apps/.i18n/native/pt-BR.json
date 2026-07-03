@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "Pronto"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "Requer configuração"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "Não verificado"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "${state.provider.label} via relay do Gateway"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Catálogo de conversa do Gateway não carregado"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Não foi possível carregar o catálogo de conversa do Gateway"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "O Gateway não retornou a configuração de ${issue.target.title}"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Nenhum provedor de ${issue.target.title} está configurado no Gateway"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "O Gateway selecionou o provedor desconhecido ${issue.providerId}"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "O Gateway não retornou a prontidão de ${issue.target.title}"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Configure um provedor de ${issue.target.title} no Gateway"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "O Gateway não identificou o provedor ativo de ${issue.target.title}"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Escolha um provedor de ${issue.target.title} compatível no Gateway"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Configure ${issue.providerLabel} no Gateway"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -709,6 +779,51 @@
       "translated": "Insira um endpoint manual válido para conectar."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Código de configuração expirado"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Token do Gateway necessário"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Token do Gateway não configurado"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Senha do Gateway necessária"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Senha do Gateway inválida"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Senha do Gateway não configurada"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Acesso ao Gateway precisa de revisão"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Autenticação salva inválida"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Identidade do dispositivo necessária"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Diagnósticos do gateway copiados"
@@ -859,6 +974,16 @@
       "translated": "Telefones vinculados e hosts de nós aparecerão aqui após o pareamento."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Aprovação do nó necessária"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Execute no host do Gateway:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Solicitações pendentes"
@@ -994,11 +1119,6 @@
       "translated": "Último gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Tentar conexão novamente"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Editar conexão"
@@ -1059,9 +1179,24 @@
       "translated": "Continuar"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Escanear novo código de configuração"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Tentar conexão novamente"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "O código de configuração expirou. Escaneie um novo QR de configuração."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Acesso ao Gateway precisa de revisão. Verifique os escopos de autenticação do gateway e tente novamente."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1089,9 +1224,9 @@
       "translated": "A autenticação salva é inválida. Autentique-se novamente ou redefina esta conexão de gateway."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "A autenticação do Gateway não está configurada. Edite esta conexão e tente novamente."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "A autenticação do Gateway não está configurada. Configure-a no host do gateway e tente novamente."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1479,24 +1614,14 @@
       "translated": "Concluído"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Provedor em tempo real"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "Conversa em tempo real"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "Ao vivo"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "Voz"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Transporte"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "Ditado"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -2649,9 +2774,9 @@
       "translated": "Parar ditado"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "Provedor"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "Configuração de voz"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3109,11 +3234,6 @@
       "translated": "Enviando voz na fila"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "Desativado"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "Ouvindo"
@@ -3122,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "Pronto"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "Desativado"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "Falha na conversa: o provedor em tempo real fechou inesperadamente."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "Falha na conversa: provedor em tempo real fechado: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",

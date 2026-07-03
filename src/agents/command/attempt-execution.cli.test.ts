@@ -2184,6 +2184,15 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
   });
 
+  it("forwards Gateway plugin runtime binding to embedded runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { allowGatewaySubagentBinding: true },
+      runId: "gateway-plugin-runtime-binding",
+    });
+
+    expect(embeddedArg.allowGatewaySubagentBinding).toBe(true);
+  });
+
   it("suppresses live stream output for hidden internal runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       opts: { lane: "subagent", sessionEffects: "internal" },
