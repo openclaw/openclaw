@@ -15,6 +15,12 @@ import {
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
 import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -600,6 +606,7 @@ describe("gateway agent handler", () => {
   afterEach(() => {
     envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
+    resetDiagnosticEventsForTest();
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
@@ -2050,6 +2057,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      task: "follow-up",
     });
   });
 
@@ -2364,6 +2372,29 @@ describe("gateway agent handler", () => {
     expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
       false,
     );
+  });
+
+  it("enables Gateway-bound plugin runtimes for ingress agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "plugin runtime check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-gateway-plugin-runtime-binding",
+      },
+      {
+        reqId: "gateway-plugin-runtime-binding",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect(
+      (await waitForAgentCommandCall<{ allowGatewaySubagentBinding?: boolean }>())
+        .allowGatewaySubagentBinding,
+    ).toBe(true);
   });
 
   it("rejects public transcriptMessage overrides", async () => {
@@ -3212,6 +3243,10 @@ describe("gateway agent handler", () => {
       lastTo: "123",
     });
     const context = makeContext();
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
     const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
 
@@ -3237,6 +3272,15 @@ describe("gateway agent handler", () => {
       status: "ok",
       summary: expect.stringContaining("exec approval followup dropped"),
     });
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-rebound-followup",
+        reason: "session_rebound",
+        phase: "gateway_preflight",
+      }),
+    );
     expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
     expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
     const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");

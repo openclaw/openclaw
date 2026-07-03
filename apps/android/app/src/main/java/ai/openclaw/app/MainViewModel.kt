@@ -11,6 +11,8 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.ui.GatewayConnectPlan
+import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -111,10 +113,12 @@ class MainViewModel(
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
-  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
-    runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
+  val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
+    runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
+  val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
+    runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -123,6 +127,8 @@ class MainViewModel(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
+    runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
   val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
@@ -277,10 +283,6 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
-  fun setGatewayToken(value: String) {
-    prefs.setGatewayToken(value)
-  }
-
   fun setGatewayBootstrapToken(value: String) {
     prefs.setGatewayBootstrapToken(value)
   }
@@ -302,37 +304,44 @@ class MainViewModel(
     deviceAuthStore.clearToken(deviceId, "operator")
   }
 
-  fun saveGatewayConfigAndConnect(
-    host: String,
-    port: Int,
-    tls: Boolean,
-    token: String,
-    bootstrapToken: String,
-    password: String,
-    resetSetupAuth: Boolean,
-  ) {
+  internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
     viewModelScope.launch(Dispatchers.Default) {
-      if (resetSetupAuth) {
+      val config = plan.config
+      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
+      val hasExplicitAuth =
+        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
+      if (replacesSavedAuth) {
         resetGatewaySetupAuth()
       }
       prefs.setManualEnabled(true)
-      prefs.setManualHost(host)
-      prefs.setManualPort(port)
-      prefs.setManualTls(tls)
-      prefs.setGatewayBootstrapToken(bootstrapToken)
-      prefs.setGatewayToken(token)
-      prefs.setGatewayPassword(password)
-      ensureRuntime()
-        .connect(
-          GatewayEndpoint.manual(host = host, port = port),
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
+
+      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
+      // including password-only setups that Compose deliberately cannot read back.
+      if (replacesSavedAuth || hasExplicitAuth) {
+        prefs.setGatewayBootstrapToken(config.bootstrapToken)
+        prefs.setGatewayToken(config.token)
+        prefs.setGatewayPassword(config.password)
+      }
+
+      val runtime = ensureRuntime()
+      val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+      if (replacesSavedAuth || hasExplicitAuth) {
+        runtime.connect(
+          endpoint,
           NodeRuntime.GatewayConnectAuth(
-            token = token.ifEmpty { null },
-            bootstrapToken = bootstrapToken.ifEmpty { null },
-            password = password.ifEmpty { null },
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
           ),
         )
+      } else {
+        runtime.connect(endpoint)
+      }
     }
   }
 
@@ -518,6 +527,10 @@ class MainViewModel(
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshTalkSetupReadiness() {
+    ensureRuntime().refreshTalkSetupReadiness()
   }
 
   fun refreshAgents() {

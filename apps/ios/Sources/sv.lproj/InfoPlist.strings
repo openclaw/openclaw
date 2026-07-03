@@ -9,6 +9,6 @@
 "NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kan dela din plats i bakgrunden när du aktiverar Alltid.";
 "NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstaktivering och tryck-och-prata.";
 "NSMotionUsageDescription" = "OpenClaw kan använda rörelsedata för att stödja enhetsmedvetna interaktioner och automatiseringar.";
-"NSPhotoLibraryUsageDescription" = "OpenClaw behöver åtkomst till bildbiblioteket när du väljer befintliga bilder att dela med din assistent.";
+"NSPhotoLibraryUsageDescription" = "OpenClaw låter din assistent läsa bilder som du tillåter och låter dig välja bilder att dela.";
 "NSRemindersFullAccessUsageDescription" = "OpenClaw använder dina påminnelser för att lista, lägga till och slutföra uppgifter när du aktiverar åtkomst till påminnelser.";
 "NSSpeechRecognitionUsageDescription" = "OpenClaw använder taligenkänning på enheten för Talk-läge och röstaktivering.";

@@ -31,10 +31,10 @@ describe("group runtime loading", () => {
     });
     expect(groupChatContext).toContain("You are in a WhatsApp group chat.");
     expect(groupChatContext).toContain(
-      "Your text replies are automatically sent to this group chat.",
+      "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
     );
     expect(groupChatContext).toContain(
-      "For ordinary text, do not use the message tool to send to this same destination; just reply normally.",
+      "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
     );
     expect(groupChatContext).toContain(
       "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
@@ -61,6 +61,9 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
+    expect(toolOnlyContext).toContain(
+      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+    );
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
       sessionCtx: { ChatType: "channel", Provider: "mattermost" },
@@ -81,12 +84,14 @@ describe("group runtime loading", () => {
     expect(telegramContext).not.toContain("Avoid Markdown tables");
     expect(
       isolatedGroups.buildGroupIntro({
-        cfg: {} as OpenClawConfig,
-        sessionCtx: { Provider: "whatsapp" },
         defaultActivation: "mention",
-        silentToken: "NO_REPLY",
       }),
     ).toContain("Activation: trigger-only");
+    expect(
+      isolatedGroups.buildGroupIntro({
+        defaultActivation: "always",
+      }),
+    ).toContain("You see every message; most need no response. When you do reply");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
@@ -97,7 +102,7 @@ describe("group runtime loading", () => {
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).toBe(
-      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation.",
+      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
     );
     expect(
       groups.buildDirectChatContext({
@@ -174,7 +179,9 @@ describe("group runtime loading", () => {
     });
 
     expect(context).toContain("You are in a Mattermost channel.");
-    expect(context).toContain("Your text replies are automatically sent to this channel.");
+    expect(context).toContain(
+      "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
+    );
     expect(context).toContain("do not use the message tool to send to this same destination");
     expect(context).toContain("attachments to this same channel/thread");
     expect(context).not.toContain("group chat");

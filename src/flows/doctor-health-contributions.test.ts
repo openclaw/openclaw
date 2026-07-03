@@ -1,5 +1,7 @@
 // Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
@@ -10,7 +12,7 @@ import {
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
@@ -57,15 +59,34 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
+  collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
+  legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
+    (migration: { pluginId: string }) => ({
+      checkId: "core/doctor/legacy-plugin-manifests",
+      severity: "warning" as const,
+      message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
+      path: "/tmp/openclaw-plugin/openclaw.plugin.json",
+      target: migration.pluginId,
+      requirement: "contracts-capability-keys",
+    }),
+  ),
+  maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
+  resolveAgentContextLimits: vi.fn(
+    (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+      cfg.agents?.defaults?.contextLimits ?? {},
+  ),
   note: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
+  findModelCatalogEntry: vi.fn(() => ({ contextTokens: 200_000 })),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
   resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   resolveHooksGmailModel: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  modelKey: vi.fn((provider: string, model: string) => `${provider}/${model}`),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
     exists: true,
@@ -76,7 +97,24 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
+  collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
+  maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
+  scanConfiguredChannelPluginBlockers: vi.fn(
+    (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
+  ),
+  channelPluginBlockerHitToHealthFinding: vi.fn(
+    (hit: { channelId: string; pluginId: string; reason: string }) => ({
+      checkId: "core/doctor/channel-plugin-blockers",
+      severity: "warning" as const,
+      message: "channels." + hit.channelId + " blocked",
+      path: "channels." + hit.channelId,
+      target: hit.pluginId,
+      requirement: hit.reason,
+    }),
+  ),
+  collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -91,6 +129,11 @@ const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+}));
+
+vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
+  collectStalePluginRuntimeSymlinkHealthFindings:
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings,
 }));
 
 vi.mock("./bundled-health-checks.js", () => ({
@@ -142,6 +185,14 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
 vi.mock("../commands/doctor-state-migrations.js", () => ({
   detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
   runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
+vi.mock("../commands/doctor-plugin-manifests.js", () => ({
+  collectLegacyPluginManifestContractMigrations:
+    mocks.collectLegacyPluginManifestContractMigrations,
+  legacyPluginManifestContractMigrationToHealthFinding:
+    mocks.legacyPluginManifestContractMigrationToHealthFinding,
+  maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
 }));
 
 vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
@@ -230,6 +281,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -238,12 +290,15 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: mocks.loadModelCatalog,
+  findModelCatalogEntry: mocks.findModelCatalogEntry,
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: mocks.getModelRefStatus,
   resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
+  resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
+  modelKey: mocks.modelKey,
 }));
 
 vi.mock("../version.js", async () => ({
@@ -273,9 +328,24 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+vi.mock("../commands/doctor-disk-space.js", () => ({
+  noteDiskSpace: vi.fn(),
+  collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
+}));
+
+vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
+  collectHeartbeatTemplateHealthFindings: mocks.collectHeartbeatTemplateHealthFindings,
+  maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
+}));
+
 vi.mock("../commands/doctor-device-pairing.js", () => ({
   collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
+  scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
+  channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -342,6 +412,11 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthProfileIds.mockClear();
     mocks.maybeRepairLegacyOAuthProfileIds.mockImplementation(async (cfg: unknown) => cfg);
+    mocks.collectLegacyPluginManifestContractMigrations.mockReset();
+    mocks.collectLegacyPluginManifestContractMigrations.mockReturnValue([]);
+    mocks.legacyPluginManifestContractMigrationToHealthFinding.mockClear();
+    mocks.maybeRepairLegacyPluginManifestContracts.mockClear();
+    mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear();
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
     mocks.collectAuthProfileHealthFindings.mockClear();
@@ -423,9 +498,16 @@ describe("doctor health contributions", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentContextLimits.mockReset();
+    mocks.resolveAgentContextLimits.mockImplementation(
+      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+        cfg.agents?.defaults?.contextLimits ?? {},
+    );
     mocks.note.mockReset();
     mocks.loadModelCatalog.mockReset();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.findModelCatalogEntry.mockReset();
+    mocks.findModelCatalogEntry.mockReturnValue({ contextTokens: 200_000 });
     mocks.getModelRefStatus.mockReset();
     mocks.getModelRefStatus.mockReturnValue({
       allowed: true,
@@ -434,8 +516,12 @@ describe("doctor health contributions", () => {
     });
     mocks.resolveConfiguredModelRef.mockReset();
     mocks.resolveConfiguredModelRef.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.resolveDefaultModelForAgent.mockReset();
+    mocks.resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     mocks.resolveHooksGmailModel.mockReset();
     mocks.resolveHooksGmailModel.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.modelKey.mockReset();
+    mocks.modelKey.mockImplementation((provider: string, model: string) => `${provider}/${model}`);
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -450,12 +536,75 @@ describe("doctor health contributions", () => {
     mocks.noteWorkspaceStatus.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
+    mocks.collectDiskSpaceHealthFindings.mockReset();
+    mocks.collectDiskSpaceHealthFindings.mockReturnValue([]);
+    mocks.collectHeartbeatTemplateHealthFindings.mockReset();
+    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
+    mocks.maybeRepairHeartbeatTemplate.mockReset();
+    mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
+    mocks.scanConfiguredChannelPluginBlockers.mockReset();
+    mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
+    mocks.channelPluginBlockerHitToHealthFinding.mockClear();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-plugin-manifests");
+    const check = contribution.healthChecks[0] as HealthCheck & { defaultEnabled?: boolean };
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/legacy-plugin-manifests"]);
+    expect(check.defaultEnabled).toBe(false);
+
+    const migration = {
+      manifestPath: "/tmp/openclaw-plugin/openclaw.plugin.json",
+      pluginId: "legacy-plugin",
+      nextRaw: {},
+      changeLines: ["- moved tools to contracts.tools"],
+    };
+    mocks.collectLegacyPluginManifestContractMigrations.mockReturnValueOnce([migration]);
+    const ctx = {
+      cfg: { plugins: { load: { paths: ["/tmp/openclaw-plugin"] } } },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectLegacyPluginManifestContractMigrations).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check],
+        onlyIds: ["core/doctor/legacy-plugin-manifests"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-plugin-manifests",
+          target: "legacy-plugin",
+          requirement: "contracts-capability-keys",
+        }),
+      ],
+    });
+    expect(mocks.collectLegacyPluginManifestContractMigrations).toHaveBeenCalledWith({
+      config: ctx.cfg,
+      env: process.env,
+    });
+    expect(mocks.legacyPluginManifestContractMigrationToHealthFinding).toHaveBeenCalledWith(
+      migration,
+      expect.any(Number),
+      expect.any(Array),
+    );
   });
 
   it("runs release configured plugin install repair before plugin registry and final config writes", () => {
@@ -967,6 +1116,47 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("keeps heartbeat template lint opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const heartbeatTemplateCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/heartbeat-template",
+    );
+    expect(heartbeatTemplateCheck).toMatchObject({ defaultEnabled: false });
+    expect(heartbeatTemplateCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { agents: { defaults: { workspace: "/tmp/openclaw-workspace" } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [heartbeatTemplateCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectHeartbeatTemplateHealthFindings).not.toHaveBeenCalled();
+
+    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/heartbeat-template",
+        severity: "warning",
+        message: "HEARTBEAT.md contains an older heartbeat documentation template.",
+        path: "/tmp/openclaw-workspace/HEARTBEAT.md",
+        requirement: "legacy-template",
+      },
+    ]);
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/heartbeat-template"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/heartbeat-template" })],
+    });
+    expect(mocks.collectHeartbeatTemplateHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+  });
+
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {
@@ -1168,8 +1358,206 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
+    expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
+    expect(contributionIds).toContain("core/doctor/disk-space");
+    expect(contributionIds).toContain("core/doctor/heartbeat-template");
     expect(contributionIds).toContain("core/doctor/device-pairing");
+    expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps tool result cap opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toMatchObject({ defaultEnabled: false });
+    expect(toolResultCapCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
+        },
+      },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [toolResultCapCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.contextLimits.toolResultMaxChars",
+        }),
+      ],
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/tool-result-cap"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+  });
+
+  it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/stale-plugin-runtime-symlinks",
+    );
+    expect(check).toMatchObject({ defaultEnabled: false });
+    expect(check).toBeDefined();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/stale-plugin-runtime-symlinks",
+        severity: "warning",
+        message: "Stale plugin-runtime symlink left-pad points at plugin-runtime-deps.",
+        path: "/tmp/node_modules/left-pad",
+        target: "/tmp/node_modules/left-pad",
+      },
+    ]);
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/stale-plugin-runtime-symlinks"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/stale-plugin-runtime-symlinks",
+          path: "/tmp/node_modules/left-pad",
+        }),
+      ],
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports agent findings for inherited default tool result caps", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toBeDefined();
+
+    mocks.resolveAgentContextLimits.mockImplementation(
+      (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
+        cfg.agents?.defaults?.contextLimits ?? {},
+    );
+    mocks.resolveDefaultModelForAgent.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { agentId?: string };
+      return params.agentId === "writer"
+        ? { provider: "openai", model: "gpt-5.5" }
+        : { provider: "local", model: "tiny" };
+    });
+    mocks.findModelCatalogEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[1] as { modelId?: string };
+      return params.modelId === "gpt-5.5" ? { contextTokens: 200_000 } : { contextTokens: 8_000 };
+    });
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: { contextLimits: { toolResultMaxChars: 16_000 } },
+          list: [{ id: "writer" }],
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [toolResultCapCheck!],
+        onlyIds: ["core/doctor/tool-result-cap"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      findings: expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.contextLimits.toolResultMaxChars",
+          target: "agents.list.writer",
+        }),
+      ]),
+    });
+  });
+
+  it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-legacy-plugin-deps-lint-"));
+    const stateDir = nodePath.join(tempDir, "state");
+    const legacyRuntimeRoot = nodePath.join(stateDir, "plugin-runtime-deps");
+    fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const contributionChecks = await resolveDoctorContributionHealthChecks();
+      const check = contributionChecks.find(
+        (entry) => entry.id === "core/doctor/legacy-plugin-dependencies",
+      );
+      expect(check).toMatchObject({ defaultEnabled: false });
+      expect(check).toBeDefined();
+
+      const ctx = {
+        cfg: {},
+        mode: "lint",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      } as const;
+
+      await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+        checksRun: 0,
+        checksSkipped: 1,
+      });
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [check!],
+          onlyIds: ["core/doctor/legacy-plugin-dependencies"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/legacy-plugin-dependencies",
+            severity: "warning",
+            path: legacyRuntimeRoot,
+          }),
+        ],
+      });
+      expect(fs.existsSync(legacyRuntimeRoot)).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
@@ -1265,6 +1653,47 @@ describe("doctor health contributions", () => {
     expect(findings).toEqual([]);
   });
 
+  it("keeps disk space opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const diskSpaceCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/disk-space",
+    );
+    expect(diskSpaceCheck).toMatchObject({ defaultEnabled: false });
+    expect(diskSpaceCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [diskSpaceCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectDiskSpaceHealthFindings).not.toHaveBeenCalled();
+
+    mocks.collectDiskSpaceHealthFindings.mockReturnValueOnce([
+      {
+        checkId: "core/doctor/disk-space",
+        severity: "warning",
+        message: "Low disk space: 300 MB free on the partition containing ~/.openclaw.",
+        path: "/home/test/.openclaw",
+        requirement: "low-free-space",
+      },
+    ]);
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/disk-space"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
+    });
+    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+  });
+
   it("keeps device pairing opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const devicePairingCheck = contributionChecks.find(
@@ -1279,7 +1708,6 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
     const checks = [devicePairingCheck!];
-
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
@@ -1296,6 +1724,46 @@ describe("doctor health contributions", () => {
       cfg: ctx.cfg,
       healthOk: false,
     });
+  });
+
+  it("keeps channel plugin blockers opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const blockerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/channel-plugin-blockers",
+    );
+    expect(blockerCheck).toMatchObject({ defaultEnabled: false });
+    expect(blockerCheck).toBeDefined();
+    mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([
+      { channelId: "discord", pluginId: "discord", reason: "missing explicit enablement" },
+    ]);
+
+    const ctx = {
+      cfg: { channels: { discord: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [blockerCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.scanConfiguredChannelPluginBlockers).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-plugin-blockers"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/channel-plugin-blockers",
+          path: "channels.discord",
+          target: "discord",
+        }),
+      ],
+    });
+    expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

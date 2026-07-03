@@ -1353,6 +1353,9 @@ export const uk: TranslationMap = {
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
+    sidebar: {
+      allSessions: "Усі сеанси",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1379,6 +1382,11 @@ export const uk: TranslationMap = {
       retry: "Повторити",
       retrySend: "Повторити надсилання",
       retryQueuedMessage: "Повторити повідомлення в черзі",
+    },
+    pairingQrExpired: {
+      title: "QR-код для пар'ювання застарів",
+      reason: "Виконайте /pair qr знову, щоб згенерувати новий код налаштування.",
+      badge: "Застарів",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

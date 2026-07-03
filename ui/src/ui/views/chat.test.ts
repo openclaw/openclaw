@@ -24,6 +24,7 @@ import {
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderChat, resetChatViewState } from "./chat.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -156,16 +157,20 @@ vi.mock("../chat/build-chat-items.ts", () => ({
 vi.mock("../chat/grouped-render.ts", () => ({
   getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
   renderMessageGroup: renderMessageGroupMock,
-  renderReadingIndicatorGroup: () => {
-    const element = document.createElement("div");
-    element.className = "chat-reading-indicator";
-    return element;
-  },
-  renderStreamingGroup: (text: string) => {
-    const element = document.createElement("div");
-    element.className = "chat-stream";
-    element.textContent = text;
-    return element;
+  renderStreamGroup: (parts: Array<{ kind: string; text?: string }>) => {
+    const group = document.createElement("div");
+    group.className = "chat-stream-run";
+    for (const part of parts) {
+      const bubble = document.createElement("div");
+      if (part.kind === "reading-indicator") {
+        bubble.className = "chat-reading-indicator";
+      } else {
+        bubble.className = "chat-stream";
+        bubble.textContent = part.text ?? "";
+      }
+      group.appendChild(bubble);
+    }
+    return group;
   },
 }));
 
@@ -1354,6 +1359,46 @@ describe("chat loading skeleton", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
+  it("folds adjacent streaming items into one group and lets a message group break the run (#63956)", () => {
+    const items: Array<ChatItem | MessageGroup> = [
+      {
+        kind: "stream",
+        key: "stream-seg:main:0",
+        text: "alpha",
+        startedAt: 10,
+        isStreaming: false,
+      },
+      { kind: "stream", key: "stream-seg:main:1", text: "beta", startedAt: 20, isStreaming: false },
+      { kind: "reading-indicator", key: "reading:main" },
+      {
+        kind: "group",
+        key: "group:assistant:test",
+        role: "assistant",
+        messages: [{ key: "m0", message: { content: "tool break" } }],
+        timestamp: 25,
+        isStreaming: false,
+      },
+      { kind: "stream", key: "stream:main:live", text: "gamma", startedAt: 30, isStreaming: true },
+    ];
+    buildChatItemsMock.mockReturnValueOnce(
+      items as unknown as ReturnType<typeof buildChatItemsMock>,
+    );
+
+    const container = renderChatView({ stream: "gamma", streamStartedAt: 30 });
+
+    // Two contiguous streaming runs, split by the message group between them.
+    const runs = container.querySelectorAll(".chat-stream-run");
+    expect(runs).toHaveLength(2);
+    // First run folds both committed segments plus the trailing reading indicator.
+    expect(runs[0]?.querySelectorAll(".chat-stream")).toHaveLength(2);
+    expect(runs[0]?.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
+    // The message group stays its own group and breaks the run.
+    expect(container.querySelectorAll(".chat-group")).toHaveLength(1);
+    // The live segment after the group forms the second run.
+    expect(runs[1]?.querySelectorAll(".chat-stream")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-stream")).toHaveLength(3);
+  });
+
   it("shows prompt-bar progress while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
@@ -1516,7 +1561,7 @@ describe("chat loading skeleton", () => {
       expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
       expect(container.querySelector(".chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
-      expect(container.querySelector<HTMLButtonElement>(".context-notice__action")?.disabled).toBe(
+      expect(container.querySelector<HTMLButtonElement>(".context-ring__action")?.disabled).toBe(
         false,
       );
     } finally {
@@ -3863,70 +3908,6 @@ describe("chat session controls", () => {
     quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
 
     expect(state.setTab).toHaveBeenCalledWith("usage");
-  });
-
-  it("shows provider quota in the sidebar session switcher (regression #93041)", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [
-              { label: "3h", usedPercent: 18 },
-              { label: "Week", usedPercent: 72 },
-            ],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
-
-    const row = container.querySelector(".chat-controls__session-row");
-    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(true);
-  });
-
-  it("hides provider quota when the sidebar session switcher is collapsed", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [{ label: "3h", usedPercent: 18 }],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        compact: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

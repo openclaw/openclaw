@@ -285,6 +285,10 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
+
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
 CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"

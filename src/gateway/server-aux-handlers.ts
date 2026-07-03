@@ -12,6 +12,7 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -76,25 +77,27 @@ export function createGatewayAuxHandlers(params: {
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
-  let execApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadExecApprovalHandlers = () =>
-    (execApprovalHandlersPromise ??= import("./server-methods/exec-approval.js").then(
-      ({ createExecApprovalHandlers }) =>
+  const loadExecApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/exec-approval.js").then(({ createExecApprovalHandlers }) =>
         createExecApprovalHandlers(execApprovalManager, {
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-  let pluginApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadPluginApprovalHandlers = () =>
-    (pluginApprovalHandlersPromise ??= import("./server-methods/plugin-approval.js").then(
-      ({ createPluginApprovalHandlers }) =>
+  const loadPluginApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
   // Serialize the entire `secrets.reload` path (activation + channel restart)
   // so concurrent callers cannot overlap the stop/start loop and so the
   // "before" snapshot used for the reload-plan diff is always the snapshot
@@ -116,10 +119,9 @@ export function createGatewayAuxHandlers(params: {
     reloadInFlight = run;
     return run;
   };
-  let secretsHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadSecretsHandlers = () =>
-    (secretsHandlersPromise ??= import("./server-methods/secrets.js").then(
-      ({ createSecretsHandlers }) =>
+  const loadSecretsHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
           reloadSecrets: () =>
             runExclusiveReload(async () => {
@@ -262,7 +264,9 @@ export function createGatewayAuxHandlers(params: {
             return { assignments, diagnostics, inactiveRefPaths };
           },
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
 
   return {
     execApprovalManager,

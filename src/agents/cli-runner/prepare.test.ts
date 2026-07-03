@@ -24,6 +24,7 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { resetCliAuthEpochTestDeps, setCliAuthEpochTestDeps } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
@@ -279,6 +280,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
+    resetCliAuthEpochTestDeps();
     getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
@@ -852,6 +854,51 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("preserves backend staging for queued execution without running it during prepare", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const beforeExecution = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({ beforeExecution }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            sessionMode: "existing",
+            output: "text",
+            input: "arg",
+          },
+        },
+      ],
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-staging-thunk",
+        config: createCliBackendConfig(),
+      });
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(beforeExecution).not.toHaveBeenCalled();
+      await context.preparedBackend.beforeExecution?.();
+      expect(beforeExecution).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
     const { dir, sessionFile } = createSessionFile();
     let generatedSystemSettingsPath: string | undefined;
@@ -911,6 +958,121 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(generatedSystemSettingsPath).toBeTruthy();
       expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans prepared execution resources when auth epoch resolution fails", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const preparedExecutionCleanup = vi.fn(async () => undefined);
+    const prepareExecution = vi.fn(async () => ({ cleanup: preparedExecutionCleanup }));
+    setCliAuthEpochTestDeps({
+      loadAuthProfileStoreForRuntime: () => {
+        throw new Error("auth epoch read failed");
+      },
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            systemPromptArg: "--system-prompt",
+            systemPromptWhen: "first",
+            output: "text",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-prepare-execution-cleanup-on-auth-epoch-failure",
+          authProfileId: "test-cli:profile",
+          config: {},
+        }),
+      ).rejects.toThrow("auth epoch read failed");
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const tempEnvSnapshot = captureEnv(["TMPDIR", "TMP", "TEMP"]);
+    const tempRoot = path.join(dir, "tmp");
+    const skillsPluginDir = path.join(dir, "claude-skills-plugin");
+    const skillsCleanup = vi.fn(async () => {
+      fs.rmSync(skillsPluginDir, { recursive: true, force: true });
+    });
+    fs.mkdirSync(tempRoot, { recursive: true });
+    fs.mkdirSync(skillsPluginDir, { recursive: true });
+    setTestEnvValue("TMPDIR", tempRoot);
+    setTestEnvValue("TMP", tempRoot);
+    setTestEnvValue("TEMP", tempRoot);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
+        args: ["--plugin-dir", skillsPluginDir],
+        cleanup: skillsCleanup,
+      })),
+      resolveOpenClawReferencePaths: vi.fn(async () => {
+        throw new Error("reference path lookup failed");
+      }),
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-mid-prepare-cleanup",
+          config: createCliBackendConfig({ bundleMcp: true }),
+        }),
+      ).rejects.toThrow("reference path lookup failed");
+
+      expect(skillsCleanup).toHaveBeenCalledOnce();
+      expect(fs.existsSync(skillsPluginDir)).toBe(false);
+      expect(
+        fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
+      ).toEqual([]);
+    } finally {
+      tempEnvSnapshot.restore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1850,6 +2012,111 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it.each([
+    {
+      name: "automatic config",
+      stableMode: "automatic",
+      staticPrompt: "group:telegram:group:automatic",
+      expectedStrongPrompt: false,
+    },
+    {
+      name: "message-tool config",
+      stableMode: "message_tool_only",
+      staticPrompt: "group:telegram:group:message_tool_only",
+      expectedStrongPrompt: true,
+    },
+  ] as const)(
+    "reuses CLI session bindings across new inbound messages with stable binding facts for $name",
+    async ({ stableMode, staticPrompt, expectedStrongPrompt }) => {
+      const { dir, sessionFile } = createSessionFile();
+      try {
+        const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        }));
+        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+          agentId: "main",
+          tools: [
+            {
+              name: "message",
+              label: "Message",
+              description: "Send a message",
+              parameters: { type: "object", properties: {} },
+              execute: vi.fn(),
+            },
+          ],
+        }));
+        setCliRunnerPrepareTestDeps({
+          getActiveMcpLoopbackRuntime,
+          resolveMcpLoopbackScopedTools,
+        });
+        const cliSessionBindingFacts = {
+          extraSystemPromptStatic: staticPrompt,
+          sourceReplyDeliveryMode: stableMode,
+        };
+        const first = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "first ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-a",
+          extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentMessageId: "msg-1",
+          cliSessionBindingFacts,
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+        const second = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "second ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-b",
+          extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: stableMode,
+          currentMessageId: "msg-2",
+          cliSessionBindingFacts,
+          cliSessionBinding: {
+            sessionId: "cli-session",
+            extraSystemPromptHash: first.extraSystemPromptHash,
+            messageToolPolicyHash: first.messageToolPolicyHash,
+            promptToolNamesHash: first.promptToolNamesHash,
+            cwdHash: hashCliSessionText(dir),
+          },
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+
+        expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+        expect(first.messageToolPolicyHash).toBeDefined();
+        expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+        expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+        expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+        if (expectedStrongPrompt) {
+          expect(first.systemPrompt).toContain(
+            "use `message(action=send)` for visible source-channel output",
+          );
+        } else {
+          expect(first.systemPrompt).toContain("final text normally routes to the source channel");
+          expect(first.systemPrompt).toContain(
+            "if current-turn context says final text stays private, use `message(action=send)`",
+          );
+        }
+        expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {
@@ -2117,7 +2384,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("does not advertise loopback prompt tools when the runtime is unavailable", async () => {
+  it("fails bundled MCP preparation when the loopback runtime is unavailable", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       registerMemoryPromptSection(({ availableTools }) =>
@@ -2168,29 +2435,25 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           },
         ],
       });
-      const context = await prepareCliRunContext({
-        sessionId: "session-test",
-        sessionKey: "agent:main:test",
-        sessionFile,
-        workspaceDir: dir,
-        prompt: "latest ask",
-        provider: "native-cli",
-        model: "test-model",
-        timeoutMs: 1_000,
-        runId: "run-test-loopback-prompt-tools-fallback",
-        config: createCliBackendConfig({ bundleMcp: true }),
-      });
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "native-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-loopback-prompt-tools-fallback",
+          config: createCliBackendConfig({ bundleMcp: true }),
+        }),
+      ).rejects.toThrow(/loopback unavailable/);
 
       expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
-      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(2);
+      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(1);
       expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
       expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
-      expect(context.systemPrompt).not.toContain("## Memory Recall");
-      expect(context.systemPrompt).not.toMatch(/^- memory_search\b/m);
-      expect(context.systemPromptReport.tools.entries).toEqual([]);
-      expect(context.promptToolNamesHash).toBeUndefined();
-      expect(context.preparedBackend.env).toBeUndefined();
-      expect(context.mcpDeliveryCapture).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -24,7 +24,8 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -39,34 +40,29 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-
-type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
-type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
 
-let stickerVisionRuntimePromise: Promise<StickerVisionRuntime> | undefined;
-let mediaUnderstandingRuntimePromise: Promise<MediaUnderstandingRuntime> | undefined;
+const loadStickerVisionRuntime = createLazyRuntimeModule(
+  () => import("./sticker-vision.runtime.js"),
+);
 
-function loadStickerVisionRuntime(): Promise<StickerVisionRuntime> {
-  stickerVisionRuntimePromise ??= import("./sticker-vision.runtime.js");
-  return stickerVisionRuntimePromise;
-}
-
-function loadMediaUnderstandingRuntime(): Promise<MediaUnderstandingRuntime> {
-  mediaUnderstandingRuntimePromise ??= import("./media-understanding.runtime.js");
-  return mediaUnderstandingRuntimePromise;
-}
+const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
+  () => import("./media-understanding.runtime.js"),
+);
 
 export type TelegramInboundBodyResult = {
   bodyText: string;
@@ -275,10 +271,11 @@ export async function resolveTelegramInboundBody(params: {
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
+  const richText = resolveTelegramRichMessageText(msg);
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
+    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
     return null;
@@ -366,9 +363,12 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
-  const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+  const explicitlyMentioned = botUsername
+    ? hasBotMention(msg, botUsername) ||
+      (richText ? hasBotMentionInText(richText, botUsername) : false)
+    : false;
   const computedWasMentioned = matchesMentionWithExplicit({
-    text: messageTextParts.text,
+    text: messageTextParts.text || richText || "",
     mentionRegexes,
     explicit: {
       hasAnyMention,
@@ -417,17 +417,16 @@ export async function resolveTelegramInboundBody(params: {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-    createChannelHistoryWindow({ historyMap: groupHistories }).record({
-      historyKey: historyKey ?? "",
+    recordTelegramGroupHistoryEntry({
+      historyMap: groupHistories,
+      historyKey,
       limit: historyLimit,
-      entry: historyKey
-        ? {
-            sender: buildSenderLabel(msg, senderId || chatId),
-            body: rawBody,
-            timestamp: msg.date ? msg.date * 1000 : undefined,
-            messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-          }
-        : null,
+      entry: {
+        sender: buildSenderLabel(msg, senderId || chatId),
+        body: rawBody,
+        timestamp: msg.date ? msg.date * 1000 : undefined,
+        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+      },
     });
     const telegramGroupPolicy = resolveChannelGroupPolicy({
       cfg,

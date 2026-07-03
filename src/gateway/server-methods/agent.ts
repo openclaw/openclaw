@@ -34,6 +34,11 @@ import {
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import {
+  clearEmbeddedAgentRunAbortabilityForRunId,
+  isEmbeddedAgentRunAbortableForRunId,
+  retainEmbeddedAgentRunAbortabilityForRunId,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -83,6 +88,7 @@ import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -1516,6 +1522,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedSessionId: currentSessionId,
         })
       ) {
+        emitDiagnosticEvent({
+          type: "exec.approval.followup_suppressed",
+          approvalId: execApprovalFollowupApprovalId,
+          reason: "session_rebound",
+          phase: "gateway_preflight",
+        });
         context.logGateway.info(
           `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
         );
@@ -2623,6 +2635,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
+        onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
         lifecycleGeneration,
@@ -2637,6 +2651,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (activeRunAbort.registered) {
+        retainEmbeddedAgentRunAbortabilityForRunId(runId);
         if (pendingChatRun) {
           context.addChatRun(runId, {
             ...pendingChatRun,
@@ -2652,6 +2667,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           );
         }
       }
+      const cleanupActiveRunAbort = (opts?: { force?: boolean }) => {
+        activeRunAbort.cleanup(opts);
+      };
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       // Confirmed only when the caller is the trusted in-process backend ACP
@@ -2761,6 +2779,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             await reactivateCompletedSubagentSession({
               sessionKey: resolvedSessionKey,
               runId,
+              task: message,
             });
           }
 
@@ -2900,12 +2919,15 @@ export const agentHandlers: GatewayRequestHandlers = {
                 spawnedBy: spawnedByValue,
                 sessionEntry,
               }),
+              // Plugin tools created for Gateway-owned turns must resolve the live
+              // Gateway subagent and node runtimes, not standalone placeholders.
+              allowGatewaySubagentBinding: true,
               allowModelOverride,
             },
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
-            cleanupAbortController: activeRunAbort.cleanup,
+            cleanupAbortController: cleanupActiveRunAbort,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2934,7 +2956,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            activeRunAbort.cleanup({ force: true });
+            cleanupActiveRunAbort({ force: true });
           }
         }
       })();

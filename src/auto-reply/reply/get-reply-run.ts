@@ -20,6 +20,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -170,6 +171,29 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
+}
+
+async function updateRoomEventAmbientTranscriptWatermark(params: {
+  expectedSessionId: string;
+  sessionCtx: TemplateContext;
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  const key = normalizeOptionalString(params.sessionCtx.AmbientTranscriptWatermarkKey);
+  const messageId = normalizeOptionalString(params.sessionCtx.AmbientTranscriptMessageId);
+  if (!params.storePath || !params.sessionKey || !key || !messageId) {
+    return;
+  }
+  // Advance only after the transcript row exists; Telegram windows exclude
+  // everything at or before this durable boundary on later turns.
+  await updateAmbientTranscriptWatermark({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    key,
+    messageId,
+    timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
+    expectedSessionId: params.expectedSessionId,
+  });
 }
 
 function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
@@ -517,6 +541,7 @@ export async function runPreparedReply(
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
   const heartbeatRunScope = resolveHeartbeatRunScope(opts);
+  const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -543,6 +568,8 @@ export async function runPreparedReply(
       : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
         ? "automatic"
         : opts?.sourceReplyDeliveryMode;
+  const sessionPromptSourceReplyDeliveryMode =
+    opts?.sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -592,14 +619,14 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
       })
     : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentToken: SILENT_REPLY_TOKEN,
       })
@@ -607,12 +634,8 @@ export async function runPreparedReply(
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
-        cfg,
-        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
-        silentToken: SILENT_REPLY_TOKEN,
-        silentReplyPolicy: silentReplySettings.policy,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -630,32 +653,35 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
+  const execOverridePromptHint = buildExecOverridePromptHint({
+    execOverrides,
+    elevatedLevel: resolvedElevatedLevel,
+    fullAccessAvailable: fullAccessState.available,
+    fullAccessBlockedReason: fullAccessState.blockedReason,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
-  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
-  const extraSystemPromptStaticParts = [
+  const extraSystemPromptStatic = [
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
-  ].filter(Boolean);
+    execOverridePromptHint,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const cliSessionBindingFacts = {
+    extraSystemPromptStatic,
+    ...(sessionPromptSourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode }
+      : {}),
+  };
   const silentReplyPromptMode: SilentReplyPromptMode =
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
@@ -738,7 +764,6 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
-    { sourceReplyDeliveryMode },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
@@ -928,7 +953,9 @@ export async function runPreparedReply(
     });
   }
   if (!thinkingLevelSupported) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    const explicitThink =
+      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+      explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
@@ -1287,6 +1314,15 @@ export async function runPreparedReply(
           }),
           errorContext: "reply user turn transcript",
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+          onMessagePersisted: isRoomEvent
+            ? async () =>
+                await updateRoomEventAmbientTranscriptWatermark({
+                  expectedSessionId: preparedSessionState.sessionId,
+                  sessionCtx,
+                  storePath,
+                  sessionKey: sessionKey ?? preparedSessionState.sessionId,
+                })
+            : undefined,
         })
       : undefined);
   const replyRoute = resolveEffectiveReplyRoute({
@@ -1426,10 +1462,10 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       silentReplyPromptMode,
-      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
+      extraSystemPromptStatic,
+      cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
-      suppressNextUserMessagePersistence: isRoomEvent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {

@@ -1359,6 +1359,9 @@ export const ru: TranslationMap = {
     updateNow: "Обновить сейчас",
     dismissUpdateBanner: "Скрыть баннер обновления",
     switchedSession: "Переключено на {session}",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",
@@ -1385,6 +1388,11 @@ export const ru: TranslationMap = {
       retry: "Повторить",
       retrySend: "Повторить отправку",
       retryQueuedMessage: "Повторить сообщение в очереди",
+    },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
     },
     composer: {
       placeholder: "Сообщение {name} (Enter для отправки)",

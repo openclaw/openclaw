@@ -8,8 +8,12 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
+import {
+  scanSessionTranscriptTree,
+  selectSessionTranscriptLeafControlledPath,
+} from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
@@ -18,6 +22,7 @@ import {
 } from "../harness/hook-history.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-manager.js";
+import { cliBackendLog } from "./log.js";
 
 /** Maximum transcript size read for CLI session history. */
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
@@ -29,6 +34,7 @@ export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 export const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+const CLI_SESSION_HISTORY_HEADER_READ_BYTES = 64 * 1024;
 
 type HistoryMessage = {
   role?: unknown;
@@ -275,6 +281,109 @@ async function safeRealpath(filePath: string): Promise<string | undefined> {
   }
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT",
+  );
+}
+
+async function readCliSessionHeaderLine(filePath: string): Promise<string | undefined> {
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(CLI_SESSION_HISTORY_HEADER_READ_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const firstChunk = buffer.subarray(0, bytesRead).toString("utf-8");
+    const lineEnd = firstChunk.indexOf("\n");
+    if (lineEnd < 0) {
+      return undefined;
+    }
+    const line = firstChunk.slice(0, lineEnd);
+    const parsed = JSON.parse(line) as { type?: unknown };
+    return parsed.type === "session" ? line : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readBoundedCliSessionTranscript(
+  filePath: string,
+  fileSize: number,
+): Promise<{ content: string; truncated: boolean }> {
+  if (fileSize <= MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
+    return { content: await fsp.readFile(filePath, "utf-8"), truncated: false };
+  }
+
+  cliBackendLog.warn(
+    `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${filePath}`,
+  );
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_CLI_SESSION_HISTORY_FILE_BYTES);
+    await handle.read(buffer, 0, buffer.length, fileSize - buffer.length);
+    const tail = buffer.toString("utf-8");
+    const firstLineEnd = tail.indexOf("\n");
+    const completeTail = firstLineEnd >= 0 ? tail.slice(firstLineEnd + 1) : "";
+    const headerLine = await readCliSessionHeaderLine(filePath);
+    return {
+      content: headerLine ? `${headerLine}\n${completeTail}` : completeTail,
+      truncated: true,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function isSafeTruncatedCliSessionTail(entries: readonly unknown[]): boolean {
+  const tree = scanSessionTranscriptTree(entries);
+  if (tree.hasLeafControl) {
+    return !tree.hasInvalidLeafControl;
+  }
+  const childParentIds = new Set<string>();
+  let truncatedRootParentId: string | undefined;
+  for (const node of tree.nodes) {
+    if (node.appendMode === "side") {
+      return false;
+    }
+    if (node.parentId === null) {
+      continue;
+    }
+    if (!tree.byId.has(node.parentId)) {
+      if (truncatedRootParentId !== undefined || childParentIds.size > 0) {
+        return false;
+      }
+      truncatedRootParentId = node.parentId;
+      continue;
+    }
+    if (childParentIds.has(node.parentId)) {
+      return false;
+    }
+    childParentIds.add(node.parentId);
+  }
+  return true;
+}
+
+function parseCliSessionEntries(
+  content: string,
+): ReturnType<typeof parseSessionEntries> | undefined {
+  for (const line of content.trim().split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      JSON.parse(line);
+    } catch (error) {
+      cliBackendLog.warn(`cli session history parse failed: ${formatErrorMessage(error)}`);
+      return undefined;
+    }
+  }
+  return parseSessionEntries(content);
+}
+
 function resolveSafeCliSessionFile(params: {
   sessionId: string;
   sessionFile: string;
@@ -325,14 +434,27 @@ async function loadCliSessionEntries(params: {
       return [];
     }
     const stat = await fsp.stat(realSessionFile);
-    if (!stat.isFile() || stat.size > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
+    if (!stat.isFile()) {
       return [];
     }
-    const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
+    const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
+    const entries = parseCliSessionEntries(transcript.content);
+    if (!entries) {
+      return [];
+    }
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter((entry) => entry.type !== "session");
+    if (transcript.truncated && !isSafeTruncatedCliSessionTail(sessionEntries)) {
+      cliBackendLog.warn(
+        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
+      );
+      return [];
+    }
     return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
-  } catch {
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      cliBackendLog.warn(`cli session history load failed: ${formatErrorMessage(error)}`);
+    }
     return [];
   }
 }
@@ -361,7 +483,7 @@ export async function hasCliSessionTranscript(params: {
       return false;
     }
     const stat = await fsp.stat(realSessionFile);
-    return stat.isFile() && stat.size <= MAX_CLI_SESSION_HISTORY_FILE_BYTES;
+    return stat.isFile();
   } catch {
     return false;
   }

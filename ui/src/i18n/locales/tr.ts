@@ -1355,6 +1355,9 @@ export const tr: TranslationMap = {
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
+    sidebar: {
+      allSessions: "Tüm oturumlar",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1381,6 +1384,11 @@ export const tr: TranslationMap = {
       retry: "Yeniden dene",
       retrySend: "Göndermeyi yeniden dene",
       retryQueuedMessage: "Kuyruğa alınan iletiyi yeniden dene",
+    },
+    pairingQrExpired: {
+      title: "Eşleştirme QR kodunun süresi doldu",
+      reason: "Yeni bir kurulum kodu oluşturmak için /pair qr komutunu tekrar çalıştırın.",
+      badge: "Süresi doldu",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

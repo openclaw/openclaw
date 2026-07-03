@@ -1335,6 +1335,9 @@ export const hi: TranslationMap = {
     updateNow: "अभी अपडेट करें",
     dismissUpdateBanner: "अपडेट बैनर हटाएँ",
     switchedSession: "{session} पर स्विच किया गया",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
@@ -1361,6 +1364,11 @@ export const hi: TranslationMap = {
       retry: "पुनः प्रयास करें",
       retrySend: "भेजने का पुनः प्रयास करें",
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
+    },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
     },
     composer: {
       placeholder: "{name} को संदेश भेजें (भेजने के लिए Enter)",

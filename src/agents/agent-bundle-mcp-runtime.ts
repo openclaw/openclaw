@@ -49,6 +49,7 @@ type BundleMcpSession = {
   supportsParallelToolCalls: boolean;
   usesOAuth: boolean;
   connected: boolean;
+  disconnectReason?: string;
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
@@ -486,6 +487,18 @@ function isRetriableMcpAuthSessionFailure(error: unknown): boolean {
   return error instanceof StreamableHTTPError && error.code === 401;
 }
 
+function isMcpTransportNotConnectedError(error: unknown): boolean {
+  return error instanceof Error && error.message === "Not connected";
+}
+
+function isBundleMcpConnectionStateError(error: unknown, serverName: string): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.startsWith(`bundle-mcp server "${serverName}" is disconnected`) ||
+      error.message === `bundle-mcp server "${serverName}" is not connected`)
+  );
+}
+
 function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
   const raw = cfg?.mcp?.sessionIdleTtlMs;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
@@ -541,6 +554,9 @@ export function createSessionMcpRuntime(params: {
       serverBackoff.delete(serverName);
       return result;
     } catch (error) {
+      if (isBundleMcpConnectionStateError(error, serverName)) {
+        throw error;
+      }
       recordServerToolFailure(serverName, nowMs);
       throw error;
     }
@@ -549,6 +565,21 @@ export function createSessionMcpRuntime(params: {
     if (disposed) {
       throw createDisposedError(params.sessionId);
     }
+  };
+  const requireConnectedSession = (serverName: string): BundleMcpSession => {
+    const session = sessions.get(serverName);
+    if (!session || !session.connected) {
+      const currentCatalogHasServer = Boolean(catalog?.servers[serverName]);
+      const currentCatalogHasServerDiagnostic = Boolean(
+        catalog?.diagnostics?.some((diagnostic) => diagnostic.serverName === serverName),
+      );
+      throw new Error(
+        session?.disconnectReason && currentCatalogHasServer && !currentCatalogHasServerDiagnostic
+          ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
+          : `bundle-mcp server "${serverName}" is not connected`,
+      );
+    }
+    return session;
   };
   const ensureSessionConnected = async (
     session: BundleMcpSession,
@@ -586,11 +617,7 @@ export function createSessionMcpRuntime(params: {
     return true;
   };
   const connectedSessionOrThrow = (serverName: string): BundleMcpSession => {
-    const session = sessions.get(serverName);
-    if (!session) {
-      throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-    }
-    return session;
+    return requireConnectedSession(serverName);
   };
   const retryAfterAuthSessionFailure = async <T>(
     serverName: string,
@@ -627,7 +654,26 @@ export function createSessionMcpRuntime(params: {
     await getCatalog();
     const session = connectedSessionOrThrow(serverName);
     try {
-      return await runGuardedServerRequest(serverName, async () => await request(session));
+      return await runGuardedServerRequest(serverName, async () => {
+        try {
+          return await request(session);
+        } catch (error) {
+          if (isMcpTransportNotConnectedError(error)) {
+            session.connected = false;
+            session.disconnectReason ??= "mcp transport closed";
+            const currentCatalogHasServerDiagnostic = Boolean(
+              catalog?.diagnostics?.some((diagnostic) => diagnostic.serverName === serverName),
+            );
+            if (currentCatalogHasServerDiagnostic) {
+              throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+            }
+            throw new Error(
+              `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`,
+            );
+          }
+          throw error;
+        }
+      });
     } catch (error) {
       if (!session.usesOAuth || !isRetriableMcpAuthSessionFailure(error)) {
         throw error;
@@ -742,6 +788,18 @@ export function createSessionMcpRuntime(params: {
               failIfDisposed();
 
               let session = sessions.get(serverName);
+              while (
+                session &&
+                !session.retiring &&
+                !session.connected &&
+                !session.connectPromise
+              ) {
+                // A closed SDK client cannot reconnect cleanly on the same transport.
+                await retireSessionIfCurrent(serverName, session);
+                // Retirement yields while closing. Preserve any replacement that a
+                // newer catalog generation installed during that await.
+                session = sessions.get(serverName);
+              }
               if (session?.retiring) {
                 session = undefined;
               }
@@ -854,6 +912,9 @@ export function createSessionMcpRuntime(params: {
                     }
                   }
                 }
+                if (isMcpTransportNotConnectedError(catalogError)) {
+                  session.connected = false;
+                }
                 const message = redactErrorUrls(catalogError);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
@@ -871,9 +932,9 @@ export function createSessionMcpRuntime(params: {
                 ];
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!connectedForCatalog && !session.connected) {
-                  // Timed-out connects can still leave the SDK client bound to a
-                  // transport. Delete before async close so future catalogs start fresh.
+                if (!session.connected) {
+                  // A close is terminal for every catalog generation sharing this
+                  // session. The identity guard preserves any newer replacement.
                   await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed

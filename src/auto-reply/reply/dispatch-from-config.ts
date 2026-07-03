@@ -1542,7 +1542,9 @@ export async function dispatchReplyFromConfig(
   };
   const getDispatchAbortSignal = () => {
     const operationSignal = dispatchReplyOperation?.abortSignal;
-    const upstreamSignal = params.replyOptions?.abortSignal;
+    // The operation mirrors upstream aborts until the backend commits its
+    // terminal outcome, then keeps delivery alive after freezeAbort().
+    const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&
       cachedDispatchAbortSignal.operationSignal === operationSignal &&
@@ -1550,7 +1552,7 @@ export async function dispatchReplyFromConfig(
     ) {
       return cachedDispatchAbortSignal.signal;
     }
-    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    const signal = operationSignal ?? upstreamSignal;
     cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
     return signal;
   };
@@ -1588,6 +1590,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchReplyOperation) {
       return;
     }
+    dispatchReplyOperation.freezeAbort();
     if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
@@ -2044,6 +2047,7 @@ export async function dispatchReplyFromConfig(
   });
   const {
     sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     sendPolicyDenied,
@@ -2203,11 +2207,13 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          if (
+          const isUnmentionedGroupFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx, cfg)
-          ) {
+            !explicitCommandTurnCtx;
+          const shouldSuppressUnmentionedFallback =
+            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+          if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });
             commitInboundDedupeIfClaimed();
@@ -2304,7 +2310,7 @@ export async function dispatchReplyFromConfig(
       let routedFinalCount = 0;
       if (!suppressDelivery) {
         const payload = {
-          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {
@@ -2383,6 +2389,11 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       params.replyOptions?.forceToolResultProgress === true;
+    const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied;
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -3063,6 +3074,7 @@ export async function dispatchReplyFromConfig(
           {
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
+            sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
             ...({
               onSessionMetadataChanges: notifySessionMetadataChanges,
               onSessionPrepared: notePreparedSession,
@@ -3074,8 +3086,7 @@ export async function dispatchReplyFromConfig(
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
             onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
-            streamReasoningInNonStreamModes:
-              params.replyOptions?.streamReasoningInNonStreamModes,
+            streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
             onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
             onAssistantMessageStart: wrapProgressCallback(
               params.replyOptions?.onAssistantMessageStart,
@@ -3110,11 +3121,15 @@ export async function dispatchReplyFromConfig(
               },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
@@ -3132,7 +3147,17 @@ export async function dispatchReplyFromConfig(
                 markInboundDedupeReplayUnsafe();
                 // Buffered commentary preceded this tool; land it before the summary.
                 await flushPendingCommentaryProgress();
+                // When the operator opts into messages.suppressToolErrors, never
+                // surface tool-error tool-result payloads as channel progress,
+                // regardless of source delivery mode. payloads.ts already drops
+                // the warning text; this drops the visible progress delivery too.
+                if (payload.isError === true && replyConfig.messages?.suppressToolErrors === true) {
+                  return;
+                }
                 const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+                const isFastModeAutoProgressDelivery =
+                  isFastModeAutoProgress &&
+                  shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                 const isForcedToolProgress =
                   shouldDeliverForcedToolProgressDespiteSourceSuppression();
                 const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
@@ -3157,7 +3182,7 @@ export async function dispatchReplyFromConfig(
                 }
                 if (
                   shouldSuppressProgressDelivery() &&
-                  !isFastModeAutoProgress &&
+                  !isFastModeAutoProgressDelivery &&
                   !isForcedToolProgress
                 ) {
                   return;

@@ -1360,6 +1360,9 @@ export const de: TranslationMap = {
     updateNow: "Jetzt aktualisieren",
     dismissUpdateBanner: "Update-Banner ausblenden",
     switchedSession: "Zu {session} gewechselt",
+    sidebar: {
+      allSessions: "Alle Sitzungen",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1386,6 +1389,11 @@ export const de: TranslationMap = {
       retry: "Wiederholen",
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
+    },
+    pairingQrExpired: {
+      title: "Kopplungs-QR-Code abgelaufen",
+      reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",
+      badge: "Abgelaufen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

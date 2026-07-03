@@ -662,9 +662,16 @@ guard instead of releasing the session lane immediately. Only
 final/non-commentary completed `agentMessage` items and pre-tool raw
 assistant completions arm the assistant-output release: if Codex then goes quiet
 without `turn/completed`, OpenClaw best-effort interrupts the native turn and
-releases the session lane. Replay-safe stdio app-server failures, including
-turn-completion idle timeouts without assistant, tool, active-item, or
-side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+releases the session lane. If another turn watch wins that release race,
+OpenClaw still accepts the completed final assistant item once no native
+request, item, or dynamic tool completion remains active and the
+assistant-output release still belongs to the latest completed item, with no
+later item completion. This can preserve the final answer after completed tool
+work without replaying the turn. Partial assistant deltas, stale earlier
+replies, and empty later completions do not qualify. Replay-safe stdio
+app-server failures,
+including turn-completion idle timeouts without assistant, tool, active-item,
+or side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
 session lane. They also clear the stale native thread binding instead of being
 replayed automatically. Completion-watch timeouts surface Codex-specific timeout

@@ -39,6 +39,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
+import { isTelegramHtmlParseError } from "../send-error-predicates.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -309,6 +310,60 @@ function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
   return undefined;
 }
 
+function buildPlainCaptionParams(
+  mediaParams: Record<string, unknown>,
+  plainCaption: string,
+): Record<string, unknown> {
+  const nextParams: Record<string, unknown> = { ...mediaParams, caption: plainCaption };
+  delete nextParams.parse_mode;
+  return nextParams;
+}
+
+async function sendTelegramCaptionedMediaWithFallback<T>(params: {
+  operation: string;
+  runtime: RuntimeEnv;
+  thread?: TelegramThreadSpec | null;
+  requestParams: Record<string, unknown>;
+  plainCaption?: string;
+  shouldLog?: (err: unknown) => boolean;
+  send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+}): Promise<T> {
+  const sendMedia = (
+    requestParams: Record<string, unknown>,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
+    sendTelegramWithThreadFallback({
+      operation: params.operation,
+      runtime: params.runtime,
+      thread: params.thread,
+      requestParams,
+      ...(shouldLog ? { shouldLog } : {}),
+      send: params.send,
+    });
+  if (!params.plainCaption) {
+    return await sendMedia(params.requestParams);
+  }
+  try {
+    return await sendMedia(
+      params.requestParams,
+      (err: unknown) =>
+        !isTelegramHtmlParseError(err) && (params.shouldLog ? params.shouldLog(err) : true),
+    );
+  } catch (err) {
+    if (!isTelegramHtmlParseError(err)) {
+      throw err;
+    }
+    // Caption fallback mirrors text sends: Telegram HTML parse failures retry
+    // once with plain caption so media replies are not dropped.
+    logVerbose(
+      `telegram ${params.operation} caption HTML rejected; retrying as plain caption: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+    return await sendMedia(buildPlainCaptionParams(params.requestParams, params.plainCaption));
+  }
+}
+
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
@@ -440,11 +495,12 @@ async function deliverMediaReply(params: {
       }),
     };
     if (isGif) {
-      const result = await sendTelegramWithThreadFallback({
+      const result = await sendTelegramCaptionedMediaWithFallback({
         operation: "sendAnimation",
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
+        plainCaption: caption,
         send: (effectiveParams) =>
           params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
       });
@@ -453,11 +509,12 @@ async function deliverMediaReply(params: {
       }
       markDelivered(params.progress);
     } else if (kind === "image") {
-      const result = await sendTelegramWithThreadFallback({
+      const result = await sendTelegramCaptionedMediaWithFallback({
         operation: "sendPhoto",
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
+        plainCaption: caption,
         send: (effectiveParams) =>
           params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
       });
@@ -466,11 +523,12 @@ async function deliverMediaReply(params: {
       }
       markDelivered(params.progress);
     } else if (kind === "video") {
-      const result = await sendTelegramWithThreadFallback({
+      const result = await sendTelegramCaptionedMediaWithFallback({
         operation: "sendVideo",
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
+        plainCaption: caption,
         send: (effectiveParams) =>
           params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
       });
@@ -490,11 +548,12 @@ async function deliverMediaReply(params: {
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,
         ) => {
-          const result = await sendTelegramWithThreadFallback({
+          const result = await sendTelegramCaptionedMediaWithFallback({
             operation: "sendVoice",
             runtime: params.runtime,
             thread: params.thread,
             requestParams,
+            plainCaption: typeof requestParams.caption === "string" ? caption : undefined,
             shouldLog,
             send: (effectiveParams) =>
               params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
@@ -580,11 +639,12 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
-        const result = await sendTelegramWithThreadFallback({
+        const result = await sendTelegramCaptionedMediaWithFallback({
           operation: "sendAudio",
           runtime: params.runtime,
           thread: params.thread,
           requestParams: mediaParams,
+          plainCaption: caption,
           send: (effectiveParams) =>
             params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
         });
@@ -594,11 +654,12 @@ async function deliverMediaReply(params: {
         markDelivered(params.progress);
       }
     } else {
-      const result = await sendTelegramWithThreadFallback({
+      const result = await sendTelegramCaptionedMediaWithFallback({
         operation: "sendDocument",
         runtime: params.runtime,
         thread: params.thread,
         requestParams: mediaParams,
+        plainCaption: caption,
         send: (effectiveParams) =>
           params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
       });

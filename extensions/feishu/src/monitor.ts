@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Feishu plugin module implements monitor behavior.
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -40,12 +41,7 @@ export type FeishuStatusSink = (patch: {
   lastError?: string | null;
 }) => void;
 
-let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined;
-
-async function loadMonitorAccountRuntime() {
-  monitorAccountRuntimePromise ??= import("./monitor.account.js");
-  return await monitorAccountRuntimePromise;
-}
+const loadMonitorAccountRuntime = createLazyRuntimeModule(() => import("./monitor.account.js"));
 
 export {
   clearFeishuWebhookRateLimitStateForTest,

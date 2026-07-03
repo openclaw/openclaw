@@ -1,20 +1,28 @@
 // Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
-import type { QaTransportCapabilities, QaTransportState } from "./qa-transport.js";
+import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
 
+type QaScenarioTransport = Pick<
+  QaTransportAdapter,
+  | "capabilities"
+  | "reset"
+  | "sendInbound"
+  | "sendNativeCommand"
+  | "state"
+  | "waitForNoOutbound"
+  | "waitForOutbound"
+>;
+
 export type QaScenarioRuntimeEnv<
   TLab = unknown,
-  TTransportState extends QaTransportState = QaTransportState,
+  TTransport extends QaScenarioTransport = QaScenarioTransport,
 > = {
   lab: TLab;
-  transport: {
-    state: TTransportState;
-    capabilities: QaTransportCapabilities;
-  };
+  transport: TTransport;
 };
 
 export type QaScenarioRuntimeDeps = {
@@ -107,6 +115,7 @@ type QaScenarioRuntimeApi<
 > = {
   env: TEnv;
   lab: TEnv["lab"];
+  transport: TEnv["transport"];
   state: TEnv["transport"]["state"];
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
@@ -216,6 +225,7 @@ export function createQaScenarioRuntimeApi<
   return {
     env: params.env,
     lab: params.env.lab,
+    transport: params.env.transport,
     state: params.env.transport.state,
     scenario: params.scenario,
     config: params.scenario.execution.config ?? {},
