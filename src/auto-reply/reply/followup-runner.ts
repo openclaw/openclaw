@@ -41,6 +41,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
@@ -82,12 +83,19 @@ import {
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  shouldWarnAboutPrivateMessageToolFinal,
+  warnPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import {
   completeFollowupRunLifecycle,
+  enqueueFollowupRun,
   FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
   type FollowupRun,
+  resolveQueueSettings,
 } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -95,8 +103,10 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
+  STRANDED_REPLY_RETRY_MARKER,
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -121,6 +131,15 @@ function hasSuccessfulFollowupSourceReplyDelivery(params: {
     params.didDeliverSourceReplyViaMessageTool === true ||
     hasVisibleAgentPayload({ payloads: params.messagingToolSourceReplyPayloads })
   );
+}
+
+function buildPendingFollowupFinalDeliveryText(payloads: ReplyPayload[]): string {
+  const text = payloads
+    .filter((payload) => payload.isReasoning !== true)
+    .map((payload) => payload.text)
+    .filter((textLocal): textLocal is string => Boolean(textLocal))
+    .join("\n\n");
+  return sanitizePendingFinalDeliveryText(text);
 }
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
@@ -520,7 +539,7 @@ export function createFollowupRunner(params: {
     }
   };
 
-  return async (queued: FollowupRun) => {
+  const runFollowupTurn = async (queued: FollowupRun) => {
     if (isFollowupRunAborted(queued)) {
       completeFollowupRunLifecycle(queued);
       typing.markRunComplete();
@@ -1439,6 +1458,7 @@ export function createFollowupRunner(params: {
             messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
           })
         ) {
+          await opts?.onObservedReplyDelivery?.();
           return false;
         }
         await sendFollowupPayloads(
@@ -1450,6 +1470,102 @@ export function createFollowupRunner(params: {
           },
           { runId },
         );
+        return true;
+      };
+      const enqueueStrandedReplyRecoveryRetry = async (payloads: ReplyPayload[]) => {
+        if (isStrandedReplyRetryFollowup(effectiveQueued)) {
+          return false;
+        }
+        const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+          cfg: runtimeConfig,
+          ctx: {
+            ChatType: queued.originatingChatType ?? run.chatType,
+            InboundEventKind: queued.currentInboundEventKind,
+            Provider: queued.originatingChannel ?? run.messageProvider,
+            Surface: queued.originatingChannel ?? run.messageProvider,
+          },
+          requested: run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+          sendPolicy: resolveSendPolicy({
+            cfg: runtimeConfig,
+            entry: activeSessionEntry,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            channel:
+              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+            chatType: activeSessionEntry?.chatType,
+          }),
+        });
+        const finalDeliveryText = buildPendingFollowupFinalDeliveryText(payloads);
+        const assistantFinalText =
+          typeof runResult.meta?.finalAssistantVisibleText === "string"
+            ? runResult.meta.finalAssistantVisibleText
+            : finalDeliveryText;
+        const isStrandedReply =
+          queued.currentInboundEventKind !== "room_event" &&
+          shouldWarnAboutPrivateMessageToolFinal({
+            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            successfulSourceReplyDelivery: hasSuccessfulFollowupSourceReplyDelivery({
+              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+            }),
+            finalText: assistantFinalText,
+          });
+        if (!isStrandedReply) {
+          return false;
+        }
+        warnPrivateMessageToolFinal({
+          sessionKey: replySessionKey,
+          channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+          finalTextLength: assistantFinalText.trim().length,
+        });
+        const retryDeliveryText = finalDeliveryText || assistantFinalText;
+        const retryPrompt =
+          `[System] Your previous reply was not delivered to the conversation because ` +
+          `you did not call message(action=send). Your reply text was:\n\n` +
+          `"${retryDeliveryText}"\n\n` +
+          `Please deliver this reply now by calling message(action=send). ` +
+          `Do not add any extra commentary; just deliver the original reply.`;
+        const retryEnqueued =
+          typeof replySessionKey === "string" &&
+          replySessionKey.length > 0 &&
+          enqueueFollowupRun(
+            replySessionKey,
+            {
+              ...effectiveQueued,
+              prompt: retryPrompt,
+              summaryLine: STRANDED_REPLY_RETRY_MARKER,
+              strandedReplyRetry: true,
+              disableCollectBatching: true,
+              transcriptPrompt: undefined,
+              userTurnTranscriptRecorder: undefined,
+              currentInboundContext: undefined,
+              run: {
+                ...run,
+                sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+                suppressNextUserMessagePersistence: true,
+              },
+            },
+            resolveQueueSettings({
+              cfg: runtimeConfig,
+              channel: queued.originatingChannel ?? run.messageProvider,
+              sessionEntry: activeSessionEntry,
+            }),
+            "none",
+            runFollowupTurn,
+            false,
+            { position: "front" },
+          );
+        if (!retryEnqueued) {
+          await sendFollowupPayloads(
+            [buildStrandedReplyDeliveryFailurePayload()],
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+        }
         return true;
       };
 
@@ -1479,6 +1595,9 @@ export function createFollowupRunner(params: {
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
+        if (await enqueueStrandedReplyRecoveryRetry([])) {
+          return;
+        }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
           return;
         }
@@ -1500,6 +1619,9 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
+        if (await enqueueStrandedReplyRecoveryRetry([])) {
+          return;
+        }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
           return;
         }
@@ -1617,6 +1739,9 @@ export function createFollowupRunner(params: {
           );
           return;
         }
+        if (await enqueueStrandedReplyRecoveryRetry(deliveryPayloads)) {
+          return;
+        }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
           return;
         }
@@ -1660,4 +1785,5 @@ export function createFollowupRunner(params: {
       typing.markDispatchIdle();
     }
   };
+  return runFollowupTurn;
 }
