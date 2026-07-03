@@ -4,8 +4,10 @@ const INBOUND_META_SENTINELS = [
   "Conversation info (untrusted metadata):",
   "Sender (untrusted metadata):",
   "Thread starter (untrusted, for context):",
+  "Reply chain of current user message (untrusted, nearest first):",
   "Reply target of current user message (untrusted, for context):",
   "Forwarded message context (untrusted metadata):",
+  "Location (untrusted metadata):",
   "Chat history since last reply (untrusted, for context):",
 ] as const;
 
