@@ -133,6 +133,10 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   { type: "model.call.completed" | "model.call.error" }
 >;
 type ModelFailoverDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
+type AuthProfileFallbackDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "auth_profile.fallback" }
+>;
 type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }
@@ -1796,6 +1800,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Model failovers by source, destination, lane, and reason",
       });
+      const authProfileFallbackCounter = meter.createCounter("openclaw.auth_profile.fallback", {
+        unit: "1",
+        description: "Auth profile fallbacks by provider, model, and reason",
+      });
       const toolExecutionDurationHistogram = meter.createHistogram(
         "openclaw.tool.execution.duration_ms",
         {
@@ -3201,6 +3209,40 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordAuthProfileFallback = (
+        evt: AuthProfileFallbackDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        authProfileFallbackCounter.add(1, {
+          "openclaw.auth_profile.reason": lowCardinalityAttr(evt.reason, "unknown"),
+          "openclaw.model": lowCardinalityAttr(evt.model),
+          "openclaw.provider": lowCardinalityAttr(evt.provider),
+        });
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.auth_profile.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        };
+        if (evt.provider) {
+          spanAttrs["openclaw.provider"] = evt.provider;
+        }
+        if (evt.model) {
+          spanAttrs["openclaw.model"] = evt.model;
+        }
+        if (evt.fromProfileIdHash) {
+          spanAttrs["openclaw.auth_profile.from_hash"] = evt.fromProfileIdHash;
+        }
+        if (evt.toProfileIdHash) {
+          spanAttrs["openclaw.auth_profile.to_hash"] = evt.toProfileIdHash;
+        }
+        const span = spanWithDuration("openclaw.auth_profile.fallback", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
       const modelCallMetricAttrs = (evt: ModelCallLifecycleDiagnosticEvent) => ({
         "openclaw.provider": evt.provider,
         "openclaw.model": evt.model,
@@ -3851,6 +3893,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);
+              return;
+            case "auth_profile.fallback":
+              recordAuthProfileFallback(evt, metadata);
           }
         } catch (err) {
           ctx.logger.error(

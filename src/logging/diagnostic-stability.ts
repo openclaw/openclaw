@@ -554,6 +554,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
       break;
+    case "auth_profile.fallback":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.source = event.fromProfileIdHash;
+      record.target = event.toProfileIdHash;
+      assignReasonCode(record, event.reason);
+      break;
   }
 
   return record;

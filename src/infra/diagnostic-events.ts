@@ -803,8 +803,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLogRecordEvent
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
-  | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticAsyncQueueDroppedEvent;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
