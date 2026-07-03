@@ -1312,7 +1312,6 @@ class GatewaySession(
       hasBootstrapToken = target?.bootstrapToken?.trim()?.isNotEmpty() == true,
       role = target?.options?.role,
       scopes = target?.options?.scopes ?: emptyList(),
-      deviceTokenRetryBudgetUsed = deviceTokenRetryBudgetUsed,
       pendingDeviceTokenRetry = pendingDeviceTokenRetry,
     )
   }
@@ -1336,11 +1335,11 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   hasBootstrapToken: Boolean,
   role: String?,
   scopes: List<String>,
-  deviceTokenRetryBudgetUsed: Boolean,
   pendingDeviceTokenRetry: Boolean,
 ): Boolean =
   when (error.details?.code) {
     "AUTH_TOKEN_MISSING",
+    "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_BOOTSTRAP_TOKEN_INVALID",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
@@ -1359,7 +1358,9 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
               error.details.recommendedNextStep == "wait_then_retry"
           )
       )
-    "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
+    // The first shared-token mismatch may schedule one trusted stored-device-token retry.
+    // Once no retry is pending, keep the terminal recovery action visible until credentials change.
+    "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
     "PROTOCOL_MISMATCH" -> true
     else -> false
   }

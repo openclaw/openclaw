@@ -308,7 +308,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = true,
         role = "node",
         scopes = emptyList(),
-        deviceTokenRetryBudgetUsed = false,
         pendingDeviceTokenRetry = false,
       ),
     )
@@ -335,7 +334,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = true,
         role = "node",
         scopes = emptyList(),
-        deviceTokenRetryBudgetUsed = false,
         pendingDeviceTokenRetry = false,
       ),
     )
@@ -362,10 +360,43 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = false,
         role = "node",
         scopes = emptyList(),
-        deviceTokenRetryBudgetUsed = false,
         pendingDeviceTokenRetry = false,
       ),
     )
+  }
+
+  @Test
+  fun tokenFailuresPauseUnlessOneDeviceTokenRetryIsPending() {
+    val cases =
+      listOf(
+        Triple("AUTH_TOKEN_MISMATCH", false, true),
+        Triple("AUTH_TOKEN_MISMATCH", true, false),
+        Triple("AUTH_DEVICE_TOKEN_MISMATCH", false, true),
+      )
+
+    for ((code, pendingDeviceTokenRetry, expected) in cases) {
+      val error =
+        GatewaySession.ErrorShape(
+          code = "INVALID_REQUEST",
+          message = "authentication failed",
+          details =
+            GatewayConnectErrorDetails(
+              code = code,
+              canRetryWithDeviceToken = false,
+              recommendedNextStep = null,
+            ),
+        )
+      val actual =
+        shouldPauseGatewayReconnectAfterAuthFailure(
+          error = error,
+          hasBootstrapToken = false,
+          role = "operator",
+          scopes = listOf("operator.read"),
+          pendingDeviceTokenRetry = pendingDeviceTokenRetry,
+        )
+
+      assertEquals("$code pending=$pendingDeviceTokenRetry", expected, actual)
+    }
   }
 
   @Test
@@ -392,7 +423,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = false,
         role = "node",
         scopes = emptyList(),
-        deviceTokenRetryBudgetUsed = false,
         pendingDeviceTokenRetry = false,
       ),
     )
@@ -419,7 +449,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = true,
         role = "node",
         scopes = emptyList(),
-        deviceTokenRetryBudgetUsed = false,
         pendingDeviceTokenRetry = false,
       ),
     )

@@ -212,6 +212,41 @@ fun OnboardingFlow(
         password = password,
       )
 
+    fun scanGatewaySetupCode() {
+      setupCode = ""
+      setupError = null
+      qrScanner
+        .startScan()
+        .addOnSuccessListener { barcode ->
+          val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
+          val scannedSetupCode = scanned.setupCode
+          if (scannedSetupCode == null) {
+            setupError =
+              gatewayEndpointValidationMessage(
+                scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
+                GatewayEndpointInputSource.QR_SCAN,
+              )
+            step = OnboardingStep.Gateway
+            return@addOnSuccessListener
+          }
+          val plan = resolveCurrentGatewayPlan(setupCodeValue = scannedSetupCode)
+          if (plan == null) {
+            setupError =
+              gatewayEndpointValidationMessage(
+                GatewayEndpointValidationError.INVALID_URL,
+                GatewayEndpointInputSource.QR_SCAN,
+              )
+            step = OnboardingStep.Gateway
+            return@addOnSuccessListener
+          }
+          setupCode = scannedSetupCode
+          connectToGatewayPlan(plan)
+        }.addOnFailureListener {
+          setupError = "Could not open the scanner."
+          step = OnboardingStep.Gateway
+        }
+    }
+
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
         step = OnboardingStep.Gateway
@@ -301,34 +336,7 @@ fun OnboardingFlow(
           discoveryStarted = runtimeInitialized,
           error = setupError,
           onBack = { step = OnboardingStep.Welcome },
-          onScan = {
-            setupError = null
-            qrScanner
-              .startScan()
-              .addOnSuccessListener { barcode ->
-                val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
-                val scannedSetupCode = scanned.setupCode
-                if (scannedSetupCode == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                val plan = resolveCurrentGatewayPlan(setupCodeValue = scannedSetupCode)
-                if (plan == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                setupCode = scannedSetupCode
-                connectToGatewayPlan(plan)
-              }.addOnFailureListener { setupError = "Could not open the scanner." }
-          },
+          onScan = ::scanGatewaySetupCode,
           onSetupCodeChange = {
             setupCode = it
             setupError = null
@@ -378,6 +386,7 @@ fun OnboardingFlow(
             connectToGatewayPlan(plan.copy(savedAuthAction = GatewaySavedAuthAction.PRESERVE))
           },
           onEdit = { step = OnboardingStep.Gateway },
+          onScan = ::scanGatewaySetupCode,
           onContinue = { step = OnboardingStep.Permissions },
         )
       OnboardingStep.Permissions ->
@@ -644,6 +653,7 @@ private fun GatewayRecoveryScreen(
   onBack: () -> Unit,
   onRetry: () -> Unit,
   onEdit: () -> Unit,
+  onScan: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -742,7 +752,7 @@ private fun GatewayRecoveryScreen(
 
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ClawPrimaryButton(
-          text = primaryAction.label,
+          text = gatewayRecoveryPrimaryActionLabel(primaryAction),
           icon =
             when (primaryAction) {
               GatewayRecoveryPrimaryAction.Continue -> Icons.Default.CheckCircle
@@ -753,9 +763,8 @@ private fun GatewayRecoveryScreen(
           onClick =
             when (primaryAction) {
               GatewayRecoveryPrimaryAction.Continue -> onContinue
-              GatewayRecoveryPrimaryAction.ScanFreshSetupCode,
-              GatewayRecoveryPrimaryAction.EditConnection,
-              -> onEdit
+              GatewayRecoveryPrimaryAction.ScanFreshSetupCode -> onScan
+              GatewayRecoveryPrimaryAction.EditConnection -> onEdit
               GatewayRecoveryPrimaryAction.RetryConnection -> onRetry
             },
           modifier = Modifier.fillMaxWidth(),
@@ -1135,14 +1144,20 @@ internal enum class GatewayRecoveryUiState(
   ),
 }
 
-internal enum class GatewayRecoveryPrimaryAction(
-  val label: String,
-) {
-  Continue("Continue"),
-  ScanFreshSetupCode("Scan fresh setup code"),
-  EditConnection("Edit connection"),
-  RetryConnection("Retry connection"),
+internal enum class GatewayRecoveryPrimaryAction {
+  Continue,
+  ScanFreshSetupCode,
+  EditConnection,
+  RetryConnection,
 }
+
+internal fun gatewayRecoveryPrimaryActionLabel(action: GatewayRecoveryPrimaryAction): String =
+  when (action) {
+    GatewayRecoveryPrimaryAction.Continue -> "Continue"
+    GatewayRecoveryPrimaryAction.ScanFreshSetupCode -> "Scan fresh setup code"
+    GatewayRecoveryPrimaryAction.EditConnection -> "Edit connection"
+    GatewayRecoveryPrimaryAction.RetryConnection -> "Retry connection"
+  }
 
 /** Selects the action that can actually recover the current structured gateway failure. */
 internal fun gatewayRecoveryPrimaryAction(

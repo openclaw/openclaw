@@ -416,6 +416,21 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryPrimaryActionLabelsDescribeTheirActualAction() {
+    val expected =
+      mapOf(
+        GatewayRecoveryPrimaryAction.Continue to "Continue",
+        GatewayRecoveryPrimaryAction.ScanFreshSetupCode to "Scan fresh setup code",
+        GatewayRecoveryPrimaryAction.EditConnection to "Edit connection",
+        GatewayRecoveryPrimaryAction.RetryConnection to "Retry connection",
+      )
+
+    for ((action, label) in expected) {
+      assertEquals(label, gatewayRecoveryPrimaryActionLabel(action))
+    }
+  }
+
+  @Test
   fun recoveryApprovalCommandPrefersTheExactNodeRequestId() {
     assertEquals(
       "openclaw nodes approve request-1",
