@@ -71,6 +71,7 @@ final class OnboardingWizardModel {
             self.errorMessage = nil
             return
         }
+        guard Self.shouldStart(mode: mode, paused: AppStateStore.shared.isPaused) else { return }
         self.isStarting = true
         self.errorMessage = nil
         self.lastStartMode = mode
@@ -98,6 +99,10 @@ final class OnboardingWizardModel {
             self.errorMessage = error.localizedDescription
             onboardingWizardLogger.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    nonisolated static func shouldStart(mode: AppState.ConnectionMode, paused: Bool) -> Bool {
+        mode == .local && !paused
     }
 
     func submit(step: WizardStep, value: AnyCodable?) async {

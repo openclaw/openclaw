@@ -59,6 +59,10 @@ final class OnboardingController {
         self.window = nil
     }
 
+    func setWindowCloseEnabled(_ enabled: Bool) {
+        self.window?.standardWindowButton(.closeButton)?.isEnabled = enabled
+    }
+
     func restart() {
         self.close()
         self.show()
@@ -74,6 +78,8 @@ struct OnboardingView: View {
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
     @State var cliInstalled = false
+    @State var cliStatusKnown = false
+    @State var onboardingVisible = false
     @State var cliInstallLocation: String?
     @State var workspacePath: String = ""
     @State var workspaceStatus: String?
@@ -91,6 +97,7 @@ struct OnboardingView: View {
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
+    @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
 
@@ -100,23 +107,26 @@ struct OnboardingView: View {
     let pageWidth: CGFloat = Self.windowWidth
     let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
+    let cliPageIndex = 2
     let wizardPageIndex = 3
     let onboardingChatPageIndex = 8
 
     let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        showOnboardingChat: Bool) -> [Int]
+        showOnboardingChat: Bool,
+        requiresCLIInstall: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            return showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
+            return showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            return showOnboardingChat ? setupPages + [8, 9] : setupPages + [9]
         }
     }
 
@@ -124,8 +134,22 @@ struct OnboardingView: View {
         self.state.connectionMode == .local && self.needsBootstrap
     }
 
+    var selectedConnectionMode: AppState.ConnectionMode {
+        if self.isConnectionSelectionBlocking {
+            return .local
+        }
+        return self.state.connectionMode
+    }
+
+    var isConnectionSelectionBlocking: Bool {
+        self.defaultsToLocalGateway && self.state.connectionMode == .unconfigured
+    }
+
     var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, showOnboardingChat: self.showOnboardingChat)
+        Self.pageOrder(
+            for: self.state.connectionMode,
+            showOnboardingChat: self.showOnboardingChat,
+            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled)
     }
 
     var pageCount: Int {
@@ -148,13 +172,12 @@ struct OnboardingView: View {
         self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
     }
 
-    var canAdvance: Bool {
-        !self.isWizardBlocking
+    var isCLIBlocking: Bool {
+        self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
-    var devLinkCommand: String {
-        let version = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
-        return "npm install -g openclaw@\(version)"
+    var canAdvance: Bool {
+        !self.isCLIBlocking && !self.isWizardBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -173,6 +196,8 @@ struct OnboardingView: View {
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
+        self._defaultsToLocalGateway = State(
+            initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         self._gatewayDiscovery = State(initialValue: discoveryModel)
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(

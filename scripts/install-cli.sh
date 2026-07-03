@@ -1183,8 +1183,6 @@ main() {
     RUN_ONBOARD=0
   fi
 
-  cleanup_legacy_submodules
-
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
