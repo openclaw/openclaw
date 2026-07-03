@@ -394,6 +394,125 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.maxChainLength).toBe(10);
   });
 
+  it("threads a silent/wake parent's inherited policy into the early child drain (#1158)", async () => {
+    // Finding r3517437268: this early drain runs BEFORE the later parentWasSilent
+    // chain-hop guards. It must pass the parent's silent/wake policy so a
+    // default-mode delegate the child queued stays internal instead of announcing.
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-silent-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "silent chain hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      inheritedSilent?: boolean;
+      inheritedWake?: boolean;
+    };
+    expect(call?.inheritedSilent).toBe(true);
+    expect(call?.inheritedWake).toBe(true);
+  });
+
+  it("does not set inherited silent/wake for a normal (visible) parent (#1158)", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-visible-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "visible chain hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      inheritedSilent?: boolean;
+      inheritedWake?: boolean;
+    };
+    expect(call?.inheritedSilent).toBeFalsy();
+    expect(call?.inheritedWake).toBeFalsy();
+  });
+
+  it("passes loadFresh/persist callbacks so a hedge-fired delayed delegate advances chain state durably (#1158)", async () => {
+    // Finding r3517500714: the drain arms the shared hedge for delayed delegates.
+    // The hedge-fired dispatch has no enclosing runner frame, so the drain must
+    // supply loadFreshChainState + persistChainState — otherwise multiple delayed
+    // delegates hedge-fire against the stale pre-spawn count and bypass maxChainLength.
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 2,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 4_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-hedge-callbacks",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "delayed chain hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      loadFreshChainState?: () => unknown;
+      persistChainState?: (state: unknown) => unknown;
+    };
+    expect(typeof call?.loadFreshChainState).toBe("function");
+    expect(typeof call?.persistChainState).toBe("function");
+    // The fresh loader reads the child entry's persisted chain basis.
+    expect(call?.loadFreshChainState?.()).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 4_000,
+    });
+  });
+
   it("defaults chain state to 0 when child session has no chain fields", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>

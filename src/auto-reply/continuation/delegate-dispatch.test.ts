@@ -176,7 +176,6 @@ import {
   cancelPendingDelegates,
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
-  finalizeStagedPostCompactionDelegates,
   listRecoverableStagedPostCompactionDelegates,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
@@ -620,6 +619,49 @@ describe("hedge timer ref/handle cleanup", () => {
     );
   });
 
+  it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {
+    // Finding r3517500714: multiple delayed delegates must advance the chain
+    // count durably across hedge fires. With the loadFresh/persist callbacks the
+    // second hedge reads the PERSISTED count (1) advanced by the first, so it
+    // spawns at hop 2 — not re-using the stale pre-spawn count (0) and bypassing
+    // maxChainLength.
+    const sessionKey = "session-hedge-sequential";
+    enqueuePendingDelegate(sessionKey, { task: "hop A", delayMs: 30_000 });
+    enqueuePendingDelegate(sessionKey, { task: "hop B", delayMs: 60_000 });
+
+    // A shared chain-state cell the loader reads and the persister writes,
+    // mimicking the child session entry the drain advances across fires.
+    let persisted = { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 };
+    const persistChainState = vi.fn((next: typeof persisted) => {
+      persisted = { ...next };
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { ...persisted },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+      loadFreshChainState: () => ({ ...persisted }),
+      persistChainState,
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // First hedge fires (hop A matured) → count 0 → 1, persisted.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(persisted.currentChainCount).toBe(1);
+
+    // Second hedge fires (hop B matured) → reads persisted count 1 → advances to 2.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(persisted.currentChainCount).toBe(2);
+  });
+
   it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate (#1144)", async () => {
     const sessionKey = "session-hedge-fold";
     // A delayed delegate annotated with a durable fold after a child chain-cost
@@ -869,6 +911,87 @@ describe("tool delegate dispatch contract", () => {
       wakeOnReturn: true,
       drainsContinuationDelegateQueue: true,
     });
+  });
+
+  it("inherits parent silent policy for a default-mode delegate (#1158)", async () => {
+    // Finding r3517437268: a delegate a silent parent chain queued must stay
+    // internal even though its own mode is unset. inheritedSilent (no wake) →
+    // silentAnnounce, no wakeOnReturn.
+    const sessionKey = "session-inherit-silent";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("default child"),
+      silentAnnounce: true,
+    });
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
+  });
+
+  it("inherits parent silent+wake policy for a default-mode delegate (#1158)", async () => {
+    const sessionKey = "session-inherit-wake";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("default child"),
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+  });
+
+  it("keeps a default-mode delegate visible without inherited policy (#1158)", async () => {
+    // Normal (non-silent) parent: the default-mode delegate stays visible.
+    const sessionKey = "session-no-inherit";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({ task: expect.stringContaining("default child") });
+    expect(spawnParams).not.toHaveProperty("silentAnnounce");
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
+  });
+
+  it("wake inheritance only applies when the parent was also silent (#1158)", async () => {
+    // inheritedWake without inheritedSilent must NOT wake — mirrors the guard
+    // semantics (parentWasSilent && wakeOnReturn), so a non-silent parent stays visible.
+    const sessionKey = "session-inherit-wake-only";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedWake: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).not.toHaveProperty("silentAnnounce");
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
   });
 
   it("dispatches silent and silent-wake default returns without target fields", async () => {
@@ -1810,7 +1933,9 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
 
   it("does not touch queued (awaiting-seam) rows — only crash-orphaned running rows", async () => {
     const sessionKey = "agent:main:subagent:pc-awaiting-seam";
-    loadSessionStoreForRecoveryMock.mockReturnValue({ [sessionKey]: { sessionId: "session-child" } });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child" },
+    });
     // A queued post-compaction row staged for a compaction that has NOT happened.
     stagePostCompactionDelegate(sessionKey, { task: "await compaction", stagedAt: Date.now() });
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
