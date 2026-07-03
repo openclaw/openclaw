@@ -821,6 +821,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Reactions (message tool)
   - H2: Approval reactions
   - H2: Delivery targets (CLI/cron)
+  - H2: Aliases
   - H2: Troubleshooting
   - H2: Security notes
   - H2: Configuration reference (Signal)

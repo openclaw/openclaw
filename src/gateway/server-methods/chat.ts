@@ -55,6 +55,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   stageSandboxMedia,
   type StageSandboxMediaResult,
@@ -2493,10 +2494,11 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
+    const abortedRunIds = new Set(runIds);
     await persistAbortedPartials({
       context: params.context,
       sessionKey: params.persistSessionKey ?? params.sessionKey,
-      snapshots,
+      snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
     });
   }
   return res;
@@ -3692,6 +3694,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
       providerId: resolvedSessionModel.provider,
       authProviderId: resolvedSessionAuthProvider,
+      isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
       kind: "chat-send",
       lifecycleGeneration,
     });
