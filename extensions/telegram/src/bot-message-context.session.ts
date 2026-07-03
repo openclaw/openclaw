@@ -20,7 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -447,7 +447,13 @@ export async function buildTelegramInboundContextPayload(params: {
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
   let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
-    const fullGroupHistoryEntries = (groupHistories.get(historyKey) ?? [])
+    const bufferedHistoryCount = groupHistories.get(historyKey)?.length ?? 0;
+    const fullGroupHistoryEntries = (
+      createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
+        historyKey,
+        limit: bufferedHistoryCount,
+      }) ?? []
+    )
       .filter((entry) =>
         isTelegramHistoryEntryAfterAmbientWatermark(entry, ambientTranscriptWatermark),
       )

@@ -1764,6 +1764,26 @@
       "translated": "更新"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "授權"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw 感謝開放原始碼社群中的合作夥伴。"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "此建置版本未包含任何授權聲明。"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "開啟 ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "檢查"
@@ -6329,9 +6349,9 @@
       "translated": "OpenClaw 可能會使用動作資料，以支援裝置感知的互動與自動化。"
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "當你選擇現有照片與助理分享時，OpenClaw 需要取用照片圖庫。"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw 可讓您的助理讀取您允許的照片，並讓您選擇要分享的照片。"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6964,6 +6984,11 @@
       "translated": "從助理搜尋並新增聯絡人。"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "照片"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "行事曆（新增事件）"
@@ -6992,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "列出、新增並完成提醒事項。"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "有限"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "讀取您為助理選取的照片。"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "為助理讀取最近的照片。"
     },
     {
       "id": "native.apple.22b335bddf72e453",

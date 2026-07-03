@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -14,10 +15,12 @@ import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -42,6 +45,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -104,6 +108,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -135,6 +141,7 @@ internal enum class SettingsRoute {
   Appearance,
   Health,
   About,
+  Licenses,
 }
 
 /**
@@ -166,6 +173,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Licenses -> LicensesSettingsScreen(onBack = onBack)
   }
 }
 
@@ -1131,6 +1139,68 @@ private fun AboutSettingsScreen(
   }
 }
 
+@Composable
+private fun LicensesSettingsScreen(onBack: () -> Unit) {
+  val context = LocalContext.current
+  val licenses = remember(context) { loadAndroidLicenseNotices(context.assets) }
+  var selectedLicense by remember { mutableStateOf<AndroidLicenseNotice?>(null) }
+  val backToListOrSettings = {
+    if (selectedLicense == null) {
+      onBack()
+    } else {
+      selectedLicense = null
+    }
+  }
+
+  BackHandler(enabled = selectedLicense != null) {
+    selectedLicense = null
+  }
+
+  SettingsDetailFrame(
+    title = "Licenses",
+    subtitle = if (selectedLicense == null) "OpenClaw appreciates its partners in the open-source community." else "",
+    subtitleTextAlign = TextAlign.Center,
+    icon = Icons.Default.Info,
+    onBack = backToListOrSettings,
+  ) {
+    val selected = selectedLicense
+    if (selected == null) {
+      if (licenses.isEmpty()) {
+        ClawPanel {
+          Text(text = "No license notices are packaged in this build.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      } else {
+        ClawListPanel(items = licenses) { license ->
+          LicenseListRow(license = license, onClick = { selectedLicense = license })
+        }
+      }
+    } else {
+      ClawPanel {
+        Text(text = selected.text, style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace), color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+@Composable
+private fun LicenseListRow(
+  license: AndroidLicenseNotice,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = license.title,
+    onClick = onClick,
+    trailing = {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = "Open ${license.title}",
+        modifier = Modifier.size(20.dp),
+        tint = ClawTheme.colors.text,
+      )
+    },
+  )
+}
+
 internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
   when (flavor.trim()) {
     "play" -> "Play"
@@ -1179,6 +1249,7 @@ internal fun SettingsDetailFrame(
   subtitle: String,
   icon: ImageVector,
   onBack: () -> Unit,
+  subtitleTextAlign: TextAlign = TextAlign.Start,
   content: @Composable () -> Unit,
 ) {
   ClawScaffold(
@@ -1197,8 +1268,16 @@ internal fun SettingsDetailFrame(
           SettingsIconMark(icon = icon)
         }
       }
-      item {
-        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      if (subtitle.isNotBlank()) {
+        item {
+          Text(
+            text = subtitle,
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = subtitleTextAlign,
+          )
+        }
       }
       item {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

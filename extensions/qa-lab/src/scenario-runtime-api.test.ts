@@ -154,6 +154,9 @@ describe("createQaScenarioRuntimeApi", () => {
         waitForOutbound: vi.fn(async () => {
           throw new Error("not used");
         }),
+        waitForOutboundSequence: vi.fn(async () => {
+          throw new Error("not used");
+        }),
         capabilities: {
           waitForCondition,
           getNormalizedMessageState: state.getSnapshot.bind(state),

@@ -1764,6 +1764,26 @@
       "translated": "अपडेट"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "लाइसेंस"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw ओपन-सोर्स समुदाय में अपने भागीदारों की सराहना करता है।"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "इस बिल्ड में कोई लाइसेंस नोटिस पैकेज नहीं किए गए हैं।"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} खोलें"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "जाँचें"
@@ -6329,9 +6349,9 @@
       "translated": "OpenClaw device-aware इंटरैक्शन और ऑटोमेशन का समर्थन करने के लिए motion data का उपयोग कर सकता है."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "जब आप अपने सहायक के साथ साझा करने के लिए मौजूदा फ़ोटो चुनते हैं, तो OpenClaw को फ़ोटो लाइब्रेरी एक्सेस की आवश्यकता होती है।"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw आपके असिस्टेंट को आपकी अनुमति वाली फ़ोटो पढ़ने देता है और आपको साझा करने के लिए फ़ोटो चुनने देता है।"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6964,6 +6984,11 @@
       "translated": "असिस्टेंट से संपर्क खोजें और जोड़ें।"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "फ़ोटो"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "कैलेंडर (इवेंट जोड़ें)"
@@ -6992,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "असिस्टेंट के लिए आपके द्वारा चुनी गई फ़ोटो पढ़ें।"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "असिस्टेंट के लिए हाल की फ़ोटो पढ़ें।"
     },
     {
       "id": "native.apple.22b335bddf72e453",

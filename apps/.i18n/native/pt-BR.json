@@ -1764,6 +1764,26 @@
       "translated": "Atualizar"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Licenças"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "A OpenClaw agradece aos seus parceiros na comunidade de código aberto."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Nenhum aviso de licença está incluído neste build."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Abrir ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "Verificar"
@@ -6329,9 +6349,9 @@
       "translated": "O OpenClaw pode usar dados de movimento para oferecer suporte a interações e automações sensíveis ao dispositivo."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "O OpenClaw precisa de acesso à fototeca quando você escolhe fotos existentes para compartilhar com seu assistente."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "O OpenClaw permite que seu assistente leia as fotos que você autorizar e permite que você escolha fotos para compartilhar."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6964,6 +6984,11 @@
       "translated": "Pesquise e adicione contatos pelo assistente."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Fotos"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Calendário (Adicionar eventos)"
@@ -6992,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Liste, adicione e conclua lembretes."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Limitado"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Ler as fotos que você selecionar para o assistente."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Ler fotos recentes para o assistente."
     },
     {
       "id": "native.apple.22b335bddf72e453",

@@ -1764,6 +1764,26 @@
       "translated": "更新"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "ライセンス"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw はオープンソースコミュニティのパートナーに感謝しています。"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "このビルドにはライセンス通知が含まれていません。"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} を開く"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "確認"
@@ -6329,9 +6349,9 @@
       "translated": "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。"
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "既存の写真を選択してアシスタントと共有する場合、OpenClaw はフォトライブラリへのアクセスが必要です。"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6964,6 +6984,11 @@
       "translated": "アシスタントから連絡先を検索して追加します。"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "写真"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "カレンダー（イベントの追加）"
@@ -6992,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "リマインダーを一覧表示、追加、完了します。"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "制限付き"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "選択した写真をアシスタントが読み取ります。"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "最近の写真をアシスタントが読み取ります。"
     },
     {
       "id": "native.apple.22b335bddf72e453",
