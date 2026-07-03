@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
@@ -145,6 +146,48 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
+let stableWorkerExecPathPromise: Promise<string> | null = null;
+
+/**
+ * Homebrew resolves process.execPath to the versioned Cellar binary, which can
+ * disappear after `brew upgrade`. Fork workers via stable symlinks when present.
+ */
+async function resolveStableWorkerExecPath(): Promise<string> {
+  stableWorkerExecPathPromise ??= (async () => {
+    const execPath = process.execPath;
+    const cellarMatch = execPath.match(
+      /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node(?:\.exe)?$/,
+    );
+    if (!cellarMatch) {
+      return execPath;
+    }
+
+    const prefix = cellarMatch[1];
+    const formula = cellarMatch[2];
+    const pathModule = execPath.includes("\\") ? path.win32 : path.posix;
+    const optPath = pathModule.join(prefix, "opt", formula, "bin", path.basename(execPath));
+    try {
+      await fs.access(optPath);
+      return optPath;
+    } catch {
+      // Fall through to the default formula's bin symlink.
+    }
+
+    if (formula === "node") {
+      const binPath = pathModule.join(prefix, "bin", path.basename(execPath));
+      try {
+        await fs.access(binPath);
+        return binPath;
+      } catch {
+        // Fall through to process.execPath when no stable symlink exists.
+      }
+    }
+
+    return execPath;
+  })();
+  return await stableWorkerExecPathPromise;
+}
+
 /** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -228,12 +271,18 @@ class LocalEmbeddingWorkerClient {
   }
 
   /** Ensure the child process exists and has lifecycle failure handlers installed. */
-  private ensureChild(): ChildProcess {
+  private async ensureChild(): Promise<ChildProcess> {
+    if (this.child?.connected) {
+      return this.child;
+    }
+
+    const execPath = await resolveStableWorkerExecPath();
     if (this.child?.connected) {
       return this.child;
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath,
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -268,7 +317,8 @@ class LocalEmbeddingWorkerClient {
     options?: EmbeddingProviderCallOptions,
   ): Promise<number[] | number[][] | undefined> {
     options?.signal?.throwIfAborted();
-    const child = this.ensureChild();
+    const child = await this.ensureChild();
+    options?.signal?.throwIfAborted();
     const id = this.nextRequestId++;
     const payload = { ...request, id } as LocalEmbeddingWorkerRequest;
     return await new Promise((resolve, reject) => {
