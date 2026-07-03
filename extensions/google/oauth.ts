@@ -16,6 +16,11 @@ import { exchangeCodeForTokens } from "./oauth.token.js";
 export { clearCredentialsCache, extractGeminiCliCredentials };
 export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
 
+function normalizeOfficialGeminiCliEmail(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && normalized.includes("@") ? normalized : undefined;
+}
+
 export async function loginGeminiCliOAuth(
   ctx: GeminiCliOAuthContext,
 ): Promise<GeminiCliOAuthCredentials> {
@@ -99,6 +104,20 @@ export async function refreshGeminiCliOAuthToken(
   credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
 ): Promise<OAuthCredential> {
   const imported = importOfficialGeminiCliOAuthCredentials();
+  if (imported) {
+    const expectedEmail = normalizeOfficialGeminiCliEmail(credentials.email);
+    const importedEmail = normalizeOfficialGeminiCliEmail(imported.email);
+    if (!importedEmail) {
+      throw new Error(
+        "Gemini CLI OAuth refresh requires a validated active Google account identity.",
+      );
+    }
+    if (expectedEmail && expectedEmail !== importedEmail) {
+      throw new Error(
+        "Gemini CLI OAuth refresh refused to update a profile for a different Google account.",
+      );
+    }
+  }
   const refreshed = imported ?? {
     access: "",
     refresh: credentials.refresh,

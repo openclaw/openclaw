@@ -1180,6 +1180,59 @@ describe("importOfficialGeminiCliOAuthCredentials", () => {
       /For headless use, configure GEMINI_API_KEY/,
     );
   });
+
+  it("fails closed when the official account cache is missing", () => {
+    process.env.GEMINI_CLI_HOME = "/mock/gemini-home";
+    const oauthPath = join("/mock/gemini-home", ".gemini", "oauth_creds.json");
+    setOfficialGeminiCliOAuthCacheFsForTest({
+      homedir: () => "/mock/home",
+      existsSync: (path) => String(path) === oauthPath,
+      readFileSync: (path) => {
+        if (String(path) === oauthPath) {
+          return JSON.stringify({
+            access_token: "official-access-token",
+            refresh_token: "official-refresh-token",
+            expiry_date: 123456789,
+          });
+        }
+        throw new Error(`unexpected read: ${String(path)}`);
+      },
+    });
+
+    expect(importOfficialGeminiCliOAuthCredentials()).toBeNull();
+    expect(() => requireOfficialGeminiCliOAuthCredentials()).toThrow(/account identity/);
+  });
+
+  it("fails closed when the OAuth cache identity differs from the active account", () => {
+    process.env.GEMINI_CLI_HOME = "/mock/gemini-home";
+    const oauthPath = join("/mock/gemini-home", ".gemini", "oauth_creds.json");
+    const accountsPath = join("/mock/gemini-home", ".gemini", "google_accounts.json");
+    setOfficialGeminiCliOAuthCacheFsForTest({
+      homedir: () => "/mock/home",
+      existsSync: (path) => {
+        const value = String(path);
+        return value === oauthPath || value === accountsPath;
+      },
+      readFileSync: (path) => {
+        const value = String(path);
+        if (value === oauthPath) {
+          return JSON.stringify({
+            access_token: "official-access-token",
+            refresh_token: "official-refresh-token",
+            expiry_date: 123456789,
+            email: "other@example.test",
+          });
+        }
+        if (value === accountsPath) {
+          return JSON.stringify({ active: "proof@example.test", old: [] });
+        }
+        throw new Error(`unexpected read: ${value}`);
+      },
+    });
+
+    expect(importOfficialGeminiCliOAuthCredentials()).toBeNull();
+    expect(() => requireOfficialGeminiCliOAuthCredentials()).toThrow(/does not match/);
+  });
 });
 
 describe("google-gemini-cli provider auth setup", () => {

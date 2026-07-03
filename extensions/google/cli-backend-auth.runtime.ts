@@ -51,6 +51,7 @@ type GeminiAuthProfileCredential = {
   expiresAt?: number;
   idToken?: string;
   projectId?: string;
+  email?: string;
 };
 
 type GeminiOAuthCredential = GeminiAuthProfileCredential & {
@@ -59,6 +60,7 @@ type GeminiOAuthCredential = GeminiAuthProfileCredential & {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
+  email: string;
 };
 
 type GeminiApiKeyCredential = GeminiAuthProfileCredential & {
@@ -78,6 +80,22 @@ type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeEmail(value: string | undefined): string | undefined {
+  const normalized = normalizeString(value)?.toLowerCase();
+  return normalized && normalized.includes("@") ? normalized : undefined;
+}
+
+function resolveEmailFromProfileId(profileId: string | undefined): string | undefined {
+  const normalized = normalizeString(profileId);
+  if (!normalized) {
+    return undefined;
+  }
+  const suffix = normalized.includes(":")
+    ? normalized.slice(normalized.indexOf(":") + 1)
+    : normalized;
+  return normalizeEmail(suffix);
 }
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
@@ -113,6 +131,7 @@ function throwUnstageableSelectedGeminiProfile(
 }
 
 function requireGeminiOAuthCredential(
+  ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
   if (!credential) {
@@ -135,6 +154,16 @@ function requireGeminiOAuthCredential(
       "Gemini CLI OAuth profile is missing usable access token material. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
     );
   }
+  const email = normalizeEmail(credential.email);
+  const expectedEmail = resolveEmailFromProfileId(ctx.authProfileId);
+  if (!email) {
+    throw new Error(
+      "Gemini CLI OAuth profile is missing validated Google account identity. Re-import the official Gemini CLI cache.",
+    );
+  }
+  if (expectedEmail && expectedEmail !== email) {
+    throw new Error("Gemini CLI OAuth profile identity does not match the selected profile id.");
+  }
 
   return {
     ...credential,
@@ -144,6 +173,7 @@ function requireGeminiOAuthCredential(
     ...(refreshToken ? { refreshToken } : {}),
     ...(typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { expiresAt } : {}),
     projectId: normalizeString(credential.projectId),
+    email,
   };
 }
 
@@ -329,7 +359,7 @@ async function prepareGeminiCliOAuthHome(
   ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<CliBackendPreparedExecution | null> {
-  const oauth = requireGeminiOAuthCredential(credential);
+  const oauth = requireGeminiOAuthCredential(ctx, credential);
   if (!oauth) {
     return null;
   }

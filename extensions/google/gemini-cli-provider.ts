@@ -36,6 +36,16 @@ function normalizeString(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeEmail(value: string | undefined): string | undefined {
+  const normalized = normalizeString(value)?.toLowerCase();
+  return normalized && normalized.includes("@") ? normalized : undefined;
+}
+
+function resolveEmailFromProfileId(profileId: string): string | undefined {
+  const suffix = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
+  return normalizeEmail(suffix);
+}
+
 function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: string) {
   const accessToken = normalizeString(credential.access);
   if (!accessToken) {
@@ -43,6 +53,16 @@ function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: s
   }
   const refreshToken = normalizeString(credential.refresh);
   const projectId = normalizeString(credential.projectId);
+  const email = normalizeEmail(credential.email);
+  const expectedEmail = resolveEmailFromProfileId(profileId);
+  if (!email) {
+    throw new Error(
+      "Gemini CLI OAuth profile is missing validated Google account identity. Re-import the official Gemini CLI cache.",
+    );
+  }
+  if (expectedEmail && expectedEmail !== email) {
+    throw new Error("Gemini CLI OAuth profile identity does not match the selected profile id.");
+  }
   return {
     kind: "oauth" as const,
     providerId: PROVIDER_ID,
@@ -53,7 +73,7 @@ function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: s
       ? { expiresAt: credential.expires }
       : {}),
     ...(projectId ? { projectId } : {}),
-    ...(credential.email ? { email: credential.email } : {}),
+    email,
   };
 }
 

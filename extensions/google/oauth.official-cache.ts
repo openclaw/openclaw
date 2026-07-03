@@ -41,6 +41,11 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeEmail(value: unknown): string | undefined {
+  const normalized = normalizeString(value)?.toLowerCase();
+  return normalized && normalized.includes("@") ? normalized : undefined;
+}
+
 function normalizeNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -92,6 +97,9 @@ function parseOfficialGeminiCliOAuthCache(
   const expires =
     normalizeNumber(parsed.expiry_date ?? parsed.expires ?? parsed.expiresAt) ?? Date.now();
   const idToken = normalizeString(parsed.id_token ?? parsed.idToken);
+  const email = normalizeEmail(
+    parsed.email ?? parsed.account ?? parsed.user_email ?? parsed.userEmail,
+  );
 
   return {
     access,
@@ -99,6 +107,7 @@ function parseOfficialGeminiCliOAuthCache(
     expires,
     sourcePath,
     ...(idToken ? { idToken } : {}),
+    ...(email ? { email } : {}),
   };
 }
 
@@ -112,10 +121,26 @@ function readActiveGoogleAccount(): string | undefined {
     if (!isRecord(parsed)) {
       return undefined;
     }
-    return normalizeString(parsed.active);
+    return normalizeEmail(parsed.active);
   } catch {
     return undefined;
   }
+}
+
+function validateImportedGeminiCliAccountIdentity(params: {
+  activeEmail: string | undefined;
+  parsedEmail: string | undefined;
+  sourcePath: string;
+}): string | null {
+  if (!params.activeEmail) {
+    officialOAuthCacheImportError = `Official Gemini CLI account identity was not found for ${params.sourcePath}. Run \`gemini\`, choose Sign in with Google, then retry.`;
+    return null;
+  }
+  if (params.parsedEmail && params.parsedEmail !== params.activeEmail) {
+    officialOAuthCacheImportError = `Official Gemini CLI OAuth cache identity does not match the active Gemini CLI account for ${params.sourcePath}.`;
+    return null;
+  }
+  return params.activeEmail;
 }
 
 function readProjectIdFromEnv(): string | undefined {
@@ -156,11 +181,18 @@ export function importOfficialGeminiCliOAuthCredentials(): GeminiCliOfficialOAut
       return null;
     }
 
-    const email = readActiveGoogleAccount();
+    const email = validateImportedGeminiCliAccountIdentity({
+      activeEmail: readActiveGoogleAccount(),
+      parsedEmail: normalizeEmail(parsed.email),
+      sourcePath: cachePath,
+    });
+    if (!email) {
+      return null;
+    }
     const projectId = readProjectIdFromEnv();
     cachedOfficialOAuthCredentials = {
       ...parsed,
-      ...(email ? { email } : {}),
+      email,
       ...(projectId ? { projectId } : {}),
     };
     return cachedOfficialOAuthCredentials;
