@@ -42,12 +42,13 @@ describe("activity model output preview redaction", () => {
 
   it("redacts dotted API keys in object-shaped tool results", () => {
     const preview = buildResultPreview({
-      "app.api.key": "visible secret with spaces",
+      "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
       "server.port": 8080,
     });
 
     expect(preview).toContain('"app.api.key": "[redacted]"');
     expect(preview).toContain('"server.port": 8080');
-    expect(preview).not.toContain("visible secret with spaces");
+    expect(preview).not.toContain("visible secret");
+    expect(preview).not.toContain("keep hidden");
   });
 });
