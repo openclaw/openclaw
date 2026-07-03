@@ -788,6 +788,9 @@ struct IPadWorkboardScreen: View {
 
     private func open(_ card: IPadWorkboardCard) {
         guard let sessionKey = normalized(card.sessionKey) else { return }
+        // Card details are a sheet. Dismiss it before changing tabs or the requested
+        // Chat session and contextual return action remain obscured by the old card.
+        self.presentedSheet = nil
         self.appModel.openChat(sessionKey: sessionKey)
         self.openChat()
     }

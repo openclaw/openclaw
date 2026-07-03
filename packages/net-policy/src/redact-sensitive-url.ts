@@ -73,6 +73,14 @@ const URL_QUERY_FALLBACK_UNQUOTED_VALUE_STOPS = new Set([
 const URL_QUERY_FALLBACK_WRAPPER_CLOSES = new Set([")", "]"]);
 const URL_QUERY_FALLBACK_AFTER_WRAPPER_STOPS = new Set([" ", "\t", "\r", "\n", ",", ";", ".", ":"]);
 
+// Telegram Bot API credentials live in `/bot<token>/...` path segments rather
+// than userinfo or query params. Keep this shape aligned with logging/redact.ts.
+const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
+
+function redactSensitiveUrlPath(value: string): string {
+  return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
+}
+
 function normalizeUrlQueryParamName(name: string): string {
   const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
   try {
@@ -114,6 +122,11 @@ export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
     let mutated = false;
+    const redactedPath = redactSensitiveUrlPath(parsed.pathname);
+    if (redactedPath !== parsed.pathname) {
+      parsed.pathname = redactedPath;
+      mutated = true;
+    }
     if (parsed.username || parsed.password) {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
@@ -242,5 +255,8 @@ export function redactSensitiveUrlLikeString(value: string): string {
   if (redactedUrl !== value) {
     return redactedUrl;
   }
-  return redactFallbackQuerySecrets(value.replace(/\/\/([^@/?#\s]+)@/g, "//***:***@"));
+  const redactedFallback = redactFallbackQuerySecrets(
+    value.replace(/\/\/([^@/?#\s]+)@/g, "//***:***@"),
+  );
+  return redactSensitiveUrlPath(redactedFallback);
 }

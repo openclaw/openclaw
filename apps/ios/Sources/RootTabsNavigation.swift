@@ -3,6 +3,21 @@ import Foundation
 import SwiftUI
 
 extension RootTabs {
+    struct PhoneChatReturn: Equatable {
+        let destination: SidebarDestination
+        let openChatRequestID: Int
+    }
+
+    struct PhoneControlNavigationRequest: Equatable {
+        enum Target: Equatable {
+            case root
+            case detail(SidebarDestination)
+        }
+
+        let id: Int
+        let target: Target
+    }
+
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }

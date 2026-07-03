@@ -45,6 +45,19 @@ describe("redactSensitiveUrl", () => {
       "https://example.com/mcp?safe=value",
     );
   });
+
+  it("redacts Telegram bot tokens from URL paths", () => {
+    expect(
+      redactSensitiveUrl(
+        "https://telegram.internal/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
+      ),
+    ).toBe("https://telegram.internal/bot***/getMe");
+    expect(
+      redactSensitiveUrl(
+        "https://api.telegram.org/bot123456%3AABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/getMe",
+      ),
+    ).toBe("https://api.telegram.org/bot***/getMe");
+  });
 });
 
 describe("redactSensitiveUrlLikeString", () => {
@@ -165,6 +178,14 @@ describe("redactSensitiveUrlLikeString", () => {
     expect(redactSensitiveUrlLikeString("failed https://x.test/cb?safe=value timed out")).toBe(
       "failed https://x.test/cb?safe=value timed out",
     );
+  });
+
+  it("redacts Telegram bot tokens from URL-like fallback strings", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "timeout /bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/sendMessage and keep /bot/settings",
+      ),
+    ).toBe("timeout /bot***/sendMessage and keep /bot/settings");
   });
 });
 

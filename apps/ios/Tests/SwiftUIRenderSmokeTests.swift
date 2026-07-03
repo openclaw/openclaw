@@ -57,6 +57,24 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `settings Licenses destination builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let root = SettingsProTab(directRoute: .licenses)
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
+
+            windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
+        }
+    }
+
     @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
         for preference in AppAppearancePreference.allCases {
             let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
@@ -191,7 +209,9 @@ struct SwiftUIRenderSmokeTests {
             let root = RootTabsPhoneControlHub(
                 groups: RootTabs.phoneControlGroups,
                 initialDestination: nil,
-                openRootDestination: { _ in })
+                navigationRequest: nil,
+                openRootDestination: { _ in },
+                openChatFromControlDetail: { _ in })
                 .environment(appModel)
 
             _ = Self.host(root)
@@ -203,7 +223,9 @@ struct SwiftUIRenderSmokeTests {
         let root = RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            navigationRequest: nil,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)

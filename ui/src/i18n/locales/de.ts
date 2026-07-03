@@ -1360,6 +1360,9 @@ export const de: TranslationMap = {
     updateNow: "Jetzt aktualisieren",
     dismissUpdateBanner: "Update-Banner ausblenden",
     switchedSession: "Zu {session} gewechselt",
+    sidebar: {
+      allSessions: "Alle Sitzungen",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

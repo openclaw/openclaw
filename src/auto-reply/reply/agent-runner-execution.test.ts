@@ -6,6 +6,7 @@ import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.j
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
@@ -38,7 +39,7 @@ import {
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
@@ -443,14 +444,17 @@ function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
 function createMockReplyOperation(): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
+  freezeAbortMock: ReturnType<typeof vi.fn>;
   retainFailureUntilCompleteMock: ReturnType<typeof vi.fn>;
   updateSessionIdMock: ReturnType<typeof vi.fn>;
 } {
   const failMock = vi.fn();
+  const freezeAbortMock = vi.fn();
   const retainFailureUntilCompleteMock = vi.fn();
   const updateSessionIdMock = vi.fn();
   return {
     failMock,
+    freezeAbortMock,
     retainFailureUntilCompleteMock,
     updateSessionIdMock,
     replyOperation: {
@@ -465,13 +469,14 @@ function createMockReplyOperation(): {
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
+      freezeAbort: freezeAbortMock,
       retainFailureUntilComplete: retainFailureUntilCompleteMock,
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
       completeWithAfterClearBarrier: vi.fn(),
       fail: failMock,
-      abortByUser: vi.fn(),
-      abortForRestart: vi.fn(),
+      abortByUser: vi.fn(() => true),
+      abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
     },
   };
@@ -1335,6 +1340,220 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("freezes abort ownership only after model fallback settles", async () => {
+    const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      await params.run("anthropic", "claude").catch(() => undefined);
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      const result = await params.run("openai", "gpt-5.5");
+      expect(freezeAbortMock).not.toHaveBeenCalled();
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.5",
+        attempts: [],
+      };
+    });
+    state.runEmbeddedAgentMock
+      .mockRejectedValueOnce(new Error("primary failed"))
+      .mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(freezeAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a settled fallback result after an accepted user abort", async () => {
+    const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    const abortController = new AbortController();
+    let operationResult: ReplyOperation["result"] = null;
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    let releaseToolTask: () => void = () => undefined;
+    const pendingToolTask = new Promise<void>((resolve) => {
+      releaseToolTask = resolve;
+    });
+    const pendingToolTasks = new Set([pendingToolTask]);
+    Object.defineProperty(replyOperation, "abortSignal", {
+      configurable: true,
+      get: () => abortController.signal,
+    });
+    Object.defineProperty(replyOperation, "result", {
+      configurable: true,
+      get: () => operationResult,
+    });
+    replyOperation.abortByUser = vi.fn(() => {
+      operationResult = { kind: "aborted", code: "aborted_by_user" };
+      abortController.abort("user_abort");
+      return true;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pending = runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+      pendingToolTasks,
+    });
+    await candidateSettled;
+    expect(replyOperation.abortByUser()).toBe(true);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    releaseFallback();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(settled).toBe(false);
+    expect(freezeAbortMock).not.toHaveBeenCalled();
+    releaseToolTask();
+
+    await expect(pending).resolves.toEqual({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(freezeAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses a settled fallback result after an upstream abort", async () => {
+    const upstreamAbort = new AbortController();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:upstream-settled-fallback",
+      sessionId: "upstream-settled-fallback",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbort.signal,
+    });
+    replyOperation.setPhase("running");
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const pending = runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+      await candidateSettled;
+      upstreamAbort.abort(new Error("caller cancelled"));
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(replyOperation.abortSignal.aborted).toBe(true);
+      releaseFallback();
+
+      await expect(pending).resolves.toEqual({
+        kind: "final",
+        payload: { text: SILENT_REPLY_TOKEN },
+      });
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("preserves restart reply classification after an upstream abort settles fallback", async () => {
+    const upstreamAbort = new AbortController();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:upstream-settled-restart",
+      sessionId: "upstream-settled-restart",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbort.signal,
+    });
+    replyOperation.setPhase("running");
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run("anthropic", "claude");
+      markCandidateSettled();
+      await fallbackRelease;
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const pending = runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+        replyOperation,
+      });
+      await candidateSettled;
+      upstreamAbort.abort(createAgentRunRestartAbortError());
+      releaseFallback();
+
+      await expect(pending).resolves.toEqual({
+        kind: "final",
+        payload: {
+          isError: true,
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        },
+      });
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("passes the hydrated run account to embedded execution", async () => {

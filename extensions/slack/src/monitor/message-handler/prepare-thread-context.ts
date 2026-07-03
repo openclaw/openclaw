@@ -2,6 +2,7 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -24,13 +25,7 @@ import {
 } from "./prepare-thread-context-root.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
-type SlackMediaModule = typeof import("../media.js");
-let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
-
-function loadSlackMediaModule(): Promise<SlackMediaModule> {
-  slackMediaModulePromise ??= import("../media.js");
-  return slackMediaModulePromise;
-}
+const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
 type SlackThreadContextData = {
   threadStarterBody: string | undefined;

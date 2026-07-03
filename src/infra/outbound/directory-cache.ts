@@ -18,6 +18,7 @@ export type DirectoryCacheKey = {
   kind: ChannelDirectoryEntryKind;
   source: "cache" | "live";
   signature?: string | null;
+  query?: string | null;
 };
 
 /**
@@ -25,7 +26,7 @@ export type DirectoryCacheKey = {
  */
 export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
   const signature = key.signature ?? "default";
-  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}`;
+  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}:query:${key.query ?? ""}`;
 }
 
 /**
