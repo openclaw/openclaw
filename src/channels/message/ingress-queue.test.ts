@@ -506,6 +506,17 @@ describe("channel ingress queue", () => {
 
       await queue.complete("old", { completedAt: 25 });
       await queue.fail(keep, { reason: "poison", message: "bad", failedAt: 25 });
+      const duplicateFailed = await queue.enqueue("keep", { text: "new poison" });
+      expect(duplicateFailed).toMatchObject({
+        kind: "failed",
+        duplicate: true,
+        record: {
+          id: "keep",
+          payload: { text: "keep" },
+          reason: "poison",
+          message: "bad",
+        },
+      });
       await queue.enqueue("retry", { text: "retry" });
       await queue.release("retry", { lastError: "stale retry text", releasedAt: 26 });
       await queue.complete("retry", { completedAt: 27 });
@@ -528,7 +539,7 @@ describe("channel ingress queue", () => {
           last_attempt_at: null,
           last_error: "bad",
           metadata_json: null,
-          payload_json: "null",
+          payload_json: JSON.stringify({ text: "keep" }),
         },
         {
           event_id: "old",
