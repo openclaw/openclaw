@@ -31,6 +31,12 @@ function createCompletionProgram(): Command {
   sessions.option("--verbose", "Verbose output");
   sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
 
+  // Register aliases so completion tests cover the alias-aware generators.
+  const tui = program.command("tui").alias("terminal").alias("chat");
+  tui.command("start").description("Start the TUI");
+
+  gateway.command("logs").alias("log").description("Show gateway logs");
+
   return program;
 }
 
@@ -118,7 +124,9 @@ describe("completion-cli", () => {
     expect(script).toContain("if ($commandPath -eq 'gateway') {");
     expect(script).toContain("if ($commandPath -eq 'gateway status') {");
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
-    expect(script).toContain("$completions = @('status','restart','--force','--token')");
+    expect(script).toContain(
+      "$completions = @('status','restart','logs','log','--force','--token')",
+    );
     expect(script).not.toContain("'-t,'");
   });
 
@@ -168,5 +176,63 @@ describe("completion-cli", () => {
 
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
+  });
+
+  it("zsh completion includes alias names in subcommand list", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("'terminal[");
+    expect(script).toContain("'chat[");
+    expect(script).toContain("'tui[");
+    expect(script).toContain("'log[Show gateway logs]'");
+  });
+
+  it("zsh dispatch patterns match alias names", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("(tui|terminal|chat)");
+    expect(script).toContain("(logs|log)");
+  });
+
+  it("bash completion includes alias names in opts and case labels", () => {
+    const script = getCompletionScript("bash", createCompletionProgram());
+
+    expect(script).toContain("tui");
+    expect(script).toContain("terminal");
+    expect(script).toContain("chat");
+    expect(script).toContain("tui|terminal|chat)");
+    expect(script).toContain("logs");
+    expect(script).toContain("log");
+  });
+
+  it("PowerShell generates command path blocks for alias paths", () => {
+    const script = getCompletionScript("powershell", createCompletionProgram());
+
+    expect(script).toContain("if ($commandPath -eq 'tui') {");
+    expect(script).toContain("if ($commandPath -eq 'terminal') {");
+    expect(script).toContain("if ($commandPath -eq 'chat') {");
+  });
+
+  it("PowerShell root completions include alias names", () => {
+    const script = getCompletionScript("powershell", createCompletionProgram());
+
+    expect(script).toContain("'terminal'");
+    expect(script).toContain("'chat'");
+    expect(script).toContain("'tui'");
+  });
+
+  it("fish generates completion lines for alias names", () => {
+    const script = getCompletionScript("fish", createCompletionProgram());
+
+    expect(script).toContain('-a "terminal"');
+    expect(script).toContain('-a "chat"');
+    expect(script).toContain('-a "log"');
+  });
+
+  it("fish generates path conditions for alias paths", () => {
+    const script = getCompletionScript("fish", createCompletionProgram());
+
+    expect(script).toContain("__openclaw_command_path_matches terminal");
+    expect(script).toContain("__openclaw_command_path_matches chat");
   });
 });
