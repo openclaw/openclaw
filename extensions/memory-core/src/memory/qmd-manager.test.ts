@@ -2978,6 +2978,73 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("keeps the caller abort signal on the stripped --candidate-limit retry", async () => {
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First query rejects --candidate-limit like an older qmd build; the retry
+    // child never closes on its own, so the only way the search can settle is
+    // the caller-owned abort signal surviving into the retry and killing it.
+    let retryChildKill: ReturnType<typeof vi.fn> | undefined;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        if (args.includes("--candidate-limit")) {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", "unknown flag: --candidate-limit", 1);
+          return child;
+        }
+        const child = createMockChild({ autoClose: false });
+        const kill = vi.fn(() => {
+          queueMicrotask(() => child.emit("close", null));
+        });
+        Object.assign(child, { kill });
+        retryChildKill = kill;
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const controller = new AbortController();
+
+    const searchPromise = manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+      signal: controller.signal,
+    });
+    searchPromise.catch(() => undefined);
+
+    await waitUntil(() => retryChildKill !== undefined);
+
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(searchPromise).rejects.toThrow("memory_search timed out after 15s");
+    expect(retryChildKill).toHaveBeenCalledWith("SIGKILL");
+    await manager.close();
+  });
+
   it("passes candidateLimit to the mcporter unified query call when decay is enabled", async () => {
     const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
       ?.defaults;

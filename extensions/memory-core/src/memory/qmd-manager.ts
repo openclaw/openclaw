@@ -2554,7 +2554,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(
           "qmd query does not support --candidate-limit; retrying without it (decay re-ranks the widened -n pool only)",
         );
-        return this.runQmdSearch(this.stripCandidateLimitArg(args), command);
+        return this.runQmdSearch(this.stripCandidateLimitArg(args), command, signal);
       }
       const recovered = this.parseFailedQmdSearchJson(err, command);
       if (recovered) {
