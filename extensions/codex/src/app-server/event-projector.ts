@@ -169,6 +169,7 @@ export class CodexAppServerEventProjector {
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly toolProgressTexts = new Set<string>();
+  private readonly toolProgressEchoTexts = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -179,6 +180,7 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
+  private readonly toolResultOutputTextTruncatedItemIds = new Set<string>();
   private readonly toolMetas = new Map<
     string,
     { toolName: string; meta?: string; asyncStarted?: boolean }
@@ -248,7 +250,7 @@ export class CodexAppServerEventProjector {
     const text = this.assistantTextByItem.get(itemId)?.trim();
     return {
       itemId,
-      hasText: Boolean(text && !this.toolProgressTexts.has(text)),
+      hasText: Boolean(text && !this.isToolProgressEchoText(text)),
     };
   }
 
@@ -995,7 +997,12 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta) {
       return;
     }
-    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    appendToolOutputDeltaText(
+      this.toolResultOutputTextByItem,
+      this.toolResultOutputTextTruncatedItemIds,
+      itemId,
+      delta,
+    );
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -1631,11 +1638,13 @@ export class CodexAppServerEventProjector {
     finalOutput?: boolean;
     isError?: boolean;
   }): void {
-    const text = truncateToolTranscriptText(params.text.trim());
+    const rawText = params.text.trim();
+    const text = truncateToolTranscriptText(rawText);
     if (!text) {
       return;
     }
     this.toolProgressTexts.add(text);
+    this.toolProgressEchoTexts.add(rawText);
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
@@ -1978,7 +1987,7 @@ export class CodexAppServerEventProjector {
       if (this.assistantPhaseByItem.get(itemId) === "commentary") {
         continue;
       }
-      if (text && !this.toolProgressTexts.has(text)) {
+      if (text && !this.isToolProgressEchoText(text)) {
         return { itemId, text };
       }
     }
@@ -2004,12 +2013,16 @@ export class CodexAppServerEventProjector {
       }
       const text = this.assistantTextByItem.get(itemId) ?? "";
       const normalizedText = text.trim();
-      if (normalizedText && this.toolProgressTexts.has(normalizedText)) {
+      if (normalizedText && this.isToolProgressEchoText(normalizedText)) {
         continue;
       }
       return this.createAssistantMessage(text);
     }
     return undefined;
+  }
+
+  private isToolProgressEchoText(text: string): boolean {
+    return this.toolProgressTexts.has(text) || this.toolProgressEchoTexts.has(text);
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
@@ -2718,14 +2731,19 @@ function itemTranscriptResultText(
 
 function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
+  truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
 ): void {
-  const current = outputTextByItem.get(itemId) ?? "";
-  if (current.includes(TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX)) {
+  if (truncatedItemIds.has(itemId)) {
     return;
   }
-  outputTextByItem.set(itemId, truncateToolTranscriptText(current + delta));
+  const current = outputTextByItem.get(itemId) ?? "";
+  const next = current + delta;
+  outputTextByItem.set(itemId, truncateToolTranscriptText(next));
+  if (next.length > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    truncatedItemIds.add(itemId);
+  }
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {

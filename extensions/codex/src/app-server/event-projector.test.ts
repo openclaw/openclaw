@@ -5,6 +5,8 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
+  formatToolAggregate,
+  inferToolMetaFromArgs,
   resetAgentEventsForTest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -895,6 +897,69 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.currentAttemptAssistant).toBeUndefined();
+  });
+
+  it("does not promote raw oversized tool progress echoes after display truncation", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+    const command = "pnpm test";
+    const cwd = `/very-long-root/${"a".repeat(10_500)}`;
+    const rawToolProgressText = formatToolAggregate(
+      "bash",
+      [inferToolMetaFromArgs("exec", { command, cwd }, { detailMode: "explain" }) ?? ""],
+      { markdown: true },
+    );
+    expect(rawToolProgressText.length).toBeGreaterThan(10_000);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-oversized-progress",
+          command,
+          cwd,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    const emittedProgressText = (
+      mockCallArg(onToolResult, 0, 0, "onToolResult") as {
+        text?: string;
+      }
+    ).text;
+    expect(emittedProgressText).toHaveLength(10_000);
+    expect(emittedProgressText).toContain("OpenClaw truncated Codex native tool output");
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-oversized-tool-progress",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawToolProgressText }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(
+      rawToolProgressText.slice(0, 1_000),
+    );
   });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
@@ -2295,6 +2360,62 @@ describe("CodexAppServerEventProjector", () => {
       name: "bash",
     }).data;
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
+  });
+
+  it("keeps streaming after output text includes the truncation notice prefix", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), {
+      trajectoryRecorder,
+    });
+    const userOutputWithNotice =
+      "...(OpenClaw truncated Codex native tool output is a literal line from the process)\n";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-notice-prefix",
+        delta: userOutputWithNotice,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-notice-prefix",
+        delta: "second line must survive\n",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-notice-prefix",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(`${userOutputWithNotice}second line must survive`);
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "tool.result",
+      expect.objectContaining({
+        itemId: "cmd-notice-prefix",
+        output: `${userOutputWithNotice}second line must survive`,
+      }),
+    );
   });
 
   it("caps streamed command output used for replay when snapshots omit aggregated output", async () => {
