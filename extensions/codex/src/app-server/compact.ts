@@ -430,6 +430,14 @@ function isSameNativeCompactionBinding(
   );
 }
 
+/**
+ * Returns true if the error indicates a missing thread in the Codex app-server.
+ *
+ * The pinned Codex app-server (v0.142.4) does not expose a dedicated
+ * thread-not-found RPC error code, so this helper falls back to a prose match.
+ * If a future version adds a structured discriminant, this should be upgraded
+ * to use that code and the prose fallback should be removed.
+ */
 function isCodexThreadNotFoundError(error: unknown): boolean {
   return formatCompactionError(error).toLowerCase().includes("thread not found");
 }
