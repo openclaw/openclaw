@@ -6,31 +6,11 @@ import {
 } from "./nix-mode-write-guard.js";
 
 describe("nix-mode-write-guard", () => {
-  it("throws NixModeConfigMutationError when NIX_MODE=1 and no skip flag", () => {
+  it("throws NixModeConfigMutationError when NIX_MODE=1", () => {
     expect(() =>
       assertConfigWriteAllowedInCurrentMode({
         env: { OPENCLAW_NIX_MODE: "1" },
-        operation: "doctor --fix",
-      }),
-    ).toThrow(NixModeConfigMutationError);
-  });
-
-  it("does not throw when skipIfNoConfigMutation is true in Nix mode", () => {
-    expect(() =>
-      assertConfigWriteAllowedInCurrentMode({
-        env: { OPENCLAW_NIX_MODE: "1" },
-        operation: "models auth login",
-        skipIfNoConfigMutation: true,
-      }),
-    ).not.toThrow();
-  });
-
-  it("still throws in Nix mode when skipIfNoConfigMutation is false", () => {
-    expect(() =>
-      assertConfigWriteAllowedInCurrentMode({
-        env: { OPENCLAW_NIX_MODE: "1" },
-        operation: "config set",
-        skipIfNoConfigMutation: false,
+        operation: "doctor --generate-gateway-token",
       }),
     ).toThrow(NixModeConfigMutationError);
   });
@@ -49,5 +29,13 @@ describe("nix-mode-write-guard", () => {
       operation: "config set",
     });
     expect(message).toContain("Operation: config set");
+  });
+
+  it("does not tell users to avoid non-config doctor repairs", () => {
+    const message = formatNixModeConfigMutationMessage({
+      operation: "doctor --fix",
+    });
+    expect(message).not.toContain("doctor repair/token-generation");
+    expect(message).toContain("doctor --fix/--repair/--yes may still run non-config repairs");
   });
 });

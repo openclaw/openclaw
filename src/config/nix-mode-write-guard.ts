@@ -29,7 +29,8 @@ export function formatNixModeConfigMutationMessage(
     "This usually means nix-openclaw, the first-party Nix distribution, or another Nix-managed package set this mode.",
     ...(params.configPath ? [`Config path: ${params.configPath}`] : []),
     ...(operationHint ? [operationHint] : []),
-    "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
+    "Do not run config-mutating operations such as setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor --generate-gateway-token, or config set against this file.",
+    "In Nix mode, doctor --fix/--repair/--yes may still run non-config repairs (for example session/legacy state migrations or permission fixes), but any step that tries to modify this file will fail.",
     "Edit the Nix source for this install instead. For nix-openclaw, edit `programs.openclaw.config` or `instances.<name>.config`, then rebuild with Home Manager or NixOS.",
     `Agent-first Nix setup: ${NIX_OPENCLAW_AGENT_FIRST_URL}`,
     `OpenClaw Nix overview: ${OPENCLAW_NIX_OVERVIEW_URL}`,
@@ -42,25 +43,20 @@ export function formatNixModeConfigMutationMessage(
  * @param params.configPath - The config file path being mutated (if known)
  * @param params.env - Environment variables to check for OPENCLAW_NIX_MODE
  * @param params.operation - Description of the operation being performed (for better error messages)
- * @param params.skipIfNoConfigMutation - When true, only throw if the operation would actually modify openclaw.json
  */
 export function assertConfigWriteAllowedInCurrentMode(
   params: {
     configPath?: string;
     env?: NodeJS.ProcessEnv;
     operation?: string;
-    skipIfNoConfigMutation?: boolean;
   } = {},
 ): void {
   if (!resolveIsNixMode(params.env)) {
     return;
   }
   // In Nix mode, all writes must happen in the declarative source and then rebuild.
-  // However, some operations (like auth-profile writes or session state repairs) don't
-  // touch openclaw.json and should be allowed.
-  if (params.skipIfNoConfigMutation) {
-    return;
-  }
+  // The caller is responsible for only invoking this guard at actual openclaw.json write points;
+  // non-config repairs (session/legacy state, permission fixes) do not call it.
   throw new NixModeConfigMutationError({
     configPath: params.configPath,
     operation: params.operation,
