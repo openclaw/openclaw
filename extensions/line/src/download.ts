@@ -13,6 +13,7 @@ export async function downloadLineMedia(
   messageId: string,
   channelAccessToken: string,
   maxBytes = 10 * 1024 * 1024,
+  options?: { originalFilename?: string },
 ): Promise<DownloadResult> {
   const client = new messagingApi.MessagingApiBlobClient({
     channelAccessToken,
@@ -24,6 +25,7 @@ export async function downloadLineMedia(
     undefined,
     "inbound",
     maxBytes,
+    options?.originalFilename,
   );
   logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
 

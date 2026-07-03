@@ -145,18 +145,21 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runner registration budget
 
-OpenClaw's current GitHub runner-registration bucket allows 3,000 self-hosted
-runner registrations per 5 minutes. The limit is shared by all Blacksmith runner
-registrations in the `openclaw` organization, so adding another Blacksmith
-installation does not add a new bucket.
+OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
+runner registrations per 5 minutes in `ghx api rate_limit`. Re-check
+`actions_runner_registration` before each tuning pass because GitHub can change
+this bucket. The limit is shared by all Blacksmith runner registrations in the
+`openclaw` organization, so adding another Blacksmith installation does not add
+a new bucket.
 
 Treat Blacksmith labels as the scarce resource for burst control. Jobs that
 only route, notify, summarize, select shards, or run short CodeQL scans should
 stay on GitHub-hosted runners unless they have measured Blacksmith-specific
 needs. Any new Blacksmith matrix, larger `max-parallel`, or high-frequency
 workflow must show its worst-case registration count and keep the org-level
-target below 2,000 registrations per 5 minutes, leaving headroom for concurrent
-repositories and retried jobs.
+target below about 60% of the live bucket. With the current 10,000-registration
+bucket, that means a 6,000-registration operating target, leaving headroom for
+concurrent repositories, retries, and burst overlap.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -484,7 +487,7 @@ For normal PRs, follow scoped CI/check evidence instead of treating parity as a 
 
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -494,6 +497,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 | `/codeql-security-high/channel-runtime-boundary`  | Core channel implementation contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, audit touchpoints              |
 | `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                |
 | `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                           |
+| `/codeql-security-high/process-exec-boundary`     | Local shell, process spawn helpers, subprocess-owning bundled plugin runtimes, and workflow script glue                             |
 | `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, package-manager install, source-loading, and Plugin SDK package contract trust surfaces |
 
 ### Platform-specific security shards

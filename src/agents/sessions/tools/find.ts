@@ -308,10 +308,8 @@ export function createFindToolDefinition(
               const output = lines.join("\n");
               if (code !== 0) {
                 const errorMsg = stderr.trim() || `fd exited with code ${code}`;
-                if (!output) {
-                  settle(() => reject(new Error(errorMsg)));
-                  return;
-                }
+                settle(() => reject(new Error(errorMsg)));
+                return;
               }
               if (!output) {
                 settle(() =>

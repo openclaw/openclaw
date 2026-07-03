@@ -112,6 +112,13 @@ export type SessionContextBudgetStatus = {
   sessionId?: string;
 };
 
+export type AmbientTranscriptWatermark = {
+  sessionId: string;
+  messageId: string;
+  timestampMs?: number;
+  updatedAt: number;
+};
+
 export type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
@@ -405,6 +412,8 @@ export type SessionEntry = {
   origin?: SessionOrigin;
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
+  /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
+  ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;

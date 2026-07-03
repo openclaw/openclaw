@@ -30,6 +30,7 @@ import {
 } from "@opentelemetry/semantic-conventions/incubating";
 import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -805,10 +806,6 @@ function describeJsonValue(value: unknown): string {
     return "null";
   }
   return typeof value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function textPart(content: string): Record<string, unknown> {
@@ -3822,6 +3819,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);
+              return;
+            case "exec.approval.followup_suppressed":
               return;
             case "log.record":
               recordLogRecord?.(evt, metadata);

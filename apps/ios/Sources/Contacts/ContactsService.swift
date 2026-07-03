@@ -11,6 +11,10 @@ final class ContactsService: ContactsServicing {
             CNContactOrganizationNameKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
+            // CNContactFormatter requires more keys than payload(from:) accesses directly.
+            // Fetch its declared key set; formatting a partial contact otherwise raises an
+            // Objective-C CNContactPropertyNotFetchedException and crashes the app.
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
         ]
     }
 

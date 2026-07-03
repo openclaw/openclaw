@@ -659,6 +659,16 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("does not reserve login globally for external plugins", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "login",
+      description: "Plugin-owned login command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
   it("rejects reserved ownership on non-reserved direct command registrations", () => {
     const result = registerPluginCommand(
       "demo-plugin",

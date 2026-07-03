@@ -351,6 +351,17 @@ export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
   return pinnedChannelRegistry ?? pinnedHttpRouteRegistry ?? activeRegistry;
 }
 
+export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
+  // Node allowlists and invoke guards are Gateway security policy. Agent-scoped
+  // registry swaps must not add commands or shadow the pinned startup policy.
+  return (
+    (state.channel.pinned ? asPluginRegistry(state.channel.registry) : null) ??
+    (state.httpRoute.pinned ? asPluginRegistry(state.httpRoute.registry) : null) ??
+    (state.sessionExtension.pinned ? asPluginRegistry(state.sessionExtension.registry) : null) ??
+    asPluginRegistry(state.activeRegistry)
+  );
+}
+
 export function requireActivePluginChannelRegistry(): PluginRegistry {
   const existing = getActivePluginChannelRegistry();
   if (existing) {
