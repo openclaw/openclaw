@@ -962,6 +962,62 @@ describe("CodexAppServerEventProjector", () => {
     );
   });
 
+  it("does not promote raw streamed full-output echoes after replay truncation", async () => {
+    const projector = await createProjector();
+    const rawOutput = `${"s".repeat(12_345)}tail-should-not-appear`;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-streamed-echo",
+        delta: rawOutput,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-streamed-full-output",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-streamed-echo",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+    const toolResultMessage = result.messagesSnapshot.find(
+      (message) => requireRecord(message, "message").role === "toolResult",
+    );
+    const toolResultContent = requireArray(
+      requireRecord(toolResultMessage, "tool result message").content,
+      "tool result content",
+    );
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toHaveLength(10_000);
+    expect(toolResultContentItem.content).toContain("original 12367 chars");
+    expect(toolResultContentItem.content).not.toContain("tail-should-not-appear");
+  });
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 

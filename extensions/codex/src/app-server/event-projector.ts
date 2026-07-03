@@ -112,6 +112,7 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
+const TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS = 1_024;
 const TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX = "...(OpenClaw truncated Codex native tool output";
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
@@ -170,6 +171,7 @@ export class CodexAppServerEventProjector {
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly toolProgressTexts = new Set<string>();
   private readonly toolProgressEchoTexts = new Set<string>();
+  private readonly toolProgressEchoPrefixes = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -998,13 +1000,14 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta) {
       return;
     }
-    appendToolOutputDeltaText(
+    const storedOutput = appendToolOutputDeltaText(
       this.toolResultOutputTextByItem,
       this.toolResultOutputTextOriginalLengthByItem,
       this.toolResultOutputTextTruncatedItemIds,
       itemId,
       delta,
     );
+    this.rememberToolProgressEcho(storedOutput.text);
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -1646,7 +1649,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolProgressTexts.add(text);
-    this.toolProgressEchoTexts.add(rawText);
+    this.rememberToolProgressEcho(rawText);
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
@@ -2024,7 +2027,27 @@ export class CodexAppServerEventProjector {
   }
 
   private isToolProgressEchoText(text: string): boolean {
-    return this.toolProgressTexts.has(text) || this.toolProgressEchoTexts.has(text);
+    if (this.toolProgressTexts.has(text) || this.toolProgressEchoTexts.has(text)) {
+      return true;
+    }
+    for (const prefix of this.toolProgressEchoPrefixes) {
+      if (text.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private rememberToolProgressEcho(text: string): void {
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+    this.toolProgressEchoTexts.add(normalized);
+    const rawPrefix = rawToolTranscriptPrefix(normalized).trim();
+    if (rawPrefix.length >= TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS) {
+      this.toolProgressEchoPrefixes.add(rawPrefix);
+    }
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
@@ -2737,17 +2760,18 @@ function appendToolOutputDeltaText(
   truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
-): void {
+): { text: string } {
   const previousOriginalLength =
     originalLengthByItem.get(itemId) ?? outputTextByItem.get(itemId)?.length ?? 0;
   const originalLength = previousOriginalLength + delta.length;
   originalLengthByItem.set(itemId, originalLength);
   const current = outputTextByItem.get(itemId) ?? "";
-  const next = current + delta;
-  outputTextByItem.set(itemId, truncateToolTranscriptText(next, originalLength));
+  const next = appendBoundedToolTranscriptText(current, delta, originalLength);
+  outputTextByItem.set(itemId, next);
   if (originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     truncatedItemIds.add(itemId);
   }
+  return { text: next };
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
@@ -2772,6 +2796,35 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
     .join("\n");
 }
 
+function appendBoundedToolTranscriptText(
+  current: string,
+  delta: string,
+  originalLength: number,
+): string {
+  if (originalLength <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return current + delta;
+  }
+  const notice = toolTranscriptTruncationNotice(originalLength);
+  if (notice.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return notice.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+  }
+  const textBudget = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - notice.length;
+  const currentPrefix = rawToolTranscriptPrefix(current);
+  const remaining = Math.max(0, textBudget - currentPrefix.length);
+  const prefix = remaining > 0 ? `${currentPrefix}${delta.slice(0, remaining)}` : currentPrefix;
+  return `${prefix.slice(0, textBudget)}${notice}`;
+}
+
+function rawToolTranscriptPrefix(text: string): string {
+  const noticeIndex = text.lastIndexOf(`\n${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original `);
+  return noticeIndex === -1 ? text : text.slice(0, noticeIndex);
+}
+
+function toolTranscriptTruncationNotice(originalLength: number): string {
+  const noticeText = `${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original ${originalLength} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
+  return `\n${noticeText}`;
+}
+
 function truncateToolTranscriptText(text: string, originalLength = text.length): string {
   if (
     originalLength <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS &&
@@ -2779,10 +2832,9 @@ function truncateToolTranscriptText(text: string, originalLength = text.length):
   ) {
     return text;
   }
-  const noticeText = `${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original ${originalLength} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
-  const notice = `\n${noticeText}`;
+  const notice = toolTranscriptTruncationNotice(originalLength);
   if (notice.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
-    return noticeText.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+    return notice.slice(1, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS + 1);
   }
   const textBudget = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - notice.length;
   return `${text.slice(0, textBudget)}${notice}`;
