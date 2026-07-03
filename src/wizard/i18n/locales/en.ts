@@ -338,6 +338,10 @@ export const en = {
       installed: "Installed {name}",
       installedWithWarnings: "Installed {name} (with warnings)",
       installing: "Installing {name}...",
+      manualPrereqsDoctorHint:
+        "Install those tools first, then run `openclaw doctor` to review skills + requirements.",
+      manualPrereqsIntro: "Skipped optional skill installs that need local tools first:",
+      manualPrereqsTitle: "Manual skill prerequisites",
       nodeManager: "Preferred node manager for skill installs",
       setEnv: "Set {env} for {name}?",
       skipDepsHint: "Continue without installing dependencies",
