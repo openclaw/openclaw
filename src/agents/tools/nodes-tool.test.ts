@@ -221,17 +221,18 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | [string, unknown, { params?: { durationMs?: unknown }; timeoutMs?: unknown }]
       | undefined;
     if (!call) {
       throw new Error("expected callGatewayTool to be called");
     }
     expect(call[0]).toBe("node.invoke");
-    expect(call[1]).toStrictEqual({});
+    expect(call[1]).toStrictEqual({ timeoutMs: 330_000 });
     expect(call[2].params?.durationMs).toBe(300_000);
+    expect(call[2].timeoutMs).toBe(330_000);
   });
 
-  it("clamps camera_clip durationMs argument to 300000 before gateway invoke", async () => {
+  it("clamps camera_clip durationMs argument and extends gateway invoke timeout", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
     nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
       base64: "ZmFrZQ==",
@@ -249,10 +250,32 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
 
     const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | [string, unknown, { params?: { durationMs?: unknown }; timeoutMs?: unknown }]
       | undefined;
     expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[1]).toStrictEqual({ timeoutMs: 330_000 });
     expect(call?.[2].params?.durationMs).toBe(300_000);
+    expect(call?.[2].timeoutMs).toBe(330_000);
+  });
+
+  it("preserves explicit recording timeout for gateway and node invoke", async () => {
+    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-explicit-timeout", {
+      action: "screen_record",
+      node: "macbook",
+      durationMs: 60_000,
+      timeoutMs: 5_000,
+    });
+
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { timeoutMs?: unknown }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+    expect(call?.[2].timeoutMs).toBe(5_000);
   });
 
   it.each([

@@ -66,6 +66,7 @@ type NodeMediaAction =
   | "screen_record"
   | "screen_snapshot";
 const MAX_RECORDING_DURATION_MS = 300_000;
+const RECORDING_INVOKE_GRACE_MS = 30_000;
 
 type ExecuteNodeMediaActionParams = {
   action: NodeMediaAction;
@@ -74,6 +75,10 @@ type ExecuteNodeMediaActionParams = {
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
 };
+
+function resolveRecordingTimeoutMs(gatewayOpts: GatewayCallOptions, durationMs: number): number {
+  return gatewayOpts.timeoutMs ?? durationMs + RECORDING_INVOKE_GRACE_MS;
+}
 
 export async function executeNodeMediaAction(
   input: ExecuteNodeMediaActionParams,
@@ -322,7 +327,9 @@ async function executeCameraClip({
     typeof params.deviceId === "string" && params.deviceId.trim()
       ? params.deviceId.trim()
       : undefined;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const timeoutMs = resolveRecordingTimeoutMs(gatewayOpts, durationMs);
+  const invokeGatewayOpts = { ...gatewayOpts, timeoutMs };
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", invokeGatewayOpts, {
     nodeId,
     command: "camera.clip",
     params: {
@@ -332,6 +339,7 @@ async function executeCameraClip({
       format: "mp4",
       deviceId,
     },
+    timeoutMs,
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseCameraClipPayload(raw?.payload);
@@ -370,7 +378,9 @@ async function executeScreenRecord({
     }) ?? 10;
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const timeoutMs = resolveRecordingTimeoutMs(gatewayOpts, durationMs);
+  const invokeGatewayOpts = { ...gatewayOpts, timeoutMs };
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", invokeGatewayOpts, {
     nodeId,
     command: "screen.record",
     params: {
@@ -380,6 +390,7 @@ async function executeScreenRecord({
       format: "mp4",
       includeAudio,
     },
+    timeoutMs,
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenRecordPayload(raw?.payload);
