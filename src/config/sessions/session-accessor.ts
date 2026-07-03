@@ -102,7 +102,11 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import {
+  isCompactionStampCurrent,
+  type SessionCompactionCheckpoint,
+  type SessionEntry,
+} from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -2087,7 +2091,15 @@ export async function trimSessionTranscriptForManualCompact(
       delete entry.outputTokens;
       delete entry.totalTokens;
       delete entry.totalTokensFresh;
-      entry.updatedAt = params.nowMs ?? Date.now();
+      const trimmedAt = params.nowMs ?? Date.now();
+      entry.updatedAt = trimmedAt;
+      // Transcript-trim is a successful manual compaction: stamp the outcome
+      // (guarded so a caller-supplied older nowMs cannot regress a newer one).
+      if (isCompactionStampCurrent(entry, trimmedAt)) {
+        entry.lastCompactionAt = trimmedAt;
+        entry.lastCompactionOutcome = "compacted";
+        delete entry.lastCompactionReason;
+      }
       return entry;
     },
     { replaceEntry: true },

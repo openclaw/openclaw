@@ -2116,7 +2116,10 @@ describe("session accessor file-backed seam", () => {
       sessionFile: manualTranscriptPath,
       sessionId,
       updatedAt: 500,
+      lastCompactionAt: 500,
+      lastCompactionOutcome: "compacted",
     });
+    expect(updatedEntry?.lastCompactionReason).toBeUndefined();
     expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
     expect(updatedEntry?.inputTokens).toBeUndefined();
     expect(updatedEntry?.outputTokens).toBeUndefined();
