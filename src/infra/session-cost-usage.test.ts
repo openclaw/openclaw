@@ -351,6 +351,72 @@ describe("session cost usage", () => {
     });
   });
 
+  it("migrates a v4 cache with per-entry pricingFingerprint to a v5 cache with a single top-level fingerprint", async () => {
+    const root = await makeSessionCostRoot("cost-cache-v4-migration");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-v4-migration.jsonl");
+    const transcriptEntry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 0,
+          totalTokens: 10,
+          cost: { total: 0.01 },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-v4-migration", transcriptEntry), "utf-8");
+
+    const fingerprint = JSON.stringify({
+      provider: "openai",
+      model: "gpt-5.4",
+      input: 0.01,
+      output: 0.01,
+    });
+    const stats = await fs.stat(sessionFile);
+    const v4Cache = {
+      version: 4,
+      updatedAt: Date.now(),
+      files: {
+        [sessionFile]: {
+          filePath: sessionFile,
+          size: stats.size,
+          mtimeMs: stats.mtimeMs,
+          pricingFingerprint: fingerprint,
+          scannedAt: Date.now(),
+          parsedRecords: 1,
+          countedRecords: 1,
+          usageEntries: [],
+          totals: { totalCost: 0.01, inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+        },
+      },
+    };
+    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+
+    await withStateDir(root, async () => {
+      await fs.writeFile(cachePath, JSON.stringify(v4Cache), "utf-8");
+
+      // Refresh should detect the v4 cache as stale and rebuild it under the v5 schema.
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+
+      const migrated = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+
+      expect(migrated.version).toBe(5);
+      expect(migrated.pricingFingerprint).toBeTruthy();
+      expect(migrated.files[sessionFile]).not.toHaveProperty("pricingFingerprint");
+    });
+  });
+
   it("loads multiple session summaries from one durable cache snapshot", async () => {
     const root = await makeSessionCostRoot("cost-cache-batch");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -927,6 +993,115 @@ describe("session cost usage", () => {
       });
       expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
       expect(refreshed.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("stores the pricing fingerprint once at the cache level, not per entry", async () => {
+    const root = await makeSessionCostRoot("cost-cache-fingerprint-dedup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionA = path.join(sessionsDir, "sess-fingerprint-a.jsonl");
+    const sessionB = path.join(sessionsDir, "sess-fingerprint-b.jsonl");
+
+    const entry = (timestamp: string, totalTokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(sessionA, `${entry("2026-02-05T12:00:00.000Z", 10)}\n`, "utf-8"),
+      fs.writeFile(sessionB, `${entry("2026-02-05T13:00:00.000Z", 20)}\n`, "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const raw = await fs.readFile(cachePath, "utf-8");
+      const cache = JSON.parse(raw) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+
+      expect(cache.version).toBe(5);
+      expect(typeof cache.pricingFingerprint).toBe("string");
+      expect(cache.pricingFingerprint).toBeTruthy();
+
+      const entries = Object.values(cache.files);
+      expect(entries.length).toBe(2);
+      for (const fileEntry of entries) {
+        expect(fileEntry).not.toHaveProperty("pricingFingerprint");
+      }
+    });
+  });
+
+  it("keeps a checkpointed cache fresh after reload when the cache-level fingerprint is present", async () => {
+    const root = await makeSessionCostRoot("cost-cache-checkpoint-reload");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-checkpoint-reload.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-checkpoint-reload", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 0,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      // Prime the cache so we have a valid pricing fingerprint and entry shape.
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const raw = await fs.readFile(cachePath, "utf-8");
+      const cache = JSON.parse(raw) as {
+        version: number;
+        updatedAt: number;
+        pricingFingerprint?: string;
+        files: Record<string, unknown>;
+      };
+
+      // Simulate an interrupted refresh: the cache has a valid top-level fingerprint
+      // and a completed entry, but the writer stopped before scanning any remaining
+      // files. The next load must still treat the existing entry as fresh.
+      expect(cache.version).toBe(5);
+      expect(cache.pricingFingerprint).toBeTruthy();
+      expect(Object.keys(cache.files).length).toBe(1);
+
+      // Write the same checkpointed cache back to disk (no entry changes) and reload.
+      await fs.writeFile(cachePath, JSON.stringify(cache), "utf-8");
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+
+      expect(summary.cacheStatus?.status).toBe("fresh");
+      expect(summary.totals.totalCost).toBeGreaterThan(0);
     });
   });
 

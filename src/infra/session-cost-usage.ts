@@ -78,7 +78,10 @@ export type {
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
 // unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
 // cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// Bumped to 5: pricingFingerprint is now stored once per cache instead of duplicated on
+// every entry. Older entries still carry the field, but they are rebuilt under the new schema
+// so the file size stops growing with N * fingerprint bytes.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -127,7 +130,8 @@ type UsageCostCacheFileEntry = {
   filePath: string;
   size: number;
   mtimeMs: number;
-  pricingFingerprint: string;
+  // pricingFingerprint intentionally lives on UsageCostCacheFile, not here, because all
+  // entries in one cache share the same config fingerprint. See #99511.
   scannedAt: number;
   parsedRecords: number;
   countedRecords: number;
@@ -141,6 +145,9 @@ type UsageCostCacheFileEntry = {
 type UsageCostCacheFile = {
   version: number;
   updatedAt: number;
+  // The normalized pricing table fingerprint is global for this config. Keeping it once
+  // at the cache level removes ~2.7 KB of duplicated JSON per cached file entry.
+  pricingFingerprint?: string;
   files: Record<string, UsageCostCacheFileEntry>;
 };
 
@@ -319,6 +326,10 @@ function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
   return {
     version: USAGE_COST_CACHE_VERSION,
     updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
+    // Preserve the top-level fingerprint so callers can compare it against the current
+    // config fingerprint without re-deriving it or reading every entry.
+    pricingFingerprint:
+      typeof record.pricingFingerprint === "string" ? record.pricingFingerprint : undefined,
     files: record.files as Record<string, UsageCostCacheFileEntry>,
   };
 }
@@ -402,14 +413,18 @@ async function listUsageCountedTranscriptFiles(
 function isUsageCostCacheEntryFresh(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
+  cache: UsageCostCacheFile;
   pricingFingerprint: string;
   requireSessionSummary?: boolean;
 }): boolean {
+  // Freshness compares the cache-level fingerprint instead of a per-entry copy.
+  // A cache written before the v5 schema will have no top-level fingerprint and
+  // therefore be treated as stale until refreshCostUsageCacheForPath rebuilds it.
   return Boolean(
     params.entry &&
     params.entry.size === params.file.size &&
     params.entry.mtimeMs === params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint &&
+    params.cache.pricingFingerprint === params.pricingFingerprint &&
     (!params.requireSessionSummary || params.entry.sessionSummary),
   );
 }
@@ -417,17 +432,22 @@ function isUsageCostCacheEntryFresh(params: {
 function canUseUsageCostCacheEntryForPartial(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
+  cache: UsageCostCacheFile;
   pricingFingerprint: string;
 }): params is {
   entry: UsageCostCacheFileEntry;
   file: UsageCostTranscriptFile;
+  cache: UsageCostCacheFile;
   pricingFingerprint: string;
 } {
+  // Partial reuse also depends on the cache-level fingerprint because entries
+  // no longer carry their own copy. If the config fingerprint changed, every
+  // cached entry must be rescanned under the new pricing.
   return Boolean(
     params.entry &&
     params.entry.size <= params.file.size &&
     params.entry.mtimeMs <= params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint,
+    params.cache.pricingFingerprint === params.pricingFingerprint,
   );
 }
 
@@ -443,6 +463,7 @@ function getUsageCostStaleFiles(params: {
       !isUsageCostCacheEntryFresh({
         entry: params.cache.files[file.filePath],
         file,
+        cache: params.cache,
         pricingFingerprint: params.pricingFingerprint,
         requireSessionSummary: sessionSummaryFiles.has(file.filePath),
       }),
@@ -463,6 +484,7 @@ function countUsableUsageCostCacheFiles(params: {
       canUseUsageCostCacheEntryForPartial({
         entry,
         file,
+        cache: params.cache,
         pricingFingerprint: params.pricingFingerprint,
       })
     ) {
@@ -501,6 +523,7 @@ function buildCostUsageSummaryFromCache(params: {
       !canUseUsageCostCacheEntryForPartial({
         entry,
         file,
+        cache: params.cache,
         pricingFingerprint: params.pricingFingerprint,
       })
     ) {
@@ -1461,13 +1484,13 @@ async function scanUsageFileForCache(params: {
   previous?: UsageCostCacheFileEntry;
   includeSessionSummary?: boolean;
 }): Promise<UsageCostCacheFileEntry> {
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  // pricingFingerprint is no longer written into individual entries; it is stored
+  // once per cache file. Freshness checks compare the cache-level value instead.
   const appendOnlyPreviousCandidate =
     params.previous &&
     params.previous.filePath === params.file.filePath &&
     params.previous.size > 0 &&
     params.previous.size < params.file.size &&
-    params.previous.pricingFingerprint === pricingFingerprint &&
     params.previous.mtimeMs <= params.file.mtimeMs
       ? params.previous
       : undefined;
@@ -1552,7 +1575,6 @@ async function scanUsageFileForCache(params: {
             filePath: params.file.filePath,
             size: params.file.size,
             mtimeMs: params.file.mtimeMs,
-            pricingFingerprint,
             scannedAt: Date.now(),
             parsedRecords,
             countedRecords,
@@ -1575,7 +1597,6 @@ async function scanUsageFileForCache(params: {
       ...appendOnlyPrevious,
       size: params.file.size,
       mtimeMs: params.file.mtimeMs,
-      pricingFingerprint,
       scannedAt: Date.now(),
       parsedRecords: appendOnlyPrevious.parsedRecords + parsedRecords,
       countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
@@ -1586,11 +1607,11 @@ async function scanUsageFileForCache(params: {
     };
   }
 
+  // Note: no pricingFingerprint here; the cache object owns it.
   return {
     filePath: params.file.filePath,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    pricingFingerprint,
     scannedAt: Date.now(),
     parsedRecords,
     countedRecords,
@@ -1633,6 +1654,22 @@ async function refreshCostUsageCacheForPath(params?: {
           : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
     let cacheMutated = false;
+
+    // When the pricing config changes, the entire cache is stale because all
+    // entries were computed under the old fingerprint. Re-scan everything and
+    // stamp the new fingerprint immediately so checkpoint writes also carry it.
+    if (cache.pricingFingerprint !== pricingFingerprint) {
+      if (cache.pricingFingerprint !== undefined) {
+        for (const filePath of Object.keys(cache.files)) {
+          if (livePaths.has(filePath)) {
+            delete cache.files[filePath];
+            cacheMutated = true;
+          }
+        }
+      }
+      cache.pricingFingerprint = pricingFingerprint;
+    }
+
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
@@ -1689,6 +1726,8 @@ async function refreshCostUsageCacheForPath(params?: {
     }
 
     if (cacheMutated || dirtyCount > 0) {
+      // The fingerprint is already set at the start of the refresh, so every
+      // checkpoint write is valid. Update the timestamp and finalize the cache.
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
     }
@@ -1794,6 +1833,7 @@ export async function loadSessionCostSummaryFromCache(params: {
     !isUsageCostCacheEntryFresh({
       entry,
       file,
+      cache,
       pricingFingerprint,
       requireSessionSummary: true,
     });
@@ -1819,6 +1859,7 @@ export async function loadSessionCostSummaryFromCache(params: {
           !isUsageCostCacheEntryFresh({
             entry,
             file,
+            cache,
             pricingFingerprint,
             requireSessionSummary: true,
           });
@@ -1932,6 +1973,7 @@ export async function loadSessionCostSummariesFromCache(params: {
       !isUsageCostCacheEntryFresh({
         entry,
         file,
+        cache,
         pricingFingerprint,
         requireSessionSummary: true,
       });
