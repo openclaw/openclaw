@@ -173,6 +173,29 @@ private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodab
     return details
 }
 
+private func gatewayIntValue(_ value: Any?) -> Int? {
+    if let value = value as? Int {
+        return value
+    }
+    if let value = value as? Int64 {
+        return Int(exactly: value)
+    }
+    if let value = value as? Double, value.rounded() == value {
+        return Int(exactly: value)
+    }
+    if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() {
+        let doubleValue = value.doubleValue
+        guard doubleValue.rounded() == doubleValue else {
+            return nil
+        }
+        return Int(exactly: doubleValue)
+    }
+    if let value = value as? String {
+        return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return nil
+}
+
 private enum ConnectChallengeError: Error {
     case timeout
 }
@@ -720,10 +743,11 @@ public actor GatewayChannelActor {
         if scheme == "wss" {
             return true
         }
-        if let host = self.url.host, LoopbackHost.isLoopback(host) {
-            return true
-        }
-        return false
+        guard scheme == "ws", let host = self.url.host else { return false }
+        // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
+        // for QR pairing. Persist the resulting bounded device token so reconnects do not
+        // fall back to auth=none after the single-use bootstrap token is cleared.
+        return LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func filteredBootstrapHandoffScopes(role: String, scopes: [String]) -> [String]? {
@@ -834,6 +858,10 @@ public actor GatewayChannelActor {
             let docsURLString = details["docsUrl"]?.value as? String
             let retryableOverride = details["retryable"]?.value as? Bool
             let pauseReconnectOverride = details["pauseReconnect"]?.value as? Bool
+            let clientMinProtocol = gatewayIntValue(details["clientMinProtocol"]?.value)
+            let clientMaxProtocol = gatewayIntValue(details["clientMaxProtocol"]?.value)
+            let expectedProtocol = gatewayIntValue(details["expectedProtocol"]?.value)
+            let minimumProbeProtocol = gatewayIntValue(details["minimumProbeProtocol"]?.value)
             throw GatewayConnectAuthError(
                 message: msg,
                 detailCodeRaw: detailCode,
@@ -848,7 +876,11 @@ public actor GatewayChannelActor {
                 actionCommand: actionCommand,
                 docsURLString: docsURLString,
                 retryableOverride: retryableOverride,
-                pauseReconnectOverride: pauseReconnectOverride)
+                pauseReconnectOverride: pauseReconnectOverride,
+                clientMinProtocol: clientMinProtocol,
+                clientMaxProtocol: clientMaxProtocol,
+                expectedProtocol: expectedProtocol,
+                minimumProbeProtocol: minimumProbeProtocol)
         }
         guard let payload = res.payload else {
             throw NSError(

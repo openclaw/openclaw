@@ -95,6 +95,15 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out).toEqual([messages[0], messages[2]]);
   });
 
+  it("preserves consecutive ambient user rows", () => {
+    const messages = [
+      userMessage("#10 Sam: first ambient"),
+      userMessage("#11 Lee: second ambient"),
+      userMessage("#12 Pat: @bot what now?"),
+    ];
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
   it("removes blank user text blocks while preserving non-text content", () => {
     const imageBlock = { type: "image", data: "AA==", mimeType: "image/png" };
     const messages = [

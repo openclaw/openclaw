@@ -75,12 +75,14 @@ describe("Anthropic provider", () => {
       apiKey?: string | null;
       authToken?: string | null;
       defaultHeaders?: Record<string, string | null>;
+      fetch?: unknown;
     };
 
     expect(config.apiKey).toBe("sk-ant-provider");
     expect(config.authToken).toBeNull();
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
+    expect(typeof config.fetch).toBe("function");
   });
 
   it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
@@ -381,6 +383,82 @@ describe("Anthropic provider", () => {
     expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
       { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
       { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
+  });
+
+  it("preserves mixed text and image tool-result order", async () => {
+    let capturedPayload: unknown;
+    const imageData = Buffer.from("image").toString("base64");
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [
+              { type: "text", text: "before image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+              {
+                type: "resource" as const,
+                resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
+              },
+              { type: "text", text: "after image" },
+            ],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result") as {
+      content: unknown[];
+    };
+
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "before image" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+      { type: "text", text: expect.stringContaining('{"type":"resource"') },
+      { type: "text", text: "after image" },
     ]);
   });
 

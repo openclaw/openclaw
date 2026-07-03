@@ -157,7 +157,7 @@ function buildConnectorPluginApprovalElicitation(overrides: Record<string, unkno
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
-    destructiveApprovalMode?: "allow" | "deny" | "auto" | "always";
+    destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
     apps?: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>;
   } = {},
 ) {
@@ -1017,7 +1017,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("does not expose allow-always for always plugin policy", async () => {
+  it("does not expose allow-always for ask plugin policy", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-calendar-always-policy", status: "accepted" })
       .mockResolvedValueOnce({
@@ -1041,7 +1041,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
-        destructiveApprovalMode: "always",
+        destructiveApprovalMode: "ask",
         apps: [
           {
             appId: "connector_google_calendar",
@@ -1062,7 +1062,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("maps unexpected allow-always decisions to one-shot for always plugin policy", async () => {
+  it("maps unexpected allow-always decisions to one-shot for ask plugin policy", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({
         id: "plugin:approval-calendar-unexpected-always",
@@ -1089,7 +1089,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
-        destructiveApprovalMode: "always",
+        destructiveApprovalMode: "ask",
         apps: [
           {
             appId: "connector_google_calendar",

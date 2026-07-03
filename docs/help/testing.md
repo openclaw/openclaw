@@ -50,12 +50,9 @@ temporary directories. They make ownership explicit and keep cleanup in the same
 test lifecycle:
 
 ```ts
-import { afterEach } from "vitest";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = createTempDirTracker();
-
-afterEach(tempDirs.cleanup);
+const tempDirs = useAutoCleanupTempDirTracker();
 
 it("uses a temp workspace", () => {
   const workspace = tempDirs.make("openclaw-example-");
@@ -63,11 +60,14 @@ it("uses a temp workspace", () => {
 });
 ```
 
-Use `makeTempDir(tempDirs, prefix)` and `cleanupTempDirs(tempDirs)` when a test
-already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
-tests unless a case is explicitly verifying raw temp-dir behavior. Add an
-auditable allow comment with a concrete reason when a test intentionally needs a
-bare temp directory:
+`useAutoCleanupTempDirTracker()` intentionally exposes no manual cleanup method; Vitest
+owns cleanup after each test. Existing lower-level helpers remain for tests that
+have not moved yet, but new and migrated tests should use the auto-cleaning
+tracker. Avoid new manual `makeTempDir`, `cleanupTempDirs`, or
+`createTempDirTracker` usage and avoid new bare `fs.mkdtemp*` calls in tests
+unless a case is explicitly verifying raw temp-dir behavior. Add an auditable
+allow comment with a concrete reason when a test intentionally needs a bare temp
+directory:
 
 ```ts
 // openclaw-temp-dir: allow verifies raw fs cleanup behavior
@@ -75,12 +75,13 @@ const workspace = fs.mkdtempSync(prefix);
 ```
 
 For migration visibility, `node scripts/report-test-temp-creations.mjs` reports
-new bare temp-dir creation in added diff lines without blocking existing cleanup
-styles. Its file scope intentionally follows the same test-path classification
-used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
-filename heuristic, while skipping the shared helper implementation itself.
-`check:changed` runs this report for changed test paths as a warning-only CI
-signal; findings are GitHub warning annotations, not failures.
+new bare temp-dir creation and new manual shared-helper usage in added diff
+lines without blocking existing cleanup styles. Its file scope intentionally
+follows the same test-path classification used by `scripts/changed-lanes.mjs`
+instead of maintaining a separate test-helper filename heuristic, while skipping
+the shared helper implementation itself. `check:changed` runs this report for
+changed test paths as a warning-only CI signal; findings are GitHub warning
+annotations, not failures.
 
 When debugging real providers/models (requires real creds):
 

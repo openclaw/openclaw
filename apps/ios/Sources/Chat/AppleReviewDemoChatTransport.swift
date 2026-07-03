@@ -81,14 +81,7 @@ struct LocalChatFixture {
         modelName: "GPT-5.5",
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: [
-            """
-            OpenClaw is connected to your gateway. I can coordinate agents, inspect project context, and prepare \
-            actions from your phone.
-            """,
-            """
-            The Molty agent is ready. Recent context, voice controls, and gateway settings are available \
-            across the app.
-            """,
+            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ],
         agents: [
             AgentSummary(

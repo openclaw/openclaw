@@ -1,6 +1,7 @@
 // Slack plugin module implements prepare content behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -50,13 +51,7 @@ type SlackBlocksText = {
   hasRichText: boolean;
 };
 
-type SlackMediaModule = typeof import("../media.js");
-let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
-
-function loadSlackMediaModule(): Promise<SlackMediaModule> {
-  slackMediaModulePromise ??= import("../media.js");
-  return slackMediaModulePromise;
-}
+const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
 function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
   const seen = new Set<string>();

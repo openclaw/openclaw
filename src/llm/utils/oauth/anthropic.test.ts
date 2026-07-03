@@ -79,4 +79,26 @@ describe("Anthropic OAuth token responses", () => {
       "Anthropic token refresh returned invalid token fields.",
     );
   });
+
+  it("rejects an oversized Anthropic token refresh response", async () => {
+    let pullCount = 0;
+    const cancel = vi.fn(async () => undefined);
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        controller.enqueue(new Uint8Array(pullCount === 1 ? 16 * 1024 * 1024 + 1 : 1));
+      },
+      cancel,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(oversizedStream, { status: 200 })),
+    );
+
+    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow("too large");
+
+    expect(pullCount).toBeLessThanOrEqual(2);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });

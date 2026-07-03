@@ -18,10 +18,16 @@ struct IPadSkillWorkshopScreen: View {
     @State private var noticeText: String?
     @State private var presentedProposalRoute: IPadSkillProposalSheetRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openSettings: () -> Void
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, openSettings: @escaping () -> Void = {}) {
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        openSettings: @escaping () -> Void = {})
+    {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openSettings = openSettings
     }
 
@@ -30,6 +36,7 @@ struct IPadSkillWorkshopScreen: View {
             title: "Skill Workshop",
             subtitle: "Review and apply proposed skills.",
             headerLeadingAction: self.headerLeadingAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             if self.isCompactWidth {

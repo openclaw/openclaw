@@ -38,6 +38,14 @@ describe("codex doctor contract", () => {
     ).toBe(false);
     expect(
       legacyConfigRules[1]?.match({
+        allow_destructive_actions: "ask",
+        plugins: {
+          "google-calendar": { allow_destructive_actions: "ask" },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      legacyConfigRules[1]?.match({
         allow_destructive_actions: "always",
         plugins: {
           "google-calendar": { allow_destructive_actions: "always" },

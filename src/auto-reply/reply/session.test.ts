@@ -11,6 +11,7 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -29,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -2157,13 +2158,14 @@ describe("initSessionState reset policy", () => {
       expectNewSession: true,
     },
     {
-      name: "failed main terminal rows reuse when the transcript exists",
+      name: "failed main terminal rows recover on visible turns when the transcript exists",
       sessionKey: "agent:main:main",
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
       expectNewSession: false,
+      expectRecovered: true,
     },
     {
       name: "main terminal rows reuse when updatedAt already reflects the transcript",
@@ -2228,11 +2230,67 @@ describe("initSessionState reset policy", () => {
       expect(entry?.startedAt).toBeUndefined();
       expect(entry?.endedAt).toBeUndefined();
       expect(entry?.runtimeMs).toBeUndefined();
+    } else if (scenario.expectRecovered) {
+      // Visible turns recover recoverable terminal rows in place: the session id
+      // is reused, but the terminal lifecycle fields are cleared (#86827).
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.startedAt).toBeUndefined();
+      expect(entry?.endedAt).toBeUndefined();
+      expect(entry?.runtimeMs).toBeUndefined();
     } else {
       expect(result.sessionId).toBe(existingSessionId);
       expect(entry?.status).toBe(scenario.status ?? "done");
       expect(entry?.endedAt).toBe(terminalEndedAt);
     }
+  });
+
+  it("recovers failed group sessions without rotating the transcript", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-failed-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1001";
+    const existingSessionId = "failed-entry-old";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        startedAt: Date.now() - 10_000,
+        endedAt: Date.now() - 1_000,
+        runtimeMs: 9_000,
+        status: "failed",
+        abortedLastRun: true,
+        chatType: "group",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "@openclaw hello",
+        RawBody: "@openclaw hello",
+        CommandBody: "@openclaw hello",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "openclaw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.abortedLastRun).toBe(false);
+    expect(result.sessionEntry.abortedLastRun).toBeUndefined();
+
+    const persisted = readSessionStoreForTest(storePath);
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.status).toBeUndefined();
+    expect(persisted[sessionKey]?.startedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.endedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.runtimeMs).toBeUndefined();
+    expect(persisted[sessionKey]?.abortedLastRun).toBeUndefined();
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -4255,7 +4313,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("accounts exhausted-run usage without committing its model", async () => {
+  it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -4299,12 +4357,12 @@ describe("persistSessionUsageUpdate", () => {
       totalTokens: 100,
       totalTokensFresh: true,
       cliSessionBindings: {
-        "claude-cli": { sessionId: "existing-cli-session" },
+        "claude-cli": { sessionId: "exhausted-cli-session" },
       },
       cliSessionIds: {
-        "claude-cli": "existing-cli-session",
+        "claude-cli": "exhausted-cli-session",
       },
-      claudeCliSessionId: "existing-cli-session",
+      claudeCliSessionId: "exhausted-cli-session",
     });
   });
 
@@ -4848,6 +4906,100 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(100);
     expect(stored[sessionKey].cacheRead).toBe(200);
     expect(stored[sessionKey].totalTokens).toBe(1_105);
+  });
+
+  it("persists heartbeat CLI binding while preserving displayed session model", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-binding-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      cliSessionBinding: {
+        sessionId: "new-heartbeat-cli-session",
+        authProfileId: "anthropic:heartbeat",
+      },
+      contextTokensUsed: 128_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("new-heartbeat-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "new-heartbeat-cli-session",
+      authProfileId: "anthropic:heartbeat",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBe("new-heartbeat-cli-session");
+  });
+
+  it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+          "codex-cli": "codex-cli-session",
+        },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+          "codex-cli": { sessionId: "codex-cli-session" },
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      modelUsed: "claude-sonnet-4-6",
+      clearCliSessionBinding: true,
+      contextTokensUsed: 128_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionIds?.["codex-cli"]).toBe("codex-cli-session");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(stored[sessionKey].cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-cli-session",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
