@@ -786,7 +786,7 @@ export async function dispatchPostCompactionDelegates(
       // TaskFlow rows NOW — before finalizing the claimed rows — so they stay
       // durably recoverable WITHOUT leaving the original claimed rows `running`.
       // Leaving them running would let startup recovery
-      // (recoverStagedPostCompactionDelegates) re-queue and replay delegates
+      // (listRecoverableStagedPostCompactionDelegates) re-dispatch delegates
       // that were already delivered or re-staged (#1144). Mirrors the
       // agent-runner post-compaction finalize path.
       const restagedCount = params.postCompactionDelegatesToPreserve.length;
@@ -810,7 +810,7 @@ export async function dispatchPostCompactionDelegates(
   // fresh queued TaskFlow rows above — so finish the claimed rows. Finalize ONLY
   // the rows THIS dispatch claimed, never other running rows for the session
   // (e.g. crash-orphaned ones awaiting recovery). A crash before this point
-  // leaves the claimed rows recoverable via recoverStagedPostCompactionDelegates
+  // leaves the claimed rows recoverable via listRecoverableStagedPostCompactionDelegates
   // instead of silently losing them behind a premature finish (#1144).
   deps.finalizeStagedPostCompactionDelegates(claimedFlowIds);
 

@@ -762,9 +762,9 @@ export function stagePostCompactionDelegate(
  * finished here: terminalization waits for {@link finalizeStagedPostCompactionDelegates}
  * after the caller has durably handed the delegate off (session-delivery row
  * enqueued or re-staged). A crash between claim and handoff therefore leaves a
- * recoverable `running` row — {@link recoverStagedPostCompactionDelegates}
- * resets it to `queued` on restart — instead of silently losing the staged work
- * behind a premature `finished` (#1144).
+ * recoverable `running` row — {@link listRecoverableStagedPostCompactionDelegates}
+ * surfaces it for startup re-dispatch — instead of silently losing the staged
+ * work behind a premature `finished` (#1144/#1158).
  *
  * At-least-once on the crash-recovery seam is intentional: a duplicate
  * post-compaction shard is far cheaper than a dropped one.
@@ -822,8 +822,8 @@ export function consumeStagedPostCompactionDelegates(
  * {@link consumeStagedPostCompactionDelegates}, once their durable handoff
  * succeeded. Finalizes ONLY the passed flow ids and only while they are still
  * `running` — so a row claimed by another path, or left `running` by a crash
- * (awaiting {@link recoverStagedPostCompactionDelegates}), is never terminalized
- * out from under its owner (#1144). Returns the number of rows finalized.
+ * (awaiting {@link listRecoverableStagedPostCompactionDelegates}), is never
+ * terminalized out from under its owner (#1144). Returns the number of rows finalized.
  */
 export function finalizeStagedPostCompactionDelegates(
   flowIds: readonly (string | undefined)[],
@@ -855,21 +855,26 @@ export function finalizeStagedPostCompactionDelegates(
 }
 
 /**
- * Recover post-compaction rows left `running` by a crash between claim and
- * durable handoff (#1144). Resets them to `queued` so the next compaction seam
- * re-consumes them; called once at startup. Returns the number of rows reset.
+ * List post-compaction rows left `running` by a crash between release-claim and
+ * durable handoff (#1144/#1158), so startup recovery can re-drive them to
+ * delivery WITHOUT waiting for another compaction seam. Returns the claimed
+ * delegates (with their `flowId` handle) grouped by owner session key and does
+ * NOT mutate row status — the recovery dispatcher finalizes only the rows whose
+ * spawn is accepted, leaving a failed row `running` and recoverable on the next
+ * restart. Queued (never-released, awaiting-seam) rows are intentionally
+ * excluded: releasing them here would fire a rehydration delegate before the
+ * compaction it was staged for actually happened.
  */
-export function recoverStagedPostCompactionDelegates(options?: {
+export function listRecoverableStagedPostCompactionDelegates(options?: {
   /**
-   * Only reset rows last updated at or before this cutoff. Startup recovery
+   * Only include rows last updated at or before this cutoff. Startup recovery
    * passes a boot-time cutoff so a post-compaction release that claims a row to
-   * `running` AFTER this process started (live traffic) is NOT flipped back to
-   * `queued` — which would make the live finalizer skip it (no longer running)
-   * and the same delegate be released a second time (#1144).
+   * `running` AFTER this process started (live traffic) is left to the live
+   * release/finalize path, not re-driven by restart recovery (duplicate work).
    */
   runningUpdatedAtOrBefore?: number;
-}): number {
-  let recovered = 0;
+}): Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> {
+  const recoverable: Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> = [];
   for (const flow of listTaskFlowRecords()) {
     if (!isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
       continue;
@@ -878,31 +883,18 @@ export function recoverStagedPostCompactionDelegates(options?: {
       options?.runningUpdatedAtOrBefore !== undefined &&
       flow.updatedAt > options.runningUpdatedAtOrBefore
     ) {
-      // Claimed by live traffic after this process started — leave it to the
-      // live release/finalize path, not restart recovery.
       continue;
     }
     const state = decodeDelegateState(flow);
     if (!state) {
+      log.warn(
+        `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} raw=${JSON.stringify(flow.stateJson).slice(0, 200)}`,
+      );
       continue;
     }
-    const now = Date.now();
-    const reset = updateFlowRecordByIdExpectedRevision({
-      flowId: flow.flowId,
-      expectedRevision: flow.revision,
-      patch: {
-        status: "queued",
-        currentStep: "Recovered running post-compaction delegate to queued after restart",
-        stateJson: state,
-        endedAt: null,
-        updatedAt: now,
-      },
-    });
-    if (reset.applied) {
-      recovered += 1;
-    }
+    recoverable.push({ sessionKey: flow.ownerKey, delegate: flowToDelegate(flow, state) });
   }
-  return recovered;
+  return recoverable;
 }
 
 export function stagedPostCompactionDelegateCount(sessionKey: string): number {

@@ -39,7 +39,9 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   consumePendingDelegates,
+  finalizeStagedPostCompactionDelegates,
   listPendingDelegateSessionKeysForRecovery,
+  listRecoverableStagedPostCompactionDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
@@ -53,7 +55,7 @@ import {
   loadContinuationChainState,
 } from "./state.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
-import type { ContinuationRuntimeConfig } from "./types.js";
+import type { ContinuationRuntimeConfig, PendingContinuationDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
@@ -104,6 +106,8 @@ function armHedgeTimer(
     loadFreshChainState?: () => ChainState;
     applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
+    inheritedSilent?: boolean;
+    inheritedWake?: boolean;
   },
 ): void {
   clearHedgeTimer(sessionKey);
@@ -142,6 +146,11 @@ function armHedgeTimer(
       // basis when its delay elapses and the hedge re-dispatches it (#1144).
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
+      // Inherited silent/wake policy must survive the hedge: a delayed delegate
+      // armed by a silent/wake parent chain must still spawn internal when the
+      // hedge finally dispatches it, not announce to the channel (#1158).
+      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+      ...(params.inheritedWake ? { inheritedWake: true } : {}),
     })
       .then(async (result) => {
         if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
@@ -256,13 +265,32 @@ export async function dispatchToolDelegates(params: {
    * enclosing runner finalize frame to persist the advanced chain state.
    */
   persistChainState?: (chainState: ChainState) => void | Promise<void>;
+  /**
+   * Inherited silent/wake policy from a silent/wake parent continuation chain.
+   * When set, a consumed delegate with its own `mode` unset (normal) still
+   * spawns internal (silent) — and wakes on return when `inheritedWake` is also
+   * set — instead of announcing to the channel. Mirrors the `parentWasSilent`
+   * handling the subagent-announce chain-hop guards apply, so descendants of a
+   * silent/wake chain drained early stay internal (#1158).
+   */
+  inheritedSilent?: boolean;
+  inheritedWake?: boolean;
 }): Promise<{ dispatched: number; rejected: number; chainState: ChainState }> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
+  // Fail closed: applying a delegate chain-cost fold requires a persist path so
+  // a hedge armed for a still-unmatured delegate can durably advance the folded
+  // chain state when it fires. Without `persistChainState` the hedge would fold
+  // the cost only in memory and lose it (later hops rebuild from the stale entry
+  // and bypass the cost cap), so force immediate dispatch here instead of arming
+  // a lossy hedge (#1158).
+  const foldWithoutPersist =
+    params.applyDelegateChainTokensFold === true && !params.persistChainState;
+  const ignoreDelay = params.dispatchQueuedRegardlessOfDelay === true || foldWithoutPersist;
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
-    ignoreDelay: params.dispatchQueuedRegardlessOfDelay === true,
+    ignoreDelay,
   });
 
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
@@ -278,6 +306,8 @@ export async function dispatchToolDelegates(params: {
       loadFreshChainState: params.loadFreshChainState,
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
+      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+      ...(params.inheritedWake ? { inheritedWake: true } : {}),
     });
   } else {
     clearHedgeTimer(sessionKey);
@@ -392,8 +422,14 @@ export async function dispatchToolDelegates(params: {
     }
 
     const nextHop = currentChainCount + 1;
-    const silent = delegate.mode === "silent" || delegate.mode === "silent-wake";
-    const silentWake = delegate.mode === "silent-wake";
+    // Own mode wins; otherwise inherit the parent chain's silent/wake policy so a
+    // default-mode delegate spawned under a silent/wake chain stays internal
+    // instead of announcing (mirrors the subagent-announce chain-hop guards) (#1158).
+    const ownSilent = delegate.mode === "silent" || delegate.mode === "silent-wake";
+    const ownWake = delegate.mode === "silent-wake";
+    const silent = ownSilent || params.inheritedSilent === true;
+    const silentWake =
+      ownWake || (params.inheritedSilent === true && params.inheritedWake === true);
     const outboundTraceparent = resolveContinuationTraceparent(delegate.traceparent);
     const delegateMode = silentWake ? "silent-wake" : silent ? "silent" : "normal";
     const delegateDelayMs = delegate.delayMs ?? 0;
@@ -575,6 +611,35 @@ export async function recoverPendingContinuationDelegates(
       }
       storeByPath.set(storePath, sessionStore);
     }
+    // Persist the advanced chain state to BOTH the durable store and the
+    // in-memory copy this recovery loop reads. The in-memory mirror keeps
+    // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
+    // delegates see the advancing basis instead of the stale pre-dispatch entry.
+    const derivedFromStore = !params.chainState;
+    const persistRecoveredChainState = derivedFromStore
+      ? async (nextState: ChainState): Promise<void> => {
+          await updateSessionStore(storePath, (store) => {
+            const sessionEntry = store[sessionKey] ?? {};
+            persistContinuationChainState({
+              sessionEntry,
+              count: nextState.currentChainCount,
+              startedAt: nextState.chainStartedAt,
+              tokens: nextState.accumulatedChainTokens,
+              ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+            });
+            store[sessionKey] = sessionEntry;
+          });
+          const inMemoryEntry = sessionStore[sessionKey] ?? {};
+          persistContinuationChainState({
+            sessionEntry: inMemoryEntry,
+            count: nextState.currentChainCount,
+            startedAt: nextState.chainStartedAt,
+            tokens: nextState.accumulatedChainTokens,
+            ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+          });
+          sessionStore[sessionKey] = inMemoryEntry;
+        }
+      : undefined;
     const result = await dispatchToolDelegates({
       sessionKey,
       chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
@@ -586,21 +651,20 @@ export async function recoverPendingContinuationDelegates(
       // stale when the settle-time chain-cost persist failed; apply the
       // delegate's durable fold so the cost cap holds across the restart (#1144).
       applyDelegateChainTokensFold: true,
+      // A recovered delayed delegate only arms a hedge here; pass the persist +
+      // fresh-load callbacks so the eventual hedge fire durably advances the
+      // folded chain state instead of losing it (cost-cap bypass) (#1158).
+      ...(persistRecoveredChainState
+        ? {
+            persistChainState: persistRecoveredChainState,
+            loadFreshChainState: () => loadContinuationChainState(sessionStore[sessionKey]),
+          }
+        : {}),
     });
     dispatched += result.dispatched;
     rejected += result.rejected;
-    if (!params.chainState && (result.dispatched > 0 || result.rejected > 0)) {
-      await updateSessionStore(storePath, (store) => {
-        const sessionEntry = store[sessionKey] ?? {};
-        persistContinuationChainState({
-          sessionEntry,
-          count: result.chainState.currentChainCount,
-          startedAt: result.chainState.chainStartedAt,
-          tokens: result.chainState.accumulatedChainTokens,
-          ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
-        });
-        store[sessionKey] = sessionEntry;
-      });
+    if (persistRecoveredChainState && (result.dispatched > 0 || result.rejected > 0)) {
+      await persistRecoveredChainState(result.chainState);
     }
   }
   return { sessions: sessionKeys.length, dispatched, rejected };
@@ -635,15 +699,22 @@ export async function dispatchStagedPostCompactionDelegates(
     fanoutMode?: "tree" | "all";
     traceparent?: string;
     model?: string;
+    /**
+     * Optional TaskFlow claim handle. Carried through so a caller (startup
+     * recovery) can finalize ONLY the rows whose spawn was accepted, leaving a
+     * failed row `running` and recoverable rather than terminalized (#1158).
+     */
+    flowId?: string;
   }>,
   sessionKey: string,
   spawnCtx: PostCompactionSpawnContext,
   options?: {
     chainState?: ChainState;
   },
-): Promise<{ dispatched: number; failed: number }> {
+): Promise<{ dispatched: number; failed: number; dispatchedFlowIds: string[] }> {
   let dispatched = 0;
   let failed = 0;
+  const dispatchedFlowIds: string[] = [];
   const config = resolveContinuationRuntimeConfig();
   const chainStartedAt = options?.chainState?.chainStartedAt ?? Date.now();
   const accumulatedChainTokens = options?.chainState?.accumulatedChainTokens ?? 0;
@@ -761,6 +832,9 @@ export async function dispatchStagedPostCompactionDelegates(
       if (spawnResult.status === "accepted") {
         currentChainCount++;
         dispatched++;
+        if (delegate.flowId) {
+          dispatchedFlowIds.push(delegate.flowId);
+        }
         continue;
       }
       postCompactionLog.warn(
@@ -783,5 +857,94 @@ export async function dispatchStagedPostCompactionDelegates(
     }
   }
 
-  return { dispatched, failed };
+  return { dispatched, failed, dispatchedFlowIds };
+}
+
+/**
+ * Startup recovery for post-compaction delegates left `running` by a crash
+ * between release-claim and durable handoff (#1144/#1158).
+ *
+ * The normal consumers of staged post-compaction delegates are the compaction
+ * release seams (`dispatchPostCompactionDelegates` / `releasePostCompactionLifecycle`).
+ * A row orphaned to `running` by a crash has no further seam for a session that
+ * already compacted, so it would sit forever. This re-drives those rows to
+ * delivery immediately at startup WITHOUT waiting for another compaction seam:
+ * it dispatches only the crash-orphaned `running` rows (never queued
+ * awaiting-seam rows, which are staged for a compaction that has not happened),
+ * finalizes ONLY the rows whose spawn was accepted, and leaves a failed row
+ * `running` so it stays recoverable on the next restart — no silent drop, no
+ * premature terminalize. At-least-once on the crash seam is intentional.
+ *
+ * Honors the continuation deny-gate: when continuation is disabled, recovery is
+ * a no-op (rows stay recoverable for when it is re-enabled), matching
+ * {@link recoverPendingContinuationDelegates}.
+ */
+export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
+  runningUpdatedAtOrBefore: number;
+}): Promise<{ sessions: number; dispatched: number; failed: number }> {
+  const runtimeConfig = resolveContinuationRuntimeConfig();
+  if (!runtimeConfig.enabled) {
+    return { sessions: 0, dispatched: 0, failed: 0 };
+  }
+  const recoverable = listRecoverableStagedPostCompactionDelegates({
+    runningUpdatedAtOrBefore: options.runningUpdatedAtOrBefore,
+  });
+  if (recoverable.length === 0) {
+    return { sessions: 0, dispatched: 0, failed: 0 };
+  }
+
+  // Group the crash-orphaned rows by owner session so each session releases once
+  // against its own persisted chain-state basis.
+  const delegatesBySession = new Map<string, PendingContinuationDelegate[]>();
+  for (const { sessionKey, delegate } of recoverable) {
+    const list = delegatesBySession.get(sessionKey) ?? [];
+    list.push(delegate);
+    delegatesBySession.set(sessionKey, list);
+  }
+
+  const runtimeConfigSnapshot = getRuntimeConfig();
+  const storeByPath = new Map<string, Record<string, SessionEntry>>();
+  let dispatched = 0;
+  let failed = 0;
+  for (const [sessionKey, delegates] of delegatesBySession) {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const storePath = resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
+    let sessionStore = storeByPath.get(storePath);
+    if (!sessionStore) {
+      try {
+        sessionStore = loadSessionStore(storePath);
+      } catch (err) {
+        postCompactionLog.warn(
+          `[continuation:post-compaction-recovery-store-load-failed] path=${storePath} falling back to zero chain state: ${formatErrorMessage(err)}`,
+        );
+        sessionStore = {};
+      }
+      storeByPath.set(storePath, sessionStore);
+    }
+    const entry = sessionStore[sessionKey];
+    const chainState = loadContinuationChainState(entry);
+    const deliveryContext = entry?.deliveryContext;
+    const spawnCtx: PostCompactionSpawnContext = {
+      agentSessionKey: sessionKey,
+      ...(deliveryContext?.channel ? { agentChannel: deliveryContext.channel } : {}),
+      ...(deliveryContext?.accountId ? { agentAccountId: deliveryContext.accountId } : {}),
+      ...(deliveryContext?.to ? { agentTo: deliveryContext.to } : {}),
+      ...(deliveryContext?.threadId !== undefined
+        ? { agentThreadId: deliveryContext.threadId }
+        : {}),
+    };
+    const result = await dispatchStagedPostCompactionDelegates(delegates, sessionKey, spawnCtx, {
+      chainState,
+    });
+    dispatched += result.dispatched;
+    failed += result.failed;
+    // Finalize ONLY the rows whose spawn was accepted. A row whose spawn failed
+    // keeps its `running` status and unchanged updatedAt (at/before this boot
+    // cutoff), so the next restart recovers it again — never a silent drop or a
+    // premature finish.
+    if (result.dispatchedFlowIds.length > 0) {
+      finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+    }
+  }
+  return { sessions: delegatesBySession.size, dispatched, failed };
 }

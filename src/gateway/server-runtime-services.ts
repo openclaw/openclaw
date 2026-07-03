@@ -187,10 +187,9 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
   const recoveryArmedAt = Date.now();
   const timer = setTimeout(() => {
     void (async () => {
-      const [delegateModule, workModule, delegateStoreModule] = await Promise.all([
+      const [delegateModule, workModule] = await Promise.all([
         import("../auto-reply/continuation/delegate-dispatch.js"),
         import("../auto-reply/continuation/work-dispatch.js"),
-        import("../auto-reply/continuation/delegate-store.js"),
       ]);
       const delegateLog = params.log.child("continuation-delegate-recovery");
       const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
@@ -203,17 +202,23 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
           `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
         );
       }
-      // #1144: reset post-compaction delegates left `running` by a crash between
-      // release-claim and durable handoff back to `queued` so the next
-      // compaction seam re-consumes them instead of losing the staged work. The
-      // boot-time cutoff excludes rows a live release claimed after startup, so
-      // recovery cannot requeue an actively-releasing delegate (duplicate work).
-      const postCompactionReset = delegateStoreModule.recoverStagedPostCompactionDelegates({
-        runningUpdatedAtOrBefore: recoveryArmedAt,
-      });
-      if (postCompactionReset > 0) {
+      // #1144/#1158: post-compaction delegates left `running` by a crash between
+      // release-claim and durable handoff must be re-dispatched now, not just
+      // requeued — for a session that already compacted there is no subsequent
+      // compaction seam to consume them, so a requeued row would sit forever.
+      // The boot-time cutoff excludes rows a live release claimed after startup,
+      // so recovery cannot double-drive an actively-releasing delegate.
+      const postCompactionRecovery =
+        await delegateModule.recoverAndReleaseStagedPostCompactionDelegates({
+          runningUpdatedAtOrBefore: recoveryArmedAt,
+        });
+      if (
+        postCompactionRecovery.sessions > 0 ||
+        postCompactionRecovery.dispatched > 0 ||
+        postCompactionRecovery.failed > 0
+      ) {
         delegateLog.info(
-          `recovered post-compaction delegates reset-to-queued=${postCompactionReset}`,
+          `recovered post-compaction delegates sessions=${postCompactionRecovery.sessions} dispatched=${postCompactionRecovery.dispatched} failed=${postCompactionRecovery.failed}`,
         );
       }
 

@@ -223,6 +223,10 @@ type ContinuationDispatchModule = {
     ctx: ContinuationDispatchContext;
     maxChainLength: number;
     dispatchQueuedRegardlessOfDelay?: boolean;
+    loadFreshChainState?: () => ContinuationChainState;
+    persistChainState?: (chainState: ContinuationChainState) => void | Promise<void>;
+    inheritedSilent?: boolean;
+    inheritedWake?: boolean;
   }) => Promise<{
     dispatched: number;
     rejected: number;
@@ -342,6 +346,16 @@ async function drainChildContinuationQueue(params: {
    * child entry and under-enforce the cost cap (#1144).
    */
   dispatchRegardlessOfDelay?: boolean;
+  /**
+   * Inherited silent/wake policy from the settled parent run. When the parent
+   * was silent (or silent-wake), a default-mode delegate the child queued must
+   * still spawn internal (and wake on return) instead of announcing to the
+   * channel. This early drain runs BEFORE the later chain-hop guards that apply
+   * `parentWasSilent`, so the policy is threaded through here to keep
+   * descendants of a silent/wake chain internal (#1158).
+   */
+  inheritedSilent?: boolean;
+  inheritedWake?: boolean;
 }): Promise<void> {
   let cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
   try {
@@ -406,32 +420,22 @@ async function drainChildContinuationQueue(params: {
               baseChainState.accumulatedChainTokens + params.additionalChainTokens,
           }
         : baseChainState;
-    const dispatchResult = await dispatchToolDelegates({
-      sessionKey: params.childSessionKey,
-      chainState,
-      ctx: {
-        sessionKey: params.childSessionKey,
-        agentChannel: params.requesterOrigin?.channel,
-        agentAccountId: params.requesterOrigin?.accountId,
-        agentTo: params.requesterOrigin?.to,
-        agentThreadId: params.requesterOrigin?.threadId,
-      },
-      maxChainLength: dispatchConfig.maxChainLength,
-      ...(params.dispatchRegardlessOfDelay ? { dispatchQueuedRegardlessOfDelay: true } : {}),
-    });
-
-    // Persist the advanced child chain state after delegate drain. Without
-    // this, child `continuationChainCount/StartedAt/Tokens`
-    // never advances after accepted spawns; later drains reload stale
-    // counters and under-enforce `maxChainLength`. Mirror the agent-runner
-    // and followup-runner persist patterns.
-    if (dispatchResult && dispatchResult.dispatched > 0) {
-      const advanced = dispatchResult.chainState;
-      const childEntryForWrite = childEntry as
-        | (ContinuationChainSource & Record<string, unknown>)
-        | undefined;
-      // In-memory mirror so any post-drain reads of the same entry see the
-      // advanced state immediately.
+    const childEntryForWrite = childEntry as
+      | (ContinuationChainSource & Record<string, unknown>)
+      | undefined;
+    // Persist the advanced child chain state to BOTH the in-memory entry (so a
+    // subsequent hedge re-arm / drain reads the advanced basis) and the durable
+    // session store (so it survives gateway restart). Shared by the synchronous
+    // drain below AND the hedge-fired dispatch: a delayed delegate that only arms
+    // a hedge here would otherwise advance only the pre-spawn snapshot, so
+    // multiple delayed delegates hedge-fire against the stale count and bypass
+    // maxChainLength / the cost cap. Mirrors the main-runner / followup-runner
+    // persist patterns (#1158).
+    const persistAdvancedChildChainState = async (
+      advanced: ContinuationChainState,
+    ): Promise<void> => {
+      // In-memory mirror so any post-drain reads of the same entry (incl. the
+      // hedge's loadFreshChainState) see the advanced state immediately.
       persistContinuationChainState({
         sessionEntry: childEntryForWrite,
         count: advanced.currentChainCount,
@@ -441,9 +445,6 @@ async function drainChildContinuationQueue(params: {
         // instead of re-minting a fresh one (stable chain correlation).
         ...(advanced.chainId ? { chainId: advanced.chainId } : {}),
       });
-      // Durable write through the session store so the advanced state
-      // survives gateway restart and is observable by other readers of
-      // the on-disk session entry.
       try {
         const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
         const storePath = resolveStorePathLazy(cfg.session?.store, { agentId });
@@ -467,6 +468,37 @@ async function drainChildContinuationQueue(params: {
           `[continuation:drain-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
         );
       }
+    };
+    const dispatchResult = await dispatchToolDelegates({
+      sessionKey: params.childSessionKey,
+      chainState,
+      ctx: {
+        sessionKey: params.childSessionKey,
+        agentChannel: params.requesterOrigin?.channel,
+        agentAccountId: params.requesterOrigin?.accountId,
+        agentTo: params.requesterOrigin?.to,
+        agentThreadId: params.requesterOrigin?.threadId,
+      },
+      maxChainLength: dispatchConfig.maxChainLength,
+      ...(params.dispatchRegardlessOfDelay ? { dispatchQueuedRegardlessOfDelay: true } : {}),
+      // A hedge-fired dispatch (delayed delegate) runs with no enclosing runner
+      // frame, so supply the fresh-load + persist callbacks the shared hedge
+      // needs to advance the child chain state durably across fires (#1158).
+      loadFreshChainState: () => loadContinuationChainState(childEntry),
+      persistChainState: persistAdvancedChildChainState,
+      // Descendants of a silent/wake parent chain must stay internal even though
+      // this drain runs before the later parentWasSilent chain-hop guards (#1158).
+      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+      ...(params.inheritedWake ? { inheritedWake: true } : {}),
+    });
+
+    // Persist the advanced child chain state after a synchronous (matured)
+    // drain. Without this, child `continuationChainCount/StartedAt/Tokens`
+    // never advances after accepted spawns; later drains reload stale counters
+    // and under-enforce `maxChainLength`. The hedge path persists itself via the
+    // persistChainState callback above.
+    if (dispatchResult && dispatchResult.dispatched > 0) {
+      await persistAdvancedChildChainState(dispatchResult.chainState);
     }
   } catch (err) {
     defaultRuntime.error?.(
@@ -1188,6 +1220,11 @@ export async function runSubagentAnnounceFlow(params: {
       requesterOrigin: targetRequesterOrigin,
       additionalChainTokens: childChainTokensToFold,
       dispatchRegardlessOfDelay: childChainTokensToFold > 0,
+      // Inherit the settled parent's silent/wake policy so a default-mode
+      // delegate the child queued stays internal instead of announcing when this
+      // early drain consumes it (before the parentWasSilent chain-hop guards run).
+      inheritedSilent: params.silentAnnounce === true,
+      inheritedWake: params.wakeOnReturn === true,
     });
 
     // --- Consume tool-dispatched delegates from the completing subagent ---
@@ -1453,6 +1490,8 @@ export async function runSubagentAnnounceFlow(params: {
                   childSessionKey: params.childSessionKey,
                   requesterOrigin: targetRequesterOrigin,
                   additionalChainTokens: childChainTokensToFold,
+                  inheritedSilent: params.silentAnnounce === true,
+                  inheritedWake: params.wakeOnReturn === true,
                 }).catch((err: unknown) => {
                   defaultRuntime.log(
                     `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,

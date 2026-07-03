@@ -33,7 +33,7 @@ export {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
-  recoverStagedPostCompactionDelegates,
+  listRecoverableStagedPostCompactionDelegates,
   resetDelegateStoreForTests,
   stagedPostCompactionDelegateCount,
 } from "./continuation/delegate-store.js";

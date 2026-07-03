@@ -3224,7 +3224,7 @@ export async function runReplyAgent(replyParams: {
         // Content is now durable (session store on success, re-staged queued rows
         // on failure). Finish the claimed rows so they are not re-consumed; a
         // crash before here leaves them recoverable via
-        // recoverStagedPostCompactionDelegates.
+        // listRecoverableStagedPostCompactionDelegates.
         finalizeStagedPostCompactionDelegates(claimedFlowIds);
       }
     }
