@@ -6,6 +6,13 @@ import {
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint >= 0xd800 && codePoint <= 0xdfff;
+  });
+}
+
 describe("sanitizeExecApprovalDisplayText", () => {
   it.each([
     ["echo hi\u200Bthere", "echo hi\\u{200B}there"],
@@ -134,6 +141,16 @@ describe("sanitizeExecApprovalDisplayText", () => {
     const result = sanitizeExecApprovalDisplayText(padding);
     expect(result.length).toBeLessThan(padding.length);
     expect(result).toContain("[truncated]");
+  });
+
+  it("does not split surrogate pairs at the display truncation boundary", () => {
+    const command = "a".repeat(16 * 1024 - 1) + "😀tail";
+    const result = sanitizeExecApprovalDisplayText(command);
+
+    expect(result).toContain("[truncated]");
+    expect(hasLoneSurrogate(result)).toBe(false);
+    expect(result).not.toContain("\uD83D");
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("refuses to display commands above the hard input cap", () => {

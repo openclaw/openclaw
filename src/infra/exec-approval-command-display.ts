@@ -4,6 +4,7 @@ import {
   redactSensitiveText,
   resolveRedactOptions,
 } from "../logging/redact.js";
+import { truncateUtf16Safe } from "../shared/utf16-slice.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, and non-ASCII space
@@ -58,7 +59,7 @@ function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
     return { text, truncated: false, oversized: false };
   }
   return {
-    text: text.slice(0, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
+    text: truncateUtf16Safe(text, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
     truncated: true,
     oversized: false,
   };
