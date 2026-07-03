@@ -1780,15 +1780,33 @@ export function createExecTool(
           ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
           : undefined;
       const searchGuardEnv =
-        requestedEnv === undefined ? inheritedBaseEnv : { ...inheritedBaseEnv, ...requestedEnv };
+        host === "sandbox" && sandbox
+          ? buildSandboxEnv({
+              defaultPath: DEFAULT_PATH,
+              paramsEnv: requestedEnv,
+              sandboxEnv: sandbox.env,
+              containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            })
+          : requestedEnv === undefined
+            ? inheritedBaseEnv
+            : { ...inheritedBaseEnv, ...requestedEnv };
       const sandboxProtectedRoots =
-        host === "sandbox" && sandbox?.containerWorkdir ? [sandbox.containerWorkdir] : undefined;
+        host === "sandbox" && sandbox
+          ? Array.from(
+              new Set(
+                [sandbox.containerWorkdir, ...(sandbox.workdirRoots ?? [])]
+                  .map((entry) => entry?.trim())
+                  .filter((entry): entry is string => Boolean(entry)),
+              ),
+            )
+          : undefined;
       if ((host === "gateway" || host === "sandbox") && workdir) {
         await rejectUnsafeExecBroadSearchShellCommand({
           command: params.command,
           workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
           env: searchGuardEnv,
           additionalProtectedRoots: sandboxProtectedRoots,
+          protectEnvHome: host !== "sandbox",
         });
       }
       let run: ExecProcessHandle;

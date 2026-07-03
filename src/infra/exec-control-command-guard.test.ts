@@ -57,6 +57,29 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("keeps wrapper-payload cd changes scoped to the child shell", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "bash -lc 'cd /tmp'; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "bash -lc 'cd ~; rg timeout'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("blocks find over external workspace roots", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -81,6 +104,27 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("blocks find over protected roots after BSD leading find options", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "find -E ~/.codex/sessions -regex '.*jsonl'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "find",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "find -f ~/.codex/sessions -name '*.jsonl'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "find",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
   it("skips find option terminators before path operands", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -90,6 +134,18 @@ describe("exec broad search command guard", () => {
     ).resolves.toMatchObject({
       executable: "find",
       protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("uses pre-assignment shell env for same-command path expansion", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "HOME=/tmp rg timeout ~/.codex",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex"),
     });
   });
 
@@ -262,6 +318,18 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("does not consume rg glob-case-insensitive as an option operand", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg --glob-case-insensitive timeout ~/.codex/sessions",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
   it("honors shell cd before resolving implicit search paths", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -324,10 +392,36 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("fails closed after cwd changes in short-circuit chains", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'true && cd "$HOME" && rg timeout',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("does not apply cd from pipeline subshells", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
         command: "cd /tmp | cat; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("does not apply cd from background jobs", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "cd /tmp & rg timeout",
         workdir: homeDir,
       }),
     ).resolves.toMatchObject({
@@ -354,6 +448,78 @@ describe("exec broad search command guard", () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
         command: "cd /definitely-missing-openclaw-search-guard; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("preserves cwd when cd has too many operands to succeed", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "cd /tmp /; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("resolves cd dash against OLDPWD", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "cd - >/dev/null; rg timeout",
+        workdir: "/tmp",
+        env: { ...process.env, OLDPWD: homeDir },
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("preserves cwd when cd has invalid options", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "cd -x /tmp; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("updates PWD and OLDPWD when tracking cd targets", async () => {
+    const sessionDir = path.join(homeDir, ".codex", "sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    try {
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: 'cd "$HOME"; rg timeout "$PWD/.codex/sessions"',
+          workdir: "/tmp",
+          env: { ...process.env, HOME: homeDir, PWD: "/tmp" },
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        protectedRoot: sessionDir,
+      });
+    } finally {
+      fs.rmSync(path.join(homeDir, ".codex"), { recursive: true, force: true });
+    }
+  });
+
+  it("treats loop bodies as conditional cwd changes", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "while false; do cd /tmp; done; rg timeout",
         workdir: homeDir,
       }),
     ).resolves.toMatchObject({
@@ -411,6 +577,16 @@ describe("exec broad search command guard", () => {
     }
   });
 
+  it("inherits cwd when entering subshells", async () => {
+    const safeRepoDir = path.join(process.cwd(), "src");
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: `cd ${safeRepoDir}; (rg timeout)`,
+        workdir: homeDir,
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("treats pattern files as supplying the search pattern", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -465,6 +641,39 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("skips additional rg value operands before inferring implicit cwd searches", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg -M 100 timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg --color always timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg --type-not rust timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("accounts for shell-expanded glob search paths", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -484,6 +693,18 @@ describe("exec broad search command guard", () => {
     ).resolves.toMatchObject({
       executable: "rg",
       protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("accounts for brace-expanded protected paths", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg timeout ~/.{codex,openclaw}",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: homeDir,
     });
   });
 
@@ -610,6 +831,101 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("fails closed when xargs can append unknown search paths", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "printf '%s\\n' \"$HOME/.codex/sessions\" | xargs rg timeout",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: "<dynamic xargs-appended search path>",
+      protectedRoot: "<dynamic xargs-appended search path>",
+    });
+  });
+
+  it("re-expands shell wrappers inside static xargs command payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "xargs sh -c 'rg timeout ~/.codex/sessions' < /dev/null",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("inspects static find exec command payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "find . -maxdepth 0 -exec rg timeout ~/.codex/sessions \\;",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("re-expands shell wrappers inside static find exec payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "find . -maxdepth 0 -exec sh -c 'rg timeout ~/.codex/sessions' \\;",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("fails closed for find roots loaded from files0-from", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "find -files0-from list -name '*.jsonl'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "find",
+      path: "<dynamic find -files0-from roots>",
+      protectedRoot: "<dynamic find -files0-from roots>",
+    });
+  });
+
+  it("blocks broad searches behind non-transparent dispatch wrappers", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "setsid rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "ionice rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "taskset 0x1 rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("resolves shell positional dispatch wrappers", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -620,6 +936,18 @@ describe("exec broad search command guard", () => {
       executable: "rg",
       path: ".",
       protectedRoot: homeDir,
+    });
+  });
+
+  it("substitutes shell positional args into wrapper payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "bash -lc 'rg timeout \"$@\"' sh ~/.codex/sessions",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
     });
   });
 
@@ -697,6 +1025,80 @@ describe("exec broad search command guard", () => {
     }
   });
 
+  it("expands arbitrary variables from the effective exec environment", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'rg timeout "$SESSION_ROOT"',
+        workdir: "/tmp",
+        env: { ...process.env, SESSION_ROOT: path.join(homeDir, ".codex", "sessions") },
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("tracks shell-local variables before path expansion", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'SESSION_ROOT=$HOME/.codex/sessions; rg timeout "$SESSION_ROOT"',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("ignores unexecuted shell assignments when expanding later paths", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command:
+          'SESSION_ROOT=$HOME/.codex/sessions; if false; then SESSION_ROOT=/tmp; fi; rg timeout "$SESSION_ROOT"',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("expands shell variables outside the first path segment", async () => {
+    const user = path.basename(homeDir);
+    const homeParent = path.dirname(homeDir);
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: `rg timeout ${homeParent}/$USER/.codex/sessions`,
+        workdir: "/tmp",
+        env: { ...process.env, USER: user },
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("treats parents of configured state roots as protected", async () => {
+    const stateParent = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-parent-"));
+    const stateDir = path.join(stateParent, "state");
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: `rg timeout ${stateParent}`,
+          workdir: "/tmp",
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        path: stateParent,
+        protectedRoot: path.resolve(stateParent),
+      });
+    } finally {
+      fs.rmSync(stateParent, { recursive: true, force: true });
+    }
+  });
+
   it("blocks explicit parent paths that contain the protected home", async () => {
     const homeParent = path.dirname(homeDir);
     await expect(
@@ -709,6 +1111,26 @@ describe("exec broad search command guard", () => {
       path: homeParent,
       protectedRoot: path.resolve(homeParent),
     });
+  });
+
+  it("protects current repo parents regardless of parent folder name", async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-src-parent-"));
+    const workdir = path.join(parent, "openclaw");
+    try {
+      fs.mkdirSync(path.join(workdir, ".git"), { recursive: true });
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: "rg timeout ..",
+          workdir,
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        path: "..",
+        protectedRoot: parent,
+      });
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("protects caller-supplied sandbox workspace roots", async () => {
@@ -736,6 +1158,16 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("allows narrowed repo searches below caller-supplied sandbox workspace roots", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg timeout",
+        workdir: "/remote/workspace/openclaw",
+        additionalProtectedRoots: ["/remote/workspace"],
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("does not treat pattern operands named help as help invocations", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -761,6 +1193,289 @@ describe("exec broad search command guard", () => {
         workdir: homeDir,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("does not treat piped rg regexp filters as filesystem searches", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "printf 'x\\n' | rg -e x",
+        workdir: homeDir,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("does not treat redirected rg filters as filesystem searches", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg x < /tmp/log",
+        workdir: homeDir,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("inspects static eval bodies before classifying searches", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "eval 'rg timeout ~/.codex/sessions'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("tracks cwd changes inside static eval bodies", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "eval 'cd \"$HOME\"; rg timeout'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("tracks cwd changes across control operators inside static shell payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "eval 'cd \"$HOME\" && rg timeout'",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("ignores uninvoked shell function definition bodies", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "f(){ rg timeout ~/.codex/sessions; }; echo ok",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("tracks cwd changes performed by shell functions", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'f(){ cd "$HOME"; }; f; rg timeout',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("tracks function cd targets supplied as arguments", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'f(){ cd "$1"; }; f "$HOME"; rg timeout',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("keeps function cwd changes conditional like their invocation", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "f(){ cd /tmp; }; false && f; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("handles bare cd inside shell functions", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "f(){ cd; }; f; rg timeout",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("inspects searches inside invoked shell function bodies", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "f(){ rg timeout ~/.codex/sessions; }; f",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("inspects shell scripts supplied through heredocs", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "bash <<'EOF'\nrg timeout ~/.codex/sessions\nEOF",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("tracks cwd changes inside heredoc shell scripts", async () => {
+    const sessionDir = path.join(homeDir, ".codex", "sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    try {
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: "bash <<'EOF'\ncd ~/.codex/sessions\nrg timeout\nEOF",
+          workdir: "/Volumes/LEXAR/repos/openclaw",
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        path: ".",
+        protectedRoot: sessionDir,
+      });
+    } finally {
+      fs.rmSync(path.join(homeDir, ".codex"), { recursive: true, force: true });
+    }
+  });
+
+  it("inspects here-string shell stdin payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "bash <<< 'rg timeout ~/.codex/sessions'",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
+  it("tracks cwd inside command substitutions", async () => {
+    const sessionDir = path.join(homeDir, ".codex", "sessions");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    try {
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: 'echo "$(cd ~/.codex/sessions; rg timeout)"',
+          workdir: "/Volumes/LEXAR/repos/openclaw",
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        path: ".",
+        protectedRoot: sessionDir,
+      });
+    } finally {
+      fs.rmSync(path.join(homeDir, ".codex"), { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on command-substituted search operands", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'rg timeout "$(printf %s "$HOME/.codex/sessions")"',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: "<dynamic shell-expanded search path>",
+    });
+  });
+
+  it("fails closed on unresolved simple variable search operands", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'for d in "$HOME/.codex/sessions"; do rg timeout "$d"; done',
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: "<dynamic shell-expanded search path>",
+    });
+  });
+
+  it("fails closed on complex parameter-expanded search operands", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'rg timeout "${SESSION_ROOT:-$HOME/.codex/sessions}"',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: "<dynamic shell-expanded search path>",
+    });
+  });
+
+  it("honors CDPATH when tracking cd targets", async () => {
+    const cdpathRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cdpath-"));
+    const cdpathHome = path.join(cdpathRoot, "alice");
+    try {
+      fs.mkdirSync(cdpathHome, { recursive: true });
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: "CDPATH=$HOME/..; cd alice; rg timeout",
+          workdir: "/tmp",
+          env: { ...process.env, HOME: cdpathHome },
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        path: ".",
+        protectedRoot: cdpathHome,
+      });
+    } finally {
+      fs.rmSync(cdpathRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves cwd when CDPATH targets do not exist", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "CDPATH=/tmp; cd definitely-missing-openclaw-search-guard; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("expands tilde-user prefixes before protection checks", async () => {
+    const username = os.userInfo().username;
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: `rg timeout ~${username}/.codex/sessions`,
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "rg timeout ~root/.codex/sessions",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: "<dynamic shell-expanded search path>",
+    });
   });
 
   it("rejects broad searches with actionable guidance", async () => {
