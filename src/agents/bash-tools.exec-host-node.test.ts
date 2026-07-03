@@ -100,6 +100,7 @@ const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
 const commandRequiresSecurityAuditSuppressionApprovalMock = vi.hoisted(() => vi.fn(() => false));
+const commandRequiresOpenClawLifecycleApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
   vi.fn(
     (_raw?: ShellAllowlistMockParams): MockAllowlistResult => ({
@@ -226,6 +227,7 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
+  commandRequiresOpenClawLifecycleApproval: commandRequiresOpenClawLifecycleApprovalMock,
   commandRequiresSecurityAuditSuppressionApproval:
     commandRequiresSecurityAuditSuppressionApprovalMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
@@ -509,6 +511,8 @@ describe("executeNodeHostCommand", () => {
     });
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReset();
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(false);
+    commandRequiresOpenClawLifecycleApprovalMock.mockReset();
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
     evaluateShellAllowlistMock.mockReturnValue({
       allowlistMatches: [],
@@ -2284,6 +2288,49 @@ describe("executeNodeHostCommand", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(warnings).toContain(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
+    );
+  });
+
+  it("keeps OpenClaw lifecycle commands off the auto-review path", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "test reviewer would allow it",
+    }));
+    const warnings: string[] = [];
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(true);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "launchctl stop gui/$UID/com.openclaw.gateway",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings,
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(commandRequiresOpenClawLifecycleApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        envComplete: false,
+      }),
+    );
+    expect(warnings).toContain(
+      "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
     );
   });
 

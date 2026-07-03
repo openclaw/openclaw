@@ -58,11 +58,33 @@ describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
     expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
     expect(splitShellArgs(`qmd --foo 'bar baz'`)).toEqual(["qmd", "--foo", "bar baz"]);
+    expect(splitShellArgs(`env -a "" openclaw gateway restart`)).toEqual([
+      "env",
+      "-a",
+      "",
+      "openclaw",
+      "gateway",
+      "restart",
+    ]);
   });
 
   it("supports backslash escapes inside double quotes", () => {
     expect(splitShellArgs(String.raw`echo "a\"b"`)).toEqual(["echo", `a"b`]);
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
+  });
+
+  it("removes POSIX backslash line continuations", () => {
+    expect(splitShellArgs("open\\\nclaw gateway restart")).toEqual([
+      "openclaw",
+      "gateway",
+      "restart",
+    ]);
+    expect(splitShellArgs('"open\\\r\nclaw" gateway restart')).toEqual([
+      "openclaw",
+      "gateway",
+      "restart",
+    ]);
+    expect(splitShellArgs("\\\n# openclaw gateway restart")).toEqual([]);
   });
 
   it("returns null for unterminated quotes", () => {

@@ -12,6 +12,7 @@ import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commitExecAuthorizationLocked,
+  commandRequiresOpenClawLifecycleApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   type ExecAsk,
@@ -663,6 +664,13 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
+  const requiresOpenClawLifecycleApproval =
+    commandRequiresOpenClawLifecycleApproval({
+      command: params.command,
+      cwd: params.workdir,
+      env: params.env,
+      segments: allowlistEval.segments,
+    }) && !(hostSecurity === "full" && hostAsk === "off");
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -674,7 +682,8 @@ export async function processGatewayAllowlist(
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
-    requiresSecurityAuditSuppressionApproval;
+    requiresSecurityAuditSuppressionApproval ||
+    requiresOpenClawLifecycleApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
@@ -707,6 +716,11 @@ export async function processGatewayAllowlist(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
+  if (requiresOpenClawLifecycleApproval) {
+    params.warnings.push(
+      "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
+    );
+  }
   if (requiresAsk) {
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
@@ -731,12 +745,14 @@ export async function processGatewayAllowlist(
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasExecutableBinding &&
-      !requiresSecurityAuditSuppressionApproval;
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresOpenClawLifecycleApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasExecutableBinding) ||
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresOpenClawLifecycleApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
