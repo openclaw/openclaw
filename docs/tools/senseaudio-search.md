@@ -59,14 +59,6 @@ environment. For a gateway install, put it in `~/.openclaw/.env`.
 If you omit `baseUrl`, OpenClaw defaults to `https://api.senseaudio.cn/v1`.
 If you omit `model`, OpenClaw defaults to `senseaudio-s2`.
 
-### Custom endpoints
-
-If you point `baseUrl` at a private or loopback host (for example an internal
-gateway such as `http://127.0.0.1:3210/v1`), OpenClaw treats the explicit
-configuration as operator opt-in and uses the self-hosted network policy for
-that endpoint. Custom public endpoints must use `https://`; cleartext
-`http://` is only allowed for private and loopback targets.
-
 ## How it works
 
 OpenClaw sends one non-streaming request to the SenseAudio `/responses`

@@ -16,19 +16,11 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
-  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
   type SearchConfigRecord,
 } from "openclaw/plugin-sdk/provider-web-search";
-import {
-  assertHttpUrlTargetsPrivateNetwork,
-  isBlockedHostnameOrIp,
-  isPrivateIpAddress,
-  resolvePinnedHostnameWithPolicy,
-  type LookupFn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -93,63 +85,6 @@ function resolveSenseAudioModel(senseaudio?: SenseAudioConfig): string {
 function resolveSenseAudioBaseUrl(senseaudio?: SenseAudioConfig): string {
   const explicit = (normalizeOptionalString(senseaudio?.baseUrl) ?? "").replace(/\/+$/, "");
   return explicit || DEFAULT_SENSEAUDIO_BASE_URL;
-}
-
-type SenseAudioEndpointMode = "selfHosted" | "strict";
-
-async function senseaudioEndpointTargetsPrivateNetwork(
-  url: URL,
-  lookupFn?: LookupFn,
-): Promise<boolean> {
-  if (isBlockedHostnameOrIp(url.hostname)) {
-    return true;
-  }
-  try {
-    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
-      lookupFn,
-      policy: {
-        allowPrivateNetwork: true,
-        allowRfc2544BenchmarkRange: true,
-      },
-    });
-    return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
-    return false;
-  }
-}
-
-/** Explicitly configured private/loopback endpoints are operator opt-in and use
- * the self-hosted network policy; the default endpoint and public overrides
- * keep the strict trusted policy (same contract as SearXNG). */
-async function resolveSenseAudioEndpointMode(
-  baseUrl: string,
-  lookupFn?: LookupFn,
-): Promise<SenseAudioEndpointMode> {
-  if (baseUrl === DEFAULT_SENSEAUDIO_BASE_URL) {
-    return "strict";
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    throw new Error("SenseAudio base URL must be a valid http:// or https:// URL.");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("SenseAudio base URL must use http:// or https://.");
-  }
-  if (parsed.protocol === "http:") {
-    // Cleartext would expose the API key, so http is private/loopback-only.
-    await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {
-      dangerouslyAllowPrivateNetwork: true,
-      lookupFn,
-      errorMessage:
-        "SenseAudio HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
-    });
-    return "selfHosted";
-  }
-  return (await senseaudioEndpointTargetsPrivateNetwork(parsed, lookupFn))
-    ? "selfHosted"
-    : "strict";
 }
 
 function extractSenseAudioMessageText(items: SenseAudioOutputItem[]): string | undefined {
@@ -250,14 +185,9 @@ async function runSenseAudioSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
-  endpointMode: SenseAudioEndpointMode;
 }): Promise<SenseAudioSearchResult> {
   const endpoint = `${params.baseUrl}/responses`;
-  const withEndpoint =
-    params.endpointMode === "selfHosted"
-      ? withSelfHostedWebSearchEndpoint
-      : withTrustedWebSearchEndpoint;
-  return await withEndpoint(
+  return await withTrustedWebSearchEndpoint(
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
@@ -327,14 +257,12 @@ export async function executeSenseAudioWebSearchProviderTool(
   }
 
   const start = Date.now();
-  const endpointMode = await resolveSenseAudioEndpointMode(baseUrl);
   const result = await runSenseAudioSearch({
     query,
     apiKey,
     baseUrl,
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-    endpointMode,
   });
   if (!result.grounded) {
     return {
@@ -370,7 +298,6 @@ export const testing = {
   resolveSenseAudioApiKey,
   resolveSenseAudioModel,
   resolveSenseAudioBaseUrl,
-  resolveSenseAudioEndpointMode,
   parseSenseAudioSearchResponse,
 } as const;
 export { testing as __testing };

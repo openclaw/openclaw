@@ -1,18 +1,8 @@
 // Senseaudio tests cover web search provider plugin behavior.
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createSenseAudioWebSearchProvider } from "./senseaudio-web-search-provider.js";
-
-function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
-  return vi.fn(async (_hostname: string, options?: unknown) => {
-    if (typeof options === "number" || !options || !(options as { all?: boolean }).all) {
-      return addresses[0];
-    }
-    return addresses;
-  }) as unknown as LookupFn;
-}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -186,80 +176,6 @@ describe("senseaudio web search provider", () => {
     });
 
     expect(result.error).toBe("unsupported_freshness");
-  });
-
-  it("keeps the default endpoint on the strict trusted policy", async () => {
-    await expect(
-      testing.resolveSenseAudioEndpointMode("https://api.senseaudio.cn/v1"),
-    ).resolves.toBe("strict");
-  });
-
-  it("routes loopback and private base URLs through the self-hosted guard", async () => {
-    const privateLookup = createLookupFn([{ address: "10.0.0.5", family: 4 }]);
-
-    await expect(
-      testing.resolveSenseAudioEndpointMode(
-        "http://localhost:3210/v1",
-        createLookupFn([{ address: "127.0.0.1", family: 4 }]),
-      ),
-    ).resolves.toBe("selfHosted");
-    await expect(testing.resolveSenseAudioEndpointMode("http://127.0.0.1:3210/v1")).resolves.toBe(
-      "selfHosted",
-    );
-    await expect(testing.resolveSenseAudioEndpointMode("https://192.168.1.10/v1")).resolves.toBe(
-      "selfHosted",
-    );
-    await expect(
-      testing.resolveSenseAudioEndpointMode("https://sense-gateway.example/v1", privateLookup),
-    ).resolves.toBe("selfHosted");
-  });
-
-  it("keeps public https overrides strict and rejects public http overrides", async () => {
-    const publicLookup = createLookupFn([{ address: "93.184.216.34", family: 4 }]);
-
-    await expect(
-      testing.resolveSenseAudioEndpointMode("https://sense.example.com/v1", publicLookup),
-    ).resolves.toBe("strict");
-    await expect(
-      testing.resolveSenseAudioEndpointMode("http://sense.example.com/v1", publicLookup),
-    ).rejects.toThrow(
-      "SenseAudio HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
-    );
-    await expect(testing.resolveSenseAudioEndpointMode("not-a-url")).rejects.toThrow(
-      "SenseAudio base URL must be a valid http:// or https:// URL.",
-    );
-  });
-
-  it("executes against an explicitly configured loopback endpoint", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse(
-          completedResponse([
-            searchCallItem(["https://a.test"]),
-            messageItem("Local gateway answer."),
-          ]),
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const provider = createSenseAudioWebSearchProvider();
-    const tool = provider.createTool({
-      config: {},
-      searchConfig: {
-        senseaudio: { apiKey: "sense-test-key", baseUrl: "http://127.0.0.1:3210/v1" },
-      },
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
-
-    const result = await tool.execute({ query: "senseaudio loopback endpoint" });
-
-    expect(result).not.toHaveProperty("error");
-    expectStringFieldContains(result, "content", "Local gateway answer.");
-    const [url] = fetchMock.mock.calls[0] as [unknown];
-    expect(String(url)).toBe("http://127.0.0.1:3210/v1/responses");
   });
 
   it("reports malformed SenseAudio JSON with a stable provider error", async () => {

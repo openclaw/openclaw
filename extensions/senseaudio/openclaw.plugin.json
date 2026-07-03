@@ -20,7 +20,7 @@
     },
     "webSearch.baseUrl": {
       "label": "SenseAudio Search Base URL",
-      "help": "SenseAudio base URL override. Private or loopback endpoints are allowed and use the self-hosted network policy."
+      "help": "SenseAudio base URL override."
     },
     "webSearch.model": {
       "label": "SenseAudio Search Model",
