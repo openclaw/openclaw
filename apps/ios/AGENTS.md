@@ -2,6 +2,15 @@
 
 Root rules still apply. This file adds the iOS release guardrails.
 
+## UI / Typography
+
+- iOS SwiftUI text should use branded typography helpers, not bare system fonts. Use `OpenClawType` in `apps/ios/Sources/**`, `OpenClawChatTypography` in shared chat UI, `WatchClawType` in watch UI, and `OpenClawActivityType` in Live Activity UI.
+- Apply branded fonts at the rendered text/control boundary when practical: `Text`, `Label`, `Button` labels, picker options, menu items, alert text/buttons, row titles/subtitles, placeholder overlays, chips, badges, and toolbar actions. Do not rely on distant parent `.font(...)` inheritance for user-visible text when a local modifier is cheap and clear.
+- Avoid shorthand controls like `Button("Title")`, `Link("Title", ...)`, `TextField("Placeholder", ...)`, and `SecureField("Placeholder", ...)` when they make typography or placeholder styling implicit. Prefer explicit label builders with branded `Text`/`Label`.
+- Secure-field placeholders need both branded visual styling and accessibility semantics. If using an overlay placeholder, keep the actual field semantically named with `.accessibilityLabel(...)` and hide the decorative placeholder from accessibility.
+- System font modifiers are acceptable for SF Symbol `Image(systemName:)` sizing, not for user-visible text unless a platform control makes branded typography impossible. If an exception is intentional, keep it narrow and explain why.
+- When touching iOS text surfaces, update/keep `apps/ios/Tests/OpenClawTypographyTests.swift` so bare text/control regressions are caught, then run the focused typography test.
+
 ## Licenses Screen
 
 - Maintain the Settings-tab Licenses screen when iOS app dependencies change.
