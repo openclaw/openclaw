@@ -366,7 +366,12 @@ function convertAnthropicMessages(
   const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
+  // Only Fable 5 natively preserves signed thinking blocks across all turns.
+  // Non-Fable-5 models (e.g. Sonnet 4.6) with thinking enabled should only
+  // replay thinking for the active tool turn — completed turns' signatures are
+  // cryptographically bound to a prior request context and the API rejects them.
+  const preserveAllThinking = replayThinkingEnabled && usesClaudeFable5MessagesContract(model);
+  const activeToolTurnAssistantIndex = preserveAllThinking
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
   for (let i = 0; i < transformedMessages.length; i += 1) {
@@ -434,7 +439,7 @@ function convertAnthropicMessages(
         if (block.type === "thinking") {
           const thinkingSignature = block.thinkingSignature?.trim();
           const isReasoningContent = thinkingSignature === "reasoning_content";
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
+          if (!preserveAllThinking && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
             omittedThinking = true;
             continue;
           }

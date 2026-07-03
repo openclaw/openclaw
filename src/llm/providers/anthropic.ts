@@ -1180,7 +1180,12 @@ function convertMessages(
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
+  // Only Fable 5 natively preserves signed thinking blocks across all turns.
+  // Non-Fable-5 models (e.g. Sonnet 4.6) with thinking enabled should only
+  // replay thinking for the active tool turn — completed turns' signatures are
+  // cryptographically bound to a prior request context and the API rejects them.
+  const preserveAllThinking = replayThinkingEnabled && usesClaudeFable5MessagesContract(model);
+  const activeToolTurnAssistantIndex = preserveAllThinking
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
@@ -1240,7 +1245,7 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+          if (!preserveAllThinking && i !== activeToolTurnAssistantIndex) {
             omittedThinking = true;
             continue;
           }
