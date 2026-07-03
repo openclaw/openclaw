@@ -412,6 +412,11 @@ function hasPipedStdinBeforeCommand(source: string, commandStartIndex: number): 
   return !before.endsWith("||");
 }
 
+function isConditionallyExecutedShellCommand(source: string, commandStartIndex: number): boolean {
+  const before = source.slice(0, commandStartIndex).trimEnd();
+  return before.endsWith("&&") || before.endsWith("||");
+}
+
 function shellPositionalPayload(argv: readonly string[]): string[] | null {
   const commandName = normalizeCommandBaseName(argv[0]);
   if (!["bash", "dash", "sh", "zsh"].includes(commandName)) {
@@ -521,7 +526,8 @@ function createCommandPayloads(rawCommand: string, workdir?: string): Promise<Co
           if (
             stepWorkdir &&
             isCwdChangingCommandContext(step.context) &&
-            !isInsideShellControlFlowBody(rawCommand, step.span.startIndex)
+            !isInsideShellControlFlowBody(rawCommand, step.span.startIndex) &&
+            !isConditionallyExecutedShellCommand(rawCommand, step.span.startIndex)
           ) {
             currentWorkdirBySubshellScope.set(
               subshellScope,

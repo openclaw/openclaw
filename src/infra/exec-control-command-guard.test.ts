@@ -275,6 +275,29 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("does not apply cd from short-circuit shell branches", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "false && cd /tmp; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "true || cd /tmp; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("preserves cwd when a failed cd would leave the shell in place", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
