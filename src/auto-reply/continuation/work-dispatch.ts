@@ -40,6 +40,7 @@ import {
 const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const TRANSIENT_ERROR_RETRY_MS = 5_000;
+const DISABLED_CONTINUATION_RECHECK_MS = 15_000;
 const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
@@ -838,12 +839,12 @@ export async function dispatchPendingContinuationWork(params: {
   // still consume and drive queued work here — buying provider turns after the
   // feature was disabled. Re-check the live config and bail before consuming or
   // mutating any queued rows (they stay durable/recoverable if re-enabled);
-  // clear the in-process timers so the self-rearm loop stops instead of
-  // re-arming a disabled feature.
+  // replace any due work timer with a non-mutating recheck so a hot re-enable
+  // can recover the row without startup or unrelated traffic.
   const runtimeConfig = resolveContinuationRuntimeConfig();
   if (!runtimeConfig.enabled) {
-    clearWorkTimer(params.sessionKey);
     clearIdleRetryFailureTimer(params.sessionKey);
+    armWorkTimer(params.sessionKey, Date.now() + DISABLED_CONTINUATION_RECHECK_MS);
     return { dispatched: 0, failed: 0, reaped: 0 };
   }
   const { replyRunRegistry } = await importReplyRunRegistry();

@@ -1,12 +1,13 @@
 /**
- * Ephemeral per-assistant-turn admission budget for `continue_delegate`.
+ * Ephemeral per-provider-turn admission budget for `continue_delegate`.
  *
  * `maxDelegatesPerTurn` is a per-turn cap, but the embedded runner builds the
  * OpenClaw tool list once per agent run, so a closure counter on the tool would
  * accumulate across every assistant turn in that run and wrongly reject a later
  * turn's first delegate. The budget therefore lives here, keyed by session, and
- * is reset at the assistant-turn boundary (`onAssistantMessageStart`) so each
- * turn starts fresh while still capping fan-out within a single turn.
+ * is reset once for the actual provider turn before the embedded run starts
+ * (not on assistant stream item changes) so each turn starts fresh while still
+ * capping fan-out within a single turn.
  *
  * This is deliberately volatile: the budget is turn-scoped rate state, not
  * durable delegate substrate (that stays in the TaskFlow-backed delegate-store).
@@ -17,7 +18,7 @@
 const delegatesScheduledThisTurn = new Map<string, number>();
 
 /**
- * Reset a session's per-turn delegate budget. Called at the assistant-turn
+ * Reset a session's per-turn delegate budget. Called at the provider-turn
  * boundary so a later turn in the same run gets a fresh `maxDelegatesPerTurn`.
  */
 export function resetContinueDelegateTurnBudget(sessionKey: string): void {

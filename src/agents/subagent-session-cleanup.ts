@@ -49,23 +49,28 @@ export function resetSubagentSessionCleanupForTests(): void {
 export async function deleteSubagentSessionForCleanup(
   params: DeleteSubagentSessionForCleanupParams,
 ): Promise<void> {
-  const [{ hasLiveOrRecentlyDispatchedContinuationWork }, { hasRecoverablePendingDelegate }] =
-    await Promise.all([
-      import("../auto-reply/continuation/work-store.js"),
-      import("../auto-reply/continuation/delegate-store.js"),
-    ]);
-  // A continuation_work TaskFlow or an in-flight continuation delegate owns
+  const [
+    { hasLiveOrRecentlyDispatchedContinuationWork },
+    { hasRecoverablePendingDelegate },
+    { countActiveDescendantRuns },
+  ] = await Promise.all([
+    import("../auto-reply/continuation/work-store.js"),
+    import("../auto-reply/continuation/delegate-store.js"),
+    import("./subagent-registry-runtime.js"),
+  ]);
+  // A continuation_work TaskFlow, an in-flight continuation delegate, or an
+  // accepted child run that still uses this session as requester owns
   // same-session re-entry. Keep the child session entry until they drain, then
   // retry, so delete-mode child sessions do not leak after cleanup bookkeeping
-  // finishes AND a delayed bracket/tool delegate does not lose the child's
-  // chain/requester state to deletion before it finishes. The delegate gate must
-  // count queued AND `running` (claimed) flows: the dispatcher/hedge claims a
-  // delegate to `running` before `spawnSubagentDirect` completes, so a
-  // queued-only count would drop to 0 mid-dispatch and let this cleanup delete
-  // the child out from under the running delegate (#1144).
+  // finishes AND delayed bracket/tool delegates do not lose the child's
+  // chain/requester state to deletion before they finish. The delegate gate must
+  // count queued AND `running` (claimed) flows; the registry gate must cover the
+  // post-accept window after the TaskFlow row has finished but the spawned
+  // continuation still depends on this requester session (#1144).
   if (
     hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
-    hasRecoverablePendingDelegate(params.childSessionKey)
+    hasRecoverablePendingDelegate(params.childSessionKey) ||
+    countActiveDescendantRuns(params.childSessionKey) > 0
   ) {
     scheduleDeferredCleanupRetry(params);
     return;

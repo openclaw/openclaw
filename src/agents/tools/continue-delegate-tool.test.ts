@@ -138,7 +138,7 @@ describe("continue_delegate tool", () => {
     expect(JSON.stringify(tool.parameters)).not.toContain("traceparent");
   });
 
-  it("resets the per-turn budget at the assistant-turn boundary for the same tool instance", async () => {
+  it("resets the per-turn budget at the provider-turn boundary for the same tool instance", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 2 } } },
     });
@@ -163,7 +163,7 @@ describe("continue_delegate tool", () => {
       stagedPostCompactionDelegates: 0,
     });
 
-    // New assistant turn boundary (onAssistantMessageStart) resets the budget.
+    // New provider-turn boundary resets the budget.
     resetContinueDelegateTurnBudget("test-session");
 
     // The SAME tool instance now gets a fresh budget for the new turn.

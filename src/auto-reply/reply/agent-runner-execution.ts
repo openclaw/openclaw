@@ -2759,6 +2759,11 @@ export async function runAgentTurnWithFallback(params: {
                   sessionKey: params.sessionKey,
                   milestone: "before_embedded_run",
                 });
+                // Reset once at the provider-turn boundary. Assistant stream
+                // item starts can fire multiple times in one embedded run.
+                if (params.sessionKey) {
+                  resetContinueDelegateTurnBudget(params.sessionKey);
+                }
                 const embeddedRunResult = await agentTurnTiming.measure("embedded_run", () =>
                   runEmbeddedAgent({
                     ...embeddedContext,
@@ -2932,13 +2937,6 @@ export async function runAgentTurnWithFallback(params: {
                       });
                     },
                     onAssistantMessageStart: async () => {
-                      // New assistant turn: reset the per-turn continue_delegate
-                      // admission budget so this turn can schedule up to
-                      // maxDelegatesPerTurn regardless of earlier turns in the
-                      // same run (the tool list is built once per run).
-                      if (params.sessionKey) {
-                        resetContinueDelegateTurnBudget(params.sessionKey);
-                      }
                       await params.typingSignals.signalMessageStart();
                       await params.opts?.onAssistantMessageStart?.();
                     },

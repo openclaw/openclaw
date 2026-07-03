@@ -547,12 +547,16 @@ describe("durable continuation_work dispatch", () => {
     const result = await dispatchPendingContinuationWork({ sessionKey });
     expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
     expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
 
-    // The queued row was not consumed/mutated: re-enabling drives it.
+    // The queued row was not consumed/mutated, and the disabled callback left a
+    // recheck timer so hot re-enable recovers it without waiting for startup or
+    // unrelated traffic.
     continuationEnabledForTest = true;
-    await dispatchPendingContinuationWork({ sessionKey });
-    await Promise.resolve();
-    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => {
+      expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("re-enters the persisted work.traceparent around the continuation turn (#1144)", async () => {
