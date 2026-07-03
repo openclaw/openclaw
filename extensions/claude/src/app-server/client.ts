@@ -652,51 +652,77 @@ export function assertSupportedBridgeVersion(
 
 // ─── Shared client lifecycle ────────────────────────────────────────────────
 
-let sharedClient: ClaudeAppServerClient | null = null;
-let sharedClientKey = "";
+/**
+ * Keyed pool, not a single slot. Two (or more) distinct app-server harness
+ * extensions built on this same client (e.g. `extensions/claude` pointed at
+ * real Anthropic, `extensions/glm-bridge` pointed at Z.ai) each resolve to a
+ * *different* spawn key — because their `env` differs — and must be able to
+ * run their own bridge process concurrently without tearing each other's
+ * down. A single caller with stable options always resolves to the same key
+ * every time, so this is exactly equivalent to the old single-slot behavior
+ * for any one extension acting alone (openclaw-7ss).
+ */
+const sharedClients = new Map<string, ClaudeAppServerClient>();
+let lastAccessedKey: string | null = null;
 
-export function getSharedClaudeAppServerClient(
-  opts: ClaudeAppServerStartOptions,
-): ClaudeAppServerClient {
-  // Spawn options form a key; if it changes we tear down the old client and
-  // start fresh. This keeps reconfiguration cheap from the operator's side.
-  // `command` is the already-resolved managed (or override) path from
-  // resolveManagedClaudeBridgeStartOptions, so the key is stable across turns.
-  const key = JSON.stringify({
+function computeSharedClientKey(
+  opts: Pick<ClaudeAppServerStartOptions, "command" | "args" | "env">,
+): string {
+  // Spawn options form the key; if they change for a given caller we tear
+  // down that caller's old client and start fresh. This keeps reconfiguration
+  // cheap from the operator's side. `command` is the already-resolved managed
+  // (or override) path from resolveManagedClaudeBridgeStartOptions, so the
+  // key is stable across turns for a given extension/config.
+  return JSON.stringify({
     command: opts.command ?? DEFAULT_COMMAND,
     args: opts.args ?? [],
     env: opts.env ?? null,
   });
-  if (!sharedClient || !sharedClient.isRunning() || sharedClientKey !== key) {
-    if (sharedClient) {
-      try {
-        sharedClient.stop();
-      } catch {
-        /* ignore */
-      }
-    }
-    sharedClient = new ClaudeAppServerClient(opts);
-    sharedClientKey = key;
-  }
-  return sharedClient;
 }
 
-export async function clearSharedClaudeAppServerClient(): Promise<void> {
-  if (sharedClient) {
+export function getSharedClaudeAppServerClient(
+  opts: ClaudeAppServerStartOptions,
+): ClaudeAppServerClient {
+  const key = computeSharedClientKey(opts);
+  const existing = sharedClients.get(key);
+  if (existing && existing.isRunning()) {
+    lastAccessedKey = key;
+    return existing;
+  }
+  if (existing) {
     try {
-      sharedClient.stop();
+      existing.stop();
     } catch {
       /* ignore */
     }
-    sharedClient = null;
-    sharedClientKey = "";
   }
+  const client = new ClaudeAppServerClient(opts);
+  sharedClients.set(key, client);
+  lastAccessedKey = key;
+  return client;
+}
+
+export async function clearSharedClaudeAppServerClient(): Promise<void> {
+  for (const client of sharedClients.values()) {
+    try {
+      client.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  sharedClients.clear();
+  lastAccessedKey = null;
 }
 
 /**
  * Return a read-only snapshot of the current shared client's state WITHOUT
  * forcing creation. Used by /claude status so the command stays cheap when
- * no turn has run yet.
+ * no turn has run yet. Reports the most recently accessed pool entry
+ * (`lastAccessedKey`) — exact for the common single-extension case; with two
+ * concurrently-active harness extensions (openclaw-7ss), this reflects
+ * whichever ran a turn most recently, not a specific one. A future caller
+ * that needs a specific entry can compute its own key via
+ * {@link computeSharedClientKey}-equivalent options and look it up directly.
  */
 export function peekSharedClaudeAppServerClient(): {
   running: boolean;
@@ -705,14 +731,18 @@ export function peekSharedClaudeAppServerClient(): {
   lastError?: string;
   runningVersion?: string;
 } | null {
-  if (!sharedClient) {
+  if (!lastAccessedKey) {
+    return null;
+  }
+  const client = sharedClients.get(lastAccessedKey);
+  if (!client) {
     return null;
   }
   return {
-    running: sharedClient.isRunning(),
-    pendingRequests: sharedClient.pendingRequestCount(),
-    command: sharedClient.commandDescription(),
-    lastError: sharedClient.lastErrorMessage(),
-    runningVersion: sharedClient.getServerInfo()?.version,
+    running: client.isRunning(),
+    pendingRequests: client.pendingRequestCount(),
+    command: client.commandDescription(),
+    lastError: client.lastErrorMessage(),
+    runningVersion: client.getServerInfo()?.version,
   };
 }

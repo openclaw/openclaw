@@ -28,6 +28,11 @@
             "additionalProperties": { "type": "string" },
             "description": "Extra env vars injected into the server process."
           },
+          "modelProvider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Provider identity stamped onto thread/start + thread/fork and persisted in the session binding. Defaults to 'anthropic'. A second bridge-backed extension pointed at an Anthropic-compatible endpoint (e.g. Z.ai) sets this to its own provider id so sessions are correctly attributed instead of reporting the real-Anthropic default."
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "untrusted", "on-failure", "on-request"],
