@@ -5,6 +5,7 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { SystemEvent } from "./system-events.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
   /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
 
@@ -223,30 +224,57 @@ export function isCronSystemEvent(evt: string) {
 export function isSlackInteractionEvent(event: Pick<SystemEvent, "contextKey" | "text">): boolean {
   return Boolean(
     event.contextKey?.startsWith("slack:interaction:") &&
+    event.text.startsWith(SLACK_INTERACTION_EVENT_PREFIX) &&
     !isExecCompletionEvent(event.text) &&
     !isHeartbeatNoiseEvent(event.text),
   );
+}
+
+// The Slack plugin enqueues interaction events with a "Slack interaction: " prefix
+// followed by a JSON object containing top-level actionId/value fields (and other
+// selected/input values for select/modal components). This helper strips the prefix
+// and extracts the fields the heartbeat prompt needs.
+function parseSlackInteractionSummary(eventText: string): {
+  actionId: string | undefined;
+  value: string | undefined;
+  selectedValues: string[] | undefined;
+  inputValue: string | undefined;
+} {
+  if (!eventText.startsWith(SLACK_INTERACTION_EVENT_PREFIX)) {
+    return {
+      actionId: undefined,
+      value: undefined,
+      selectedValues: undefined,
+      inputValue: undefined,
+    };
+  }
+  try {
+    const parsed = JSON.parse(eventText.slice(SLACK_INTERACTION_EVENT_PREFIX.length)) as {
+      actionId?: string;
+      value?: string;
+      selectedValues?: string[];
+      inputValue?: string;
+    };
+    return {
+      actionId: parsed.actionId,
+      value: parsed.value,
+      selectedValues: Array.isArray(parsed.selectedValues) ? parsed.selectedValues : undefined,
+      inputValue: parsed.inputValue,
+    };
+  } catch {
+    return {
+      actionId: undefined,
+      value: undefined,
+      selectedValues: undefined,
+      inputValue: undefined,
+    };
+  }
 }
 
 // Cap the number of Slack interactions rendered in a single heartbeat prompt to prevent
 // prompt bloat when many rapid clicks are coalesced into one wake. Overflow is summarized
 // so the user knows additional clicks happened without exploding the context window.
 const MAX_SLACK_INTERACTION_EVENTS = 5;
-
-function parseSlackInteractionAction(eventText: string): {
-  actionId: string | undefined;
-  value: string | undefined;
-} {
-  try {
-    const parsed = JSON.parse(eventText) as {
-      actions?: Array<{ action_id?: string; value?: string }>;
-    };
-    const action = parsed.actions?.[0];
-    return { actionId: action?.action_id, value: action?.value };
-  } catch {
-    return { actionId: undefined, value: undefined };
-  }
-}
 
 export function buildSlackInteractionEventPrompt(
   events: string[],
@@ -260,12 +288,20 @@ export function buildSlackInteractionEventPrompt(
   // rendered list; consumed entries beyond the cap are still removed from the queue, but
   // the summary line tells the model additional interactions arrived.
   const rendered = events.slice(0, MAX_SLACK_INTERACTION_EVENTS).map((eventText, index) => {
-    const { actionId, value } = parseSlackInteractionAction(eventText);
-    const actionDescription = actionId ? `action_id="${actionId}"` : "a Slack button";
-    const valueDescription = value ? `value="${value}"` : "";
-    return `${index + 1}. ${actionDescription}${
-      valueDescription ? ` with ${valueDescription}` : ""
-    }`;
+    const { actionId, value, selectedValues, inputValue } = parseSlackInteractionSummary(eventText);
+    const idPart = actionId ? `action_id="${actionId}"` : "a Slack interaction";
+    const valueParts: string[] = [];
+    if (value != null && value !== "") {
+      valueParts.push(`value="${value}"`);
+    }
+    if (selectedValues != null && selectedValues.length > 0) {
+      valueParts.push(`selected=${JSON.stringify(selectedValues)}`);
+    }
+    if (inputValue != null && inputValue !== "") {
+      valueParts.push(`input="${inputValue}"`);
+    }
+    const valuePart = valueParts.length > 0 ? ` with ${valueParts.join(", ")}` : "";
+    return `${index + 1}. ${idPart}${valuePart}`;
   });
 
   const remaining = events.length - rendered.length;
@@ -277,7 +313,7 @@ export function buildSlackInteractionEventPrompt(
     ? "Use heartbeat_respond to acknowledge the interaction(s)."
     : "Reply HEARTBEAT_OK.";
 
-  const base = `Slack interactive button(s) were clicked:\n${rendered.join("\n")}\n\nPlease act on these interaction(s).`;
+  const base = `Slack interactive component(s) were used:\n${rendered.join("\n")}\n\nPlease act on these interaction(s).`;
 
   return options.deliverToUser
     ? `${base} ${completionInstruction}`

@@ -181,10 +181,10 @@ describe("heartbeat event classification", () => {
 });
 
 describe("isSlackInteractionEvent", () => {
-  it("returns true for Slack block_actions events with slack:interaction contextKey", () => {
+  it("returns true for Slack interaction events with slack:interaction contextKey", () => {
     expect(
       isSlackInteractionEvent({
-        text: JSON.stringify({ type: "block_actions", actions: [{ action_id: "approve" }] }),
+        text: `Slack interaction: ${JSON.stringify({ actionId: "approve", value: "merge-99544" })}`,
         contextKey: "slack:interaction:C123:1234567890.123456:approve",
       }),
     ).toBe(true);
@@ -208,10 +208,19 @@ describe("isSlackInteractionEvent", () => {
     ).toBe(false);
   });
 
-  it("returns false for non-Slack events", () => {
+  it("returns false for events missing the Slack interaction prefix", () => {
     expect(
       isSlackInteractionEvent({
         text: JSON.stringify({ type: "block_actions", actions: [{ action_id: "approve" }] }),
+        contextKey: "slack:interaction:C123:1234567890.123456:approve",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for non-Slack events", () => {
+    expect(
+      isSlackInteractionEvent({
+        text: `Slack interaction: ${JSON.stringify({ actionId: "approve" })}`,
         contextKey: "cron:daily-reminder",
       }),
     ).toBe(false);
@@ -223,14 +232,11 @@ describe("buildSlackInteractionEventPrompt", () => {
     {
       name: "builds user-facing prompt with action_id and value",
       events: [
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-        }),
+        `Slack interaction: ${JSON.stringify({ actionId: "approve_pr", value: "merge-99544" })}`,
       ],
       opts: { deliverToUser: true, useHeartbeatResponseTool: false },
       expected: [
-        "Slack interactive button(s) were clicked",
+        "Slack interactive component(s) were used",
         '1. action_id="approve_pr"',
         'value="merge-99544"',
         "Please act on these interaction(s)",
@@ -240,37 +246,41 @@ describe("buildSlackInteractionEventPrompt", () => {
     {
       name: "builds internal-only prompt",
       events: [
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-        }),
+        `Slack interaction: ${JSON.stringify({ actionId: "approve_pr", value: "merge-99544" })}`,
       ],
       opts: { deliverToUser: false, useHeartbeatResponseTool: false },
       expected: ["Handle the result internally", "heartbeat_ok"],
-      unexpected: ["Please relay"],
+      unexpected: ["Reply HEARTBEAT_OK"],
     },
     {
       name: "uses heartbeat_respond instruction when response tool is enabled",
       events: [
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-        }),
+        `Slack interaction: ${JSON.stringify({ actionId: "approve_pr", value: "merge-99544" })}`,
       ],
       opts: { deliverToUser: true, useHeartbeatResponseTool: true },
       expected: ["Use heartbeat_respond", "acknowledge the interaction(s)"],
     },
     {
+      name: "renders select menu values and input values",
+      events: [
+        `Slack interaction: ${JSON.stringify({
+          actionId: "choose_options",
+          selectedValues: ["option-a", "option-b"],
+          inputValue: "free-form text",
+        })}`,
+      ],
+      opts: { deliverToUser: true, useHeartbeatResponseTool: false },
+      expected: [
+        'action_id="choose_options"',
+        'selected=["option-a","option-b"]',
+        'input="free-form text"',
+      ],
+    },
+    {
       name: "renders multiple queued interactions and preserves render/consume symmetry",
       events: [
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-        }),
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: "reject_pr", value: "close-99544" }],
-        }),
+        `Slack interaction: ${JSON.stringify({ actionId: "approve_pr", value: "merge-99544" })}`,
+        `Slack interaction: ${JSON.stringify({ actionId: "reject_pr", value: "close-99544" })}`,
       ],
       opts: { deliverToUser: true, useHeartbeatResponseTool: false },
       expected: [
@@ -283,11 +293,10 @@ describe("buildSlackInteractionEventPrompt", () => {
     },
     {
       name: "caps at MAX_SLACK_INTERACTION_EVENTS and reports overflow",
-      events: Array.from({ length: 6 }, (_, index) =>
-        JSON.stringify({
-          type: "block_actions",
-          actions: [{ action_id: `action_${index}`, value: `value_${index}` }],
-        }),
+      events: Array.from(
+        { length: 6 },
+        (_, index) =>
+          `Slack interaction: ${JSON.stringify({ actionId: `action_${index}`, value: `value_${index}` })}`,
       ),
       opts: { deliverToUser: true, useHeartbeatResponseTool: false },
       expected: ["action_0", "action_4", "...and 1 more Slack interaction(s)"],

@@ -53,10 +53,10 @@ describe("runHeartbeatOnce Slack interaction", () => {
   it("injects a Slack interaction system event into the heartbeat prompt", async () => {
     const tempDirs = useAutoCleanupTempDirTracker();
     const { cfg, sessionKey } = await buildConfig(tempDirs);
-    const interactionPayload = JSON.stringify({
-      type: "block_actions",
-      actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-    });
+    const interactionPayload = `Slack interaction: ${JSON.stringify({
+      actionId: "approve_pr",
+      value: "merge-99544",
+    })}`;
     enqueueSystemEvent(interactionPayload, {
       sessionKey,
       contextKey: "slack:interaction:C123:1234567890.123456:approve_pr",
@@ -80,7 +80,7 @@ describe("runHeartbeatOnce Slack interaction", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const body = replySpy.mock.calls[0][0] as { Body?: string; Provider?: string };
     expect(body.Provider).toBe("heartbeat");
-    expect(body.Body).toContain("Slack interactive button(s) were clicked");
+    expect(body.Body).toContain("Slack interactive component(s) were used");
     expect(body.Body).toContain('action_id="approve_pr"');
     expect(body.Body).toContain('value="merge-99544"');
   });
@@ -91,20 +91,14 @@ describe("runHeartbeatOnce Slack interaction", () => {
 
     // Simulate two rapid Slack button clicks that get coalesced into one heartbeat wake.
     enqueueSystemEvent(
-      JSON.stringify({
-        type: "block_actions",
-        actions: [{ action_id: "approve_pr", value: "merge-99544" }],
-      }),
+      `Slack interaction: ${JSON.stringify({ actionId: "approve_pr", value: "merge-99544" })}`,
       {
         sessionKey,
         contextKey: "slack:interaction:C123:1234567890.123456:approve_pr",
       },
     );
     enqueueSystemEvent(
-      JSON.stringify({
-        type: "block_actions",
-        actions: [{ action_id: "reject_pr", value: "close-99544" }],
-      }),
+      `Slack interaction: ${JSON.stringify({ actionId: "reject_pr", value: "close-99544" })}`,
       {
         sessionKey,
         contextKey: "slack:interaction:C123:1234567890.123456:reject_pr",
