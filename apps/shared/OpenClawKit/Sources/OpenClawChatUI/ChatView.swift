@@ -245,6 +245,8 @@ public struct OpenClawChatView: View {
                     if self.isAtLiveEdge {
                         self.followTarget = .latest
                         self.hasNewerContentBelow = false
+                    } else {
+                        self.hasNewerContentBelow = true
                     }
                 }
             }
@@ -585,11 +587,11 @@ public struct OpenClawChatView: View {
                 after: latestUserMessageID,
                 visibleIDs: self.visibleMessages.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
-            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor, animated: false)
+            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
         } else {
             self.followTarget = .latest
             self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
+            self.moveScrollPosition(to: self.scrollerBottomID)
         }
     }
 
@@ -603,7 +605,7 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = nil
             self.followTarget = .latest
             self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
+            self.moveScrollPosition(to: self.scrollerBottomID)
             return
         }
         let visibleMessages = self.visibleMessages
@@ -638,13 +640,14 @@ public struct OpenClawChatView: View {
         switch self.followTarget {
         case .latest:
             self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
+            self.moveScrollPosition(to: self.scrollerBottomID)
         case let .user(messageID):
+            // Reader policy stays on this turn after the one-shot scroll binding is released. Reissuing
+            // that target for every streaming delta can loop SwiftUI layout and starve interaction.
             self.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: messageID,
                 visibleIDs: visibleMessages.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
-            self.moveScrollPosition(to: messageID, anchor: Layout.newTurnAnchor, animated: false)
         case nil:
             self.hasNewerContentBelow = true
         }
@@ -652,13 +655,18 @@ public struct OpenClawChatView: View {
 
     private func moveScrollPosition(
         to id: UUID,
-        anchor: UnitPoint = .bottom,
-        animated: Bool = true)
+        anchor: UnitPoint = .bottom)
     {
-        var transaction = Transaction(animation: animated ? .snappy(duration: 0.22) : nil)
+        var transaction = Transaction(animation: nil)
         transaction.scrollTargetAnchor = anchor
         withTransaction(transaction) {
             self.scrollPosition = id
+        }
+        DispatchQueue.main.async {
+            guard self.scrollPosition == id else { return }
+            // Reader policy lives in followTarget. The binding is only a one-shot positioning request;
+            // keeping an overflowing transcript bound to any row can loop SwiftUI scroll layout.
+            self.scrollPosition = nil
         }
     }
 

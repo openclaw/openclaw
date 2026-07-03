@@ -121,13 +121,13 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
-  fun manuallyCrossingReadAnchorDoesNotResumeFollowing() {
+  fun manualDepartureOffersJumpWithoutResumingFollowing() {
     val timeline = activeTimeline(user("user-1"), stream = "reply")
     val following =
       ChatReaderState(
         initialized = true,
         followTarget = ChatScrollFollowTarget.ReadAnchor,
-        hasNewerContent = true,
+        hasNewerContent = false,
         latestUserMessageId = "user-1",
       )
 

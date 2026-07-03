@@ -262,7 +262,7 @@ internal fun ChatReaderState.onViewportChanged(
     }
   return copy(
     followTarget = nextTarget,
-    hasNewerContent = if (nextTarget == ChatScrollFollowTarget.LatestContent) false else hasNewerContent,
+    hasNewerContent = nextTarget == null && timeline.latestContentIndex != null,
   )
 }
 
