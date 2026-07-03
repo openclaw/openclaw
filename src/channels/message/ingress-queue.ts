@@ -271,6 +271,7 @@ function completedRecord<TCompletedMetadata>(
 }
 
 function failedRecord<TPayload>(row: ChannelIngressRow): ChannelIngressQueueFailedRecord<TPayload> {
+  const payload = parseJson(row.payload_json);
   return {
     id: row.event_id,
     channelId: row.channel_id,
@@ -279,7 +280,7 @@ function failedRecord<TPayload>(row: ChannelIngressRow): ChannelIngressQueueFail
     failedAt: row.failed_at ?? row.updated_at,
     reason: row.failed_reason ?? "failed",
     ...(row.last_error === null ? {} : { message: row.last_error }),
-    ...(row.payload_json === null ? {} : { payload: parseJson(row.payload_json) as TPayload }),
+    ...(payload === null ? {} : { payload: payload as TPayload }),
   };
 }
 

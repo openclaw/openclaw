@@ -477,6 +477,50 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("omits payload for old failed tombstones with cleared payload storage", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      await queue.enqueue("old-failed", { text: "old payload" });
+      const claimed = await queue.claim("old-failed", { ownerId: "worker" });
+      if (!claimed) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claimed, { reason: "poison", message: "bad", failedAt: 20 });
+
+      const database = openOpenClawStateDatabase({
+        env: createStateDirEnv(stateDir),
+      });
+      const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .updateTable("channel_ingress_events")
+          .set({ payload_json: "null" })
+          .where("event_id", "=", "old-failed"),
+      );
+
+      expect(await queue.enqueue("old-failed", { text: "new payload" })).toEqual({
+        kind: "failed",
+        duplicate: true,
+        record: {
+          id: "old-failed",
+          channelId: "test",
+          accountId: "account",
+          queueName: JSON.stringify(["test", "account"]),
+          failedAt: 20,
+          reason: "poison",
+          message: "bad",
+        },
+      });
+    });
+  });
+
   it("recovers stale claims and prunes completed or failed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({
