@@ -130,6 +130,7 @@ function createReplyOperation(): ReplyOperation {
     }),
     completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
+    freezeAbort: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
     terminalRecovery: false,
