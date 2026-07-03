@@ -877,6 +877,20 @@ export async function dispatchStagedPostCompactionDelegates(
       const spawnTraceparent = resolveContinuationTraceparent(delegate.traceparent);
       const nextHop = currentChainCount + 1;
       const dispatchChainId = currentChainId ?? generateChainId();
+      const childSessionKey = delegate.flowId
+        ? deriveContinuationDelegateChildSessionKeyFromParent(sessionKey, delegate.flowId)
+        : undefined;
+      if (
+        childSessionKey &&
+        (hasActiveSubagentRegistryRun(childSessionKey) ||
+          (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
+      ) {
+        currentChainCount = nextHop;
+        currentChainId = dispatchChainId;
+        dispatched++;
+        dispatchedFlowIds.push(delegate.flowId!);
+        continue;
+      }
       const spawnResult = await spawnSubagentDirect(
         {
           task:

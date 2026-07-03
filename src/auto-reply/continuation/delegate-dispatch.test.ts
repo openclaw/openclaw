@@ -2080,6 +2080,25 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
   });
 
+  it("finalizes a crash-orphaned row whose deterministic child was already accepted", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-accepted-child";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate already accepted child");
+    const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
   it("leaves a transient spawn-failed row running and recoverable — no terminalize, no silent drop", async () => {
     const sessionKey = "agent:main:subagent:pc-recover-fail";
     loadSessionStoreForRecoveryMock.mockReturnValue({

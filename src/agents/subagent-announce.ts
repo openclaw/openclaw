@@ -454,7 +454,7 @@ async function drainChildContinuationQueue(params: {
     // persist patterns (#1158).
     const persistAdvancedChildChainState = async (
       advanced: ContinuationChainState,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       chainStateFloor = mergeContinuationChainStateFloor(advanced, chainStateFloor);
       // In-memory mirror so any post-drain reads of the same entry (incl. the
       // hedge's loadFreshChainState) see the advanced state immediately.
@@ -467,6 +467,7 @@ async function drainChildContinuationQueue(params: {
         // instead of re-minting a fresh one (stable chain correlation).
         ...(advanced.chainId ? { chainId: advanced.chainId } : {}),
       });
+      let wroteDurableEntry = false;
       try {
         const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
         const storePath = resolveStorePathLazy(cfg.session?.store, { agentId });
@@ -475,6 +476,7 @@ async function drainChildContinuationQueue(params: {
           if (!existing) {
             return;
           }
+          wroteDurableEntry = true;
           store[params.childSessionKey] = {
             ...existing,
             continuationChainCount: advanced.currentChainCount,
@@ -489,10 +491,19 @@ async function drainChildContinuationQueue(params: {
         defaultRuntime.error?.(
           `[continuation:drain-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
         );
+        return false;
       }
+      if (!wroteDurableEntry) {
+        defaultRuntime.error?.(
+          `[continuation:drain-persist-missing-entry] child=${params.childSessionKey} advanced chain state was not durably written`,
+        );
+      }
+      return wroteDurableEntry;
     };
+    let forceDispatchRegardlessOfDelay = params.dispatchRegardlessOfDelay === true;
     if (params.chainStateOverride) {
-      await persistAdvancedChildChainState(chainState);
+      const overridePersisted = await persistAdvancedChildChainState(chainState);
+      forceDispatchRegardlessOfDelay ||= !overridePersisted;
     }
     const dispatchResult = await dispatchToolDelegates({
       sessionKey: params.childSessionKey,
@@ -505,12 +516,14 @@ async function drainChildContinuationQueue(params: {
         agentThreadId: params.requesterOrigin?.threadId,
       },
       maxChainLength: dispatchConfig.maxChainLength,
-      ...(params.dispatchRegardlessOfDelay ? { dispatchQueuedRegardlessOfDelay: true } : {}),
+      ...(forceDispatchRegardlessOfDelay ? { dispatchQueuedRegardlessOfDelay: true } : {}),
       // A hedge-fired dispatch (delayed delegate) runs with no enclosing runner
       // frame, so supply the fresh-load + persist callbacks the shared hedge
       // needs to advance the child chain state durably across fires (#1158).
       loadFreshChainState: loadFreshChildChainState,
-      persistChainState: persistAdvancedChildChainState,
+      persistChainState: async (advanced) => {
+        await persistAdvancedChildChainState(advanced);
+      },
       // Descendants of a silent/wake parent chain must stay internal even though
       // this drain runs before the later parentWasSilent chain-hop guards (#1158).
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),

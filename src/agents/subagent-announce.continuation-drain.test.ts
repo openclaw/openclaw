@@ -603,6 +603,52 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
+  it("force-dispatches delayed child drains when the post-bracket override cannot be persisted (#1159)", async () => {
+    const childEntry = {
+      sessionId: "session-child",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1_700_000_000_000,
+      continuationChainTokens: 7_000,
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:override-persist-fail": childEntry,
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    updateSessionStoreMock.mockRejectedValueOnce(new Error("session store write failed"));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:override-persist-fail",
+      childRunId: "run-override-persist-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: bracket delegate]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
+      dispatchQueuedRegardlessOfDelay?: boolean;
+    };
+    expect(call.chainState).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(call.dispatchQueuedRegardlessOfDelay).toBe(true);
+  });
+
   it("defaults chain state to 0 when child session has no chain fields", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
