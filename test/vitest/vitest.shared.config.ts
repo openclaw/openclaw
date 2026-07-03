@@ -344,6 +344,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/net-policy/url-protocol",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-protocol.ts"),
+      },
+      {
         find: "@openclaw/net-policy/url-userinfo",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
       },

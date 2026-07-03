@@ -387,6 +387,7 @@ function buildNetPolicyDistEntries(): Record<string, string> {
     ip: "packages/net-policy/src/ip.ts",
     ipv4: "packages/net-policy/src/ipv4.ts",
     "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-protocol": "packages/net-policy/src/url-protocol.ts",
     "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
   };
 }

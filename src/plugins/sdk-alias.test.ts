@@ -1593,6 +1593,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "ip.ts",
       distFile: "ip.mjs",
     });
+    const netPolicyUrlProtocol = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "net-policy",
+      srcFile: "url-protocol.ts",
+      distFile: "url-protocol.mjs",
+    });
     const modelCatalogProviderId = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "model-catalog-core",
@@ -1617,6 +1623,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
     fs.rmSync(netPolicyIp.distFile);
+    fs.rmSync(netPolicyUrlProtocol.distFile);
     fs.rmSync(modelCatalogProviderId.distFile);
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -1680,6 +1687,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/net-policy/ip"] ?? "")).toBe(
       fs.realpathSync(netPolicyIp.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
+      fs.realpathSync(netPolicyUrlProtocol.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-id"] ?? "")).toBe(
       fs.realpathSync(modelCatalogProviderId.srcFile),
@@ -1762,8 +1772,8 @@ describe("plugin sdk alias helpers", () => {
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
-      srcFile: "redact-sensitive-url.ts",
-      distFile: "redact-sensitive-url.mjs",
+      srcFile: "url-protocol.ts",
+      distFile: "url-protocol.mjs",
     });
     const modelCatalogCore = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1804,7 +1814,7 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
     );
-    expect(fs.realpathSync(aliases["@openclaw/net-policy/redact-sensitive-url"] ?? "")).toBe(
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/url-protocol"] ?? "")).toBe(
       fs.realpathSync(netPolicy.distFile),
     );
     expect(
