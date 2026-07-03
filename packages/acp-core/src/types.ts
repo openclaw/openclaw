@@ -1,5 +1,8 @@
 // ACP Core type module defines shared TypeScript contracts.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringOption,
+} from "@openclaw/normalization-core/string-coerce";
 
 const ACP_PROVENANCE_MODE_VALUES = ["off", "meta", "meta+receipt"] as const;
 
@@ -14,9 +17,7 @@ export function normalizeAcpProvenanceMode(
   if (!normalized) {
     return undefined;
   }
-  return (ACP_PROVENANCE_MODE_VALUES as readonly string[]).includes(normalized)
-    ? (normalized as AcpProvenanceMode)
-    : undefined;
+  return readStringOption(normalized, ACP_PROVENANCE_MODE_VALUES);
 }
 
 export type AcpSession = {

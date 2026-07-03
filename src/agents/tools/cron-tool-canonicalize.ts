@@ -4,6 +4,7 @@
  * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
@@ -56,7 +57,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
-  return typeof value === "string" && (CRON_SCHEDULE_KINDS as readonly string[]).includes(value);
+  return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {

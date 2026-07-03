@@ -3,6 +3,57 @@ export function readStringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+type StringOptions<T extends string> = readonly T[] | ReadonlySet<T>;
+
+/** Narrows a value to one of the caller-owned string options. */
+export function isStringOption<T extends string>(
+  value: unknown,
+  options: StringOptions<T>,
+): value is T {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return Array.isArray(options)
+    ? (options as readonly string[]).includes(value)
+    : (options as ReadonlySet<string>).has(value);
+}
+
+/** Reads a value only when it matches one of the caller-owned string options. */
+export function readStringOption<T extends string>(
+  value: unknown,
+  options: StringOptions<T>,
+): T | undefined {
+  return isStringOption(value, options) ? value : undefined;
+}
+
+/** Reads the first string-valued alias, preserving whitespace and empty strings. */
+export function readStringAlias(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = readStringValue(record[key]);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/** Reads and trims the first non-empty string-valued alias. */
+export function readTrimmedStringAlias(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = normalizeOptionalString(record[key]);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 /** Trims string input and returns null for non-strings or empty strings. */
 export function normalizeNullableString(value: unknown): string | null {
   if (typeof value !== "string") {

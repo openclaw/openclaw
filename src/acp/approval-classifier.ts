@@ -5,6 +5,7 @@ import { asRecord } from "@openclaw/acp-core/record-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readTrimmedStringAlias,
 } from "@openclaw/normalization-core/string-coerce";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
@@ -52,13 +53,7 @@ function readFirstStringValue(
   if (!source) {
     return undefined;
   }
-  for (const key of keys) {
-    const value = normalizeOptionalString(source[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(source, keys);
 }
 
 function normalizeToolName(value: string): string | undefined {

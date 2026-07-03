@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readTrimmedStringAlias } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
 import {
   fetchJson,
@@ -40,11 +41,9 @@ function readFirstMediaPath(value: unknown): string | undefined {
     return undefined;
   }
   const media = value as Record<string, unknown>;
-  for (const key of ["mediaUrl", "path", "filePath"] as const) {
-    const candidate = media[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
+  const directPath = readTrimmedStringAlias(media, ["mediaUrl", "path", "filePath"]);
+  if (directPath) {
+    return directPath;
   }
   const mediaUrls = media.mediaUrls;
   if (Array.isArray(mediaUrls)) {

@@ -1,4 +1,5 @@
 // Shared model catalog data contracts for provider manifests and normalized rows.
+import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 
 /** Supported API protocols for model catalog entries. */
 export const MODEL_CATALOG_APIS = [
@@ -33,7 +34,7 @@ export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)
 
 /** Narrow a string to a supported model catalog thinking format. */
 export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
-  return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
+  return isStringOption(value, MODEL_CATALOG_THINKING_FORMATS);
 }
 
 /** Compatibility flags and provider-specific routing metadata for one model. */

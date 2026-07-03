@@ -4,6 +4,8 @@
  * Keeps route normalization, schema tests, and action dispatch using the same
  * action names, mouse buttons, and keyboard modifier vocabulary.
  */
+import { isStringOption } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const ACT_KINDS = [
   "batch",
   "click",
@@ -25,10 +27,7 @@ export type ActKind = (typeof ACT_KINDS)[number];
 
 /** Return true when a raw value names a supported browser action kind. */
 export function isActKind(value: unknown): value is ActKind {
-  if (typeof value !== "string") {
-    return false;
-  }
-  return (ACT_KINDS as readonly string[]).includes(value);
+  return isStringOption(value, ACT_KINDS);
 }
 
 type ClickButton = "left" | "right" | "middle";

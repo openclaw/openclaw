@@ -5,6 +5,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readStringAlias,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { telegramHtmlToPlainTextFallback } from "../format.js";
 
@@ -131,13 +132,7 @@ function renderRichInlineText(value: unknown): string {
   if (directText !== undefined) {
     return renderRichInlineText(directText);
   }
-  for (const key of ["alternative_text", "expression"] as const) {
-    const text = value[key];
-    if (typeof text === "string") {
-      return text;
-    }
-  }
-  return "";
+  return readStringAlias(value, ["alternative_text", "expression"]) ?? "";
 }
 
 function renderRichBlocks(value: unknown): string {

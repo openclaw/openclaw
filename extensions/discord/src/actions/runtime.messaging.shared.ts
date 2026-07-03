@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime.messaging.shared behavior.
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { readTrimmedStringAlias } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
@@ -116,14 +117,7 @@ function readDiscordChannelStringField(value: unknown, ...keys: string[]): strin
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(value as Record<string, unknown>, keys);
 }
 
 function readDiscordChannelType(value: unknown): number | undefined {

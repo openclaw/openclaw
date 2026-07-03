@@ -1,4 +1,5 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
+import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -101,9 +102,7 @@ type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
 
 function isSessionKeyCompatMethodName(value: PropertyKey): value is SessionKeyCompatMethodName {
-  return (
-    typeof value === "string" && (SESSION_KEY_COMPAT_METHODS as readonly string[]).includes(value)
-  );
+  return isStringOption(value, SESSION_KEY_COMPAT_METHODS);
 }
 
 function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(

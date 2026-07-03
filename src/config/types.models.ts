@@ -1,4 +1,5 @@
 // Defines model selection and provider configuration types.
+import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
@@ -74,7 +75,7 @@ export const MODEL_THINKING_FORMATS = [
 
 /** Runtime guard for config-provided thinking format strings. */
 export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
-  return (MODEL_THINKING_FORMATS as readonly string[]).includes(value);
+  return isStringOption(value, MODEL_THINKING_FORMATS);
 }
 
 /** Provider/model compatibility switches consumed by request builders and tool schema adapters. */

@@ -3,6 +3,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readTrimmedStringAlias,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -48,13 +49,7 @@ function readFirstString(
   params: Record<string, unknown>,
   keys: readonly string[],
 ): string | undefined {
-  for (const key of keys) {
-    const value = normalizeOptionalString(params[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(params, keys);
 }
 
 function resolveSourceReplyTarget(params: Record<string, unknown>): string | undefined {

@@ -3,6 +3,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  readTrimmedStringAlias,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -526,12 +527,7 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
-  for (const key of ["target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
-  return false;
+  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
 
 function hasExplicitTargetParam(params: Record<string, unknown>): boolean {

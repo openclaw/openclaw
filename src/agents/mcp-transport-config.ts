@@ -1,7 +1,10 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readTrimmedStringAlias,
+} from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
@@ -107,14 +110,7 @@ function getStringField(rawServer: unknown, keys: readonly string[]): string | u
   if (!rawServer || typeof rawServer !== "object") {
     return undefined;
   }
-  const record = rawServer as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(rawServer as Record<string, unknown>, keys);
 }
 
 function getRequestedTransport(rawServer: unknown): string {

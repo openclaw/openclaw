@@ -1,6 +1,9 @@
 // Fetches and normalizes MiniMax provider usage records.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readTrimmedStringAlias,
+} from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
 import {
@@ -185,13 +188,7 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
 }
 
 function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(record, keys);
 }
 
 function parseEpoch(value: unknown): number | undefined {

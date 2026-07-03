@@ -12,7 +12,11 @@ export {
   normalizeOptionalStringifiedId,
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
+  isStringOption,
+  readStringAlias,
+  readStringOption,
   readStringValue,
+  readTrimmedStringAlias,
 } from "../../packages/normalization-core/src/string-coerce.js";
 export {
   asFiniteNumberInRange,

@@ -1,13 +1,12 @@
 // Feishu plugin module implements comment target behavior.
+import { readStringOption } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export const FEISHU_COMMENT_FILE_TYPES = ["doc", "docx", "file", "sheet", "slides"] as const;
 
 export type CommentFileType = (typeof FEISHU_COMMENT_FILE_TYPES)[number];
 
 export function normalizeCommentFileType(value: unknown): CommentFileType | undefined {
-  return typeof value === "string" &&
-    (FEISHU_COMMENT_FILE_TYPES as readonly string[]).includes(value)
-    ? (value as CommentFileType)
-    : undefined;
+  return readStringOption(value, FEISHU_COMMENT_FILE_TYPES);
 }
 
 type FeishuCommentTarget = {

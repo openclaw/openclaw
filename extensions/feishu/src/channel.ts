@@ -32,7 +32,11 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readTrimmedStringAlias,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
@@ -549,16 +553,7 @@ function readFirstString(
   keys: string[],
   fallback?: string | null,
 ): string | undefined {
-  for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  if (typeof fallback === "string" && fallback.trim()) {
-    return fallback.trim();
-  }
-  return undefined;
+  return readTrimmedStringAlias(params, keys) ?? normalizeOptionalString(fallback);
 }
 
 function readOptionalPositiveInteger(
