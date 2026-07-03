@@ -67,6 +67,7 @@ type NodeMediaAction =
   | "screen_snapshot";
 const MAX_RECORDING_DURATION_MS = 300_000;
 const RECORDING_INVOKE_GRACE_MS = 30_000;
+const RECORDING_TRANSPORT_GRACE_MS = 30_000;
 
 type ExecuteNodeMediaActionParams = {
   action: NodeMediaAction;
@@ -76,8 +77,22 @@ type ExecuteNodeMediaActionParams = {
   imageSanitization: ImageSanitizationLimits;
 };
 
-function resolveRecordingTimeoutMs(gatewayOpts: GatewayCallOptions, durationMs: number): number {
-  return gatewayOpts.timeoutMs ?? durationMs + RECORDING_INVOKE_GRACE_MS;
+function resolveRecordingTimeouts(params: {
+  input: Record<string, unknown>;
+  gatewayOpts: GatewayCallOptions;
+  durationMs: number;
+}): { gatewayOpts: GatewayCallOptions; invokeTimeoutMs: number } {
+  const invokeTimeoutMs =
+    readPositiveIntegerParam(params.input, "invokeTimeoutMs") ??
+    params.durationMs + RECORDING_INVOKE_GRACE_MS;
+  // The Gateway transport starts before the forwarded node timer and must outlive it.
+  // Keep explicit transport and invoke overrides independent so callers can cancel either layer.
+  const transportTimeoutMs =
+    params.gatewayOpts.timeoutMs ?? invokeTimeoutMs + RECORDING_TRANSPORT_GRACE_MS;
+  return {
+    gatewayOpts: { ...params.gatewayOpts, timeoutMs: transportTimeoutMs },
+    invokeTimeoutMs,
+  };
 }
 
 export async function executeNodeMediaAction(
@@ -327,9 +342,8 @@ async function executeCameraClip({
     typeof params.deviceId === "string" && params.deviceId.trim()
       ? params.deviceId.trim()
       : undefined;
-  const timeoutMs = resolveRecordingTimeoutMs(gatewayOpts, durationMs);
-  const invokeGatewayOpts = { ...gatewayOpts, timeoutMs };
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", invokeGatewayOpts, {
+  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
     nodeId,
     command: "camera.clip",
     params: {
@@ -339,7 +353,7 @@ async function executeCameraClip({
       format: "mp4",
       deviceId,
     },
-    timeoutMs,
+    timeoutMs: timeouts.invokeTimeoutMs,
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseCameraClipPayload(raw?.payload);
@@ -378,9 +392,8 @@ async function executeScreenRecord({
     }) ?? 10;
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const timeoutMs = resolveRecordingTimeoutMs(gatewayOpts, durationMs);
-  const invokeGatewayOpts = { ...gatewayOpts, timeoutMs };
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", invokeGatewayOpts, {
+  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
     nodeId,
     command: "screen.record",
     params: {
@@ -390,7 +403,7 @@ async function executeScreenRecord({
       format: "mp4",
       includeAudio,
     },
-    timeoutMs,
+    timeoutMs: timeouts.invokeTimeoutMs,
     idempotencyKey: crypto.randomUUID(),
   });
   const payload = parseScreenRecordPayload(raw?.payload);
