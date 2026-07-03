@@ -9,6 +9,11 @@ scenario:
     secondary:
       - runtime.delivery
   objective: Verify streaming channel replies produce visible previews that resolve to one final answer.
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        streaming:
+          mode: partial
   successCriteria:
     - The selected transport exposes at least one preview event before final delivery.
     - The final answer replaces or follows the preview without losing the requested text.
