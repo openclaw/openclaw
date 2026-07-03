@@ -111,6 +111,21 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
   };
 }
 
+function createNativeResponsesModel(): Model<"openai-responses"> {
+  return {
+    id: "gpt-5.5",
+    name: "GPT-5.5",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
 function neverYieldsStream(): AsyncIterable<unknown> {
   // Simulates an HTTP stream that opened but never delivered the first SSE event.
   return {
@@ -839,6 +854,85 @@ describe("openai transport stream", () => {
       expect(summary).toContain("payload=");
       expect(summary).toContain("sk-abc");
       expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("redacts full Chat Completions payload debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const summary = testing.summarizeCompletionsPayload({
+        model: "gpt-5.5",
+        stream: true,
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "exec", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_1", content: "OC99241_TEXT_ONLY_MARKER" },
+        ],
+        tools: [{ type: "function", function: { name: "exec" } }],
+        apiKey: "sk-abcdefghijklmnopqrstuvwxyz",
+      });
+      expect(summary).toContain("payload=");
+      expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
+      expect(summary).toContain("sk-abc");
+      expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
+  it("includes text-only tool results in redacted Responses payload debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const params = buildOpenAIResponsesParams(
+        createNativeResponsesModel() as Model,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1|fc_1",
+                  name: "exec",
+                  arguments: {},
+                },
+              ],
+              timestamp: 1,
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_1|fc_1",
+              toolName: "exec",
+              content: [{ type: "text", text: "OC99241_TEXT_ONLY_MARKER" }],
+              timestamp: 2,
+            },
+          ],
+          tools: [],
+        },
+        {},
+      ) as { input?: Array<Record<string, unknown>> };
+      const summary = testing.summarizeResponsesPayload(params);
+      expect(summary).toContain("payload=");
+      expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
+      expect(summary).not.toContain("attached image");
+      expect(summary).not.toContain("attached media");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
@@ -12052,15 +12146,19 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       const output = params.input?.find((item) => item.type === "function_call_output");
       expect(output).toBeDefined();
 
-      // The marker text must be present in the serialized output
+      // The marker text must be present in the serialized provider payload.
       const outputText = output?.output as string;
       expect(typeof outputText).toBe("string");
+      const serializedPayload = JSON.stringify(params);
       expect(outputText).toContain(MARKER);
+      expect(serializedPayload).toContain(MARKER);
 
-      // Must NOT contain any image/attachment placeholder text
-      expect(outputText).not.toContain("(see attached image)");
-      expect(outputText).not.toContain("Attached image(s) from tool result:");
-      expect(outputText).not.toContain("image_url");
+      // Text-only tool results must not acquire media placeholders or image fields.
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
     });
 
     it("preserves text-only toolResult in Completions messages", () => {
@@ -12108,15 +12206,19 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
         undefined,
       ) as { messages: unknown[] };
 
-      // Find the tool result message in the converted output
+      // Find the tool result message in the converted output.
       const toolMsg = params.messages.find((m: any) => m.role === "tool" && m.content === MARKER);
       expect(toolMsg).toBeDefined();
       expect(toolMsg.content).toBe(MARKER);
+      const serializedPayload = JSON.stringify(params);
+      expect(serializedPayload).toContain(MARKER);
 
-      // Must NOT contain any image/attachment placeholder text
-      expect(toolMsg.content).not.toContain("(see attached image)");
-      expect(toolMsg.content).not.toContain("Attached image(s) from tool result:");
-      expect(toolMsg.content).not.toContain("image_url");
+      // Text-only tool results must not acquire media placeholders or image fields.
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
     });
 
     it("does not inject image placeholders for text-only toolResult even with mixed content models", () => {
@@ -12172,10 +12274,14 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
       const outputText = output?.output as string;
       expect(typeof outputText).toBe("string");
+      const serializedPayload = JSON.stringify(params);
       expect(outputText).toContain(MARKER);
-      expect(outputText).not.toContain("(see attached image)");
-      expect(outputText).not.toContain("Attached image(s) from tool result:");
-      expect(outputText).not.toContain("input_image");
+      expect(serializedPayload).toContain(MARKER);
+      expect(serializedPayload).not.toContain("attached");
+      expect(serializedPayload).not.toContain("attachments");
+      expect(serializedPayload).not.toContain("image_url");
+      expect(serializedPayload).not.toContain("input_image");
+      expect(serializedPayload).not.toContain("data:image/");
     });
   });
 });
