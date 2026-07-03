@@ -25,11 +25,12 @@ export type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
-function isEaccesError(err: unknown): boolean {
+function isProfileWriteError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  if ("code" in err && (err as NodeJS.ErrnoException).code === "EACCES") return true;
+  const code = "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
   if ("cause" in err && err.cause instanceof Error) {
-    return isEaccesError(err.cause);
+    return isProfileWriteError(err.cause);
   }
   return false;
 }
@@ -208,7 +209,7 @@ export async function doctorShellCompletion(
       await installCompletion(status.shell, true, cliName);
       note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     } catch (err) {
-      if (isEaccesError(err)) {
+      if (isProfileWriteError(err)) {
         const profilePath = resolveCompletionProfilePath(status.shell);
         note(
           `Shell completion not upgraded: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
@@ -262,7 +263,7 @@ export async function doctorShellCompletion(
         await installCompletion(status.shell, true, cliName);
         note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
       } catch (err) {
-        if (isEaccesError(err)) {
+        if (isProfileWriteError(err)) {
           const profilePath = resolveCompletionProfilePath(status.shell);
           note(
             `Shell completion not installed: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,

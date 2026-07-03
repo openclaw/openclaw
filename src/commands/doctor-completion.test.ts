@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -106,8 +106,21 @@ describe("shell completion health mapping", () => {
   });
 });
 
+const installCompletionMock = vi.hoisted(() => vi.fn());
+vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/completion-runtime.js")>();
+  return {
+    ...actual,
+    installCompletion: installCompletionMock,
+  };
+});
+
 describe("doctorShellCompletion", () => {
-  it("handles read-only shell profile gracefully when installing completion", async () => {
+  beforeEach(() => {
+    installCompletionMock.mockReset();
+  });
+
+  it("handles EACCES gracefully when installing completion", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-home-"));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-state-"));
     tempDirs.push(homeDir, stateDir);
@@ -121,11 +134,16 @@ describe("doctorShellCompletion", () => {
       '# test bashrc\n[ -f "/tmp/nonexistent" ] && source <(openclaw completion bash)\n',
       "utf-8",
     );
-    await fs.chmod(bashrcPath, 0o444);
 
     const cacheDir = path.join(stateDir, "completions");
     await fs.mkdir(cacheDir, { recursive: true });
     await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# completion cache\n", "utf-8");
+
+    const eaccesError = new Error(
+      `EACCES: permission denied, open '${bashrcPath}'`,
+    ) as NodeJS.ErrnoException;
+    eaccesError.code = "EACCES";
+    installCompletionMock.mockRejectedValue(eaccesError);
 
     const noteSpy = vi.spyOn(noteModule, "note");
 
@@ -147,7 +165,35 @@ describe("doctorShellCompletion", () => {
       expect.stringContaining("completion --install"),
       "Shell completion",
     );
+  });
 
-    await fs.chmod(bashrcPath, 0o644);
+  it("re-throws non-permission errors from installCompletion", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-home-non-eacces-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-state-non-eacces-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const bashrcPath = path.join(homeDir, ".bashrc");
+    await fs.writeFile(
+      bashrcPath,
+      '# test bashrc\n[ -f "/tmp/nonexistent" ] && source <(openclaw completion bash)\n',
+      "utf-8",
+    );
+
+    const cacheDir = path.join(stateDir, "completions");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# completion cache\n", "utf-8");
+
+    const enospcError = new Error("ENOSPC: no space left on device") as NodeJS.ErrnoException;
+    enospcError.code = "ENOSPC";
+    installCompletionMock.mockRejectedValue(enospcError);
+
+    await expect(
+      doctorShellCompletion({} as never, {
+        confirm: async () => true,
+      }),
+    ).rejects.toThrow("ENOSPC");
   });
 });
