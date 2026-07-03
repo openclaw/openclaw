@@ -152,7 +152,9 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("channel-message-flows", {
         omitOutboundSequence: true,
       }),
-    ).rejects.toThrow("qa flow callable not found: transport.waitForOutboundSequence");
+    ).rejects.toThrow(
+      'QA scenario "channel-message-flows" cannot run "waitForOutboundSequence": the active transport adapter does not implement this method.',
+    );
   });
 
   it("supports qaImport inside flow expressions", async () => {
