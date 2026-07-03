@@ -1453,6 +1453,27 @@ export function createFollowupRunner(params: {
         if (!isStrandedReplyRetryFollowup(effectiveQueued)) {
           return false;
         }
+        const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+          cfg: runtimeConfig,
+          ctx: {
+            ChatType: queued.originatingChatType ?? run.chatType,
+            InboundEventKind: queued.currentInboundEventKind,
+            Provider: queued.originatingChannel ?? run.messageProvider,
+            Surface: queued.originatingChannel ?? run.messageProvider,
+          },
+          requested: run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+          sendPolicy: resolveSendPolicy({
+            cfg: runtimeConfig,
+            entry: activeSessionEntry,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            channel:
+              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+            chatType: activeSessionEntry?.chatType,
+          }),
+        });
+        if (sourceReplyPolicy.sendPolicyDenied) {
+          return false;
+        }
         if (
           hasSuccessfulFollowupSourceReplyDelivery({
             didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
