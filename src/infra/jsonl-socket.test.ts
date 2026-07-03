@@ -166,27 +166,8 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer((socket) => {
-        socket.on("error", () => {
-          // The requester destroys the socket after accepting the line,
-          // so the producer may see EPIPE on the trailing write.
-        });
         socket.on("data", () => {
-          // Send a valid JSON line first, then oversized trailing data
-          // without a newline. The valid line should be accepted before
-          // the unterminated remainder hits the cap.
-          socket.write('{"ok":true}\n');
-          const chunk = "x".repeat(64 * 1024);
-          let writtenBytes = 0;
-          const writeChunk = () => {
-            while (writtenBytes <= testApi.JSONL_SOCKET_MAX_BUFFER_BYTES) {
-              writtenBytes += Buffer.byteLength(chunk, "utf8");
-              if (!socket.write(chunk)) {
-                socket.once("drain", writeChunk);
-                return;
-              }
-            }
-          };
-          writeChunk();
+          socket.end(`{"type":"done","value":7}\n${"x".repeat(65)}`);
         });
       });
       const listening = await listenOnSocket(server, socketPath);
@@ -195,65 +176,54 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
       }
 
       try {
-        const startMs = Date.now();
-        const result = await requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 500,
-          accept: (msg: unknown) => {
-            const m = msg as Record<string, unknown>;
-            return m.ok === true ? "accepted" : undefined;
-          },
-        });
-        expect(result).toBe("accepted");
-        expect(Date.now() - startMs).toBeLessThan(250);
+        await expect(
+          testApi.requestJsonlSocketWithMaxLineBytes(
+            {
+              socketPath,
+              requestLine: "{}",
+              timeoutMs: 500,
+              accept: acceptDoneValue,
+            },
+            64,
+          ),
+        ).resolves.toBe(7);
       } finally {
         server.close();
       }
     });
   });
 
-  it("returns null when the response exceeds the buffer size cap", async () => {
-    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer((socket) => {
-        socket.on("error", () => {
-          // The requester destroys the socket as soon as the newline-free
-          // pending response exceeds the cap, so the producer may see EPIPE.
+  it("rejects oversized complete and unterminated response lines before timeout", async () => {
+    for (const response of ["x".repeat(65), `${"x".repeat(65)}\n{"type":"done","value":9}\n`]) {
+      await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+        const socketPath = path.join(dir, "socket.sock");
+        const server = net.createServer((socket) => {
+          socket.on("data", () => {
+            socket.write(response);
+          });
         });
-        socket.on("data", () => {
-          const chunk = "x".repeat(64 * 1024);
-          let writtenBytes = 0;
-          const writeChunk = () => {
-            while (writtenBytes <= testApi.JSONL_SOCKET_MAX_BUFFER_BYTES) {
-              writtenBytes += Buffer.byteLength(chunk, "utf8");
-              if (!socket.write(chunk)) {
-                socket.once("drain", writeChunk);
-                return;
-              }
-            }
-          };
-          writeChunk();
-        });
-      });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
+        const listening = await listenOnSocket(server, socketPath);
+        if (!listening) {
+          return;
+        }
 
-      try {
-        const startMs = Date.now();
-        const result = await requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 500,
-          accept: () => undefined,
-        });
-        expect(result).toBeNull();
-        expect(Date.now() - startMs).toBeLessThan(250);
-      } finally {
-        server.close();
-      }
-    });
+        try {
+          const startMs = Date.now();
+          const result = await testApi.requestJsonlSocketWithMaxLineBytes(
+            {
+              socketPath,
+              requestLine: "{}",
+              timeoutMs: 500,
+              accept: acceptDoneValue,
+            },
+            64,
+          );
+          expect(result).toBeNull();
+          expect(Date.now() - startMs).toBeLessThan(250);
+        } finally {
+          server.close();
+        }
+      });
+    }
   });
 });
