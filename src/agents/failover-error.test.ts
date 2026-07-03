@@ -264,6 +264,12 @@ describe("failover-error", () => {
     ).toBe("overloaded");
     expect(
       resolveFailoverReasonFromError({
+        status: 429,
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
+    expect(
+      resolveFailoverReasonFromError({
         status: 499,
         message: ANTHROPIC_OVERLOADED_PAYLOAD,
       }),

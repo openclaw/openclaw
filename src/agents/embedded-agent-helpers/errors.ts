@@ -818,6 +818,9 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
+    if (messageReason === "overloaded") {
+      return messageClassification;
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
