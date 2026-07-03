@@ -617,6 +617,85 @@ describe("crabline transport", () => {
     });
   });
 
+  it("configures Zalo and normalizes native message sends", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("zalo"),
+        state: createQaBusState(),
+      });
+
+      try {
+        expect(transport.requiredPluginIds).toEqual(["zalo"]);
+        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+          channels: {
+            zalo: {
+              allowFrom: ["*"],
+              botToken: "crabline-zalo-bot-token",
+              dmPolicy: "open",
+              enabled: true,
+              groupAllowFrom: ["*"],
+              groupPolicy: "open",
+            },
+          },
+        });
+        expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
+          ZALO_API_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+          ZALO_BOT_TOKEN: "crabline-zalo-bot-token",
+        });
+
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-group", kind: "group" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "Zalo baseline marker check.",
+        });
+        const delivery = transport.buildAgentDelivery({ target: "group:qa-group" });
+        expect(delivery).toEqual({
+          channel: "zalo",
+          replyChannel: "zalo",
+          replyTo: "qa-group",
+          to: "qa-group",
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/sendMessage`,
+          init: {
+            body: JSON.stringify({
+              chat_id: delivery.to,
+              text: "assistant via fake zalo",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-zalo-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: "qa-group", kind: "group" },
+            textIncludes: "assistant via fake zalo",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: "qa-group", kind: "group" },
+          text: "assistant via fake zalo",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("injects inbound messages through Crabline and mirrors Telegram sends into normalized state", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
