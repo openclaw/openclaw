@@ -116,6 +116,76 @@ from a remote machine. For remote/headless hosts, prefer a direct QR image
 handoff path over manual terminal capture.
 </Warning>
 
+## Call the current requester with MeowCaller (experimental)
+
+The WhatsApp plugin can expose `whatsapp_call` in WhatsApp-originated agent turns. The tool
+uses [MeowCaller](https://github.com/purpshell/meowcaller) to place a WhatsApp voice call to
+the current authorized requester and plays an OpenClaw TTS message after they answer. The tool
+does not accept a destination number, so a prompt cannot redirect the call to a third party.
+
+<Warning>
+MeowCaller is experimental, has no tagged release, and uses a separately paired whatsmeow
+linked-device session. It cannot reuse the WhatsApp plugin's Baileys credentials. Pairing adds
+another linked device to the same WhatsApp account. Scan with the WhatsApp identity used by
+OpenClaw. Personal-number/self-chat mode cannot call itself; use a dedicated OpenClaw number
+to call your personal number.
+</Warning>
+
+<Steps>
+  <Step title="Install a MeowCaller CLI with send-only notify support">
+
+    The adapter expects an executable named `meowcaller` on the gateway host's `PATH`.
+    It must provide this send-only command:
+
+```bash
+meowcaller notify <target> <file.mp3|wav|opus>
+```
+
+    `notify` must send the file without opening a speaker, receiving peer audio, or recording
+    peer audio. The current upstream `play` command does not meet that contract because it also
+    opens the local speaker. Do not substitute `play`. Pin the reviewed MeowCaller revision that
+    adds `notify`, build `examples/cli`, and put the resulting binary on the gateway service's
+    `PATH`.
+
+  </Step>
+
+  <Step title="Pair the MeowCaller linked device">
+
+    Ask the WhatsApp agent to check call setup. The `whatsapp_call` status action reports the
+    account-specific state directory and pairing command. For the default account:
+
+```bash
+mkdir -p "$HOME/.openclaw/credentials/whatsapp-calls/default"
+cd "$HOME/.openclaw/credentials/whatsapp-calls/default"
+meowcaller listen
+```
+
+    On first run, the example CLI prints a `qr_code` payload. Render that payload with a trusted
+    local QR tool, scan it from **WhatsApp > Linked devices**, wait for the `connected` line, then
+    stop the listener. Keep `wa-voip.db` private; it is the MeowCaller linked-device session.
+
+  </Step>
+
+  <Step title="Configure TTS and call from WhatsApp">
+
+    Configure a telephony-capable [TTS provider](/tools/tts), restart the gateway, then send a
+    WhatsApp request such as `Call me and say the build finished.` The tool resolves the sender
+    from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a
+    bounded call window, and deletes the audio file afterward.
+
+  </Step>
+</Steps>
+
+Current limits:
+
+- one-to-one outbound audio calls only
+- no arbitrary destination numbers
+- no shared auth with the chat connection
+- no self-calls from personal-number/self-chat mode
+- synthesized audio is limited to 60 seconds
+- no answer/delivery receipt; the tool reports only that MeowCaller stayed active for the call window
+- OpenClaw stops the companion process after a bounded 60–120 second window
+
 ## Deployment patterns
 
 <AccordionGroup>
