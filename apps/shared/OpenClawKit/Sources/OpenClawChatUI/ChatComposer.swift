@@ -89,7 +89,6 @@ struct OpenClawChatComposer: View {
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
-    @State private var slashPickerFilter: OpenClawChatCommandFilter = .all
     @State private var isSlashPopoverPresented = false
     @State private var suppressNextSlashPopoverUpdate = false
     @State private var slashPanelHeight: CGFloat = 0
@@ -651,32 +650,8 @@ struct OpenClawChatComposer: View {
         let query = self.slashQuery ?? ""
         let matches = self.viewModel.slashCommandMatches(
             query: query,
-            filter: self.slashPickerFilter)
+            filter: .all)
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text(self.slashPickerFilter.rawValue)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Menu {
-                    ForEach(OpenClawChatCommandFilter.allCases, id: \.self) { filter in
-                        Button(filter.rawValue) {
-                            self.slashPickerFilter = filter
-                        }
-                    }
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 18, weight: .semibold))
-                }
-                .accessibilityLabel("Slash command category")
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            Divider()
-
             if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -722,6 +697,11 @@ struct OpenClawChatComposer: View {
                     .padding(8)
                 }
                 .frame(maxHeight: .infinity)
+                .overlay(alignment: .bottom) {
+                    if matches.count > 4 {
+                        self.slashCommandScrollAffordance
+                    }
+                }
             }
         }
         .frame(height: 340)
@@ -743,19 +723,9 @@ struct OpenClawChatComposer: View {
                 .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(command.displayInvocation)
-                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                        .lineLimit(1)
-                    Text(self.slashCommandSourceLabel(command.source))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(Color.secondary.opacity(0.12)))
-                }
+                Text(command.displayInvocation)
+                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                    .lineLimit(1)
                 if !command.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(command.description)
                         .font(.caption)
@@ -771,15 +741,25 @@ struct OpenClawChatComposer: View {
         .contentShape(Rectangle())
     }
 
-    private func slashCommandSourceLabel(_ source: OpenClawChatCommandChoice.Source) -> String {
-        switch source {
-        case .skill:
-            "Skill"
-        case .plugin:
-            "Command"
-        case .command, .unknown:
-            "Command"
+    private var slashCommandScrollAffordance: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [
+                    .clear,
+                    OpenClawChatTheme.composerBackground.opacity(0.94),
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
+                .frame(height: 34)
+
+            Image(systemName: "chevron.compact.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 6)
+                .background(OpenClawChatTheme.composerBackground.opacity(0.94))
         }
+        .allowsHitTesting(false)
     }
 
     private func selectSlashCommand(_ command: OpenClawChatCommandChoice) {
