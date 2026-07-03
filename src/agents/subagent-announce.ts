@@ -1583,18 +1583,20 @@ export async function runSubagentAnnounceFlow(params: {
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
                 });
-                void drainChildContinuationQueue({
-                  childSessionKey: params.childSessionKey,
-                  requesterOrigin: targetRequesterOrigin,
-                  additionalChainTokens: childChainTokensToFold,
-                  inheritedSilent: params.silentAnnounce === true,
-                  inheritedWake: params.wakeOnReturn === true,
-                }).catch((err: unknown) => {
-                  defaultRuntime.log(
-                    `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
-                  );
-                });
-                delayedBracketDelegateDrainArmed = true;
+                if (toolDelegates.length === 0) {
+                  void drainChildContinuationQueue({
+                    childSessionKey: params.childSessionKey,
+                    requesterOrigin: targetRequesterOrigin,
+                    additionalChainTokens: childChainTokensToFold,
+                    inheritedSilent: params.silentAnnounce === true,
+                    inheritedWake: params.wakeOnReturn === true,
+                  }).catch((err: unknown) => {
+                    defaultRuntime.log(
+                      `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
+                    );
+                  });
+                  delayedBracketDelegateDrainArmed = true;
+                }
               }
             } else {
               // Fire-and-forget — don't block the announce flow

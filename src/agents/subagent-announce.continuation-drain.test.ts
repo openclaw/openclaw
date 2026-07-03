@@ -1848,4 +1848,57 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(toolSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
     expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-post-compaction");
   });
+
+  it("arms a delayed bracket hedge after same-child tool delegates advance the override (#1159)", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:delayed-bracket-tool": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 7_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    consumePendingDelegatesMock.mockReturnValue([
+      { task: "tool-row delegate", flowId: "flow-tool-after-delayed", expectedRevision: 2 },
+    ]);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:delayed-bracket-tool",
+      childRunId: "run-delayed-bracket-tool",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: delayed bracket +30s]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
+      loadFreshChainState?: () => { currentChainCount: number; accumulatedChainTokens: number };
+    };
+    expect(call.chainState).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(call.loadFreshChainState?.()).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 7_000,
+    });
+  });
 });
