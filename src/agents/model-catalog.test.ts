@@ -999,7 +999,9 @@ describe("loadModelCatalog", () => {
       });
 
       const loadPromise = loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(readFileMock).not.toHaveBeenCalled();
 
       releaseWrite?.();
