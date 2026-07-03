@@ -366,9 +366,14 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
       ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
       : null;
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  const hasAnyClassificationData =
+  // The store file (sessions.json) may have ordinary rows that are neither
+  // cron nor dreaming — those rows still mean the store was loaded and
+  // classified as "not cron".  Only treat the result as unknown when no
+  // rows were loaded at all (file missing or empty).
+  const storeHasRows =
     classification.cronRunTranscriptPaths.size > 0 ||
-    classification.dreamingNarrativeTranscriptPaths.size > 0;
+    classification.dreamingNarrativeTranscriptPaths.size > 0 ||
+    storePathHasEntries(sessionsDir);
   const hasClassifiedPath = (paths: ReadonlySet<string>) =>
     paths.has(normalizedAbsPath) ||
     (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
@@ -376,12 +381,26 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
     generatedByDreamingNarrative: hasClassifiedPath(
       classification.dreamingNarrativeTranscriptPaths,
     ),
-    // Return undefined when the session store has no data at all so callers
-    // can distinguish "unknown" from "checked and confirmed to be absent".
-    generatedByCronRun: hasAnyClassificationData
+    // Return undefined only when the store truly has no data so callers can
+    // distinguish "unknown" from "checked and confirmed to be absent".
+    generatedByCronRun: storeHasRows
       ? hasClassifiedPath(classification.cronRunTranscriptPaths)
       : undefined,
   };
+}
+
+function storePathHasEntries(sessionsDir: string): boolean {
+  const storePath = path.join(sessionsDir, "sessions.json");
+  try {
+    const raw = fsSync.readFileSync(storePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    return Object.keys(parsed as Record<string, unknown>).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
