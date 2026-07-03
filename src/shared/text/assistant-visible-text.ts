@@ -41,6 +41,7 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "tool_calls",
   "antml:invoke",
   "antml:parameter",
+  "parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
@@ -181,6 +182,24 @@ function isLikelyStandaloneFunctionToolCall(
   }
 
   return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
+}
+
+function isLikelyStandaloneParameterWrapper(
+  text: string,
+  tagStart: number,
+  tag: ParsedToolCallTag,
+): boolean {
+  if (tag.tagName !== "parameter" || tag.isClose || tag.isSelfClosing || tag.isTruncated) {
+    return false;
+  }
+
+  if (findMatchingToolCallCloseIndex(text, tag.end, tag.tagName) === -1) {
+    return false;
+  }
+
+  return (
+    isStandaloneOpeningTagLine(text, tagStart, tag) || isOpeningTagFollowedByLineBreak(text, tag)
+  );
 }
 
 function isStandaloneOpeningTagLine(
@@ -433,9 +452,12 @@ export function stripToolCallXmlTags(
           (functionResponseCloseStart !== -1 &&
             isVisibleLineStart(result) &&
             isOpeningTagFollowedByLineBreak(text, tag)));
+      const shouldStripStandaloneParameter = isLikelyStandaloneParameterWrapper(text, idx, tag);
       if (
         !tag.isClose &&
-        ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult)
+        ((payloadKind && shouldStripStandaloneFunction) ||
+          shouldStripStandaloneResult ||
+          shouldStripStandaloneParameter)
       ) {
         inToolCallBlock = true;
         toolCallBlockContentStart = tag.end;
