@@ -1126,6 +1126,46 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
+  it("preserves raw aggregate echo signatures before snapshot output truncation", async () => {
+    const projector = await createProjector();
+    const rawOutput = `\n${"s".repeat(12_345)}tail-should-not-appear\n`;
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-aggregate-full-output",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-aggregate-echo",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: rawOutput,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tail-should-not-appear");
+  });
+
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {
     const projector = await createProjector();
     const rawOutput = "s".repeat(12_345);

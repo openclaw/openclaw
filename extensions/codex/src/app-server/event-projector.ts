@@ -851,6 +851,7 @@ export class CodexAppServerEventProjector {
       });
     }
     this.recordToolMeta(item);
+    this.rememberCommandAggregateOutputEcho(item);
     this.emitStandardItemEvent({ phase: "end", item });
     await this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
@@ -972,6 +973,7 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
@@ -2097,6 +2099,17 @@ export class CodexAppServerEventProjector {
     this.toolProgressEchoesByItem.set(itemId, existing);
   }
 
+  private rememberCommandAggregateOutputEcho(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "commandExecution" || typeof item.aggregatedOutput !== "string") {
+      return;
+    }
+    const signature = toolOutputRawEchoSignature(item.aggregatedOutput);
+    if (!signature) {
+      return;
+    }
+    this.rememberToolProgressEcho(item.id, signature);
+  }
+
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
     return (
       (await readCodexMirroredSessionHistoryMessages({
@@ -2857,6 +2870,19 @@ function updateToolOutputTrimState(
   state.trailingWhitespaceLength = delta.match(/\s*$/u)?.[0].length ?? 0;
   trimStateByItem.set(itemId, state);
   return state.totalLength - state.leadingWhitespaceLength - state.trailingWhitespaceLength;
+}
+
+function toolOutputRawEchoSignature(
+  text: string,
+): { rawLength: number; rawPrefix: string } | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return {
+    rawLength: trimmed.length,
+    rawPrefix: trimmed.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+  };
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
