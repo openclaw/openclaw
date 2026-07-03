@@ -136,7 +136,8 @@ describe("native command auth in groups", () => {
     expect(contexts.at(-1)).toMatchObject({
       StatusNotes: [expect.stringContaining("no effective allowFrom entries")],
     });
-    expect(contexts.at(-1)?.StatusNotes?.[0]).not.toContain("sender allowed=");
+    const finalizedContext = contexts.at(-1) as { StatusNotes?: string[] } | undefined;
+    expect(finalizedContext?.StatusNotes?.[0]).not.toContain("sender allowed=");
   });
 
   it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
