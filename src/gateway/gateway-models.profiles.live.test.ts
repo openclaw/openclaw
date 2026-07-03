@@ -1135,13 +1135,25 @@ function createGatewayLiveTestModel(provider: string, id: string): Model {
     provider,
     id,
     name: id,
-    api: "openai-responses",
+    api: resolveExplicitLiveFallbackApi(provider),
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1_000,
     maxTokens: 100,
     reasoning: false,
   } as Model;
+}
+
+const EXPLICIT_LIVE_FALLBACK_API_BY_PROVIDER: Partial<Record<string, Api>> = {
+  "amazon-bedrock": "bedrock-converse-stream",
+};
+
+const DEFAULT_BEDROCK_LIVE_BASE_URL = "https://bedrock-runtime.us-east-1.amazonaws.com";
+
+function resolveExplicitLiveFallbackApi(provider: string): Api {
+  return (
+    EXPLICIT_LIVE_FALLBACK_API_BY_PROVIDER[normalizeProviderId(provider)] ?? "openai-responses"
+  );
 }
 
 function createExplicitLiveFallbackModel(provider: string, id: string): Model {
@@ -1250,6 +1262,33 @@ describe("resolveExplicitLiveModelCandidates", () => {
     }
     expect(candidates).toEqual([createExplicitLiveFallbackModel("openai", "gpt-5.5")]);
     expect(candidates[0]?.contextWindow).toBeGreaterThanOrEqual(4_000);
+  });
+
+  it("uses the Bedrock Converse API for explicit Bedrock fallback candidates", () => {
+    const modelRef = "amazon-bedrock/global.anthropic.claude-sonnet-4-6";
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["amazon-bedrock"]),
+      modelFilter: new Set([modelRef]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: createGatewayLiveTestRegistry({
+        find(provider, modelId) {
+          expect(provider).toBe("amazon-bedrock");
+          expect(modelId).toBe("global.anthropic.claude-sonnet-4-6");
+          return undefined;
+        },
+      }),
+      modelFilter: new Set([modelRef]),
+      providerFilter: new Set(["amazon-bedrock"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates?.[0]).toMatchObject({
+      provider: "amazon-bedrock",
+      id: "global.anthropic.claude-sonnet-4-6",
+      api: "bedrock-converse-stream",
+    });
   });
 
   it("falls back to enumeration for ambiguous model-only filters", () => {
@@ -1564,6 +1603,29 @@ describe("buildLiveGatewayConfig", () => {
     expect(cfg.models?.providers?.google?.timeoutSeconds).toBeGreaterThanOrEqual(
       Math.ceil(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000),
     );
+  });
+
+  it("writes valid AWS SDK provider config for explicit Bedrock fallback models", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [
+        createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
+      ],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+
+    expect(cfg.models?.providers?.["amazon-bedrock"]).toMatchObject({
+      api: "bedrock-converse-stream",
+      auth: "aws-sdk",
+      baseUrl: DEFAULT_BEDROCK_LIVE_BASE_URL,
+      models: [
+        {
+          id: "global.anthropic.claude-sonnet-4-6",
+          api: "bedrock-converse-stream",
+        },
+      ],
+    });
   });
 });
 
@@ -2617,14 +2679,30 @@ function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, Mode
       existing.models.push(toLiveModelConfig(model));
       continue;
     }
-    providers[model.provider] = {
-      api: model.api as ModelProviderConfig["api"],
-      baseUrl: model.baseUrl,
-      timeoutSeconds: resolveGatewayLiveProviderTimeoutSeconds(),
-      models: [toLiveModelConfig(model)],
-    };
+    providers[model.provider] = buildLiveProviderConfig(model);
   }
   return providers;
+}
+
+function buildLiveProviderConfig(model: Model): ModelProviderConfig {
+  const provider = normalizeProviderId(model.provider);
+  const config: ModelProviderConfig = {
+    api: model.api as ModelProviderConfig["api"],
+    baseUrl:
+      provider === "amazon-bedrock"
+        ? (model.baseUrl ?? DEFAULT_BEDROCK_LIVE_BASE_URL)
+        : model.baseUrl,
+    timeoutSeconds: resolveGatewayLiveProviderTimeoutSeconds(),
+    models: [toLiveModelConfig(model)],
+  };
+  if (provider === "amazon-bedrock") {
+    return {
+      ...config,
+      api: model.api as ModelProviderConfig["api"],
+      auth: "aws-sdk",
+    };
+  }
+  return config;
 }
 
 function parseExplicitLiveModelRef(
