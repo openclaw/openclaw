@@ -232,6 +232,12 @@ describe("matrixApprovalNativeRuntime", () => {
     });
   });
 
+  it("identifies the originating session in Matrix native plugin prompts", async () => {
+    const view = buildPluginApprovalView({ sessionKey: "agent:main:matrix:direct:@u:example.org" });
+    const pendingPayload = await buildPendingPayload(view);
+    expect(pendingPayload?.text).toContain("Session: agent:main:matrix:direct:@u:example.org");
+  });
+
   it("delivers Matrix approval content with plugin approval fields", async () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$plugin-approval",

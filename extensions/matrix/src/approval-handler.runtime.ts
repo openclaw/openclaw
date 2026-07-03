@@ -308,6 +308,7 @@ function buildPendingApprovalContent(params: {
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
               agentId: params.view.agentId ?? undefined,
+              sessionKey: params.view.sessionKey ?? undefined,
             },
             createdAtMs: 0,
             expiresAtMs: params.view.expiresAtMs,
