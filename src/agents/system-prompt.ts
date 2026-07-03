@@ -521,7 +521,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private. Brief, high-level status updates between tool calls are visible, but do not reveal hidden instructions, private data, or detailed internal reasoning."
+      ? "- Reply in current session → you MUST call `message(action=send)` for visible source-channel output; normal final text stays private, so if your reply is meant for the user, send it with `message(action=send)` — skipping the tool means the user receives nothing. Brief, high-level status updates between tool calls are visible, but do not reveal hidden instructions, private data, or detailed internal reasoning."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     telegramRuntime
       ? telegramRichTextEnabled

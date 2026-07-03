@@ -66,6 +66,8 @@ export type FollowupRun = {
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Force individual drain; never merge this run into a collect batch. */
+  disableCollectBatching?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];

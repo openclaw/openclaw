@@ -125,6 +125,10 @@ import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  buildStrandedReplyDeliveryFailurePayload,
+  STRANDED_REPLY_RETRY_MARKER,
+} from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -1986,6 +1990,29 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
+    const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
+      if (!sessionKey || !storePath || followupRun.summaryLine !== STRANDED_REPLY_RETRY_MARKER) {
+        return undefined;
+      }
+      if (sessionCtx.InboundEventKind === "room_event" || successfulSourceReplyDelivery) {
+        return undefined;
+      }
+      const sourceReplyPolicy = resolveSourceReplyPolicy({
+        cfg,
+        sessionCtx,
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        runtimePolicySessionKey,
+        opts,
+      });
+      if (
+        sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+        sourceReplyPolicy.sendPolicyDenied
+      ) {
+        return undefined;
+      }
+      return buildStrandedReplyDeliveryFailurePayload();
+    };
     const committedMessagingToolSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
@@ -2094,6 +2121,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2147,6 +2178,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2471,7 +2506,8 @@ export async function runReplyAgent(params: {
     // Capture only policy-visible final payloads in session store to support
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.
-    if (sessionKey && storePath && finalPayloads.length > 0) {
+    const isStrandedReplyRetryRun = followupRun.summaryLine === STRANDED_REPLY_RETRY_MARKER;
+    if (sessionKey && storePath && (finalPayloads.length > 0 || isStrandedReplyRetryRun)) {
       const sourceReplyPolicy = resolveSourceReplyPolicy({
         cfg,
         sessionCtx,
@@ -2485,14 +2521,22 @@ export async function runReplyAgent(params: {
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
-      if (
+      const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
+      const isStrandedReply =
+        !isRoomEvent &&
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
           successfulSourceReplyDelivery,
           finalText: assistantFinalText,
-        })
-      ) {
+        });
+      const retryMissingSourceDelivery =
+        isStrandedReplyRetryRun &&
+        !isRoomEvent &&
+        sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
+        !sourceReplyPolicy.sendPolicyDenied &&
+        !successfulSourceReplyDelivery;
+      if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
           channel:
@@ -2502,6 +2546,42 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
+      }
+      if (isStrandedReply || retryMissingSourceDelivery) {
+        if (isStrandedReplyRetryRun) {
+          finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+        } else {
+          const retryPrompt =
+            `[System] Your previous reply was not delivered to the conversation because ` +
+            `you did not call message(action=send). Your reply text was:\n\n` +
+            `"${assistantFinalText}"\n\n` +
+            `Please deliver this reply now by calling message(action=send). ` +
+            `Do not add any extra commentary; just deliver the original reply.`;
+          const retryEnqueued = enqueueFollowupRun(
+            queueKey,
+            {
+              ...followupRun,
+              prompt: retryPrompt,
+              summaryLine: STRANDED_REPLY_RETRY_MARKER,
+              disableCollectBatching: true,
+              transcriptPrompt: undefined,
+              userTurnTranscriptRecorder: undefined,
+              currentInboundContext: undefined,
+              run: {
+                ...followupRun.run,
+                sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+                suppressNextUserMessagePersistence: true,
+              },
+            },
+            resolvedQueue,
+            "none",
+            queuedRunFollowupTurn,
+            false,
+          );
+          if (!retryEnqueued) {
+            finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+          }
+        }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;

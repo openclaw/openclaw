@@ -94,12 +94,24 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import {
+  buildStrandedReplyDeliveryFailurePayload,
+  STRANDED_REPLY_RETRY_MARKER,
+} from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
+
+function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
+  return (
+    queued.summaryLine === STRANDED_REPLY_RETRY_MARKER &&
+    queued.currentInboundEventKind !== "room_event" &&
+    queued.run.sourceReplyDeliveryMode === "message_tool_only"
+  );
+}
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -370,7 +382,9 @@ export function createFollowupRunner(params: {
 
     const sendablePayloads = payloads.filter(
       (payload): payload is ReplyPayload =>
-        hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+        hasOutboundReplyContent(payload) &&
+        (!deliveryPlan.isSilentPayload(payload) ||
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
     );
 
     if (sendablePayloads.length === 0) {
@@ -1405,6 +1419,21 @@ export function createFollowupRunner(params: {
           fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
+      const deliverStrandedReplyRetryFailureDiagnostic = async () => {
+        if (!isStrandedReplyRetryFollowup(effectiveQueued)) {
+          return false;
+        }
+        await sendFollowupPayloads(
+          [buildStrandedReplyDeliveryFailurePayload()],
+          effectiveQueued,
+          {
+            provider: providerUsed,
+            modelId: modelUsed,
+          },
+          { runId },
+        );
+        return true;
+      };
 
       if (storePath && replySessionKey) {
         await persistRunSessionUsage({
@@ -1432,6 +1461,9 @@ export function createFollowupRunner(params: {
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
+        if (await deliverStrandedReplyRetryFailureDiagnostic()) {
+          return;
+        }
         return;
       }
       const finalPayloads = resolveFollowupDeliveryPayloads({
@@ -1450,6 +1482,9 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
+        if (await deliverStrandedReplyRetryFailureDiagnostic()) {
+          return;
+        }
         return;
       }
 
@@ -1548,6 +1583,25 @@ export function createFollowupRunner(params: {
       }
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        const suppressionDeliverablePayloads = deliveryPayloads.filter(
+          (payload) =>
+            getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+        );
+        if (suppressionDeliverablePayloads.length > 0) {
+          await sendFollowupPayloads(
+            suppressionDeliverablePayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          return;
+        }
+        if (await deliverStrandedReplyRetryFailureDiagnostic()) {
+          return;
+        }
         logVerbose(
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );

@@ -604,12 +604,20 @@ describe("qa scenario catalog", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
       | { requiredProviderMode?: string }
       | undefined;
+    const retryFailureConfig = readQaScenarioExecutionConfig(
+      "message-tool-stranded-final-retry-failure",
+    ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
     const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
     const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
     expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(JSON.stringify(retryFailure.execution.flow)).toContain(
       "this seeded scenario is mock-openai only",
     );
     expect(heartbeatFlow).toContain("sessionKey");

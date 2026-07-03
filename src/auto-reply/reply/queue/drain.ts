@@ -252,6 +252,10 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
   );
 }
 
+function requiresIndividualCollectDrain(item: FollowupRun): boolean {
+  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
+}
+
 function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undefined {
   const signals = items.flatMap((item) => (item.abortSignal ? [item.abortSignal] : []));
   if (signals.length === 0) {
@@ -758,7 +762,7 @@ export function scheduleFollowupDrain(
           // If so, process individually to preserve per-message routing.
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
-            queue.items.some(hasRuntimeOnlyFollowupMetadata);
+            queue.items.some(requiresIndividualCollectDrain);
           if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
             collectState.forceIndividualCollect = false;
           }

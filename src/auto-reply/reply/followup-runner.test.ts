@@ -4569,6 +4569,57 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("routes sanitized diagnostics when message-tool-only stranded retry strands again", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "raw private final" }],
+      },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+    expect(String(routeReplyMock.mock.calls[0]?.[0]?.payload?.text)).not.toContain(
+      "raw private final",
+    );
+  });
+
+  it("routes sanitized diagnostics when message-tool-only stranded retry returns no payloads", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock.mock.calls[0]?.[0]?.payload?.text).toBe(
+      "I generated a reply but could not deliver it to this chat. Please try again.",
+    );
+  });
+
   it("lets provider followup route hooks force dispatcher delivery", async () => {
     resolveProviderFollowupFallbackRouteMock.mockReturnValue({
       route: "dispatcher",
