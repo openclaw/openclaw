@@ -1826,7 +1826,15 @@ function scrollActiveSlashMenuOptionIntoView(): void {
     if (!activeOption || !menu) {
       return;
     }
-    activeOption.scrollIntoView({ block: "nearest" });
+    const menuBounds = menu.getBoundingClientRect();
+    const optionBounds = activeOption.getBoundingClientRect();
+    // scrollIntoView also moves the short-landscape composer and page. Keep
+    // keyboard navigation owned by the menu so textarea focus stays stable.
+    if (optionBounds.top < menuBounds.top) {
+      menu.scrollTop -= menuBounds.top - optionBounds.top;
+    } else if (optionBounds.bottom > menuBounds.bottom) {
+      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    }
   });
 }
 
