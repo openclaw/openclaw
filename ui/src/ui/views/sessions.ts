@@ -5,6 +5,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -92,6 +93,7 @@ const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 const DEFAULT_RECENT_ACTIVITY_MINUTES = 120;
+const MAX_SESSION_GOAL_LENGTH = 72;
 
 type SessionActivityLevel = "active" | "recent" | "normal";
 
@@ -278,6 +280,34 @@ function resolveThinkLevelPatchValue(value: string): string | null {
     return null;
   }
   return value;
+}
+
+function compactSessionGoal(objective: string | undefined | null): string | null {
+  const trimmed = normalizeOptionalString(objective);
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.length <= MAX_SESSION_GOAL_LENGTH) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, MAX_SESSION_GOAL_LENGTH - 1)}...`;
+}
+
+function resolveSessionListName(
+  row: GatewaySessionRow,
+): { primary: string; subtitle: string | null } {
+  const baseName = resolveSessionDisplayName(row.key, row);
+  const goal = compactSessionGoal(row.goal?.objective ?? null);
+  const normalizedLabel = normalizeOptionalString(row.label);
+  const hasCustomLabel = normalizedLabel !== null && normalizedLabel !== row.key;
+
+  if (!goal) {
+    return { primary: baseName, subtitle: null };
+  }
+  if (hasCustomLabel) {
+    return { primary: baseName, subtitle: goal };
+  }
+  return { primary: goal, subtitle: baseName === row.key ? null : baseName };
 }
 
 function filterRows(
@@ -506,6 +536,19 @@ function isRowControlTarget(target: EventTarget | null): boolean {
     target instanceof Element &&
     Boolean(target.closest("a, button, input, label, select, textarea"))
   );
+}
+
+function focusSessionLabelInput(rowRoot: Element | null): void {
+  const rowElement = rowRoot instanceof Element ? rowRoot.closest("tr") : null;
+  if (!(rowElement instanceof HTMLTableRowElement)) {
+    return;
+  }
+  const labelInput = rowElement.querySelector<HTMLInputElement>(".session-label-input");
+  if (!labelInput || labelInput.disabled) {
+    return;
+  }
+  labelInput.focus();
+  labelInput.select();
 }
 
 function renderFilterToggle(params: {
@@ -897,7 +940,16 @@ function renderRows(
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
-  const keyCellTitle = friendlyKeyLabel ?? row.key;
+  const listName = resolveSessionListName(row);
+  const keyCellTitle = [
+    listName.primary,
+    listName.subtitle,
+    friendlyKeyLabel,
+    row.key,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter((value, index, items) => items.indexOf(value) === index)
+    .join(" · ");
   const activityLevel = resolveSessionActivityLevel(
     row,
     nowMs,
@@ -966,13 +1018,20 @@ function renderRows(
       </td>
       <td class="data-table-key-col">
         <div
-          class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
+          class=${friendlyKeyLabel ? "session-key-cell session-key-cell--editable" : "mono session-key-cell session-key-cell--editable"}
           title=${keyCellTitle}
+          @click=${(e: MouseEvent) => {
+            if (isRowControlTarget(e.target)) {
+              return;
+            }
+            e.stopPropagation();
+            focusSessionLabelInput(e.currentTarget instanceof Element ? e.currentTarget : null);
+          }}
         >
           ${canLink
             ? html`<a
                 href=${chatUrl}
-                class="session-link"
+                class="session-link session-key-name-link"
                 @click=${(e: MouseEvent) => {
                   if (
                     e.defaultPrevented ||
@@ -981,28 +1040,31 @@ function renderRows(
                     e.ctrlKey ||
                     e.shiftKey ||
                     e.altKey
-                  ) {
-                    return;
-                  }
-                  if (props.onNavigateToChat) {
-                    e.preventDefault();
-                    props.onNavigateToChat(row.key);
-                  }
+              ) {
+                  return;
+                }
+                if (props.onNavigateToChat) {
+                  e.preventDefault();
+                  props.onNavigateToChat(row.key);
+                }
                 }}
-                >${friendlyKeyLabel ?? row.key}</a
+                >${friendlyKeyLabel ?? listName.primary}</a
               >`
-            : (friendlyKeyLabel ?? row.key)}
+            : html`<span class="session-key-name-link">${friendlyKeyLabel ?? listName.primary}</span>`}
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
+            : nothing}
+          ${listName.subtitle
+            ? html`<span class="muted session-key-display-name">${listName.subtitle}</span>`
             : nothing}
         </div>
       </td>
       <td>
         <input
+          class="session-label-input"
           .value=${row.label ?? ""}
           ?disabled=${props.loading}
           placeholder=${t("sessionsView.optionalPlaceholder")}
-          style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
             props.onPatch(row.key, { label: value });
@@ -1149,11 +1211,18 @@ function renderRows(
                     <div class="session-details-panel__eyebrow">
                       ${t("sessionsView.sessionDetails")}
                     </div>
-                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+                    <div class="session-details-panel__title">
+                      ${friendlyKeyLabel ?? listName.primary}
+                    </div>
                     ${showDisplayName
                       ? html`
                           <div class="muted session-details-panel__subtitle">${displayName}</div>
                         `
+                      : nothing}
+                    ${listName.subtitle
+                      ? html`<div class="muted session-details-panel__subtitle">
+                          ${listName.subtitle}
+                        </div>`
                       : nothing}
                   </div>
                   <div class="session-details-panel__badges">

@@ -431,11 +431,12 @@ describe("sessions view", () => {
 
   it("shows agent identity name and emoji for matching session keys", async () => {
     const container = document.createElement("div");
+    const sessionKey = "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN";
     render(
       renderSessions({
         ...buildProps(
           buildResult({
-            key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+            key: sessionKey,
             kind: "direct",
             updatedAt: Date.now(),
           }),
@@ -455,7 +456,9 @@ describe("sessions view", () => {
 
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
-    expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
+    expect(keyCell?.getAttribute("title")).toBe(
+      `${sessionKey} · 📊 Data Expert (dingtalk)`,
+    );
   });
 
   it("keeps raw keys when identity data is unavailable", async () => {
@@ -477,6 +480,72 @@ describe("sessions view", () => {
     const keyCell = container.querySelector(".session-key-cell");
     expect(keyCell?.textContent?.trim()).toBe("agent:unknown-agent:telegram:abc123");
     expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
+  });
+
+  it("uses a custom label as the primary session name when goal exists", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:goal-label",
+            kind: "direct",
+            updatedAt: Date.now(),
+            label: "Project kickoff notes",
+            goal: {
+              schemaVersion: 1,
+              id: "goal-1",
+              objective: "Ship the new search workflow",
+              status: "active",
+              createdAt: 1,
+              updatedAt: 2,
+              tokenStart: 100,
+              tokensUsed: 12_000,
+              tokenBudget: 100_000,
+              continuationTurns: 1,
+            },
+          }),
+        ),
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyLink = container.querySelector(".session-key-cell .session-key-name-link");
+    const subtitle = container.querySelectorAll(".session-key-cell .session-key-display-name")[0];
+    expect(keyLink?.textContent?.trim()).toBe("Project kickoff notes");
+    expect(subtitle?.textContent?.trim()).toBe("Ship the new search workflow");
+  });
+
+  it("focuses session label input when clicking the session key cell", async () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:focusable",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        onPatch,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyCell = container.querySelector(".session-key-cell") as HTMLElement | null;
+    const labelInput = container.querySelector<HTMLInputElement>(".session-label-input");
+    expect(labelInput).toBeInstanceOf(HTMLInputElement);
+    if (!(labelInput instanceof HTMLInputElement)) {
+      throw new Error("Expected session label input");
+    }
+    const focusSpy = vi.spyOn(labelInput, "focus");
+
+    keyCell?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(focusSpy).toHaveBeenCalledTimes(1);
   });
 
   it("renders cron session kind distinctly", async () => {
@@ -884,7 +953,7 @@ describe("sessions view", () => {
       "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
-      "agent:main:main",
+      "Main Session",
     );
     expect(
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
