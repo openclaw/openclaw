@@ -749,7 +749,6 @@ describe("waitForAgentJob", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
-  }
   });
 });
 
