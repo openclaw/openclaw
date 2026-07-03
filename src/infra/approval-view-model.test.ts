@@ -30,4 +30,49 @@ describe("buildPendingApprovalView", () => {
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
   });
+
+  it("includes session identity in exec metadata rows for adapter-backed prompts", () => {
+    const request: ExecApprovalRequest = {
+      id: "approval-id",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        command: "echo hi",
+        host: "node",
+        ask: "always",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:424242",
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+
+    expect(view.metadata).toContainEqual({
+      label: "Session",
+      value: "agent:main:telegram:direct:424242",
+    });
+    // Absent session keys must not add an empty row.
+    const withoutSession = buildPendingApprovalView({
+      ...request,
+      request: { ...request.request, sessionKey: null },
+    });
+    expect(withoutSession.metadata.some((row) => row.label === "Session")).toBe(false);
+  });
+
+  it("includes session identity in plugin metadata rows", () => {
+    const view = buildPendingApprovalView({
+      id: "plugin:req-1",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Sensitive tool call",
+        description: "Plugin wants to call a sensitive tool",
+        pluginId: "voice-call",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    expect(view.metadata).toContainEqual({ label: "Session", value: "agent:main:main" });
+  });
 });

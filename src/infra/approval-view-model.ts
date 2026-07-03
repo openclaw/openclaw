@@ -27,6 +27,11 @@ function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[]
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
   }
+  if (request.request.sessionKey) {
+    // Disambiguates concurrent sessions of one agent in adapter-backed prompts,
+    // matching the fallback text; the value already ships on the payload envelope.
+    metadata.push({ label: "Session", value: request.request.sessionKey });
+  }
   if (request.request.cwd) {
     metadata.push({ label: "CWD", value: request.request.cwd });
   }
@@ -54,6 +59,10 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   }
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
+  }
+  if (request.request.sessionKey) {
+    // Same session disambiguation as the exec metadata above.
+    metadata.push({ label: "Session", value: request.request.sessionKey });
   }
   return metadata;
 }

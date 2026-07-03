@@ -380,6 +380,11 @@ export function buildExecApprovalPendingReplyPayload(
   if (params.nodeId) {
     info.push(`Node: ${params.nodeId}`);
   }
+  if (params.sessionKey) {
+    // Disambiguates concurrent sessions of one agent in native/forwarded
+    // prompts, matching the generic fallback text and the payload envelope.
+    info.push(`Session: ${params.sessionKey}`);
+  }
   if (params.cwd) {
     info.push(`CWD: ${formatApprovalDisplayPath(params.cwd)}`);
   }

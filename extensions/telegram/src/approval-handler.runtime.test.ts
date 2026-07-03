@@ -51,6 +51,43 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
   });
 
+  it("identifies the originating session in the native pending prompt", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        commandText: "echo hi",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:424242",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve req-1 allow-once",
+            style: "success",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain("Session: agent:main:telegram:direct:424242");
+  });
+
   it("passes topic thread ids to typing and message delivery", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({
