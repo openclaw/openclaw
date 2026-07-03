@@ -107,6 +107,7 @@ import {
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stagePostCompactionDelegate } from "../continuation-delegate-store.js";
+import { resetContinueDelegateTurnBudget } from "../continuation/delegate-turn-admission.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -2800,6 +2801,11 @@ export async function runAgentTurnWithFallback(params: {
                   sessionKey: params.sessionKey,
                   milestone: "before_embedded_run",
                 });
+                // Reset once at the provider-turn boundary. Assistant stream
+                // item starts can fire multiple times in one embedded run.
+                if (params.sessionKey) {
+                  resetContinueDelegateTurnBudget(params.sessionKey);
+                }
                 const embeddedRunResult = await agentTurnTiming.measure("embedded_run", () =>
                   runEmbeddedAgent({
                     ...embeddedContext,

@@ -102,6 +102,7 @@ function armHedgeTimer(
     maxChainLength: number;
     config?: ContinuationRuntimeConfig;
     loadFreshChainState?: () => ChainState;
+    applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
   },
 ): void {
@@ -135,6 +136,11 @@ function armHedgeTimer(
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
       loadFreshChainState: params.loadFreshChainState,
+      // Carry the recovery fold flag across the hedge: a recovered delayed
+      // delegate annotated with `chainTokensFold` after a child chain-cost
+      // persist failure must still be checked against the folded (not stale)
+      // basis when its delay elapses and the hedge re-dispatches it (#1144).
+      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
     })
       .then(async (result) => {
@@ -229,6 +235,23 @@ export async function dispatchToolDelegates(params: {
   recoverRunningDelegates?: boolean;
   includeRunningUpdatedAtOrBefore?: number;
   /**
+   * Dispatch queued delegates immediately even if their `delayMs` has not
+   * elapsed. Fail-closed lever for the child chain-cost persist-failure path:
+   * a delayed delegate left durably queued would recover from the stale child
+   * entry and under-enforce the cost cap, so dispatch it now on the correct
+   * in-memory folded basis instead (#1144).
+   */
+  dispatchQueuedRegardlessOfDelay?: boolean;
+  /**
+   * When true, add each consumed delegate's durable `chainTokensFold` to the
+   * chain cost basis. Set by restart recovery: recovery rebuilds chain cost from
+   * the child session entry, which is stale (missing this run's tokens) when the
+   * settle-time persist failed; the delegate carries the fold so the cost cap is
+   * still enforced against the post-run total (#1144). Live dispatch leaves this
+   * unset because the live drain already folds the cost into `chainState`.
+   */
+  applyDelegateChainTokensFold?: boolean;
+  /**
    * Optional callback used by hedge-fired dispatches, where there is no
    * enclosing runner finalize frame to persist the advanced chain state.
    */
@@ -239,6 +262,7 @@ export async function dispatchToolDelegates(params: {
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
+    ignoreDelay: params.dispatchQueuedRegardlessOfDelay === true,
   });
 
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
@@ -252,6 +276,7 @@ export async function dispatchToolDelegates(params: {
       maxChainLength: params.maxChainLength,
       ...(params.config ? { config: params.config } : {}),
       loadFreshChainState: params.loadFreshChainState,
+      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
     });
   } else {
@@ -292,7 +317,17 @@ export async function dispatchToolDelegates(params: {
   let dispatched = 0;
   let rejected = delegatesOverLimit.length;
   let currentChainCount = chainState.currentChainCount;
-  const accumulatedTokens = chainState.accumulatedChainTokens;
+  // Restart recovery rebuilds `chainState` from the (possibly stale) child
+  // session entry; add the delegate's durable chain-cost fold so the cost cap is
+  // enforced against the post-run total. Applied once (the fold is a per-child
+  // shared cost carried identically on each of the child's delegates), and only
+  // when the caller opts in — live dispatch already folds it into `chainState`
+  // (#1144).
+  const accumulatedTokens =
+    chainState.accumulatedChainTokens +
+    (params.applyDelegateChainTokensFold
+      ? Math.max(0, ...toolDelegates.map((delegate) => delegate.chainTokensFold ?? 0))
+      : 0);
   let currentChainId = chainState.chainId;
 
   for (const delegate of delegatesWithinLimit) {
@@ -547,6 +582,10 @@ export async function recoverPendingContinuationDelegates(
       maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
       recoverRunningDelegates: true,
       includeRunningUpdatedAtOrBefore,
+      // Recovery rebuilds chain cost from the persisted child entry, which is
+      // stale when the settle-time chain-cost persist failed; apply the
+      // delegate's durable fold so the cost cap holds across the restart (#1144).
+      applyDelegateChainTokensFold: true,
     });
     dispatched += result.dispatched;
     rejected += result.rejected;

@@ -5,6 +5,7 @@ import {
   resetDelegateStoreForTests,
 } from "../../auto-reply/continuation-delegate-store.js";
 import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-store.js";
+import { resetContinueDelegateTurnAdmissionForTests } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -55,12 +56,14 @@ async function expectContinueDelegateError(params: {
 describe("continue_delegate cross-session targeting gate", () => {
   beforeEach(() => {
     resetDelegateStoreForTests();
+    resetContinueDelegateTurnAdmissionForTests();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     cancelPendingDelegates(DISPATCHING_SESSION);
     resetDelegateStoreForTests();
+    resetContinueDelegateTurnAdmissionForTests();
     clearRuntimeConfigSnapshot();
   });
 

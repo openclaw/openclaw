@@ -12,6 +12,12 @@ let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
+// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// (no explicit chainState survives a restart), so tests inject the persisted
+// store here to prove the cost cap is enforced against the post-run child total.
+const loadSessionStoreForRecoveryMock = vi.fn(
+  (_storePath: string) => ({}) as Record<string, unknown>,
+);
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -32,6 +38,21 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+}));
+
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: (storePath: string) => loadSessionStoreForRecoveryMock(storePath),
+}));
+
+vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/store.js")>()),
+  // Recovery persists advanced chain state after dispatch/rejection; keep it
+  // in-memory so tests exercise the derive-from-store cost basis (#1144) without
+  // touching a real session store on disk.
+  updateSessionStore: async <T>(
+    _storePath: string,
+    mutator: (store: Record<string, unknown>) => Promise<T> | T,
+  ): Promise<T> => await mutator({}),
 }));
 
 vi.mock("../../logging/subsystem.js", () => {
@@ -206,6 +227,7 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
   activeRegistryChildSessionKeys.clear();
@@ -568,6 +590,42 @@ describe("hedge timer ref/handle cleanup", () => {
       }),
     );
   });
+
+  it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate (#1144)", async () => {
+    const sessionKey = "session-hedge-fold";
+    // A delayed delegate annotated with a durable fold after a child chain-cost
+    // persist failure, recovered as not-yet-due so it arms the hedge.
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop",
+      delayMs: 60_000,
+      chainTokensFold: 250_000,
+    });
+
+    const armed = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 300_000,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig({ costCapTokens: 500_000 }),
+      recoverRunningDelegates: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+      applyDelegateChainTokensFold: true,
+    });
+    expect(armed.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // When the hedge fires, the fold flag is carried through: 300_000 (stale
+    // basis) + 250_000 (durable fold) = 550_000 > costCapTokens (500_000) →
+    // rejected. Without forwarding the flag the hedge would check 300_000 and
+    // wrongly launch the over-budget hop.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("tool delegate dispatch contract", () => {
@@ -634,6 +692,34 @@ describe("tool delegate dispatch contract", () => {
       expect.stringContaining("maxDelegatesPerTurn exceeded (5). Task: delegate-5"),
       { sessionKey, trusted: true },
     );
+  });
+
+  it("dispatchQueuedRegardlessOfDelay force-dispatches a not-yet-due delegate (fail-closed persist-failure path) (#1144)", async () => {
+    const sessionKey = "session-force-dispatch-delayed";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+
+    // Without the override, an unmatured delegate is left queued (not dispatched).
+    const held = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    expect(held.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // With the override, it dispatches immediately despite the unelapsed delay —
+    // used when the child chain-cost persist failed so a delayed delegate is not
+    // left durably queued to recover on a stale cost basis.
+    const forced = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      dispatchQueuedRegardlessOfDelay: true,
+    });
+    expect(forced.dispatched).toBe(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("honors resolved run config and delegate slots already consumed this turn", async () => {
@@ -1344,6 +1430,29 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("recovers a force-claimed not-yet-due running delegate instead of stranding it by due time (#1144)", async () => {
+    const sessionKey = "agent:main:force-claim-crash";
+    // A delayed delegate force-claimed to `running` pre-due (ignoreDelay), then
+    // orphaned by a crash before spawn accept — its dueAt is still in the future.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    // The delay gate applies only to queued rows, so recovery re-drives this
+    // running row despite its future dueAt rather than skipping it (which would
+    // strand it `running` with no hedge to re-arm it).
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+  });
+
   it("reconciles a claimed continuation child accepted before registry registration", async () => {
     const sessionKey = "agent:main:parent";
     enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });
@@ -1402,5 +1511,89 @@ describe("recoverPendingContinuationDelegates", () => {
 
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get("flow-1")?.status).toBe("running");
+  });
+
+  it("enforces the cost cap against the persisted child chain cost on recovery (#1144)", async () => {
+    // The finding: a delayed delegate queued under a child session is re-driven
+    // on restart by recoverPendingContinuationDelegates, which derives the chain
+    // cost from the PERSISTED child entry (no in-memory fold survives a restart).
+    // The child's own run cost is folded into the child entry's durable
+    // continuationChainTokens at settle (subagent-announce accumulation), so a
+    // child run that already blew past costCapTokens cannot launch the delayed
+    // hop after a restart. Recovery is invoked WITHOUT an explicit chainState
+    // (as the gateway startup path does), forcing the derive-from-store path.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:cost-recovery";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop after restart" });
+    // Persisted child chain cost already over the cap (post-run accumulation).
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 555_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // Cost cap enforced from the persisted basis → no spawn, delegate failed.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
+
+  it("recovery applies the delegate's durable chainTokensFold over a stale child entry (#1144)", async () => {
+    // When the settle-time child chain-cost persist FAILED, the child entry is
+    // permanently stale (missing this run's tokens) and the in-memory fold does
+    // not survive a restart. The fold is instead recorded durably on the delegate
+    // (chainTokensFold); recovery must add it to the stale child-entry cost so the
+    // cost cap still holds — otherwise a child over costCapTokens launches the hop.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:fold-recovery";
+    // A delegate carrying the durable fold, orphaned to `running` by a crash.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", chainTokensFold: 250_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    // The persisted child entry is stale: UNDER the cap without the fold.
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // 300_000 (stale entry) + 250_000 (durable fold) = 550_000 > costCapTokens
+    // (500_000) → rejected. Without the durable fold recovery would read 300_000
+    // and wrongly launch the over-budget hop.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
 });

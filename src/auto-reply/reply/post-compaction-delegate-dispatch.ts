@@ -23,7 +23,11 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { consumeStagedPostCompactionDelegates } from "../continuation-delegate-store.js";
+import {
+  consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates,
+  stagePostCompactionDelegate,
+} from "../continuation-delegate-store.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
@@ -58,6 +62,8 @@ export type PostCompactionDelegateDeliveryDeps = {
 
 export type PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates(sessionKey: string): SessionPostCompactionDelegate[];
+  finalizeStagedPostCompactionDelegates(flowIds: readonly (string | undefined)[]): number;
+  stagePostCompactionDelegate(sessionKey: string, delegate: SessionPostCompactionDelegate): void;
   drainPostCompactionDelegateDeliveries(params: {
     entryIds?: readonly string[];
     log: SessionDeliveryRecoveryLogger;
@@ -123,6 +129,8 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
 
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates,
+  stagePostCompactionDelegate,
   drainPostCompactionDelegateDeliveries,
   enqueuePostCompactionDelegateDelivery,
   enqueueSystemEvent,
@@ -639,6 +647,11 @@ export async function dispatchPostCompactionDelegates(
   deps: PostCompactionDelegateDispatchDeps = defaultPostCompactionDelegateDispatchDeps,
 ): Promise<DispatchPostCompactionDelegatesResult> {
   const stagedCompactionDelegates = deps.consumeStagedPostCompactionDelegates(params.sessionKey);
+  // Capture the claim handles immediately: consumeStagedPostCompactionDelegates
+  // now claims TaskFlow rows to `running` (not `finished`), and we finalize ONLY
+  // these specific rows after the durable handoff below — never other running
+  // rows for the session (e.g. crash-orphaned ones awaiting recovery) (#1144).
+  const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
   let persistedCompactionDelegates: SessionPostCompactionDelegate[] = [];
   try {
     persistedCompactionDelegates = await takePendingPostCompactionDelegates({
@@ -768,15 +781,38 @@ export async function dispatchPostCompactionDelegates(
         storePath: params.storePath,
         delegates: params.postCompactionDelegatesToPreserve,
       });
-      params.postCompactionDelegatesToPreserve.length = 0;
     } catch (err) {
+      // Session-store persist failed. Re-stage the delegates as fresh queued
+      // TaskFlow rows NOW — before finalizing the claimed rows — so they stay
+      // durably recoverable WITHOUT leaving the original claimed rows `running`.
+      // Leaving them running would let startup recovery
+      // (recoverStagedPostCompactionDelegates) re-queue and replay delegates
+      // that were already delivered or re-staged (#1144). Mirrors the
+      // agent-runner post-compaction finalize path.
+      const restagedCount = params.postCompactionDelegatesToPreserve.length;
+      for (const delegate of params.postCompactionDelegatesToPreserve) {
+        deps.stagePostCompactionDelegate(params.sessionKey, delegate);
+      }
       deps.log(
-        `Failed to persist re-staged post-compaction delegates for ${params.sessionKey} (${params.postCompactionDelegatesToPreserve.length}): ${String(
+        `Failed to persist re-staged post-compaction delegates for ${params.sessionKey}; re-staged ${restagedCount} to the durable queue: ${String(
           err,
         )}`,
       );
     }
+    // Cleared on both paths: the delegates are now durable (session store on
+    // success, fresh queued TaskFlow rows on failure), so the caller's finally
+    // must not re-stage them a second time.
+    params.postCompactionDelegatesToPreserve.length = 0;
   }
+
+  // The delegates the claimed rows carried are now durable — delivered to the
+  // session-delivery queue, persisted to the session store, or re-staged as
+  // fresh queued TaskFlow rows above — so finish the claimed rows. Finalize ONLY
+  // the rows THIS dispatch claimed, never other running rows for the session
+  // (e.g. crash-orphaned ones awaiting recovery). A crash before this point
+  // leaves the claimed rows recoverable via recoverStagedPostCompactionDelegates
+  // instead of silently losing them behind a premature finish (#1144).
+  deps.finalizeStagedPostCompactionDelegates(claimedFlowIds);
 
   const lifecycleEvent = buildPostCompactionLifecycleEvent({
     compactionCount: params.compactionCount,

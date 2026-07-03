@@ -108,6 +108,8 @@ function createDispatchDeps(options?: {
   const drainPostCompactionDelegateDeliveries = vi.fn(async () => undefined);
   const deps: PostCompactionDelegateDispatchDeps = {
     consumeStagedPostCompactionDelegates: vi.fn(() => options?.staged ?? []),
+    finalizeStagedPostCompactionDelegates: vi.fn(() => 0),
+    stagePostCompactionDelegate: vi.fn(),
     drainPostCompactionDelegateDeliveries,
     enqueuePostCompactionDelegateDelivery,
     enqueueSystemEvent,
@@ -1150,5 +1152,49 @@ describe("post-compaction delegate dispatch extraction", () => {
       "[system:post-compaction] Session compacted at 2026-04-26T22:30:00.000Z. Compaction count: 4. Queued 3 post-compaction delegate(s) for delivery into the fresh session.",
       { sessionKey: "main" },
     );
+  });
+
+  it("re-stages preserved delegates and finalizes claimed rows when the durable persist fails (#1144)", async () => {
+    // Two staged rows are claimed; the first delegate's delivery enqueue fails
+    // so it lands in the preserve list, and the session-store re-stage then
+    // throws. The dispatch must re-stage the preserved delegate as a fresh
+    // queued TaskFlow row AND finalize the claimed rows — leaving them `running`
+    // would let recoverStagedPostCompactionDelegates replay already-delivered /
+    // re-staged delegates as duplicates on the next gateway startup.
+    const staged: SessionPostCompactionDelegate[] = [
+      { ...delegate("staged one"), flowId: "flow-1" },
+      { ...delegate("staged two"), flowId: "flow-2" },
+    ];
+    const preserve: SessionPostCompactionDelegate[] = [];
+    const { deps } = createDispatchDeps({ staged, rejectEnqueueAt: 0 });
+
+    const persistSpy = vi
+      .spyOn(sessionStoreModule, "updateSessionStore")
+      .mockRejectedValue(new Error("store write failed"));
+    try {
+      await dispatchPostCompactionDelegates(
+        {
+          cfg,
+          compactionCount: 1,
+          followupRun: createFollowupRun(),
+          postCompactionDelegatesToPreserve: preserve,
+          sessionKey: "main",
+          storePath: "/tmp/post-compaction-persist-fail.json",
+        },
+        deps,
+      );
+    } finally {
+      persistSpy.mockRestore();
+    }
+    await flushMicrotasks();
+
+    // The preserved delegate is re-staged as a fresh durable queued row.
+    const stageCalls = vi.mocked(deps["stagePostCompactionDelegate"]).mock.calls;
+    expect(stageCalls).toHaveLength(1);
+    // The claimed rows are finished so recovery cannot replay them.
+    const finalizeCalls = vi.mocked(deps["finalizeStagedPostCompactionDelegates"]).mock.calls;
+    expect(finalizeCalls).toContainEqual([["flow-1", "flow-2"]]);
+    // Preserve list drained: the caller's finally must not re-stage a second time.
+    expect(preserve).toHaveLength(0);
   });
 });

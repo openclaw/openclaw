@@ -64,9 +64,12 @@ export async function releasePostCompactionLifecycle(
 ): Promise<ReleasePostCompactionResult> {
   const { sessionKey, cfg, agentCfgContextTokens, activeSessionEntry, originating } = params;
 
-  const { consumeStagedPostCompactionDelegates, clearContextPressureState, checkContextPressure } =
-    await import("./lazy.runtime.js");
-
+  const {
+    consumeStagedPostCompactionDelegates,
+    finalizeStagedPostCompactionDelegates,
+    clearContextPressureState,
+    checkContextPressure,
+  } = await import("./lazy.runtime.js");
   // 1. Clear pressure dedup so post-compaction lifecycle can fire fresh bands.
   clearContextPressureState(sessionKey);
 
@@ -93,7 +96,12 @@ export async function releasePostCompactionLifecycle(
   }
 
   // 3. Release staged post-compaction delegates with the canonical flag set.
+  //    consumeStagedPostCompactionDelegates now claims the rows to `running`;
+  //    finalize only these claimed rows after dispatch completes so a crash in
+  //    between leaves recoverable substrate, and other running rows are never
+  //    touched (#1144).
   const stagedDelegates = consumeStagedPostCompactionDelegates(sessionKey);
+  const claimedFlowIds = stagedDelegates.map((delegate) => delegate.flowId);
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {
     const { dispatchStagedPostCompactionDelegates } = await import("./delegate-dispatch.js");
@@ -119,6 +127,7 @@ export async function releasePostCompactionLifecycle(
       },
     );
     delegatesDispatched = result.dispatched;
+    finalizeStagedPostCompactionDelegates(claimedFlowIds);
   }
 
   return { pressureFired, delegatesDispatched };

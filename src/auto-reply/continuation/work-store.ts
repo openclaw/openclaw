@@ -599,6 +599,70 @@ export function markPendingWorkDelivered(work: PendingContinuationWork): boolean
   return true;
 }
 
+/**
+ * Reconcile a continuation work row whose durable delivered-mark lost the
+ * expected-revision race AFTER the provider turn already executed (#1144:
+ * revision/cancel race). The turn is spent, so restart-gap replay must be
+ * prevented AND the row must not linger `running`: dispatchPendingContinuationWork
+ * skips markPendingWorkTurnGranted on this path (work.expectedRevision is stale),
+ * so nothing else finalizes it. Terminalize the CURRENT-revision row here — a
+ * lingering `running` row would keep live-work bookkeeping and cleanup gates
+ * (hasLiveOrRecentlyDispatchedContinuationWork) blocked until a later recovery
+ * pass even though the turn is spent. If finishing races too, fail the row
+ * non-retryably — dropping a stale row is strictly safer than replaying an
+ * already-executed turn.
+ *
+ * No-ops when the row is gone, already terminal, cancel-owned, or re-queued by
+ * another actor: none of those replay THIS turn (a fresh election is a new flow
+ * / a deliberate requeue, not a restart-gap redelivery).
+ */
+export function reconcileUndeliverableGrantedWork(work: PendingContinuationWork): void {
+  if (!work.flowId) {
+    return;
+  }
+  const current = getTaskFlowById(work.flowId);
+  if (!current || current.status !== "running" || current.cancelRequestedAt != null) {
+    return;
+  }
+  const state = decodeWorkState(current) ?? buildFallbackWorkState(work);
+  const { idleRetry: _idleRetry, recoveryDueAt: _recoveryDueAt, ...terminalState } = state;
+  const now = Date.now();
+  const succeeded = { point: "optimal", durability: "durable" } as const;
+  // Finish (terminalize) against the CURRENT revision — the turn already ran, so
+  // this is a clean delivered/granted close, not a failure. Stamp both the
+  // delivered read-guard and turnGrantedAt so the finished row reads identically
+  // to the normal deliver-then-grant path.
+  const finished = finishFlow({
+    flowId: current.flowId,
+    expectedRevision: current.revision,
+    currentStep: "Continuation wake delivered (post-race reconcile)",
+    stateJson: {
+      ...terminalState,
+      deliveredAt: state.deliveredAt ?? now,
+      turnGrantedAt: now,
+      disposition: "granted",
+      succeeded,
+    },
+    updatedAt: now,
+    endedAt: now,
+  });
+  if (finished.applied) {
+    return;
+  }
+  const latest = getTaskFlowById(work.flowId);
+  if (!latest || latest.status !== "running" || latest.cancelRequestedAt != null) {
+    return;
+  }
+  failFlow({
+    flowId: latest.flowId,
+    expectedRevision: latest.revision,
+    currentStep: "Continuation turn executed; delivered-mark lost revision race",
+    blockedSummary:
+      "Provider turn already ran; parking non-retryable to prevent restart-gap replay.",
+    updatedAt: Date.now(),
+  });
+}
+
 export function requeuePendingWork(
   work: PendingContinuationWork,
   params: {

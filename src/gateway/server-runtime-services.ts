@@ -180,11 +180,17 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
   // Delegate recovery must run before same-session continue_work recovery to
   // preserve normal post-turn ordering when a restart happens after both were
   // queued in the same turn.
+  //
+  // Captured BEFORE the deferred timer as a boot-time cutoff: post-compaction
+  // recovery only resets rows that were already `running` at process start, so a
+  // live release claiming a row during the startup window is not requeued (#1144).
+  const recoveryArmedAt = Date.now();
   const timer = setTimeout(() => {
     void (async () => {
-      const [delegateModule, workModule] = await Promise.all([
+      const [delegateModule, workModule, delegateStoreModule] = await Promise.all([
         import("../auto-reply/continuation/delegate-dispatch.js"),
         import("../auto-reply/continuation/work-dispatch.js"),
+        import("../auto-reply/continuation/delegate-store.js"),
       ]);
       const delegateLog = params.log.child("continuation-delegate-recovery");
       const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
@@ -195,6 +201,19 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
       ) {
         delegateLog.info(
           `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
+        );
+      }
+      // #1144: reset post-compaction delegates left `running` by a crash between
+      // release-claim and durable handoff back to `queued` so the next
+      // compaction seam re-consumes them instead of losing the staged work. The
+      // boot-time cutoff excludes rows a live release claimed after startup, so
+      // recovery cannot requeue an actively-releasing delegate (duplicate work).
+      const postCompactionReset = delegateStoreModule.recoverStagedPostCompactionDelegates({
+        runningUpdatedAtOrBefore: recoveryArmedAt,
+      });
+      if (postCompactionReset > 0) {
+        delegateLog.info(
+          `recovered post-compaction delegates reset-to-queued=${postCompactionReset}`,
         );
       }
 
