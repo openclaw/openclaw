@@ -59,6 +59,9 @@ function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): 
 
 function hasTransientStateSuffix(filePosix: string): boolean {
   const lowerFilePosix = filePosix.toLowerCase();
+  if (STATE_TRANSIENT_SUFFIXES.some((suffix) => lowerFilePosix.endsWith(`.sqlite${suffix}`))) {
+    return false;
+  }
   return STATE_TRANSIENT_SUFFIXES.some((suffix) => lowerFilePosix.endsWith(suffix));
 }
 
@@ -70,8 +73,8 @@ function isStateScratchSidecarPath(filePosix: string, stateDirPosix: string): bo
     return false;
   }
   const relative = path.posix.relative(stateDirPosix, filePosix);
-  const parts = relative.split("/").filter(Boolean);
-  return parts.length >= 2 && STATE_SCRATCH_ROOTS.has(parts[0] ?? "");
+  const firstSlashIndex = relative.indexOf("/");
+  return firstSlashIndex > 0 && STATE_SCRATCH_ROOTS.has(relative.slice(0, firstSlashIndex));
 }
 
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
@@ -100,8 +103,9 @@ function isShellSnapshotCachePath(filePosix: string, stateDirPosix: string): boo
     return false;
   }
   const relative = path.posix.relative(cacheRoot, filePosix);
-  const parts = relative.split("/").filter(Boolean);
-  return parts[0] === "shell-snapshots" || parts[0] === "shell_snapshots";
+  const firstSlashIndex = relative.indexOf("/");
+  const root = firstSlashIndex >= 0 ? relative.slice(0, firstSlashIndex) : relative;
+  return root === "shell-snapshots" || root === "shell_snapshots";
 }
 
 function isBrowserCachePath(filePosix: string, stateDirPosix: string): boolean {
@@ -147,7 +151,7 @@ type VolatileFilterPlan = {
  *   - `{stateDir}/cache/shell-snapshots/**`
  *   - `{stateDir}/browser/**` cache/resource-cache directories
  *   - `{stateDir}/archived/**`
- *   - `{stateDir}/**`/`*.{pid,sock,tmp}` and `*-{journal,shm,wal}`
+ *   - `{stateDir}/**`/`*.{pid,sock,tmp}` and non-SQLite `*-{journal,shm,wal}`
  *   - `{stateDir}/{cache,delivery-queue,session-delivery-queue,tmp}/**`/`*.{lock,partial}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {

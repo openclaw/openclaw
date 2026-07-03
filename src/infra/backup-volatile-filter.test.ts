@@ -35,9 +35,9 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/browser/openclaw/user-data/Default/Service Worker/CacheStorage/index`, true],
     [`${stateDir}/browser/openclaw/user-data/Default/Web Applications/_crx/app.ico`, true],
     [`${stateDir}/archived/2026-01-01/openclaw-backup.tar.gz`, true],
-    [`${stateDir}/state/openclaw.sqlite-wal`, true],
-    [`${stateDir}/state/openclaw.sqlite-shm`, true],
-    [`${stateDir}/state/openclaw.sqlite-journal`, true],
+    [`${stateDir}/state/download-wal`, true],
+    [`${stateDir}/state/index-shm`, true],
+    [`${stateDir}/state/queue-journal`, true],
     [`${stateDir}/tmp/backup.lock`, true],
     [`${stateDir}/tmp/archive.partial`, true],
     [`${stateDir}/cache/backup.lock`, true],
@@ -55,6 +55,9 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/extensions/demo/download.partial`, false],
     [`${stateDir}/locks/backup.lock`, false],
     [`${stateDir}/downloads/archive.partial`, false],
+    [`${stateDir}/state/openclaw.sqlite-wal`, false],
+    [`${stateDir}/state/openclaw.sqlite-shm`, false],
+    [`${stateDir}/state/openclaw.sqlite-journal`, false],
     // non-volatile: cron definitions
     [`${stateDir}/cron/jobs.json`, false],
     // non-volatile: cron runs but wrong extension

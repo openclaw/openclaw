@@ -796,6 +796,8 @@ describe("createBackupArchive", () => {
             expect(createdLatePath).toBe(true);
             expect(await fs.readdir(outputDir)).toEqual([]);
           } finally {
+            closeOpenClawAgentDatabasesForTest();
+            closeOpenClawStateDatabase();
             readdirSpy.mockRestore();
           }
         },
