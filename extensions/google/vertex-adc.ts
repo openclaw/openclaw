@@ -50,7 +50,7 @@ const GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
-const GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES = 1024 * 1024;
+const MAX_DECODED_TOKEN_BODY_BYTES = 16 * 1024 * 1024;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -293,12 +293,11 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   return token;
 }
 
-async function readGoogleOauthTokenResponsePayload(
+export async function readGoogleOauthTokenResponsePayload(
   response: Response,
 ): Promise<GoogleOauthTokenResponsePayload | undefined> {
-  const bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) =>
-      new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),
+  const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+    onOverflow: () => new Error("google-vertex-adc: token response exceeds 16 MiB"),
   });
   const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
   if (!text.trim()) {
@@ -314,21 +313,27 @@ async function readGoogleOauthTokenResponsePayload(
 function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
   if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
     try {
-      return gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(
-        "utf8",
-      );
-    } catch (error) {
+      // bounded gunzip: maxOutputLength prevents OOM from a small compressed
+      // payload that inflates to a huge buffer, without relying on the gzip
+      // trailer ISIZE field (which is modulo 2^32 and trivially bypassed).
+      const decoded = gunzipSync(bytes, { maxOutputLength: MAX_DECODED_TOKEN_BODY_BYTES });
+      return decoded.toString("utf8");
+    } catch (err) {
+      // zlib throws ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED (Node <24) or
+      // ERR_BUFFER_TOO_LARGE (Node 24+) when the decompressed output
+      // exceeds maxOutputLength — surface a clear error instead of
+      // returning raw binary as UTF-8.
       if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ERR_BUFFER_TOO_LARGE"
+        err instanceof Error &&
+        "code" in err &&
+        (err.code === "ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED" || err.code === "ERR_BUFFER_TOO_LARGE")
       ) {
         throw new Error(
-          `Google OAuth token response exceeds ${GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES} decompressed bytes`,
-          { cause: error },
+          `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
+          { cause: err },
         );
       }
+      // Malformed/truncated gzip: fall back to raw bytes
       return bytes.toString("utf8");
     }
   }
@@ -337,15 +342,13 @@ function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: stri
 
 function shouldGunzipGoogleOauthTokenResponse(
   bytes: Buffer,
-  contentEncoding: string | null,
+  _contentEncoding: string | null,
 ): boolean {
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    return true;
-  }
-  return (contentEncoding ?? "")
-    .split(",")
-    .map((encoding) => encoding.trim().toLowerCase())
-    .includes("gzip");
+  // Only gunzip when the payload starts with gzip magic bytes (0x1f 0x8b).
+  // content-encoding header alone is not reliable because Node.js fetch
+  // auto-decompresses gzip bodies but may leave the header intact,
+  // causing gunzipSync to fail on already-decompressed data.
+  return bytes[0] === 0x1f && bytes[1] === 0x8b;
 }
 
 async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
