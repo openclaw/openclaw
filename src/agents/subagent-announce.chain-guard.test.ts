@@ -260,24 +260,9 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
     expect(spawnSpy).not.toHaveBeenCalled();
   });
 
-  it("blocks on cost cap even when chain length is within bounds", async () => {
-    await writeSessionStore({
-      "agent:main:discord:dm:test-chain": {
-        sessionId: "test",
-        updatedAt: Date.now(),
-        continuationChainTokens: 600_000,
-      },
-    });
-
-    const params = buildChainShardParams(1);
-    await runSubagentAnnounceFlow(params);
-
-    expect(spawnSpy).not.toHaveBeenCalled();
-  });
-
   it("allows continuation when accumulated tokens equal costCapTokens exactly (> not >=)", async () => {
     await writeSessionStore({
-      "agent:main:discord:dm:test-chain": {
+      "agent:main:main": {
         sessionId: "test",
         updatedAt: Date.now(),
         continuationChainTokens: 500_000,
@@ -285,6 +270,8 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
     });
 
     const params = buildChainShardParams(1);
+    params.requesterSessionKey = "agent:main:main";
+    params.requesterDisplayKey = "main";
     await runSubagentAnnounceFlow(params);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -295,7 +282,7 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
 
   it("rejects continuation when accumulated tokens exceed costCapTokens by one", async () => {
     await writeSessionStore({
-      "agent:main:discord:dm:test-chain": {
+      "agent:main:main": {
         sessionId: "test",
         updatedAt: Date.now(),
         continuationChainTokens: 500_001,
@@ -303,7 +290,12 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
     });
 
     const params = buildChainShardParams(1);
+    params.requesterSessionKey = "agent:main:main";
+    params.requesterDisplayKey = "main";
     await runSubagentAnnounceFlow(params);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     expect(spawnSpy).not.toHaveBeenCalled();
   });
