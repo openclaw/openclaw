@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -11,6 +12,12 @@ import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 type ParsedExecApprovalCommand = {
   approvalId: string;
   decision: "allow-once" | "allow-always" | "deny";
+};
+
+type CommandPayload = {
+  argv: string[];
+  text: string;
+  workdir?: string;
 };
 
 export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
@@ -104,10 +111,10 @@ export async function detectUnsafeExecControlShellCommand(
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   const candidates = await createCommandPayloads(command);
   for (const candidate of candidates) {
-    if (parseExecApprovalShellCommand(candidate)) {
+    if (parseExecApprovalShellCommand(candidate.text)) {
       return "approve";
     }
-    if (parseOpenClawChannelsLoginShellCommand(candidate)) {
+    if (parseOpenClawChannelsLoginShellCommand(candidate.text)) {
       return "channel-login";
     }
   }
@@ -141,6 +148,7 @@ const RG_OPTION_ARGS_WITH_VALUES = new Set([
   "-e",
   "-f",
   "-g",
+  "-j",
   "-m",
   "-t",
   "-T",
@@ -154,6 +162,7 @@ const RG_OPTION_ARGS_WITH_VALUES = new Set([
   "--glob",
   "--glob-case-insensitive",
   "--iglob",
+  "--ignore-file",
   "--json-seq",
   "--max-columns",
   "--max-count",
@@ -197,21 +206,129 @@ const GREP_OPTION_ARGS_WITH_VALUES = new Set([
   "--regexp",
 ]);
 
-function createCommandPayloads(rawCommand: string): Promise<string[]> {
+function commandPayloadKey(payload: CommandPayload): string {
+  return `${payload.workdir ?? ""}\0${payload.argv.join("\0")}`;
+}
+
+function payloadFromArgv(argv: string[], workdir?: string): CommandPayload | null {
+  if (argv.length === 0) {
+    return null;
+  }
+  return {
+    argv,
+    text: argv.join(" "),
+    ...(workdir ? { workdir } : {}),
+  };
+}
+
+function pushUniquePayload(
+  payloads: CommandPayload[],
+  seen: Set<string>,
+  payload: CommandPayload | null,
+): void {
+  if (!payload) {
+    return;
+  }
+  const key = commandPayloadKey(payload);
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  payloads.push(payload);
+}
+
+function payloadsFromCandidateStrings(candidates: string[], workdir?: string): CommandPayload[] {
+  return normalizeStringEntries(candidates).flatMap((candidate) => {
+    const argv = splitShellArgs(candidate);
+    return argv
+      ? [payloadFromArgv(argv, workdir)].filter((payload): payload is CommandPayload =>
+          Boolean(payload),
+        )
+      : [];
+  });
+}
+
+function isCwdChangingCommandContext(context: string): boolean {
+  return context === "top-level" || context === "wrapper-payload";
+}
+
+function resolveCdWorkdir(argv: readonly string[], currentWorkdir: string): string | null {
+  if (normalizeCommandBaseName(argv[0]) !== "cd") {
+    return null;
+  }
+  const target = argv.find((token, index) => index > 0 && token !== "--" && !token.startsWith("-"));
+  if (target === "-") {
+    return null;
+  }
+  const resolved = resolveSearchTargetPath(target ?? "~", currentWorkdir);
+  return resolved ? maybeRealpath(resolved) : null;
+}
+
+function subshellScopeKey(source: string, endIndex: number): string {
+  const stack: number[] = [];
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let index = 0; index < Math.min(endIndex, source.length); index += 1) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      stack.push(index);
+    } else if (char === ")") {
+      stack.pop();
+    }
+  }
+  return stack.join("/");
+}
+
+function createCommandPayloads(rawCommand: string, workdir?: string): Promise<CommandPayload[]> {
   return (async () => {
-    const fallbackCandidates = normalizeStringEntries(rawCommand.split(/\r?\n/u)).flatMap(
-      (line) => {
-        const argv = splitShellArgs(line);
-        return argv ? buildCommandPayloadCandidates(argv) : [line];
-      },
-    );
+    const fallbackCandidates = rawCommand.split(/\r?\n/u).flatMap((line) => {
+      const argv = splitShellArgs(line);
+      return argv ? payloadsFromCandidateStrings(buildCommandPayloadCandidates(argv), workdir) : [];
+    });
     try {
       const explanation = await explainShellCommand(rawCommand.trim());
       if (explanation.ok) {
-        const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-        const parsedCandidates = normalizeStringEntries(
-          commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
+        const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands].toSorted(
+          (a, b) => a.span.startIndex - b.span.startIndex,
         );
+        const parsedCandidates: CommandPayload[] = [];
+        const seen = new Set<string>();
+        const currentWorkdirBySubshellScope = new Map<string, string | undefined>([["", workdir]]);
+        for (const step of commands) {
+          const subshellScope = subshellScopeKey(rawCommand, step.span.startIndex);
+          const stepWorkdir = currentWorkdirBySubshellScope.get(subshellScope) ?? workdir;
+          pushUniquePayload(parsedCandidates, seen, payloadFromArgv(step.argv, stepWorkdir));
+          for (const payload of payloadsFromCandidateStrings(
+            buildCommandPayloadCandidates(step.argv),
+            stepWorkdir,
+          )) {
+            pushUniquePayload(parsedCandidates, seen, payload);
+          }
+          if (stepWorkdir && isCwdChangingCommandContext(step.context)) {
+            currentWorkdirBySubshellScope.set(
+              subshellScope,
+              resolveCdWorkdir(step.argv, stepWorkdir) ?? stepWorkdir,
+            );
+          }
+        }
         return parsedCandidates.length > 0 ? parsedCandidates : fallbackCandidates;
       }
     } catch {
@@ -285,10 +402,15 @@ function hasGrepRecursiveFlag(args: readonly string[]): boolean {
 
 function hasSearchPatternOption(args: readonly string[]): boolean {
   return args.some((arg) => {
-    if (arg === "-e" || arg === "--regexp") {
+    if (arg === "-e" || arg === "--regexp" || arg === "-f" || arg === "--file") {
       return true;
     }
-    return arg.startsWith("-e") || arg.startsWith("--regexp=");
+    return (
+      arg.startsWith("-e") ||
+      arg.startsWith("-f") ||
+      arg.startsWith("--regexp=") ||
+      arg.startsWith("--file=")
+    );
   });
 }
 
@@ -352,20 +474,29 @@ function resolveSearchTargetPath(searchPath: string, workdir: string): string | 
   if (!searchPath || searchPath === "-") {
     return null;
   }
-  const shellHome = process.env.HOME || os.homedir();
-  const expandedShellHome = shellHome
-    ? searchPath
-        .replace(/^\$HOME(?=$|[\\/])/u, shellHome)
-        .replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
-    : searchPath;
-  const expanded = expandHomePrefix(expandedShellHome);
+  const expanded = expandHomePrefix(expandShellHomePrefix(searchPath));
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workdir, expanded));
 }
 
-function protectedRootForPath(targetPath: string): string | null {
-  const resolved = path.resolve(targetPath);
-  if (resolved === path.parse(resolved).root) {
-    return resolved;
+function expandShellHomePrefix(input: string): string {
+  const shellHome = process.env.HOME || os.homedir();
+  return shellHome
+    ? input.replace(/^\$HOME(?=$|[\\/])/u, shellHome).replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
+    : input;
+}
+
+function maybeRealpath(targetPath: string): string | null {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function protectedRootForResolvedPath(resolved: string): string | null {
+  const normalizedResolved = path.resolve(resolved);
+  if (normalizedResolved === path.parse(normalizedResolved).root) {
+    return normalizedResolved;
   }
   const homeDirs = Array.from(
     new Set([resolveRequiredHomeDir(), os.homedir()].map((home) => path.resolve(home))),
@@ -377,21 +508,72 @@ function protectedRootForPath(targetPath: string): string | null {
     path.join(homeDir, ".codex", "archived_sessions"),
     path.join(homeDir, ".openclaw"),
   ]);
-  const matchedHomeRoot = homeProtectedRoots.find((root) => resolved === root);
+  const matchedHomeRoot = homeProtectedRoots.find((root) => {
+    const normalizedRoot = path.resolve(root);
+    return (
+      normalizedResolved === normalizedRoot || normalizedResolved === maybeRealpath(normalizedRoot)
+    );
+  });
   if (matchedHomeRoot) {
     return matchedHomeRoot;
   }
-  const segments = resolved.split(path.sep).filter(Boolean);
+  const matchedRunnerWorkRoot = homeDirs
+    .map((homeDir) => {
+      const relative = path.relative(homeDir, normalizedResolved).split(path.sep).filter(Boolean);
+      return relative[0] === "work" && relative.length <= 2 ? normalizedResolved : null;
+    })
+    .find((root) => root !== null);
+  if (matchedRunnerWorkRoot) {
+    return matchedRunnerWorkRoot;
+  }
+  const segments = normalizedResolved.split(path.sep).filter(Boolean);
   if (segments[0] === "Volumes" && segments.length <= 3) {
     return path.sep + path.join(...segments);
   }
   if (segments.length === 1 && ["workspace", "workspaces"].includes(segments[0] ?? "")) {
-    return resolved;
+    return normalizedResolved;
   }
   if (segments.at(-1) === "repos" && segments.length <= 3) {
-    return resolved;
+    return normalizedResolved;
   }
   return null;
+}
+
+function protectedRootForPath(targetPath: string): string | null {
+  const resolved = path.resolve(targetPath);
+  return (
+    protectedRootForResolvedPath(resolved) ??
+    protectedRootForResolvedPath(maybeRealpath(resolved) ?? resolved)
+  );
+}
+
+function globBaseSearchPath(searchPath: string): string | null {
+  const globIndex = searchPath.search(/[*?[]/u);
+  if (globIndex === -1) {
+    return null;
+  }
+  const prefix = searchPath.slice(0, globIndex);
+  if (!prefix || prefix.endsWith("/") || prefix.endsWith("\\")) {
+    return prefix ? prefix.replace(/[\\/]+$/u, "") || "." : ".";
+  }
+  return path.dirname(prefix);
+}
+
+function protectedRootForSearchPath(searchPath: string, workdir: string): string | null {
+  const targetPath = resolveSearchTargetPath(searchPath, workdir);
+  if (!targetPath) {
+    return null;
+  }
+  const directRoot = protectedRootForPath(targetPath);
+  if (directRoot) {
+    return directRoot;
+  }
+  const globBase = globBaseSearchPath(searchPath);
+  if (!globBase) {
+    return null;
+  }
+  const globBasePath = resolveSearchTargetPath(globBase, workdir);
+  return globBasePath ? protectedRootForPath(globBasePath) : null;
 }
 
 function detectBroadSearchArgv(params: {
@@ -419,11 +601,7 @@ function detectBroadSearchArgv(params: {
     return null;
   }
   for (const searchPath of paths) {
-    const targetPath = resolveSearchTargetPath(searchPath, params.workdir);
-    if (!targetPath) {
-      continue;
-    }
-    const protectedRoot = protectedRootForPath(targetPath);
+    const protectedRoot = protectedRootForSearchPath(searchPath, params.workdir);
     if (protectedRoot) {
       return {
         executable: normalizedExecutable,
@@ -439,13 +617,12 @@ export async function detectUnsafeExecBroadSearchShellCommand(params: {
   command: string;
   workdir: string;
 }): Promise<UnsafeExecBroadSearchShellCommand | null> {
-  const payloads = await createCommandPayloads(params.command);
+  const payloads = await createCommandPayloads(params.command, params.workdir);
   for (const payload of payloads) {
-    const argv = splitShellArgs(payload);
-    if (!argv) {
-      continue;
-    }
-    const hit = detectBroadSearchArgv({ argv, workdir: params.workdir });
+    const hit = detectBroadSearchArgv({
+      argv: payload.argv,
+      workdir: payload.workdir ?? params.workdir,
+    });
     if (hit) {
       return hit;
     }
