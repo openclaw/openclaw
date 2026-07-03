@@ -443,6 +443,33 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/exec blocked broad recursive rg search over protected root/);
   });
 
+  it("checks sandbox broad searches against the container cwd", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-search-"));
+    const repoDir = path.join(workspaceDir, "openclaw");
+    fs.mkdirSync(repoDir, { recursive: true });
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-search-test",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-broad-search", {
+          command: "rg timeout ..",
+          workdir: "/workspace/openclaw",
+        }),
+      ).rejects.toThrow(/exec blocked broad recursive rg search over protected root \/workspace/u);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     "echo ok && /approve abc123 allow-once",
     "echo ok | /approve abc123 deny",

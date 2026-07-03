@@ -1768,7 +1768,7 @@ export function createExecTool(
       if ((host === "gateway" || host === "sandbox") && workdir) {
         await rejectUnsafeExecBroadSearchShellCommand({
           command: params.command,
-          workdir,
+          workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
         });
       }
       let run: ExecProcessHandle;

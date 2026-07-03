@@ -7,7 +7,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
 import { unwrapDispatchWrappersForResolution } from "./dispatch-wrapper-resolution.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 
 type ParsedExecApprovalCommand = {
   approvalId: string;
@@ -18,6 +18,7 @@ type CommandPayload = {
   argv: string[];
   text: string;
   workdir?: string;
+  stdinFromPipe?: boolean;
 };
 
 export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
@@ -145,6 +146,7 @@ const RG_OPTION_ARGS_WITH_VALUES = new Set([
   "-A",
   "-B",
   "-C",
+  "-E",
   "-e",
   "-f",
   "-g",
@@ -207,10 +209,16 @@ const GREP_OPTION_ARGS_WITH_VALUES = new Set([
 ]);
 
 function commandPayloadKey(payload: CommandPayload): string {
-  return `${payload.workdir ?? ""}\0${payload.argv.join("\0")}`;
+  return `${payload.workdir ?? ""}\0${
+    payload.stdinFromPipe === true ? "pipe" : ""
+  }\0${payload.argv.join("\0")}`;
 }
 
-function payloadFromArgv(argv: string[], workdir?: string): CommandPayload | null {
+function payloadFromArgv(
+  argv: string[],
+  workdir?: string,
+  opts?: { stdinFromPipe?: boolean },
+): CommandPayload | null {
   if (argv.length === 0) {
     return null;
   }
@@ -218,6 +226,7 @@ function payloadFromArgv(argv: string[], workdir?: string): CommandPayload | nul
     argv,
     text: argv.join(" "),
     ...(workdir ? { workdir } : {}),
+    ...(opts?.stdinFromPipe === true ? { stdinFromPipe: true } : {}),
   };
 }
 
@@ -237,11 +246,15 @@ function pushUniquePayload(
   payloads.push(payload);
 }
 
-function payloadsFromCandidateStrings(candidates: string[], workdir?: string): CommandPayload[] {
+function payloadsFromCandidateStrings(
+  candidates: string[],
+  workdir?: string,
+  opts?: { stdinFromPipe?: boolean },
+): CommandPayload[] {
   return normalizeStringEntries(candidates).flatMap((candidate) => {
     const argv = splitShellArgs(candidate);
     return argv
-      ? [payloadFromArgv(argv, workdir)].filter((payload): payload is CommandPayload =>
+      ? [payloadFromArgv(argv, workdir, opts)].filter((payload): payload is CommandPayload =>
           Boolean(payload),
         )
       : [];
@@ -262,6 +275,187 @@ function resolveCdWorkdir(argv: readonly string[], currentWorkdir: string): stri
   }
   const resolved = resolveSearchTargetPath(target ?? "~", currentWorkdir);
   return resolved ? maybeRealpath(resolved) : null;
+}
+
+function resolveEnvChdirWorkdir(argv: readonly string[], currentWorkdir: string): string | null {
+  if (normalizeCommandBaseName(argv[0]) !== "env") {
+    return null;
+  }
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "--") {
+      return null;
+    }
+    if (token === "-C" || token === "--chdir") {
+      const target = argv[index + 1];
+      return target ? resolveSearchTargetPath(target, currentWorkdir) : null;
+    }
+    if (token.startsWith("--chdir=")) {
+      return resolveSearchTargetPath(token.slice("--chdir=".length), currentWorkdir);
+    }
+    if (!token.startsWith("-")) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolvePayloadWorkdir(
+  argv: readonly string[],
+  currentWorkdir?: string,
+): string | undefined {
+  if (!currentWorkdir) {
+    return currentWorkdir;
+  }
+  return resolveEnvChdirWorkdir(argv, currentWorkdir) ?? currentWorkdir;
+}
+
+function shellTokensBefore(source: string, endIndex: number): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let index = 0; index < Math.min(endIndex, source.length); index += 1) {
+    const char = source[index] ?? "";
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/[A-Za-z0-9_]/u.test(char)) {
+      current += char;
+      continue;
+    }
+    if (current) {
+      tokens.push(current);
+      current = "";
+    }
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function isInsideShellControlFlowBody(source: string, commandStartIndex: number): boolean {
+  const stack: Array<"pending-if" | "if-body"> = [];
+  for (const token of shellTokensBefore(source, commandStartIndex)) {
+    if (token === "if") {
+      stack.push("pending-if");
+      continue;
+    }
+    if (token === "then" && stack.at(-1) === "pending-if") {
+      stack[stack.length - 1] = "if-body";
+      continue;
+    }
+    if (token === "fi") {
+      stack.pop();
+    }
+  }
+  return stack.at(-1) === "if-body";
+}
+
+function previousNonWhitespaceShellChar(source: string, startIndex: number): string {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let previous = "";
+  for (let index = 0; index < Math.min(startIndex, source.length); index += 1) {
+    const char = source[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      previous = char;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      previous = char;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      previous = char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      previous = char;
+      continue;
+    }
+    if (!/\s/u.test(char)) {
+      previous = char;
+    }
+  }
+  return previous;
+}
+
+function hasPipedStdinBeforeCommand(source: string, commandStartIndex: number): boolean {
+  if (previousNonWhitespaceShellChar(source, commandStartIndex) !== "|") {
+    return false;
+  }
+  const before = source.slice(0, commandStartIndex).trimEnd();
+  return !before.endsWith("||");
+}
+
+function shellPositionalPayload(argv: readonly string[]): string[] | null {
+  const commandName = normalizeCommandBaseName(argv[0]);
+  if (!["bash", "dash", "sh", "zsh"].includes(commandName)) {
+    return null;
+  }
+  let commandIndex = -1;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "-c" || token.endsWith("c")) {
+      commandIndex = index + 1;
+      break;
+    }
+    if (!token.startsWith("-")) {
+      return null;
+    }
+  }
+  const commandText = commandIndex >= 0 ? (argv[commandIndex] ?? "") : "";
+  if (!commandText.includes("$@") && !commandText.includes("$*")) {
+    return null;
+  }
+  const payload = argv.slice(commandIndex + 2);
+  return payload.length > 0 ? payload : null;
+}
+
+function payloadsFromArgv(
+  argv: readonly string[],
+  workdir?: string,
+  opts?: { stdinFromPipe?: boolean },
+): CommandPayload[] {
+  const payloadWorkdir = resolvePayloadWorkdir(argv, workdir);
+  const payloads = payloadsFromCandidateStrings(
+    buildCommandPayloadCandidates([...argv]),
+    payloadWorkdir,
+    opts,
+  );
+  const positionalPayload = shellPositionalPayload(argv);
+  if (positionalPayload) {
+    payloads.push(
+      ...[payloadFromArgv([...positionalPayload], workdir, opts)].filter(
+        (payload): payload is CommandPayload => Boolean(payload),
+      ),
+    );
+  }
+  return payloads;
 }
 
 function subshellScopeKey(source: string, endIndex: number): string {
@@ -315,14 +509,20 @@ function createCommandPayloads(rawCommand: string, workdir?: string): Promise<Co
         for (const step of commands) {
           const subshellScope = subshellScopeKey(rawCommand, step.span.startIndex);
           const stepWorkdir = currentWorkdirBySubshellScope.get(subshellScope) ?? workdir;
-          pushUniquePayload(parsedCandidates, seen, payloadFromArgv(step.argv, stepWorkdir));
-          for (const payload of payloadsFromCandidateStrings(
-            buildCommandPayloadCandidates(step.argv),
-            stepWorkdir,
-          )) {
+          const stdinFromPipe = hasPipedStdinBeforeCommand(rawCommand, step.span.startIndex);
+          pushUniquePayload(
+            parsedCandidates,
+            seen,
+            payloadFromArgv(step.argv, stepWorkdir, { stdinFromPipe }),
+          );
+          for (const payload of payloadsFromArgv(step.argv, stepWorkdir, { stdinFromPipe })) {
             pushUniquePayload(parsedCandidates, seen, payload);
           }
-          if (stepWorkdir && isCwdChangingCommandContext(step.context)) {
+          if (
+            stepWorkdir &&
+            isCwdChangingCommandContext(step.context) &&
+            !isInsideShellControlFlowBody(rawCommand, step.span.startIndex)
+          ) {
             currentWorkdirBySubshellScope.set(
               subshellScope,
               resolveCdWorkdir(step.argv, stepWorkdir) ?? stepWorkdir,
@@ -414,11 +614,14 @@ function hasSearchPatternOption(args: readonly string[]): boolean {
   });
 }
 
-function resolveRgSearchPaths(args: readonly string[]): string[] {
+function resolveRgSearchPaths(args: readonly string[], stdinFromPipe = false): string[] {
   if (args.includes("--help") || args.includes("--version")) {
     return [];
   }
   const nonOptionArgs = collectNonOptionArgs(args, RG_OPTION_ARGS_WITH_VALUES);
+  if (stdinFromPipe && !args.includes("--files") && !hasSearchPatternOption(args)) {
+    return nonOptionArgs.length > 1 ? nonOptionArgs.slice(1) : [];
+  }
   return args.includes("--files") || hasSearchPatternOption(args)
     ? nonOptionArgs.length > 0
       ? nonOptionArgs
@@ -450,6 +653,10 @@ function resolveFindSearchPaths(args: readonly string[]): string[] {
   let index = 0;
   while (index < args.length) {
     const arg = args[index] ?? "";
+    if (arg === "--") {
+      index += 1;
+      continue;
+    }
     if (arg === "-H" || arg === "-L" || arg === "-P" || /^-O(?:\d+)?$/u.test(arg)) {
       index += 1;
       continue;
@@ -474,14 +681,17 @@ function resolveSearchTargetPath(searchPath: string, workdir: string): string | 
   if (!searchPath || searchPath === "-") {
     return null;
   }
-  const expanded = expandHomePrefix(expandShellHomePrefix(searchPath));
+  const expanded = expandShellHomePrefix(searchPath);
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workdir, expanded));
 }
 
 function expandShellHomePrefix(input: string): string {
   const shellHome = process.env.HOME || os.homedir();
   return shellHome
-    ? input.replace(/^\$HOME(?=$|[\\/])/u, shellHome).replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
+    ? input
+        .replace(/^~(?=$|[\\/])/u, shellHome)
+        .replace(/^\$HOME(?=$|[\\/])/u, shellHome)
+        .replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
     : input;
 }
 
@@ -501,14 +711,7 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   const homeDirs = Array.from(
     new Set([resolveRequiredHomeDir(), os.homedir()].map((home) => path.resolve(home))),
   );
-  const homeProtectedRoots = homeDirs.flatMap((homeDir) => [
-    homeDir,
-    path.join(homeDir, ".codex"),
-    path.join(homeDir, ".codex", "sessions"),
-    path.join(homeDir, ".codex", "archived_sessions"),
-    path.join(homeDir, ".openclaw"),
-  ]);
-  const matchedHomeRoot = homeProtectedRoots.find((root) => {
+  const matchedHomeRoot = homeDirs.find((root) => {
     const normalizedRoot = path.resolve(root);
     return (
       normalizedResolved === normalizedRoot || normalizedResolved === maybeRealpath(normalizedRoot)
@@ -516,6 +719,25 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   });
   if (matchedHomeRoot) {
     return matchedHomeRoot;
+  }
+  const stateProtectedRoots = homeDirs.flatMap((homeDir) => [
+    path.join(homeDir, ".codex"),
+    path.join(homeDir, ".codex", "sessions"),
+    path.join(homeDir, ".codex", "archived_sessions"),
+    path.join(homeDir, ".openclaw"),
+  ]);
+  stateProtectedRoots.sort((left, right) => right.length - left.length);
+  const matchedStateRoot = stateProtectedRoots.find((root) => {
+    const candidates = [path.resolve(root), maybeRealpath(root)].filter(
+      (candidate): candidate is string => candidate !== null,
+    );
+    return candidates.some((candidate) => {
+      const relative = path.relative(candidate, normalizedResolved);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    });
+  });
+  if (matchedStateRoot) {
+    return matchedStateRoot;
   }
   const matchedRunnerWorkRoot = homeDirs
     .map((homeDir) => {
@@ -579,13 +801,14 @@ function protectedRootForSearchPath(searchPath: string, workdir: string): string
 function detectBroadSearchArgv(params: {
   argv: string[];
   workdir: string;
+  stdinFromPipe?: boolean;
 }): UnsafeExecBroadSearchShellCommand | null {
   const argv = unwrapDispatchWrappersForResolution(stripLeadingEnvAssignments(params.argv));
   const executable = normalizeCommandBaseName(argv[0]);
   const args = argv.slice(1);
   const paths =
     executable === "rg" || executable === "ripgrep"
-      ? resolveRgSearchPaths(args)
+      ? resolveRgSearchPaths(args, params.stdinFromPipe === true)
       : executable === "grep" && hasGrepRecursiveFlag(args)
         ? resolveGrepSearchPaths(args)
         : executable === "find"
@@ -622,6 +845,7 @@ export async function detectUnsafeExecBroadSearchShellCommand(params: {
     const hit = detectBroadSearchArgv({
       argv: payload.argv,
       workdir: payload.workdir ?? params.workdir,
+      stdinFromPipe: payload.stdinFromPipe,
     });
     if (hit) {
       return hit;
