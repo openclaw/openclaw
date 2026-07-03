@@ -805,7 +805,9 @@ export async function handleTelegramAction(
     const nameFromName = readStringParam(params, "name");
     const nameFromThread = readStringParam(params, "threadName");
     const name = nameFromName ?? nameFromThread;
-    if (!name) throw new Error("Telegram forum topic name is required (name or threadName).");
+    if (!name) {
+      throw new Error("Telegram forum topic name is required (name or threadName).");
+    }
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
