@@ -99,14 +99,23 @@ function resolveDiscordSuppressEmbeds(params: {
 }
 
 function isDiscordOversizedMediaError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const status =
-    "status" in err
-      ? (err as { status?: unknown }).status
-      : "statusCode" in err
-        ? (err as { statusCode?: unknown }).statusCode
-        : undefined;
-  return status === 413;
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const obj = err as Record<string, unknown>;
+  if (obj.status === 413 || obj.statusCode === 413) {
+    return true;
+  }
+  if (obj.code === 40005) {
+    return true;
+  }
+  if (obj.rawError && typeof obj.rawError === "object") {
+    const raw = obj.rawError as Record<string, unknown>;
+    if (raw.code === 40005) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Discord thread names are capped at 100 characters. */
