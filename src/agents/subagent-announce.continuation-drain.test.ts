@@ -19,7 +19,7 @@ const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string
 // the same in-memory store the drain reads.
 const updateSessionStoreMock = vi.fn(
   async (storePath: string, mutator: (store: Record<string, unknown>) => unknown) =>
-    await mutator(loadSessionStoreMock(storePath) as Record<string, unknown>),
+    await mutator(loadSessionStoreMock(storePath)),
 );
 const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
   return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
@@ -281,7 +281,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockReset()
       .mockImplementation(
         async (storePath: string, mutator: (store: Record<string, unknown>) => unknown) =>
-          await mutator(loadSessionStoreMock(storePath) as Record<string, unknown>),
+          await mutator(loadSessionStoreMock(storePath)),
       );
     resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");

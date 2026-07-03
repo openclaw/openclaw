@@ -1189,9 +1189,11 @@ describe("post-compaction delegate dispatch extraction", () => {
     await flushMicrotasks();
 
     // The preserved delegate is re-staged as a fresh durable queued row.
-    expect(deps.stagePostCompactionDelegate).toHaveBeenCalledTimes(1);
+    const stageCalls = vi.mocked(deps["stagePostCompactionDelegate"]).mock.calls;
+    expect(stageCalls).toHaveLength(1);
     // The claimed rows are finished so recovery cannot replay them.
-    expect(deps.finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith(["flow-1", "flow-2"]);
+    const finalizeCalls = vi.mocked(deps["finalizeStagedPostCompactionDelegates"]).mock.calls;
+    expect(finalizeCalls).toContainEqual([["flow-1", "flow-2"]]);
     // Preserve list drained: the caller's finally must not re-stage a second time.
     expect(preserve).toHaveLength(0);
   });
