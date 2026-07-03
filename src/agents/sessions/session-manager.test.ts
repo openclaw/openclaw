@@ -2589,6 +2589,47 @@ describe("parseSessionEntries", () => {
       ),
     ).toBe(true);
   });
+
+  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo does not log warning for clean session listing", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    // buildSessionInfo must not log any warning for a clean listing.
+    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
+      call[0].includes("buildSessionInfo"),
+    );
+    expect(buildSessionInfoCalls).toHaveLength(0);
+  });
 });
 
 function readMessageContent(entry: SessionEntry): unknown {
