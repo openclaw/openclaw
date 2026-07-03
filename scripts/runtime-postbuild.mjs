@@ -299,6 +299,33 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
+  /(^|\n)\s*export\s+default[\s({[]|(^|\n)\s*export\s*\{[^}]*\bas default\b[^}]*\}/;
+
+/**
+ * Builds alias module source for a runtime chunk target. `export * from`
+ * never re-exports `default`, so when the target chunk has a default export
+ * the alias must forward it explicitly — otherwise lazy `import()` consumers
+ * that destructure `default` receive `undefined` (e.g. the post-compaction
+ * count reconcile failed this way with "TypeError: reconcile is not a
+ * function" on every compaction).
+ */
+function buildRuntimeAliasSource(params) {
+  const { distDir, fsImpl, targetFileName } = params;
+  const specifier = `./${targetFileName}`;
+  const starSource = `export * from ${JSON.stringify(specifier)};\n`;
+  let targetSource;
+  try {
+    targetSource = fsImpl.readFileSync(path.join(distDir, targetFileName), "utf8");
+  } catch {
+    return starSource;
+  }
+  if (!RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource)) {
+    return starSource;
+  }
+  return `${starSource}export { default } from ${JSON.stringify(specifier)};\n`;
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  */
@@ -320,7 +347,10 @@ export function writeStableRootRuntimeAliases(params = {}) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
     }
-    writeTextFileIfChanged(aliasPath, `export * from "./${candidate}";\n`);
+    writeTextFileIfChanged(
+      aliasPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName: candidate }),
+    );
   }
 }
 
@@ -480,7 +510,10 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
     if (!targetFileName) {
       continue;
     }
-    writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
+    writeTextFileIfChanged(
+      legacyPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName }),
+    );
   }
 }
 

@@ -361,6 +361,35 @@ describe("runtime postbuild static assets", () => {
     await expectPathMissing(path.join(distDir, "library.js"));
   });
 
+  it("forwards default exports through stable aliases (export * never re-exports default)", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    // Mirrors the real compaction-reconcile chunk shape: its ONLY export is default,
+    // and its caller lazy-imports `{ default: reconcile }` through the stable alias.
+    await fs.writeFile(
+      path.join(distDir, "compaction.runtime-Hash111.js"),
+      "async function reconcile(params) { return params; }\nexport { reconcile as default };\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "mixed.runtime-Hash222.js"),
+      "export const named = true;\nexport default function run() {}\n",
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "compaction.runtime.js"), "utf8")).toBe(
+      'export * from "./compaction.runtime-Hash111.js";\n' +
+        'export { default } from "./compaction.runtime-Hash111.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "mixed.runtime.js"), "utf8")).toBe(
+      'export * from "./mixed.runtime-Hash222.js";\n' +
+        'export { default } from "./mixed.runtime-Hash222.js";\n',
+    );
+  });
+
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
