@@ -3,6 +3,26 @@ import SwiftUI
 import UIKit
 #endif
 
+enum ChatReaderUserTransition: Equatable {
+    case unchanged
+    case added(UUID)
+    case removed(latestRemainingID: UUID?)
+}
+
+func chatReaderUserTransition(
+    previousID: UUID?,
+    visibleIDs: [UUID]) -> ChatReaderUserTransition
+{
+    let latestID = visibleIDs.last
+    if let previousID, !visibleIDs.contains(previousID) {
+        return .removed(latestRemainingID: latestID)
+    }
+    if let latestID, latestID != previousID {
+        return .added(latestID)
+    }
+    return .unchanged
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -355,9 +375,15 @@ public struct OpenClawChatView: View {
     }
 
     private var latestVisibleUserMessageID: UUID? {
-        self.visibleMessages.last { message in
+        self.visibleUserMessageIDs.last
+    }
+
+    private var visibleUserMessageIDs: [UUID] {
+        self.visibleMessages.compactMap { message in
             message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
-        }?.id
+                ? message.id
+                : nil
+        }
     }
 
     private var isFollowingUserTurn: Bool {
@@ -570,13 +596,28 @@ public struct OpenClawChatView: View {
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
             return
         }
-        let latestUserMessageID = self.latestVisibleUserMessageID
-        if let latestUserMessageID, latestUserMessageID != self.lastUserMessageID {
+        let visibleUserMessageIDs = self.visibleUserMessageIDs
+        switch chatReaderUserTransition(
+            previousID: self.lastUserMessageID,
+            visibleIDs: visibleUserMessageIDs)
+        {
+        case let .removed(latestRemainingID):
+            self.lastUserMessageID = latestRemainingID
+            if case let .user(messageID) = self.followTarget,
+               !visibleUserMessageIDs.contains(messageID)
+            {
+                self.followTarget = nil
+                self.hasNewerContentBelow = false
+            }
+            return
+        case let .added(latestUserMessageID):
             self.lastUserMessageID = latestUserMessageID
             self.followTarget = .user(latestUserMessageID)
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
             return
+        case .unchanged:
+            break
         }
 
         switch self.followTarget {
