@@ -1690,6 +1690,34 @@ describe("followup queue collect routing", () => {
     }
   });
 
+  it("can prepend priority followups before already queued items", () => {
+    const key = `test-priority-followup-front-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "queued later one",
+      "queued later two",
+    ]);
+  });
+
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
     const calls: FollowupRun[] = [];

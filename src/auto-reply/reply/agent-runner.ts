@@ -2575,8 +2575,9 @@ export async function runReplyAgent(params: {
             },
             resolvedQueue,
             "none",
-            queuedRunFollowupTurn,
+            runFollowupTurn,
             false,
+            { position: "front" },
           );
           if (!retryEnqueued) {
             finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];

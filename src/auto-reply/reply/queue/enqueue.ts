@@ -16,6 +16,7 @@ import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -98,6 +99,7 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
@@ -171,7 +173,11 @@ export function enqueueFollowupRun(
     return false;
   }
 
-  queue.items.push(run);
+  if (options.position === "front") {
+    queue.items.unshift(run);
+  } else {
+    queue.items.push(run);
+  }
   markFollowupRunEnqueued(run);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);

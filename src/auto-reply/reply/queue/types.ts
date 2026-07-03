@@ -35,6 +35,12 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export type QueueInsertPosition = "tail" | "front";
+
+export type EnqueueFollowupRunOptions = {
+  position?: QueueInsertPosition;
+};
+
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
     super(message);

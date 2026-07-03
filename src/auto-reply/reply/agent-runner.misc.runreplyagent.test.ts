@@ -3407,6 +3407,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.disableCollectBatching).toBe(true);
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[3]).toBe("none");
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({ position: "front" });
   });
 
   it("does not warn or enqueue retry for a short private final reply", async () => {

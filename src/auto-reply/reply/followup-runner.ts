@@ -113,6 +113,45 @@ function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
   );
 }
 
+function hasNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as { text?: unknown; mediaUrls?: unknown };
+    if ("text" in record || "mediaUrls" in record) {
+      return (
+        (typeof record.text === "string" && record.text.trim().length > 0) ||
+        hasNonEmptyStringArray(record.mediaUrls)
+      );
+    }
+    return true;
+  });
+}
+
+function hasSuccessfulFollowupSourceReplyDelivery(params: {
+  didDeliverSourceReplyViaMessageTool?: boolean;
+  didSendViaMessagingTool?: boolean;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return (
+    params.didDeliverSourceReplyViaMessageTool === true ||
+    params.didSendViaMessagingTool === true ||
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+  );
+}
+
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
 }
@@ -1421,6 +1460,17 @@ export function createFollowupRunner(params: {
         }) ?? DEFAULT_CONTEXT_TOKENS;
       const deliverStrandedReplyRetryFailureDiagnostic = async () => {
         if (!isStrandedReplyRetryFollowup(effectiveQueued)) {
+          return false;
+        }
+        if (
+          hasSuccessfulFollowupSourceReplyDelivery({
+            didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+            didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+            messagingToolSentTexts: runResult.messagingToolSentTexts,
+            messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+            messagingToolSentTargets: runResult.messagingToolSentTargets,
+          })
+        ) {
           return false;
         }
         await sendFollowupPayloads(
