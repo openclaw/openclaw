@@ -1,3 +1,4 @@
+import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 // Control UI controller manages skill workshop gateway state.
 import type { ApplicationGateway } from "../../app/context.ts";
 import {
@@ -81,6 +82,7 @@ type SkillProposalInspectResult = {
 
 export type SkillWorkshopContext = {
   gateway: ApplicationGateway;
+  agentSelection: Pick<AgentSelectionCapability, "state">;
 };
 
 export type SkillWorkshopState = {
@@ -167,10 +169,13 @@ function getErrorMessage(err: unknown): string {
 function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
+  const selectedAgentId = context.agentSelection.state.selectedId;
   return {
     agentId: sessionAgentId
       ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot),
+      : selectedAgentId
+        ? normalizeAgentId(selectedAgentId)
+        : resolveUiSelectedGlobalAgentId(snapshot),
   };
 }
 

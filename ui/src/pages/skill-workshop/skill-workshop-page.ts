@@ -351,6 +351,7 @@ export class SkillWorkshopPage extends LitElement {
 
   private state?: SkillWorkshopState;
   private stopGatewaySubscription?: () => void;
+  private stopAgentSelectionSubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
@@ -397,6 +398,7 @@ export class SkillWorkshopPage extends LitElement {
 
   override updated() {
     this.startGatewaySubscription();
+    this.startAgentSelectionSubscription();
     this.startAgentIdentitySubscription();
     this.ensureWorkshopAgentIdentity();
   }
@@ -431,6 +433,19 @@ export class SkillWorkshopPage extends LitElement {
     this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(this.requestPageUpdate);
   }
 
+  private startAgentSelectionSubscription(): void {
+    const context = this.context;
+    if (!context || !this.state || this.stopAgentSelectionSubscription) {
+      return;
+    }
+    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
+      if (!this.state || !this.context) {
+        return;
+      }
+      void loadSkillWorkshopProposals(this.state, this.context).finally(this.requestPageUpdate);
+    });
+  }
+
   private ensureWorkshopAgentIdentity(): void {
     const context = this.context;
     const agentId = this.state?.skillWorkshopAgentId;
@@ -443,6 +458,8 @@ export class SkillWorkshopPage extends LitElement {
   override disconnectedCallback() {
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.stopAgentSelectionSubscription?.();
+    this.stopAgentSelectionSubscription = undefined;
     this.stopAgentIdentitySubscription?.();
     this.stopAgentIdentitySubscription = undefined;
     if (this.state?.skillWorkshopActionNoticeTimer) {

@@ -37,6 +37,11 @@ function createFixture(
     ...snapshotOverrides,
   };
   const context: SkillWorkshopContext = {
+    agentSelection: {
+      get state() {
+        return { selectedId: snapshot.assistantAgentId };
+      },
+    },
     gateway: {
       get snapshot() {
         return snapshot;
