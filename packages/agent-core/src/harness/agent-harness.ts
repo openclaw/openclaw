@@ -730,6 +730,9 @@ export class CoreAgentHarness<
       return await this.executeTurn(turnState, text, options);
     } catch (error) {
       this.phase = "idle";
+      if (isMidTurnPrecheckSignal(error)) {
+        throw error;
+      }
       throw normalizeHarnessError(error, "unknown");
     } finally {
       finishRunPromise();
@@ -754,6 +757,9 @@ export class CoreAgentHarness<
       );
     } catch (error) {
       this.phase = "idle";
+      if (isMidTurnPrecheckSignal(error)) {
+        throw error;
+      }
       throw normalizeHarnessError(error, "unknown");
     } finally {
       finishRunPromise();
@@ -777,6 +783,9 @@ export class CoreAgentHarness<
       return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
     } catch (error) {
       this.phase = "idle";
+      if (isMidTurnPrecheckSignal(error)) {
+        throw error;
+      }
       throw normalizeHarnessError(error, "unknown");
     } finally {
       finishRunPromise();
