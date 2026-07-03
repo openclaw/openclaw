@@ -292,6 +292,40 @@ extension SettingsProTab {
         self.showQRScanner = true
     }
 
+    func queueScannedGatewayLink(_ link: GatewayConnectDeepLink) {
+        self.pendingScannedSetupCode = nil
+        self.pendingScannedGatewayLink = link
+        self.setupStatusText = "QR loaded. Closing scanner..."
+        self.showQRScanner = false
+    }
+
+    func queueScannedSetupCode(_ code: String) {
+        self.pendingScannedGatewayLink = nil
+        self.pendingScannedSetupCode = code
+        self.setupStatusText = "QR loaded. Closing scanner..."
+        self.showQRScanner = false
+    }
+
+    func processQueuedScannerResult() {
+        guard self.pendingScannedGatewayLink != nil || self.pendingScannedSetupCode != nil else { return }
+        self.pendingScannerResultTask?.cancel()
+        self.pendingScannerResultTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled, !self.showQRScanner else { return }
+
+            if let link = self.pendingScannedGatewayLink {
+                self.pendingScannedGatewayLink = nil
+                self.handleScannedGatewayLink(link)
+                return
+            }
+
+            if let code = self.pendingScannedSetupCode {
+                self.pendingScannedSetupCode = nil
+                self.handleScannedSetupCode(code)
+            }
+        }
+    }
+
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
         self.showQRScanner = false
         self.setupCode = ""

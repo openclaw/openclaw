@@ -43,6 +43,9 @@ struct SettingsProTab: View {
     @State var setupStatusText: String?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State var pendingScannedGatewayLink: GatewayConnectDeepLink?
+    @State var pendingScannedSetupCode: String?
+    @State var pendingScannerResultTask: Task<Void, Never>?
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
@@ -140,6 +143,10 @@ struct SettingsProTab: View {
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
             }
+            .onDisappear {
+                self.pendingScannerResultTask?.cancel()
+                self.pendingScannerResultTask = nil
+            }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
                     self.syncSettingsState()
@@ -196,10 +203,10 @@ struct SettingsProTab: View {
                 NavigationStack {
                     QRScannerView(
                         onGatewayLink: { link in
-                            self.handleScannedGatewayLink(link)
+                            self.queueScannedGatewayLink(link)
                         },
                         onSetupCode: { code in
-                            self.handleScannedSetupCode(code)
+                            self.queueScannedSetupCode(code)
                         },
                         onError: { error in
                             self.showQRScanner = false
@@ -225,6 +232,10 @@ struct SettingsProTab: View {
                             }
                         }
                 }
+            }
+            .onChange(of: self.showQRScanner) { _, isPresented in
+                guard !isPresented else { return }
+                self.processQueuedScannerResult()
             }
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(

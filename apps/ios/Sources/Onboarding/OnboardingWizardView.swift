@@ -64,6 +64,9 @@ struct OnboardingWizardView: View {
     @State private var discoveryRestartTask: Task<Void, Never>?
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
+    @State private var pendingScannedGatewayLink: GatewayConnectDeepLink?
+    @State private var pendingScannedSetupCode: String?
+    @State private var pendingScannerResultTask: Task<Void, Never>?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
@@ -191,10 +194,10 @@ struct OnboardingWizardView: View {
                 NavigationStack {
                     QRScannerView(
                         onGatewayLink: { link in
-                            self.handleScannedLink(link)
+                            self.queueScannedLink(link)
                         },
                         onSetupCode: { code in
-                            self.handleScannedSetupCode(code)
+                            self.queueScannedSetupCode(code)
                         },
                         onError: { error in
                             self.showQRScanner = false
@@ -241,11 +244,11 @@ struct OnboardingWizardView: View {
                         }
                         if let message = self.detectQRCode(from: data) {
                             if let link = GatewayConnectDeepLink.fromSetupInput(message) {
-                                self.handleScannedLink(link)
+                                self.queueScannedLink(link)
                                 return
                             }
                             if AppleReviewDemoMode.isSetupCode(message) {
-                                self.handleScannedSetupCode(message)
+                                self.queueScannedSetupCode(message)
                                 return
                             }
                         }
@@ -271,9 +274,15 @@ struct OnboardingWizardView: View {
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
+                self.pendingScannerResultTask?.cancel()
+                self.pendingScannerResultTask = nil
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
+            }
+            .onChange(of: self.showQRScanner) { _, isPresented in
+                guard !isPresented else { return }
+                self.processQueuedScannerResult()
             }
             .onChange(of: self.manualPortText) { _, newValue in
                 let digits = newValue.filter(\.isNumber)
@@ -818,10 +827,43 @@ extension OnboardingWizardView {
         await self.connectManual()
     }
 
+    private func queueScannedLink(_ link: GatewayConnectDeepLink) {
+        self.pendingScannedSetupCode = nil
+        self.pendingScannedGatewayLink = link
+        self.statusLine = "QR loaded. Closing scanner..."
+        self.showQRScanner = false
+    }
+
+    private func queueScannedSetupCode(_ code: String) {
+        self.pendingScannedGatewayLink = nil
+        self.pendingScannedSetupCode = code
+        self.statusLine = "QR loaded. Closing scanner..."
+        self.showQRScanner = false
+    }
+
+    private func processQueuedScannerResult() {
+        guard self.pendingScannedGatewayLink != nil || self.pendingScannedSetupCode != nil else { return }
+        self.pendingScannerResultTask?.cancel()
+        self.pendingScannerResultTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled, !self.showQRScanner else { return }
+
+            if let link = self.pendingScannedGatewayLink {
+                self.pendingScannedGatewayLink = nil
+                self.handleScannedLink(link)
+                return
+            }
+
+            if let code = self.pendingScannedSetupCode {
+                self.pendingScannedSetupCode = nil
+                self.handleScannedSetupCode(code)
+            }
+        }
+    }
+
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
         self.applyGatewayLink(link)
         self.setupCodeStatus = nil
-        self.showQRScanner = false
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
