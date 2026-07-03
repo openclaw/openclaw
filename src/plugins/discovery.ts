@@ -1445,42 +1445,17 @@ export function discoverOpenClawPlugins(params: {
   const scopedResult = tracePluginLifecyclePhase(
     "discovery scan",
     () => {
-      const result = createDiscoveryResult();
       const seen = new Set<string>();
-      const extra = params.extraPaths ?? [];
-      for (const extraPath of extra) {
-        if (typeof extraPath !== "string") {
-          continue;
-        }
-        const trimmed = extraPath.trim();
-        if (!trimmed) {
-          continue;
-        }
-        const bundledAlias = resolvePackagedBundledLoadPathAlias({
-          bundledRoot: roots.stock,
-          loadPath: resolveUserPath(trimmed, env),
-        });
-        if (bundledAlias) {
-          result.diagnostics.push({
-            level: "warn",
-            source: trimmed,
-            message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
-          });
-          continue;
-        }
-        discoverFromPath({
-          rawPath: trimmed,
-          origin: "config",
-          ownershipUid: params.ownershipUid,
-          workspaceDir,
-          env,
-          candidates: result.candidates,
-          diagnostics: result.diagnostics,
-          seen,
-          realpathCache,
-          packageManifestCache,
-        });
-      }
+      const result = discoverConfiguredPluginLoadPaths({
+        workspaceDir,
+        extraPaths: params.extraPaths,
+        ownershipUid: params.ownershipUid,
+        env,
+        bundledRoot: roots.stock,
+        realpathCache,
+        packageManifestCache,
+        seen,
+      });
       const workspaceMatchesBundledRoot = resolvesToSameDirectory(
         workspaceRoot,
         roots.stock,
@@ -1631,5 +1606,57 @@ export function discoverOpenClawPlugins(params: {
   mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
   mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
   addMissingRequiredPluginDiagnostics(result);
+  return result;
+}
+
+export function discoverConfiguredPluginLoadPaths(params: {
+  workspaceDir?: string | undefined;
+  extraPaths?: string[] | undefined;
+  ownershipUid?: number | null;
+  env?: NodeJS.ProcessEnv;
+  bundledRoot?: string | undefined;
+  realpathCache?: Map<string, string>;
+  packageManifestCache?: Map<string, PackageManifest | null>;
+  seen?: Set<string>;
+}): PluginDiscoveryResult {
+  const env = params.env ?? process.env;
+  const result = createDiscoveryResult();
+  const seen = params.seen ?? new Set<string>();
+  const realpathCache = params.realpathCache ?? new Map<string, string>();
+  const packageManifestCache =
+    params.packageManifestCache ?? new Map<string, PackageManifest | null>();
+  for (const extraPath of params.extraPaths ?? []) {
+    if (typeof extraPath !== "string") {
+      continue;
+    }
+    const trimmed = extraPath.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const bundledAlias = resolvePackagedBundledLoadPathAlias({
+      bundledRoot: params.bundledRoot,
+      loadPath: resolveUserPath(trimmed, env),
+    });
+    if (bundledAlias) {
+      result.diagnostics.push({
+        level: "warn",
+        source: trimmed,
+        message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
+      });
+      continue;
+    }
+    discoverFromPath({
+      rawPath: trimmed,
+      origin: "config",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      env,
+      candidates: result.candidates,
+      diagnostics: result.diagnostics,
+      seen,
+      realpathCache,
+      packageManifestCache,
+    });
+  }
   return result;
 }

@@ -449,6 +449,35 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("keeps configured load path plugins when reconstructing an installed-index registry", () => {
+    const installedRoot = makeTempDir();
+    const workspacePluginRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(workspacePluginRoot, "workspace", "workspace-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [workspacePluginRoot] },
+          entries: {
+            workspace: { enabled: true },
+          },
+          allow: ["workspace"],
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["workspace", "installed"]);
+    expect(registry.plugins.map((plugin) => plugin.origin)).toEqual(["config", "global"]);
+  });
+
   it("reconstructs bundle candidates with their bundle manifest format", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });

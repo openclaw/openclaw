@@ -6,7 +6,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import type { PluginCandidate } from "./discovery.js";
+import { normalizePluginsConfig } from "./config-state.js";
+import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -612,6 +613,16 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
       const realpathCache = new Map<string, string>();
+      const installRecords = extractPluginInstallRecordsFromInstalledPluginIndex(params.index);
+      const configuredLoadPaths = normalizePluginsConfig(params.config?.plugins).loadPaths;
+      const loadPathDiscovery =
+        configuredLoadPaths.length > 0
+          ? discoverConfiguredPluginLoadPaths({
+              workspaceDir: params.workspaceDir,
+              extraPaths: configuredLoadPaths,
+              env,
+            })
+          : { candidates: [], diagnostics: [] };
       const diagnostics = pluginIdSet
         ? params.index.diagnostics.filter((diagnostic) => {
             const pluginId = diagnostic.pluginId;
@@ -622,13 +633,22 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
+      const loadPathCandidates = pluginIdSet
+        ? loadPathDiscovery.candidates.filter((candidate) => pluginIdSet.has(candidate.idHint))
+        : loadPathDiscovery.candidates;
+      const loadPathDiagnostics = pluginIdSet
+        ? loadPathDiscovery.diagnostics.filter((diagnostic) => {
+            const pluginId = diagnostic.pluginId;
+            return !pluginId || pluginIdSet.has(pluginId);
+          })
+        : loadPathDiscovery.diagnostics;
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
-        candidates,
-        diagnostics: [...diagnostics],
-        installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
+        candidates: [...loadPathCandidates, ...candidates],
+        diagnostics: [...loadPathDiagnostics, ...diagnostics],
+        installRecords,
         ...(params.bundledChannelConfigCollector
           ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
           : {}),
