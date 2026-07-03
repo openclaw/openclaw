@@ -340,6 +340,7 @@ describe("validateTalkCatalogResult", () => {
         speech: { providers: [] },
         transcription: { providers: [] },
         realtime: {
+          ready: true,
           activeProvider: "google",
           providers: [
             {

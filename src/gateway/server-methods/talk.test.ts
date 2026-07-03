@@ -231,6 +231,10 @@ describe("talk.catalog handler", () => {
         createBridge: vi.fn(),
       } as never,
     ]);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: { id: "google" },
+      providerConfig: { apiKey: "live-key", project: "base", model: "talk-model" },
+    } as never);
 
     const respond = vi.fn();
     await talkHandlers["talk.catalog"]({
@@ -291,6 +295,7 @@ describe("talk.catalog handler", () => {
           ],
         },
         transcription: {
+          ready: true,
           activeProvider: "openai",
           providers: [
             {
@@ -315,6 +320,7 @@ describe("talk.catalog handler", () => {
           ],
         },
         realtime: {
+          ready: true,
           activeProvider: "google",
           providers: [
             {
@@ -436,14 +442,52 @@ describe("talk.catalog handler", () => {
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: {
+        ready: true,
         activeProvider: "transcription-fast",
         providers: [
           { id: "transcription-slow", configured: true },
           { id: "transcription-fast", configured: true },
         ],
       },
-      realtime: { activeProvider: "realtime-fast" },
+      realtime: { ready: true, activeProvider: "realtime-fast" },
     });
+  });
+
+  it("reports an authoritative setup requirement when automatic selection fails", async () => {
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      {
+        id: "transcription",
+        label: "Transcription",
+        isConfigured: vi.fn(() => false),
+      },
+    ] as never);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([
+      {
+        id: "realtime",
+        label: "Realtime",
+        isConfigured: vi.fn(() => false),
+        createBridge: vi.fn(),
+      },
+    ] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(() => {
+      throw new Error("No realtime voice provider configured");
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.catalog"]({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
+    });
+
+    const catalog = mockCallArg(respond, 0, 1) as Record<string, Record<string, unknown>>;
+    expect(catalog.transcription).toMatchObject({ ready: false });
+    expect(catalog.transcription).not.toHaveProperty("activeProvider");
+    expect(catalog.realtime).toMatchObject({ ready: false });
+    expect(catalog.realtime).not.toHaveProperty("activeProvider");
   });
 });
 

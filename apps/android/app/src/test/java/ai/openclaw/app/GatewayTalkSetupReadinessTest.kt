@@ -92,7 +92,28 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun allUnconfiguredProvidersStayUnverifiedWithoutAnActiveProvider() {
+  fun authoritativeUnconfiguredProvidersRequireSetupWithoutAnActiveProvider() {
+    val readiness =
+      parseGatewayTalkSetupReadiness(
+        catalog(
+          realtime =
+            providerGroup(
+              id = "openai",
+              label = "OpenAI Realtime",
+              configured = false,
+              activeProvider = null,
+              ready = false,
+            ),
+          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
+        ),
+      )
+
+    assertTrue(readiness.realtimeTalk is GatewayTalkSetupState.NeedsSetup)
+    assertTrue(readiness.realtimeTalk.requiresSetup)
+  }
+
+  @Test
+  fun olderCatalogWithoutSelectionReadinessStaysUnverified() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog(
@@ -162,10 +183,12 @@ class GatewayTalkSetupReadinessTest {
     configured: Boolean,
     activeProvider: String? = id,
     aliases: List<String> = emptyList(),
+    ready: Boolean? = null,
   ): String {
     val active = activeProvider?.let { "\"activeProvider\":\"$it\"," }.orEmpty()
+    val readiness = ready?.let { "\"ready\":$it," }.orEmpty()
     val aliasJson = aliases.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
-    return """{$active"providers":[{"id":"$id","label":"$label","configured":$configured,"aliases":$aliasJson}]}"""
+    return """{$readiness$active"providers":[{"id":"$id","label":"$label","configured":$configured,"aliases":$aliasJson}]}"""
   }
 
   private fun json(value: String) = Json.parseToJsonElement(value).jsonObject

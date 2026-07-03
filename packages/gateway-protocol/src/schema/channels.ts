@@ -456,6 +456,7 @@ const TalkCatalogProviderSchema = Type.Object(
 /** Active provider plus all candidates for a Talk capability family. */
 const TalkCatalogProviderGroupSchema = Type.Object(
   {
+    ready: Type.Optional(Type.Boolean()),
     activeProvider: Type.Optional(Type.String()),
     providers: Type.Array(TalkCatalogProviderSchema),
   },

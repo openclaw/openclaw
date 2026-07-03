@@ -82,18 +82,22 @@ private fun parseTalkCatalogGroup(
     (group["providers"] as? JsonArray)
       ?.mapNotNull(::parseTalkCatalogProvider)
       .orEmpty()
+  val ready = (group["ready"] as? JsonPrimitive)?.booleanOrNull
   val activeProviderId = group["activeProvider"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
   if (providers.isEmpty()) {
-    return if (activeProviderId == null) {
-      GatewayTalkSetupState.NeedsSetup("No $title provider is registered on the Gateway")
-    } else {
-      GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
+    return when {
+      ready == false -> GatewayTalkSetupState.NeedsSetup("No $title provider is configured on the Gateway")
+      activeProviderId != null -> GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
+      else -> GatewayTalkSetupState.Unverified("Gateway did not return $title readiness")
     }
   }
 
   if (activeProviderId == null) {
+    if (ready == false) {
+      return GatewayTalkSetupState.NeedsSetup("Configure a $title provider on the Gateway")
+    }
     // Older Gateways can omit the selected provider and report alias-backed rows as unconfigured
-    // even though session startup resolves them. Only an explicit selection is authoritative.
+    // even though session startup resolves them. Only an explicit readiness result is authoritative.
     return GatewayTalkSetupState.Unverified("Gateway did not identify the active $title provider")
   }
   val selected =
@@ -102,7 +106,7 @@ private fun parseTalkCatalogGroup(
       ?: providers.firstOrNull { it.matchesAlias(activeProviderId) }
       ?: return GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
   val provider = GatewayTalkProvider(id = selected.id, label = selected.label)
-  return if (selected.configured) {
+  return if (ready ?: selected.configured) {
     GatewayTalkSetupState.Ready(provider)
   } else {
     GatewayTalkSetupState.NeedsSetup(

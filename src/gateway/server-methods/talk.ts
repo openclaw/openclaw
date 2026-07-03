@@ -79,18 +79,21 @@ type TalkSpeakErrorDetails = {
   fallbackEligible: boolean;
 };
 
-function resolveCatalogActiveProvider(
+function resolveCatalogProviderSelection(
   configuredProvider: string | undefined,
   resolveAutomaticProvider: () => string,
-): string | undefined {
-  if (configuredProvider) {
-    return configuredProvider;
-  }
+): { activeProvider?: string; ready: boolean } {
   // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
   try {
-    return resolveAutomaticProvider();
+    return {
+      activeProvider: configuredProvider ?? resolveAutomaticProvider(),
+      ready: true,
+    };
   } catch {
-    return undefined;
+    return {
+      ...(configuredProvider ? { activeProvider: configuredProvider } : {}),
+      ready: false,
+    };
   }
 }
 
@@ -223,7 +226,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
   const transcriptionConfig = buildTalkTranscriptionConfig(config);
-  const activeTranscriptionProvider = resolveCatalogActiveProvider(
+  const transcriptionSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeTranscriptionProviderId(transcriptionConfig.provider, config),
     () =>
       resolveConfiguredRealtimeTranscriptionProvider({
@@ -233,8 +236,9 @@ function buildTalkCatalog(config: OpenClawConfig) {
         defaultModel: transcriptionConfig.model,
       }).provider.id,
   );
+  const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
-  const activeRealtimeProvider = resolveCatalogActiveProvider(
+  const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () =>
       resolveConfiguredRealtimeVoiceProvider({
@@ -244,6 +248,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
         defaultModel: realtimeConfig.model,
       }).provider.id,
   );
+  const activeRealtimeProvider = realtimeSelection.activeProvider;
 
   return {
     modes: ["realtime", "stt-tts", "transcription"],
@@ -278,6 +283,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
       }),
     },
     transcription: {
+      ready: transcriptionSelection.ready,
       ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
       providers: listRealtimeTranscriptionProviders(config).map((provider) => {
         const rawConfig = getVoiceProviderConfig({
@@ -313,6 +319,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
       }),
     },
     realtime: {
+      ready: realtimeSelection.ready,
       ...(activeRealtimeProvider ? { activeProvider: activeRealtimeProvider } : {}),
       providers: listRealtimeVoiceProviders(config).map((provider) => {
         const rawConfig = resolveProviderRawConfig({
