@@ -52,6 +52,24 @@ function messageEntry(params: {
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("treats an empty mirrored session file as empty history", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, "  \n");
+
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toEqual([]);
+  });
+
+  it("returns undefined for malformed non-empty mirrored session files", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, JSON.stringify({ type: "message", id: "orphan" }) + "\n");
+
+    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toBeUndefined();
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),

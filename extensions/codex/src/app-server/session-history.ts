@@ -27,6 +27,9 @@ export async function readCodexMirroredSessionHistoryMessages(
 ): Promise<AgentMessage[] | undefined> {
   try {
     const raw = await fs.readFile(sessionFile, "utf-8");
+    if (raw.trim().length === 0) {
+      return [];
+    }
     const entries = parseSessionEntries(raw);
     const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
     if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
