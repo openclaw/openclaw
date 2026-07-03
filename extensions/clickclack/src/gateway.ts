@@ -206,7 +206,7 @@ export async function startClickClackGatewayAccount(
             });
           })().catch((e: unknown) =>
             reject(
-              e instanceof Error ? e : new Error("ClickClack ws message failed", { cause: e }),
+              e instanceof Error ? e : new Error(`ClickClack ws message failed: ${String(e)}`, { cause: e }),
             ),
           );
         });

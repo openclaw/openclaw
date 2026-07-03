@@ -256,3 +256,28 @@ describe("ClickClack gateway", () => {
     });
   });
 });
+
+  it("wraps non-Error ws message rejections with the original value in the message", async () => {
+    const rejection = await new Promise<unknown>((_, reject) => {
+      Promise.resolve()
+        .then(() => {
+          throw "connection reset";
+        })
+        .catch((e: unknown) =>
+          reject(
+            e instanceof Error
+              ? e
+              : new Error(`ClickClack ws message failed: ${String(e)}`, { cause: e }),
+          ),
+        );
+    }).then(
+      (v) => ({ ok: true, value: v }),
+      (e) => ({ ok: false, error: e }),
+    );
+
+    expect(rejection.ok).toBe(false);
+    const err = rejection.ok ? undefined : (rejection.error as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toBe("ClickClack ws message failed: connection reset");
+    expect(err!.cause).toBe("connection reset");
+  });
