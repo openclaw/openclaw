@@ -5,6 +5,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
+import { unwrapDispatchWrappersForResolution } from "./dispatch-wrapper-resolution.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 
 type ParsedExecApprovalCommand = {
@@ -133,7 +134,7 @@ export async function rejectUnsafeExecControlShellCommand(command: string): Prom
   }
 }
 
-const SEARCH_OPTION_ARGS_WITH_VALUES = new Set([
+const RG_OPTION_ARGS_WITH_VALUES = new Set([
   "-A",
   "-B",
   "-C",
@@ -158,7 +159,6 @@ const SEARCH_OPTION_ARGS_WITH_VALUES = new Set([
   "--max-count",
   "--max-depth",
   "--max-filesize",
-  "--mmap",
   "--path-separator",
   "--pre",
   "--pre-glob",
@@ -170,6 +170,31 @@ const SEARCH_OPTION_ARGS_WITH_VALUES = new Set([
   "--type",
   "--type-add",
   "--type-clear",
+]);
+
+const GREP_OPTION_ARGS_WITH_VALUES = new Set([
+  "-A",
+  "-B",
+  "-C",
+  "-D",
+  "-d",
+  "-e",
+  "-f",
+  "-m",
+  "--after-context",
+  "--before-context",
+  "--binary-files",
+  "--context",
+  "--devices",
+  "--directories",
+  "--exclude",
+  "--exclude-dir",
+  "--exclude-from",
+  "--group-separator",
+  "--include",
+  "--label",
+  "--max-count",
+  "--regexp",
 ]);
 
 function createCommandPayloads(rawCommand: string): Promise<string[]> {
@@ -184,10 +209,10 @@ function createCommandPayloads(rawCommand: string): Promise<string[]> {
       const explanation = await explainShellCommand(rawCommand.trim());
       if (explanation.ok) {
         const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-        return normalizeStringEntries([
-          ...commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
-          ...fallbackCandidates,
-        ]);
+        const parsedCandidates = normalizeStringEntries(
+          commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
+        );
+        return parsedCandidates.length > 0 ? parsedCandidates : fallbackCandidates;
       }
     } catch {
       // Fall back to line-local shell splitting below.
@@ -204,7 +229,10 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
   return index > 0 ? argv.slice(index) : argv;
 }
 
-function collectNonOptionArgs(args: readonly string[]): string[] {
+function collectNonOptionArgs(
+  args: readonly string[],
+  optionsWithValues: ReadonlySet<string>,
+): string[] {
   const positional: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index] ?? "";
@@ -214,14 +242,14 @@ function collectNonOptionArgs(args: readonly string[]): string[] {
     }
     if (token.startsWith("--")) {
       const option = token.split("=", 1)[0] ?? token;
-      if (!token.includes("=") && SEARCH_OPTION_ARGS_WITH_VALUES.has(option)) {
+      if (!token.includes("=") && optionsWithValues.has(option)) {
         index += 1;
       }
       continue;
     }
     if (token.startsWith("-") && token !== "-") {
       const option = token.slice(0, 2);
-      if (SEARCH_OPTION_ARGS_WITH_VALUES.has(option) && token.length === 2) {
+      if (optionsWithValues.has(option) && token.length === 2) {
         index += 1;
       }
       continue;
@@ -232,12 +260,27 @@ function collectNonOptionArgs(args: readonly string[]): string[] {
 }
 
 function hasGrepRecursiveFlag(args: readonly string[]): boolean {
-  return args.some((arg) => {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
     if (arg === "--recursive" || arg === "-r" || arg === "-R") {
       return true;
     }
-    return /^-[^-].*[rR]/u.test(arg);
-  });
+    if (arg === "-d" || arg === "--directories") {
+      const value = args[index + 1];
+      if (value === "recurse") {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg === "--directories=recurse") {
+      return true;
+    }
+    if (/^-[^-].*[rR]/u.test(arg)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasSearchPatternOption(args: readonly string[]): boolean {
@@ -253,7 +296,7 @@ function resolveRgSearchPaths(args: readonly string[]): string[] {
   if (args.includes("--help") || args.includes("--version")) {
     return [];
   }
-  const nonOptionArgs = collectNonOptionArgs(args);
+  const nonOptionArgs = collectNonOptionArgs(args, RG_OPTION_ARGS_WITH_VALUES);
   return args.includes("--files") || hasSearchPatternOption(args)
     ? nonOptionArgs.length > 0
       ? nonOptionArgs
@@ -267,7 +310,7 @@ function resolveGrepSearchPaths(args: readonly string[]): string[] {
   if (args.includes("--help") || args.includes("--version")) {
     return [];
   }
-  const nonOptionArgs = collectNonOptionArgs(args);
+  const nonOptionArgs = collectNonOptionArgs(args, GREP_OPTION_ARGS_WITH_VALUES);
   return hasSearchPatternOption(args)
     ? nonOptionArgs.length > 0
       ? nonOptionArgs
@@ -282,7 +325,21 @@ function resolveFindSearchPaths(args: readonly string[]): string[] {
     return [];
   }
   const paths: string[] = [];
-  for (const arg of args) {
+  let index = 0;
+  while (index < args.length) {
+    const arg = args[index] ?? "";
+    if (arg === "-H" || arg === "-L" || arg === "-P" || /^-O(?:\d+)?$/u.test(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg === "-D") {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  for (; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
     if (arg === "!" || arg === "(" || arg === ")" || arg.startsWith("-")) {
       break;
     }
@@ -295,7 +352,13 @@ function resolveSearchTargetPath(searchPath: string, workdir: string): string | 
   if (!searchPath || searchPath === "-") {
     return null;
   }
-  const expanded = expandHomePrefix(searchPath);
+  const shellHome = process.env.HOME || os.homedir();
+  const expandedShellHome = shellHome
+    ? searchPath
+        .replace(/^\$HOME(?=$|[\\/])/u, shellHome)
+        .replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
+    : searchPath;
+  const expanded = expandHomePrefix(expandedShellHome);
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workdir, expanded));
 }
 
@@ -322,6 +385,9 @@ function protectedRootForPath(targetPath: string): string | null {
   if (segments[0] === "Volumes" && segments.length <= 3) {
     return path.sep + path.join(...segments);
   }
+  if (segments.length === 1 && ["workspace", "workspaces"].includes(segments[0] ?? "")) {
+    return resolved;
+  }
   if (segments.at(-1) === "repos" && segments.length <= 3) {
     return resolved;
   }
@@ -332,7 +398,7 @@ function detectBroadSearchArgv(params: {
   argv: string[];
   workdir: string;
 }): UnsafeExecBroadSearchShellCommand | null {
-  const argv = stripLeadingEnvAssignments(params.argv);
+  const argv = unwrapDispatchWrappersForResolution(stripLeadingEnvAssignments(params.argv));
   const executable = normalizeCommandBaseName(argv[0]);
   const args = argv.slice(1);
   const paths =
