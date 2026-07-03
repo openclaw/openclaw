@@ -1,4 +1,3 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   removeAuthProfilesWithLock,
@@ -8,6 +7,7 @@ import {
   type AuthProfileCredential,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 /** Command helper for removing saved model auth profiles. */
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -104,10 +104,10 @@ function resolveProfilesToRemove(params: {
 
 function assertProfilesOwnedBySelectedAgent(params: {
   agentDir: string;
-  agentId: string;
-  defaultAgentId: string;
   profileIds: readonly string[];
 }): void {
+  const selectedAuthStorePath = resolveAuthStorePath(params.agentDir);
+  const mainAuthStorePath = resolveAuthStorePath();
   for (const profileId of params.profileIds) {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
       agentDir: params.agentDir,
@@ -116,12 +116,12 @@ function assertProfilesOwnedBySelectedAgent(params: {
     if (ownerAgentDir === params.agentDir) {
       continue;
     }
-    if (!ownerAgentDir && params.agentId === params.defaultAgentId) {
+    if (!ownerAgentDir && selectedAuthStorePath === mainAuthStorePath) {
       continue;
     }
-    const ownerAgentLabel = ownerAgentDir ? "another agent" : params.defaultAgentId;
+    const ownerAgentLabel = ownerAgentDir ? "another agent" : "the main auth store";
     throw new Error(
-      `Auth profile "${profileId}" is inherited from ${ownerAgentLabel}; remove it with ${formatCliCommand(`openclaw models auth remove ${profileId} --agent ${params.defaultAgentId}`)} instead.`,
+      `Auth profile "${profileId}" is inherited from ${ownerAgentLabel}; remove it from the owning agent store instead.`,
     );
   }
 }
@@ -169,8 +169,6 @@ export async function modelsAuthRemoveCommand(
   });
   assertProfilesOwnedBySelectedAgent({
     agentDir,
-    agentId,
-    defaultAgentId: resolveDefaultAgentId(cfg),
     profileIds,
   });
   const profiles = profileIds.map((profileId) =>

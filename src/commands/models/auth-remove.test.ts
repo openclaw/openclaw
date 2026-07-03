@@ -185,7 +185,22 @@ describe("modelsAuthRemoveCommand", () => {
         { profileId: "openai:user@example.com", agent: "coder", yes: true },
         runtime,
       ),
-    ).rejects.toThrow("is inherited from main");
+    ).rejects.toThrow("is inherited from the main auth store");
+
+    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+  });
+
+  it("rejects inherited profiles when the configured default agent is not the main auth store", async () => {
+    const runtime = createRuntime();
+    mocks.resolveModelsTargetAgent.mockImplementationOnce(() => ({
+      agentDir: "/tmp/openclaw/agents/coder",
+      agentId: "coder",
+    }));
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(() => undefined);
+
+    await expect(
+      modelsAuthRemoveCommand({ profileId: "openai:user@example.com", yes: true }, runtime),
+    ).rejects.toThrow("is inherited from the main auth store");
 
     expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
   });
