@@ -1765,10 +1765,30 @@ export function createExecTool(
       } else {
         workdir = workdirResolution.remoteCwd;
       }
+      if (!resolveExecEnvPrepared) {
+        params = await prepareParamsWithResolvedExecEnv(params, {
+          hookContext: deferredResolveExecEnvState?.hookContext,
+        });
+      }
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
+      const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
+      const requestedEnv: Record<string, string> | undefined =
+        params.env !== undefined ||
+        resolvedExecEnvState?.pluginEnv !== undefined ||
+        channelContextEnv !== undefined
+          ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
+          : undefined;
+      const searchGuardEnv =
+        requestedEnv === undefined ? inheritedBaseEnv : { ...inheritedBaseEnv, ...requestedEnv };
+      const sandboxProtectedRoots =
+        host === "sandbox" && sandbox?.containerWorkdir ? [sandbox.containerWorkdir] : undefined;
       if ((host === "gateway" || host === "sandbox") && workdir) {
         await rejectUnsafeExecBroadSearchShellCommand({
           command: params.command,
           workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
+          env: searchGuardEnv,
+          additionalProtectedRoots: sandboxProtectedRoots,
         });
       }
       let run: ExecProcessHandle;
@@ -1777,21 +1797,6 @@ export function createExecTool(
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
         }
-        if (!resolveExecEnvPrepared) {
-          params = await prepareParamsWithResolvedExecEnv(params, {
-            hookContext: deferredResolveExecEnvState?.hookContext,
-          });
-        }
-
-        const inheritedBaseEnv = coerceEnv(process.env);
-        const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
-        const channelContextEnv = buildChannelContextEnv(defaults?.channelContext);
-        const requestedEnv: Record<string, string> | undefined =
-          params.env !== undefined ||
-          resolvedExecEnvState?.pluginEnv !== undefined ||
-          channelContextEnv !== undefined
-            ? { ...params.env, ...resolvedExecEnvState?.pluginEnv, ...channelContextEnv }
-            : undefined;
         const hostEnvResult =
           host === "sandbox"
             ? null

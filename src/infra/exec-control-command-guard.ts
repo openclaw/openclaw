@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
+import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { explainShellCommand } from "./command-explainer/extract.js";
 import { unwrapDispatchWrappersForResolution } from "./dispatch-wrapper-resolution.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -19,6 +20,11 @@ type CommandPayload = {
   text: string;
   workdir?: string;
   stdinFromPipe?: boolean;
+};
+
+type SearchGuardContext = {
+  env?: Record<string, string | undefined>;
+  additionalProtectedRoots?: readonly string[];
 };
 
 export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
@@ -208,6 +214,42 @@ const GREP_OPTION_ARGS_WITH_VALUES = new Set([
   "--regexp",
 ]);
 
+const XARGS_OPTIONS_WITH_VALUES = new Set([
+  "-a",
+  "-d",
+  "-E",
+  "-I",
+  "-L",
+  "-l",
+  "-n",
+  "-P",
+  "-s",
+  "--arg-file",
+  "--delimiter",
+  "--eof",
+  "--max-args",
+  "--max-chars",
+  "--max-lines",
+  "--max-procs",
+  "--process-slot-var",
+  "--replace",
+]);
+
+const XARGS_STANDALONE_OPTIONS = new Set([
+  "-0",
+  "-o",
+  "-p",
+  "-r",
+  "-t",
+  "-x",
+  "--interactive",
+  "--no-run-if-empty",
+  "--null",
+  "--open-tty",
+  "--verbose",
+  "--exit",
+]);
+
 function commandPayloadKey(payload: CommandPayload): string {
   return `${payload.workdir ?? ""}\0${
     payload.stdinFromPipe === true ? "pipe" : ""
@@ -269,19 +311,28 @@ function controlFlowUnknownWorkdir(): string {
   return resolveRequiredHomeDir();
 }
 
-function resolveCdWorkdir(argv: readonly string[], currentWorkdir: string): string | null {
-  if (normalizeCommandBaseName(argv[0]) !== "cd") {
+function resolveCdWorkdir(
+  argv: readonly string[],
+  currentWorkdir: string,
+  context?: SearchGuardContext,
+): string | null {
+  const commandName = normalizeCommandBaseName(argv[0]);
+  if (commandName !== "cd" && commandName !== "pushd") {
     return null;
   }
   const target = argv.find((token, index) => index > 0 && token !== "--" && !token.startsWith("-"));
   if (target === "-") {
     return null;
   }
-  const resolved = resolveSearchTargetPath(target ?? "~", currentWorkdir);
+  const resolved = resolveSearchTargetPath(target ?? "~", currentWorkdir, context);
   return resolved ? maybeRealpath(resolved) : null;
 }
 
-function resolveEnvChdirWorkdir(argv: readonly string[], currentWorkdir: string): string | null {
+function resolveEnvChdirWorkdir(
+  argv: readonly string[],
+  currentWorkdir: string,
+  context?: SearchGuardContext,
+): string | null {
   if (normalizeCommandBaseName(argv[0]) !== "env") {
     return null;
   }
@@ -292,10 +343,37 @@ function resolveEnvChdirWorkdir(argv: readonly string[], currentWorkdir: string)
     }
     if (token === "-C" || token === "--chdir") {
       const target = argv[index + 1];
-      return target ? resolveSearchTargetPath(target, currentWorkdir) : null;
+      return target ? resolveSearchTargetPath(target, currentWorkdir, context) : null;
     }
     if (token.startsWith("--chdir=")) {
-      return resolveSearchTargetPath(token.slice("--chdir=".length), currentWorkdir);
+      return resolveSearchTargetPath(token.slice("--chdir=".length), currentWorkdir, context);
+    }
+    if (!token.startsWith("-")) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolveSudoChdirWorkdir(
+  argv: readonly string[],
+  currentWorkdir: string,
+  context?: SearchGuardContext,
+): string | null {
+  if (normalizeCommandBaseName(argv[0]) !== "sudo") {
+    return null;
+  }
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "--") {
+      return null;
+    }
+    if (token === "-D" || token === "--chdir") {
+      const target = argv[index + 1];
+      return target ? resolveSearchTargetPath(target, currentWorkdir, context) : null;
+    }
+    if (token.startsWith("--chdir=")) {
+      return resolveSearchTargetPath(token.slice("--chdir=".length), currentWorkdir, context);
     }
     if (!token.startsWith("-")) {
       return null;
@@ -307,11 +385,16 @@ function resolveEnvChdirWorkdir(argv: readonly string[], currentWorkdir: string)
 function resolvePayloadWorkdir(
   argv: readonly string[],
   currentWorkdir?: string,
+  context?: SearchGuardContext,
 ): string | undefined {
   if (!currentWorkdir) {
     return currentWorkdir;
   }
-  return resolveEnvChdirWorkdir(argv, currentWorkdir) ?? currentWorkdir;
+  return (
+    resolveEnvChdirWorkdir(argv, currentWorkdir, context) ??
+    resolveSudoChdirWorkdir(argv, currentWorkdir, context) ??
+    currentWorkdir
+  );
 }
 
 function shellTokensBefore(source: string, endIndex: number): string[] {
@@ -416,6 +499,17 @@ function hasPipedStdinBeforeCommand(source: string, commandStartIndex: number): 
   return !before.endsWith("||");
 }
 
+function hasPipedStdoutAfterCommand(source: string, commandEndIndex: number): boolean {
+  for (let index = commandEndIndex; index < source.length; index += 1) {
+    const char = source[index] ?? "";
+    if (/\s/u.test(char)) {
+      continue;
+    }
+    return char === "|" && source[index + 1] !== "|";
+  }
+  return false;
+}
+
 function isConditionallyExecutedShellCommand(source: string, commandStartIndex: number): boolean {
   const before = source.slice(0, commandStartIndex).trimEnd();
   return before.endsWith("&&") || before.endsWith("||");
@@ -465,6 +559,70 @@ function payloadsFromArgv(
     );
   }
   return payloads;
+}
+
+function resolveStaticXargsCommandArgv(argv: readonly string[]): string[] | null {
+  if (normalizeCommandBaseName(argv[0]) !== "xargs") {
+    return null;
+  }
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "--") {
+      return argv.slice(index + 1);
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return argv.slice(index);
+    }
+    const option = token.split("=", 1)[0] ?? token;
+    if (XARGS_STANDALONE_OPTIONS.has(option)) {
+      continue;
+    }
+    if (XARGS_OPTIONS_WITH_VALUES.has(option)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (/^-I.+/u.test(token) || /^-E.+/u.test(token) || /^-L\d+$/u.test(token)) {
+      continue;
+    }
+    if (/^-[lnPs]\d+$/u.test(token)) {
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function resolveSearchExecutionContext(params: {
+  argv: string[];
+  workdir: string;
+  context?: SearchGuardContext;
+}): { argv: string[]; workdir: string } {
+  let argv = stripLeadingEnvAssignments(params.argv);
+  let workdir = params.workdir;
+  const seen = new Set<string>();
+  for (let depth = 0; depth < 8; depth += 1) {
+    const key = `${workdir}\0${argv.join("\0")}`;
+    if (seen.has(key)) {
+      break;
+    }
+    seen.add(key);
+    const dispatchUnwrapped = unwrapDispatchWrappersForResolution(argv);
+    if (dispatchUnwrapped.join("\0") !== argv.join("\0")) {
+      argv = stripLeadingEnvAssignments(dispatchUnwrapped);
+      continue;
+    }
+    workdir = resolvePayloadWorkdir(argv, workdir, params.context) ?? workdir;
+    const carriedArgv =
+      resolveCarrierCommandArgv(argv, 0, { includeExec: true }) ??
+      resolveStaticXargsCommandArgv(argv);
+    if (!carriedArgv || carriedArgv.length === 0) {
+      break;
+    }
+    argv = stripLeadingEnvAssignments(carriedArgv);
+  }
+  return { argv, workdir };
 }
 
 function subshellScopeKey(source: string, endIndex: number): string {
@@ -533,7 +691,8 @@ function createCommandPayloads(rawCommand: string, workdir?: string): Promise<Co
               currentWorkdirBySubshellScope.set(subshellScope, controlFlowUnknownWorkdir());
             } else if (
               nextWorkdir &&
-              !isConditionallyExecutedShellCommand(rawCommand, step.span.startIndex)
+              !isConditionallyExecutedShellCommand(rawCommand, step.span.startIndex) &&
+              !hasPipedStdoutAfterCommand(rawCommand, step.span.endIndex)
             ) {
               currentWorkdirBySubshellScope.set(subshellScope, nextWorkdir);
             } else if (!nextWorkdir) {
@@ -591,7 +750,12 @@ function collectNonOptionArgs(
 function hasGrepRecursiveFlag(args: readonly string[]): boolean {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
-    if (arg === "--recursive" || arg === "-r" || arg === "-R") {
+    if (
+      arg === "--recursive" ||
+      arg === "--dereference-recursive" ||
+      arg === "-r" ||
+      arg === "-R"
+    ) {
       return true;
     }
     if (arg === "-d" || arg === "--directories") {
@@ -612,6 +776,35 @@ function hasGrepRecursiveFlag(args: readonly string[]): boolean {
   return false;
 }
 
+function hasStandaloneHelpOrVersionOption(
+  args: readonly string[],
+  optionsWithValues: ReadonlySet<string>,
+): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index] ?? "";
+    if (token === "--") {
+      return false;
+    }
+    if (token === "--help" || token === "--version") {
+      return true;
+    }
+    if (token.startsWith("--")) {
+      const option = token.split("=", 1)[0] ?? token;
+      if (!token.includes("=") && optionsWithValues.has(option)) {
+        index += 1;
+      }
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const option = token.slice(0, 2);
+      if (optionsWithValues.has(option) && token.length === 2) {
+        index += 1;
+      }
+    }
+  }
+  return false;
+}
+
 function hasSearchPatternOption(args: readonly string[]): boolean {
   return args.some((arg) => {
     if (arg === "-e" || arg === "--regexp" || arg === "-f" || arg === "--file") {
@@ -627,7 +820,7 @@ function hasSearchPatternOption(args: readonly string[]): boolean {
 }
 
 function resolveRgSearchPaths(args: readonly string[], stdinFromPipe = false): string[] {
-  if (args.includes("--help") || args.includes("--version")) {
+  if (hasStandaloneHelpOrVersionOption(args, RG_OPTION_ARGS_WITH_VALUES)) {
     return [];
   }
   const nonOptionArgs = collectNonOptionArgs(args, RG_OPTION_ARGS_WITH_VALUES);
@@ -644,7 +837,7 @@ function resolveRgSearchPaths(args: readonly string[], stdinFromPipe = false): s
 }
 
 function resolveGrepSearchPaths(args: readonly string[]): string[] {
-  if (args.includes("--help") || args.includes("--version")) {
+  if (hasStandaloneHelpOrVersionOption(args, GREP_OPTION_ARGS_WITH_VALUES)) {
     return [];
   }
   const nonOptionArgs = collectNonOptionArgs(args, GREP_OPTION_ARGS_WITH_VALUES);
@@ -658,7 +851,7 @@ function resolveGrepSearchPaths(args: readonly string[]): string[] {
 }
 
 function resolveFindSearchPaths(args: readonly string[]): string[] {
-  if (args.includes("--help") || args.includes("--version")) {
+  if (hasStandaloneHelpOrVersionOption(args, new Set())) {
     return [];
   }
   const paths: string[] = [];
@@ -689,17 +882,21 @@ function resolveFindSearchPaths(args: readonly string[]): string[] {
   return paths.length > 0 ? paths : ["."];
 }
 
-function resolveSearchTargetPath(searchPath: string, workdir: string): string | null {
+function resolveSearchTargetPath(
+  searchPath: string,
+  workdir: string,
+  context?: SearchGuardContext,
+): string | null {
   if (!searchPath || searchPath === "-") {
     return null;
   }
-  const expanded = expandShellHomePrefix(searchPath);
+  const expanded = expandShellHomePrefix(searchPath, context?.env);
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(workdir, expanded));
 }
 
-function expandShellHomePrefix(input: string): string {
-  const shellHome = process.env.HOME || os.homedir();
-  const openClawStateDir = process.env.OPENCLAW_STATE_DIR;
+function expandShellHomePrefix(input: string, env?: SearchGuardContext["env"]): string {
+  const shellHome = env?.HOME || process.env.HOME || os.homedir();
+  const openClawStateDir = env?.OPENCLAW_STATE_DIR ?? process.env.OPENCLAW_STATE_DIR;
   const expandedHome = shellHome
     ? input
         .replace(/^~(?=$|[\\/])/u, shellHome)
@@ -721,14 +918,28 @@ function maybeRealpath(targetPath: string): string | null {
   }
 }
 
-function protectedRootForResolvedPath(resolved: string): string | null {
+function protectedRootForResolvedPath(
+  resolved: string,
+  context?: SearchGuardContext,
+): string | null {
   const normalizedResolved = path.resolve(resolved);
   if (normalizedResolved === path.parse(normalizedResolved).root) {
     return normalizedResolved;
   }
   const homeDirs = Array.from(
-    new Set([resolveRequiredHomeDir(), os.homedir()].map((home) => path.resolve(home))),
+    new Set(
+      normalizeStringEntries([resolveRequiredHomeDir(), os.homedir(), context?.env?.HOME]).map(
+        (home) => path.resolve(home),
+      ),
+    ),
   );
+  const matchedHomeAncestor = homeDirs.find((homeRoot) => {
+    const relative = path.relative(normalizedResolved, homeRoot);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  });
+  if (matchedHomeAncestor) {
+    return normalizedResolved;
+  }
   const matchedHomeRoot = homeDirs.find((root) => {
     const normalizedRoot = path.resolve(root);
     return (
@@ -738,7 +949,10 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   if (matchedHomeRoot) {
     return matchedHomeRoot;
   }
-  const configuredOpenClawStateRoots = normalizeStringEntries([process.env.OPENCLAW_STATE_DIR]);
+  const configuredOpenClawStateRoots = normalizeStringEntries([
+    context?.env?.OPENCLAW_STATE_DIR,
+    process.env.OPENCLAW_STATE_DIR,
+  ]);
   const stateProtectedRoots = [
     ...homeDirs.flatMap((homeDir) => [
       path.join(homeDir, ".codex"),
@@ -760,6 +974,19 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   });
   if (matchedStateRoot) {
     return matchedStateRoot;
+  }
+  const additionalProtectedRoots = normalizeStringEntries(context?.additionalProtectedRoots ?? []);
+  const matchedAdditionalRoot = additionalProtectedRoots.find((root) => {
+    const candidates = [path.resolve(root), maybeRealpath(root)].filter(
+      (candidate): candidate is string => candidate !== null,
+    );
+    return candidates.some((candidate) => {
+      const relative = path.relative(candidate, normalizedResolved);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    });
+  });
+  if (matchedAdditionalRoot) {
+    return matchedAdditionalRoot;
   }
   const matchedRunnerWorkRoot = homeDirs
     .map((homeDir) => {
@@ -783,11 +1010,11 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   return null;
 }
 
-function protectedRootForPath(targetPath: string): string | null {
+function protectedRootForPath(targetPath: string, context?: SearchGuardContext): string | null {
   const resolved = path.resolve(targetPath);
   return (
-    protectedRootForResolvedPath(resolved) ??
-    protectedRootForResolvedPath(maybeRealpath(resolved) ?? resolved)
+    protectedRootForResolvedPath(resolved, context) ??
+    protectedRootForResolvedPath(maybeRealpath(resolved) ?? resolved, context)
   );
 }
 
@@ -803,12 +1030,16 @@ function globBaseSearchPath(searchPath: string): string | null {
   return path.dirname(prefix);
 }
 
-function protectedRootForSearchPath(searchPath: string, workdir: string): string | null {
-  const targetPath = resolveSearchTargetPath(searchPath, workdir);
+function protectedRootForSearchPath(
+  searchPath: string,
+  workdir: string,
+  context?: SearchGuardContext,
+): string | null {
+  const targetPath = resolveSearchTargetPath(searchPath, workdir, context);
   if (!targetPath) {
     return null;
   }
-  const directRoot = protectedRootForPath(targetPath);
+  const directRoot = protectedRootForPath(targetPath, context);
   if (directRoot) {
     return directRoot;
   }
@@ -816,16 +1047,22 @@ function protectedRootForSearchPath(searchPath: string, workdir: string): string
   if (!globBase) {
     return null;
   }
-  const globBasePath = resolveSearchTargetPath(globBase, workdir);
-  return globBasePath ? protectedRootForPath(globBasePath) : null;
+  const globBasePath = resolveSearchTargetPath(globBase, workdir, context);
+  return globBasePath ? protectedRootForPath(globBasePath, context) : null;
 }
 
 function detectBroadSearchArgv(params: {
   argv: string[];
   workdir: string;
   stdinFromPipe?: boolean;
+  context?: SearchGuardContext;
 }): UnsafeExecBroadSearchShellCommand | null {
-  const argv = unwrapDispatchWrappersForResolution(stripLeadingEnvAssignments(params.argv));
+  const resolvedContext = resolveSearchExecutionContext({
+    argv: params.argv,
+    workdir: params.workdir,
+    context: params.context,
+  });
+  const argv = resolvedContext.argv;
   const executable = normalizeCommandBaseName(argv[0]);
   const args = argv.slice(1);
   const paths =
@@ -846,7 +1083,11 @@ function detectBroadSearchArgv(params: {
     return null;
   }
   for (const searchPath of paths) {
-    const protectedRoot = protectedRootForSearchPath(searchPath, params.workdir);
+    const protectedRoot = protectedRootForSearchPath(
+      searchPath,
+      resolvedContext.workdir,
+      params.context,
+    );
     if (protectedRoot) {
       return {
         executable: normalizedExecutable,
@@ -861,13 +1102,20 @@ function detectBroadSearchArgv(params: {
 export async function detectUnsafeExecBroadSearchShellCommand(params: {
   command: string;
   workdir: string;
+  env?: Record<string, string | undefined>;
+  additionalProtectedRoots?: readonly string[];
 }): Promise<UnsafeExecBroadSearchShellCommand | null> {
   const payloads = await createCommandPayloads(params.command, params.workdir);
+  const context: SearchGuardContext = {
+    env: params.env,
+    additionalProtectedRoots: params.additionalProtectedRoots,
+  };
   for (const payload of payloads) {
     const hit = detectBroadSearchArgv({
       argv: payload.argv,
       workdir: payload.workdir ?? params.workdir,
       stdinFromPipe: payload.stdinFromPipe,
+      context,
     });
     if (hit) {
       return hit;
@@ -879,6 +1127,8 @@ export async function detectUnsafeExecBroadSearchShellCommand(params: {
 export async function rejectUnsafeExecBroadSearchShellCommand(params: {
   command: string;
   workdir: string;
+  env?: Record<string, string | undefined>;
+  additionalProtectedRoots?: readonly string[];
 }): Promise<void> {
   const hit = await detectUnsafeExecBroadSearchShellCommand(params);
   if (!hit) {
