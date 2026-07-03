@@ -6,6 +6,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import {
   filterWorkspaceSkillEntriesWithOptions,
@@ -131,7 +132,7 @@ export function buildWorkspaceSkillCommandSpecs(
     const rawDescription = entry.skill.description?.trim() || rawName;
     const description =
       rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        ? truncateUtf16Safe(rawDescription, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
         : rawDescription;
     const dispatch = (() => {
       const kindRaw = normalizeLowercaseStringOrEmpty(
@@ -203,7 +204,7 @@ export function buildWorkspaceSkillCommandSpecs(
     used.add(normalizeLowercaseStringOrEmpty(unique));
     const description =
       entry.description.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        ? truncateUtf16Safe(entry.description, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
         : entry.description;
     specs.push({
       name: unique,
