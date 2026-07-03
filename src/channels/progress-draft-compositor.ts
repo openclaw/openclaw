@@ -501,7 +501,6 @@ function normalizeCommentaryProgressText(text: string): string {
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean)
-    .map((line) => `_${line}_`)
     .join("\n");
 }
 

@@ -104,11 +104,11 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+    help: "Show compact tool/task progress lines in progress draft mode (default: true). Set false to hide tooling while still allowing opt-in commentary.",
   },
   "streaming.progress.commentary": {
     label: "Discord Progress Commentary",
-    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Combine with toolProgress: false for commentary without tool calls.",
   },
   "streaming.progress.commandText": {
     label: "Discord Progress Command Text",

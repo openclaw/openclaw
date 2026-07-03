@@ -8,8 +8,28 @@ import {
 
 describe("createChannelProgressDraftCompositor", () => {
   it("keeps the default automatic label pool neutral for technical progress", () => {
-    expect(DEFAULT_PROGRESS_DRAFT_LABELS).toContain("Executing");
-    expect(DEFAULT_PROGRESS_DRAFT_LABELS).not.toContain("Lobstering");
+    expect([...DEFAULT_PROGRESS_DRAFT_LABELS]).toEqual([
+      "Working",
+      "Reading",
+      "Checking",
+      "Running",
+      "Testing",
+      "Reviewing",
+      "Updating",
+      "Inspecting",
+      "Searching",
+      "Planning",
+      "Analyzing",
+      "Verifying",
+      "Preparing",
+      "Loading",
+      "Scanning",
+      "Executing",
+      "Syncing",
+      "Building",
+      "Finishing",
+      "Reporting",
+    ]);
   });
 
   it("keeps the progress label visible when tool lines are hidden", async () => {
@@ -109,6 +129,41 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalled();
   });
 
+  it("shows configured commentary while tool progress lines are hidden", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Working", commentary: true, toolProgress: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushCommentaryProgress("Checking the workspace");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Working\n\nChecking the workspace",
+      expect.objectContaining({
+        lines: [
+          expect.objectContaining({
+            kind: "item",
+            label: "Commentary",
+            prefix: false,
+            text: "Checking the workspace",
+          }),
+        ],
+      }),
+    );
+    expect(update.mock.calls.every(([text]) => !String(text).includes("🛠️"))).toBe(true);
+    expect(update.mock.calls.every(([text]) => !String(text).includes("_Checking"))).toBe(true);
+  });
+
   it("does not resurrect progress after suppression", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
@@ -159,7 +214,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushCommentaryProgress("Checking the workspace", { itemId: "c1" });
 
     const rendered = update.mock.calls.map((call) => call[0]);
-    expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
+    expect(rendered).toContain("Shelling\n\n💬 Checking the workspace");
   });
 
   it("interleaves reasoning bursts with tool calls in arrival order", async () => {

@@ -17,7 +17,7 @@ agent reads, plans, calls tools, or waits for approval, and then turns that draf
 into the final answer when the channel can do that safely.
 
 ```text
-Shelling...
+Working...
 📖 from docs/concepts/progress-drafts.md
 🔎 Web Search: for "discord edit message"
 🛠️ Bash: run tests
@@ -53,7 +53,7 @@ A progress draft has two parts:
 
 | Part           | Purpose                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
-| Label          | A short starter/status line such as `Working` or `Shelling`.                          |
+| Label          | A short starter/status line such as `Working` or `Checking`.                          |
 | Progress lines | Compact run updates using the same tool icons and detail formatter as verbose output. |
 
 The label appears after the agent starts meaningful work and either remains busy
@@ -99,25 +99,25 @@ single-word label pool:
 
 ```text
 Working
-Shelling
-Scuttling
-Clawing
-Pinching
-Molting
-Bubbling
-Tiding
-Reefing
-Cracking
-Sifting
-Brining
-Nautiling
-Krilling
-Barnacling
+Reading
+Checking
+Running
+Testing
+Reviewing
+Updating
+Inspecting
+Searching
+Planning
+Analyzing
+Verifying
+Preparing
+Loading
+Scanning
 Executing
-Tidepooling
-Pearling
-Snapping
-Surfacing
+Syncing
+Building
+Finishing
+Reporting
 ```
 
 Use a fixed label:
@@ -154,6 +154,48 @@ Use your own automatic label pool:
   },
 }
 ```
+
+If you want the same hidden preferences across channels, put them in a small
+include file and reference it from each channel's `streaming.progress` object.
+For example, create `~/.openclaw/progress-draft-preferences.json5`:
+
+```json5
+{
+  label: "auto",
+  labels: ["Thinking", "Reading", "Checking", "Running", "Finishing"],
+  commentary: true,
+  toolProgress: false,
+}
+```
+
+Then include it from the channel config:
+
+```json5
+{
+  channels: {
+    telegram: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          $include: "./progress-draft-preferences.json5",
+        },
+      },
+    },
+    discord: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          $include: "./progress-draft-preferences.json5",
+        },
+      },
+    },
+  },
+}
+```
+
+The include file is merged through the normal config `$include` mechanism, so
+the main config can stay short while users still keep per-channel overrides next
+to the include when needed.
 
 Hide the label and show only progress lines:
 
@@ -328,6 +370,29 @@ Keep the single progress draft but hide tool and task lines:
 With `toolProgress: false`, OpenClaw still suppresses the older standalone
 tool-progress messages for that turn. The channel stays visually quiet until the
 final answer, except for the label if one is configured.
+
+Show assistant commentary without showing tool calls:
+
+```json5
+{
+  channels: {
+    telegram: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          commentary: true,
+          toolProgress: false,
+        },
+      },
+    },
+  },
+}
+```
+
+`commentary` is opt-in and only works in `mode: "progress"`. With
+`commentary: true` and `toolProgress: false`, the temporary draft can show
+assistant commentary/preamble text while still hiding tool, command, and task
+progress lines. Final answer delivery is unchanged.
 
 ## Channel behavior
 

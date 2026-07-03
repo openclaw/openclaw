@@ -235,6 +235,9 @@ describe("channel-streaming", () => {
 
   it("uses auto progress labels when no explicit label is configured", () => {
     expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working");
+    expect([...DEFAULT_PROGRESS_DRAFT_LABELS]).not.toEqual(
+      expect.arrayContaining(["Shelling", "Scuttling", "Lobstering", "Tidepooling"]),
+    );
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -305,13 +308,14 @@ describe("channel-streaming", () => {
         lines: [
           {
             kind: "item",
-            text: "_Checking source data before summarizing._",
+            text: "Checking source data before summarizing.",
             label: "Commentary",
             prefix: false,
           },
         ],
+        formatLine: (line) => `_${line}_`,
       }),
-    ).toBe("_Checking source data before summarizing._");
+    ).toBe("Checking source data before summarizing.");
   });
 
   it("renders progress labels as rolling lines", () => {

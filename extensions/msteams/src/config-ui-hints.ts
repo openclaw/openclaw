@@ -40,7 +40,7 @@ export const msTeamsChannelConfigUiHints = {
   },
   "streaming.progress.toolProgress": {
     label: "MS Teams Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress mode (default: true). Set false to keep only the title until final delivery.",
+    help: "Show compact tool/task progress lines in progress mode (default: true). Set false to hide tooling while still allowing opt-in commentary where supported.",
   },
   "streaming.progress.commandText": {
     label: "MS Teams Progress Command Text",

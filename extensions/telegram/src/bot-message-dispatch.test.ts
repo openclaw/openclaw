@@ -3008,8 +3008,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Cracking\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
-        "<b>Cracking</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
+        "Planning\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
+        "<b>Planning</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
       ),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
@@ -3661,7 +3661,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+      telegramProgressPreview("Planning\n\n🛠️ Exec", "<b>Planning</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);
@@ -4206,6 +4206,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createContext(),
       streamMode: "progress",
       telegramCfg: {
+        richMessages: true,
         streaming: {
           mode: "progress",
           progress: { label: "Shelling", commentary: true },
@@ -4213,12 +4214,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\n💬 Checking recent context",
-        "<b>Shelling</b>\n💬 Checking recent context",
-      ),
-    );
+    expect(draftStream.updatePreview).toHaveBeenCalledWith({
+      text: "Shelling\n\n💬 Checking recent context",
+      richMessage: {
+        html: "<b>Shelling</b><br>💬 Checking recent context",
+        skip_entity_detection: true,
+      },
+    });
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview?.text).not.toContain("_Checking");
+  });
+
+  it("renders configured Telegram commentary while tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        richMessages: true,
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commentary: true, toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
+      text: "Shelling\n\n💬 Checking recent context",
+      richMessage: {
+        html: "<b>Shelling</b><br>💬 Checking recent context",
+        skip_entity_detection: true,
+      },
+    });
+    expect(
+      draftStream.updatePreview.mock.calls.every(([preview]) => !preview.text.includes("Exec")),
+    ).toBe(true);
+    expect(
+      draftStream.updatePreview.mock.calls.every(([preview]) => !preview.text.includes("_")),
+    ).toBe(true);
   });
 
   it("suppresses Telegram preamble progress when commentary is disabled", async () => {

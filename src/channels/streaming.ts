@@ -100,25 +100,25 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
 
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
   "Working",
-  "Shelling",
-  "Scuttling",
-  "Clawing",
-  "Pinching",
-  "Molting",
-  "Bubbling",
-  "Tiding",
-  "Reefing",
-  "Cracking",
-  "Sifting",
-  "Brining",
-  "Nautiling",
-  "Krilling",
-  "Barnacling",
+  "Reading",
+  "Checking",
+  "Running",
+  "Testing",
+  "Reviewing",
+  "Updating",
+  "Inspecting",
+  "Searching",
+  "Planning",
+  "Analyzing",
+  "Verifying",
+  "Preparing",
+  "Loading",
+  "Scanning",
   "Executing",
-  "Tidepooling",
-  "Pearling",
-  "Snapping",
-  "Surfacing",
+  "Syncing",
+  "Building",
+  "Finishing",
+  "Reporting",
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
@@ -1237,7 +1237,7 @@ export function formatChannelProgressDraftText(params: {
     )
     .slice(-maxLines)
     .map(({ text, isLabelLine, prefix }) => {
-      const formatted = isLabelLine ? text : formatLine(text);
+      const formatted = isLabelLine || !prefix ? text : formatLine(text);
       return {
         text:
           !isLabelLine && prefix && shouldPrefixProgressLine(text)

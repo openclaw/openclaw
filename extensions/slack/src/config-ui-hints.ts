@@ -200,7 +200,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+    help: "Show compact tool/task progress lines in progress draft mode (default: true). Set false to hide tooling while still allowing opt-in commentary where supported.",
   },
   "streaming.progress.commandText": {
     label: "Slack Progress Command Text",
