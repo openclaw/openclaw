@@ -1,7 +1,11 @@
 // Discord plugin module implements send.outbound behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -45,6 +49,8 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToIdSource?: string;
+  replyToMode?: ReplyToMode;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -268,6 +274,7 @@ export async function sendMessageDiscord(
           opts.silent,
           suppressEmbeds,
           textLimit,
+          undefined,
         );
         await sendDiscordThreadTextChunks({
           rest,
@@ -340,6 +347,8 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToMode,
+        opts.replyToIdSource,
       );
     } else {
       result = await sendDiscordText(
@@ -355,6 +364,8 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToMode,
+        opts.replyToIdSource,
       );
     }
   } catch (err) {

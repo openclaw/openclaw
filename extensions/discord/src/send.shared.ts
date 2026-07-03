@@ -2,7 +2,7 @@
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -14,6 +14,7 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -307,6 +308,8 @@ async function sendDiscordText(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToMode?: ReplyToMode,
+  replyToIdSource?: string,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -328,7 +331,13 @@ async function sendDiscordText(
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+      replyTo:
+        isFirst ||
+        replyToMode === undefined ||
+        replyToIdSource === "explicit" ||
+        !isSingleUseReplyToMode(replyToMode)
+          ? replyTo
+          : undefined,
     });
     return (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
@@ -372,6 +381,8 @@ async function sendDiscordMedia(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToMode?: ReplyToMode,
+  replyToIdSource?: string,
 ) {
   const media = await loadWebMedia(
     mediaUrl,
@@ -424,7 +435,11 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      replyToMode === undefined ||
+        replyToIdSource === "explicit" ||
+        !isSingleUseReplyToMode(replyToMode)
+        ? replyTo
+        : undefined,
       request,
       maxLinesPerMessage,
       undefined,

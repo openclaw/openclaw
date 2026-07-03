@@ -41,6 +41,8 @@ function resolveDiscordDeliveryOptions(
 ) {
   return {
     replyTo: sendContext.resolveReplyTo(),
+    ...(ctx.replyToIdSource ? { replyToIdSource: ctx.replyToIdSource } : {}),
+    ...(ctx.replyToMode ? { replyToMode: ctx.replyToMode } : {}),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
