@@ -1764,6 +1764,26 @@
       "translated": "به‌روزرسانی"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "مجوزها"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw از شرکای خود در جامعهٔ متن‌باز قدردانی می‌کند."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "هیچ اعلان مجوزی در این بیلد گنجانده نشده است."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "باز کردن ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "بررسی"
@@ -5294,6 +5314,11 @@
       "translated": "درباره"
     },
     {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "مجوزها"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -5472,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "هیچ مجوزی همراه نشده است"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "فایل‌های مجوز در این بیلد در دسترس نیستند."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw از شرکای خود در جامعهٔ متن‌باز قدردانی می‌کند."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6309,9 +6349,9 @@
       "translated": "OpenClaw ممکن است از داده‌های حرکت برای پشتیبانی از تعاملات و خودکارسازی‌های آگاه از دستگاه استفاده کند."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw زمانی به دسترسی به کتابخانهٔ عکس نیاز دارد که عکس‌های موجود را برای اشتراک‌گذاری با دستیار خود انتخاب می‌کنید."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw به دستیار شما اجازه می‌دهد عکس‌هایی را که مجاز می‌کنید بخواند و به شما امکان می‌دهد عکس‌هایی را برای اشتراک‌گذاری انتخاب کنید."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6944,6 +6984,11 @@
       "translated": "از دستیار، مخاطبین را جستجو و اضافه کنید."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "عکس‌ها"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "تقویم (افزودن رویدادها)"
@@ -6972,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "یادآورها را فهرست، اضافه و کامل کنید."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "محدود"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "عکس‌هایی را که برای دستیار انتخاب می‌کنید بخواند."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "عکس‌های اخیر را برای دستیار بخواند."
     },
     {
       "id": "native.apple.22b335bddf72e453",

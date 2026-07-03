@@ -1764,6 +1764,26 @@
       "translated": "Оновити"
     },
     {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Ліцензії"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw цінує своїх партнерів у спільноті відкритого коду."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "У цій збірці не включено жодних повідомлень про ліцензії."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Відкрити ${license.title}"
+    },
+    {
       "id": "native.android.cfffa5b838a65ca4",
       "source": "Check",
       "translated": "Перевірити"
@@ -5294,6 +5314,11 @@
       "translated": "Про застосунок"
     },
     {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Ліцензії"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -5472,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Ліцензії не включено"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Файли ліцензій недоступні в цій збірці."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw цінує своїх партнерів у спільноті відкритого коду."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6309,9 +6349,9 @@
       "translated": "OpenClaw може використовувати дані про рух для підтримки взаємодій і автоматизацій з урахуванням пристрою."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw потрібен доступ до фототеки, коли ви вибираєте наявні фото, щоб поділитися ними зі своїм асистентом."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw дає змогу вашому асистенту читати дозволені вами фото й дає вам змогу вибирати фото для надсилання."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6944,6 +6984,11 @@
       "translated": "Шукайте й додавайте контакти з помічника."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Фото"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Календар (додавання подій)"
@@ -6972,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Переглядайте список, додавайте й позначайте нагадування як виконані."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Обмежено"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Читати вибрані вами фото для асистента."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Читати нещодавні фото для асистента."
     },
     {
       "id": "native.apple.22b335bddf72e453",

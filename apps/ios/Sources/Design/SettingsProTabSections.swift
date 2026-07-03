@@ -167,6 +167,14 @@ extension SettingsProTab {
                 title: "About",
                 route: .about)
         }
+
+        Section {
+            self.settingsListRow(
+                icon: "doc.text",
+                title: "Licenses",
+                route: .licenses)
+                .accessibilityIdentifier("settings-licenses-row")
+        }
     }
 
     func settingsListRow(
@@ -221,6 +229,8 @@ extension SettingsProTab {
                         self.privacyDestination
                     case .notifications:
                         self.notificationsDestination
+                    case .licenses:
+                        self.licensesDestination
                     case .about:
                         self.aboutDestination
                     }
@@ -555,6 +565,69 @@ extension SettingsProTab {
                 self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
         }
+    }
+
+    var licensesDestination: some View {
+        let documents = LicenseDocumentLoader.bundledDocuments()
+        return VStack(alignment: .leading, spacing: 14) {
+            if documents.isEmpty {
+                ProCard(radius: SettingsLayout.cardRadius) {
+                    HStack(spacing: 12) {
+                        ProIconBadge(systemName: "doc.text", color: .secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("No licenses bundled")
+                                .font(.subheadline.weight(.semibold))
+                            Text("License files are not available in this build.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
+            } else {
+                let lastDocumentID = documents.last?.id
+
+                Text("OpenClaw appreciates its partners in the open-source community.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, OpenClawProMetric.pagePadding)
+
+                self.detailListCard {
+                    ForEach(documents) { document in
+                        NavigationLink {
+                            LicenseDocumentDetailView(document: document)
+                        } label: {
+                            self.licenseDocumentRow(document)
+                        }
+                        .buttonStyle(.plain)
+
+                        if document.id != lastDocumentID {
+                            Divider().padding(.leading, 60)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("settings-licenses-list")
+            }
+        }
+    }
+
+    func licenseDocumentRow(_ document: LicenseDocument) -> some View {
+        HStack(spacing: 12) {
+            ProIconBadge(systemName: "doc.text", color: .secondary)
+            Text(document.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: SettingsLayout.rowHeight)
     }
 
     func gatewayActionButton(

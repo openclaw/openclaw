@@ -48,6 +48,18 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
