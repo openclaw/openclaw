@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,8 +40,8 @@ describe("ClawRouter plugin", () => {
     vi.unstubAllGlobals();
   });
 
-  it("registers catalog, transport compatibility, and quota hooks", () => {
-    const provider = capturePluginRegistration(plugin).providers[0];
+  it("registers catalog, transport compatibility, and quota hooks", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider).toMatchObject({
       id: "clawrouter",
@@ -66,8 +66,8 @@ describe("ClawRouter plugin", () => {
     expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
   });
 
-  it("attaches the proxy key and native upstream id only at request dispatch", () => {
-    const provider = capturePluginRegistration(plugin).providers[0];
+  it("attaches the proxy key and native upstream id only at request dispatch", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
     const calls: Array<Parameters<StreamFn>[0]> = [];
     const baseStreamFn: StreamFn = (model) => {
       calls.push(model);
@@ -113,7 +113,7 @@ describe("ClawRouter plugin", () => {
     });
     const fetchMock = vi.fn(async () => Response.json(LIVE_CATALOG));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const provider = capturePluginRegistration(plugin).providers[0];
+    const provider = await registerSingleProviderPlugin(plugin);
 
     const result = await provider?.catalog?.run({
       config: { models: {} },
@@ -157,7 +157,7 @@ describe("ClawRouter plugin", () => {
       "fetch",
       vi.fn(async () => new Response("Unauthorized", { status: 401 })),
     );
-    const provider = capturePluginRegistration(plugin).providers[0];
+    const provider = await registerSingleProviderPlugin(plugin);
 
     await expect(
       provider?.catalog?.run({
@@ -177,8 +177,8 @@ describe("ClawRouter plugin", () => {
     ).rejects.toThrow(/401/u);
   });
 
-  it("dispatches replay and tool policies by upstream protocol family", () => {
-    const provider = capturePluginRegistration(plugin).providers[0];
+  it("dispatches replay and tool policies by upstream protocol family", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
       provider?.buildReplayPolicy?.({
