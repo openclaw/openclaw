@@ -1518,56 +1518,46 @@ describe("listControlledSubagentRuns", () => {
     resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("returns runs when controllerSessionKey matches (existing path)", () => {
-    addSubagentRunForTests({
-      runId: "run-list-controller-match",
-      childSessionKey: "agent:main:subagent:list-ctrl-match",
+  it.each([
+    {
+      name: "control owner",
       controllerSessionKey: "agent:main:main",
       requesterSessionKey: "agent:main:telegram:direct:abc123",
-      requesterDisplayKey: "main",
-      task: "controller key match test",
-      cleanup: "keep",
-      createdAt: Date.now() - 30_000,
-      startedAt: Date.now() - 30_000,
-    });
-
-    const results = listControlledSubagentRuns("agent:main:main");
-    expect(results).toHaveLength(1);
-    expect(results[0].childSessionKey).toBe("agent:main:subagent:list-ctrl-match");
-  });
-
-  it("returns runs when requesterSessionKey matches via OR (new fix path)", () => {
-    addSubagentRunForTests({
-      runId: "run-list-requester-match",
-      childSessionKey: "agent:main:subagent:list-req-match",
+      expectedCount: 1,
+    },
+    {
+      name: "completion owner",
       controllerSessionKey: "agent:main:telegram:direct:abc123",
       requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "requester key match test",
-      cleanup: "keep",
-      createdAt: Date.now() - 10_000,
-      startedAt: Date.now() - 10_000,
-    });
-
-    const results = listControlledSubagentRuns("agent:main:main");
-    expect(results).toHaveLength(1);
-    expect(results[0].childSessionKey).toBe("agent:main:subagent:list-req-match");
-  });
-
-  it("excludes runs when neither key matches (scope isolation preserved)", () => {
-    addSubagentRunForTests({
-      runId: "run-list-unrelated",
-      childSessionKey: "agent:main:subagent:list-unrelated",
+      expectedCount: 1,
+    },
+    {
+      name: "unrelated session",
       controllerSessionKey: "agent:other:discord:direct:xyz",
-      requesterSessionKey: "agent:other:discord:direct:xyz",
-      requesterDisplayKey: "other",
-      task: "unrelated run",
-      cleanup: "keep",
-      createdAt: Date.now(),
-      startedAt: Date.now(),
-    });
+      requesterSessionKey: "agent:other:main",
+      expectedCount: 0,
+    },
+  ])(
+    "applies read visibility for the $name",
+    ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+      const childSessionKey = "agent:main:subagent:list-visibility";
+      addSubagentRunForTests({
+        runId: "run-list-visibility",
+        childSessionKey,
+        controllerSessionKey,
+        requesterSessionKey,
+        requesterDisplayKey: requesterSessionKey,
+        task: "visibility test",
+        cleanup: "keep",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
 
-    const results = listControlledSubagentRuns("agent:main:main");
-    expect(results).toHaveLength(0);
-  });
+      const results = listControlledSubagentRuns("agent:main:main");
+      expect(results).toHaveLength(expectedCount);
+      if (expectedCount === 1) {
+        expect(results[0]?.childSessionKey).toBe(childSessionKey);
+      }
+    },
+  );
 });
