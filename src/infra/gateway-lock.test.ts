@@ -378,9 +378,6 @@ describe("gateway lock", () => {
   });
 
   it("closes handle and removes lock file when writeFile fails after open succeeds", async () => {
-    // When fs.open succeeds but the subsequent writeFile fails (e.g. disk full),
-    // the file handle must be closed and the partial lock file removed before
-    // re-throwing to avoid a file descriptor leak.
     vi.useRealTimers();
     const env = await makeEnv();
     const { lockPath } = resolveLockPath(env);
@@ -388,24 +385,26 @@ describe("gateway lock", () => {
     const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
     });
-    const closeMock = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const mockHandle = {
-      writeFile: vi.fn().mockRejectedValue(writeError),
-      close: closeMock,
+      writeFile: vi.fn().mockImplementation(async () => {
+        await fs.writeFile(lockPath, "partial", "utf8");
+        throw writeError;
+      }),
+      close,
     };
 
     const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(mockHandle as never);
-    const rmSpy = vi.spyOn(fs, "rm");
 
-    await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
+    await expect(acquireForTest(env)).rejects.toMatchObject({
+      name: "GatewayLockError",
+      cause: writeError,
+    });
 
-    // The handle must be closed so the file descriptor is not leaked.
-    expect(closeMock).toHaveBeenCalledTimes(1);
-    // The partially-written lock file must be removed so no stale lock lingers.
-    expect(rmSpy).toHaveBeenCalledWith(lockPath, { force: true });
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     openSpy.mockRestore();
-    rmSpy.mockRestore();
   });
 
   it("clears stale lock on win32 when process cmdline is not a gateway", async () => {

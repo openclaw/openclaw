@@ -273,10 +273,12 @@ export async function acquireGatewayLock(
           payload.startTime = startTime;
         }
         await handle.writeFile(JSON.stringify(payload), "utf8");
-      } catch (writeErr) {
+      } catch (error) {
+        // Acquisition owns both resources until the release callback exists.
+        // Unwind them if payload preparation fails before ownership transfers.
         await handle.close().catch(() => undefined);
         await fs.rm(lockPath, { force: true }).catch(() => undefined);
-        throw writeErr;
+        throw error;
       }
       return {
         lockPath,
