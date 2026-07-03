@@ -15,11 +15,38 @@ import {
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+
+/**
+ * Wraps installCompletion so that filesystem permission errors (EACCES) and
+ * other non-critical failures degrade to a warning instead of a hard error.
+ * Doctor treats shell-completion installation as optional — an unwritable rc
+ * file must never cause exit code 1.
+ */
+async function tryInstallCompletion(
+  shell: string,
+  yes: boolean,
+  binName: string,
+  cliName: string,
+): Promise<boolean> {
+  try {
+    await installCompletion(shell, yes, binName);
+    return true;
+  } catch (error) {
+    const message = formatErrorMessage(error);
+    note(
+      `Shell completion not installed: ${message}. ` +
+        `Run \`${cliName} completion install\` against a writable rc file manually.`,
+      "Shell completion",
+    );
+    return false;
+  }
+}
 
 export type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
@@ -195,8 +222,9 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    if (await tryInstallCompletion(status.shell, true, cliName, cliName)) {
+      note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    }
     return;
   }
 
@@ -237,8 +265,9 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      if (await tryInstallCompletion(status.shell, true, cliName, cliName)) {
+        note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      }
     }
   }
 }
