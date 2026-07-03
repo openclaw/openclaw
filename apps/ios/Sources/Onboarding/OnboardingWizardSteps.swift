@@ -25,8 +25,11 @@ struct OnboardingIntroStep: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 Label("Connect to your gateway", systemImage: "link")
+                    .font(OpenClawType.subheadSemiBold)
                 Label("Choose device permissions", systemImage: "hand.raised")
+                    .font(OpenClawType.subheadSemiBold)
                 Label("Use OpenClaw from your phone", systemImage: "message.fill")
+                    .font(OpenClawType.subheadSemiBold)
             }
             .font(OpenClawType.subheadSemiBold)
             .frame(maxWidth: .infinity, alignment: .leading)

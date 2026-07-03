@@ -176,9 +176,13 @@ struct OnboardingWizardView: View {
             get: { self.scannerError != nil },
             set: { if !$0 { self.scannerError = nil } }))
         {
-            Button("OK", role: .cancel) {}
+            Button(role: .cancel) {} label: {
+                Text("OK")
+                    .font(OpenClawType.subheadSemiBold)
+            }
         } message: {
             Text(self.scannerError ?? "")
+                .font(OpenClawType.subhead)
         }
         .sheet(isPresented: self.$showQRScanner) {
                 NavigationStack {
@@ -541,12 +545,10 @@ struct OnboardingWizardView: View {
     private var authStep: some View {
         Group {
             Section {
-                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                self.onboardingSecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(OpenClawType.subhead)
-                SecureField("Gateway Password", text: self.$gatewayPassword)
-                    .font(OpenClawType.subhead)
+                self.onboardingSecureField("Gateway Password", text: self.$gatewayPassword)
 
                 if let problem = self.currentProblem {
                     GatewayProblemBanner(
@@ -732,12 +734,10 @@ extension OnboardingWizardView {
                 .autocorrectionDisabled()
                 .font(OpenClawType.subhead)
             if self.selectedMode == .remoteDomain {
-                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                self.onboardingSecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(OpenClawType.subhead)
-                SecureField("Gateway Password", text: self.$gatewayPassword)
-                    .font(OpenClawType.subhead)
+                self.onboardingSecureField("Gateway Password", text: self.$gatewayPassword)
             }
             self.manualConnectButton
         } header: {
@@ -755,6 +755,22 @@ extension OnboardingWizardView {
             Text(title)
                 .font(OpenClawType.subheadSemiBold)
         }
+    }
+
+    private func onboardingSecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        ZStack(alignment: .leading) {
+            SecureField("", text: text)
+                .font(OpenClawType.subhead)
+                .accessibilityLabel(placeholder)
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.tertiary)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(OpenClawType.subhead)
     }
 
     private var manualConnectButton: some View {

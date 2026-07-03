@@ -198,9 +198,13 @@ private struct GatewayQuickSetupCandidatePanel: View {
                 // Use verbatim strings so Bonjour-provided values can't be interpreted as
                 // localized format strings (which can crash with Objective-C exceptions).
                 Text(verbatim: "Discovery: \(self.discoveryStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Status: \(self.gatewayDisplayStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Node: \(self.nodeStatusText)")
+                    .font(OpenClawType.monoFootnote)
                 Text(verbatim: "Operator: \(self.operatorStatusText)")
+                    .font(OpenClawType.monoFootnote)
             }
             .font(OpenClawType.monoFootnote)
             .foregroundStyle(.secondary)

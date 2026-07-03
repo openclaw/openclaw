@@ -280,12 +280,15 @@ struct AgentProDreamingDestination: View {
                     Label(
                         day.title,
                         systemImage: day.id == selectedDay?.id ? "checkmark.circle.fill" : "calendar")
+                        .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subheadSemiBold)
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "calendar")
                 Text(selectedDay?.title ?? "Day")
+                    .font(OpenClawType.captionSemiBold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }

@@ -1045,11 +1045,17 @@ private struct IPadWorkboardKanbanCard: View {
 
                 Menu {
                     ForEach(self.statuses, id: \.self) { status in
-                        Button("Move to \(IPadWorkboardDefaults.label(for: status))") {
+                        Button {
                             self.move(status)
+                        } label: {
+                            Text("Move to \(IPadWorkboardDefaults.label(for: status))")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
-                    Button(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive", action: self.archive)
+                    Button(action: self.archive) {
+                        Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
                 } label: {
                     Image(systemName: self.isBusy ? "hourglass" : "ellipsis")
                         .frame(width: 22, height: 22)
@@ -1150,37 +1156,61 @@ struct IPadWorkboardQueueRow: View {
             self.actionMenuItems
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            Button("Inspect", action: self.inspect)
-                .tint(OpenClawBrand.accent)
+            Button(action: self.inspect) {
+                Text("Inspect")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .tint(OpenClawBrand.accent)
             if self.card.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                Button("Open", action: self.openSession)
-                    .tint(OpenClawBrand.ok)
+                Button(action: self.openSession) {
+                    Text("Open")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .tint(OpenClawBrand.ok)
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if let nextStatus {
-                Button(IPadWorkboardDefaults.label(for: nextStatus)) {
+                Button {
                     self.move(nextStatus)
+                } label: {
+                    Text(IPadWorkboardDefaults.label(for: nextStatus))
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .tint(OpenClawBrand.accentHot)
             }
-            Button(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive", action: self.archive)
-                .tint(.secondary)
+            Button(action: self.archive) {
+                Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .tint(.secondary)
         }
     }
 
     @ViewBuilder
     private var actionMenuItems: some View {
         if self.card.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            Button("Open Session", action: self.openSession)
-        }
-        Button("Inspect", action: self.inspect)
-        ForEach(self.statuses, id: \.self) { status in
-            Button("Move to \(IPadWorkboardDefaults.label(for: status))") {
-                self.move(status)
+            Button(action: self.openSession) {
+                Text("Open Session")
+                    .font(OpenClawType.subheadSemiBold)
             }
         }
-        Button(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive", action: self.archive)
+        Button(action: self.inspect) {
+            Text("Inspect")
+                .font(OpenClawType.subheadSemiBold)
+        }
+        ForEach(self.statuses, id: \.self) { status in
+            Button {
+                self.move(status)
+            } label: {
+                Text("Move to \(IPadWorkboardDefaults.label(for: status))")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+        }
+        Button(action: self.archive) {
+            Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                .font(OpenClawType.subheadSemiBold)
+        }
     }
 
     private var nextStatus: String? {

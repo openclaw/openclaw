@@ -180,7 +180,9 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label).tag(option.id)
+                Text(option.label)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tag(option.id)
             }
         }
         .labelsHidden()
@@ -196,9 +198,13 @@ struct OpenClawChatComposer: View {
                 get: { self.viewModel.modelSelectionID },
                 set: { next in self.viewModel.selectModel(next) }))
         {
-            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
+            Text(self.viewModel.defaultModelLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(OpenClawChatViewModel.defaultModelSelectionID)
             ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+                Text(model.displayLabel)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tag(model.selectionID)
             }
         }
         .labelsHidden()
@@ -312,6 +318,7 @@ struct OpenClawChatComposer: View {
                         }
 
                         Text(att.fileName)
+                            .font(OpenClawChatTypography.caption)
                             .lineLimit(1)
 
                         Button {

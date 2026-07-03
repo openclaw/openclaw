@@ -481,10 +481,9 @@ extension AgentProTab {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("API key")
                             .font(OpenClawType.subheadSemiBold)
-                        SecureField(primaryEnv, text: self.skillAPIKeyBinding(for: skill))
+                        self.skillSecureField(primaryEnv, text: self.skillAPIKeyBinding(for: skill))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .font(OpenClawType.subhead)
                         Button {
                             Task { await self.saveSkillAPIKey(skill) }
                         } label: {
@@ -509,6 +508,22 @@ extension AgentProTab {
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func skillSecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        ZStack(alignment: .leading) {
+            SecureField("", text: text)
+                .font(OpenClawType.subhead)
+                .accessibilityLabel(placeholder)
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.tertiary)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(OpenClawType.subhead)
     }
 
     func skillEditorToggleRow(

@@ -221,9 +221,11 @@ struct AgentProNodesDestination: View {
         let normalized = Self.normalized(value) ?? "n/a"
         return HStack(spacing: 10) {
             Text(title)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(normalized)
+                .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Button {

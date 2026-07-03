@@ -28,10 +28,13 @@ extension SettingsProTab {
                     self.appearancePreferenceRaw = preference.rawValue
                 } label: {
                     Label(preference.label, systemImage: preference.systemImage)
+                        .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subheadSemiBold)
             }
         } message: {
             Text("Choose system, light, or dark appearance")
+                .font(OpenClawType.subhead)
         }
     }
 
@@ -1239,6 +1242,7 @@ extension SettingsProTab {
         } label: {
             HStack {
                 Text(title)
+                    .font(OpenClawType.subhead)
                 Spacer(minLength: 8)
                 self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
             }
@@ -1269,8 +1273,10 @@ extension SettingsProTab {
     func simpleSettingsRow(title: String, value: String) -> some View {
         HStack {
             Text(title)
+                .font(OpenClawType.subhead)
             Spacer(minLength: 8)
             Text(value)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)

@@ -226,6 +226,7 @@ struct SettingsProTab: View {
                                     Text("Cancel")
                                         .font(OpenClawType.subheadSemiBold)
                                 }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                         }
                 }
@@ -236,12 +237,19 @@ struct SettingsProTab: View {
                     onContinue: self.requestNotificationAuthorizationFromSettings)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
+                Button(role: .destructive) {
                     self.resetOnboarding()
+                } label: {
+                    Text("Reset")
+                        .font(OpenClawType.subheadSemiBold)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                    .font(OpenClawType.subhead)
             }
             .alert(
                 "QR Scanner Unavailable",
@@ -249,9 +257,13 @@ struct SettingsProTab: View {
                     get: { self.scannerError != nil },
                     set: { if !$0 { self.scannerError = nil } }))
             {
-                Button("OK", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
             }
     }
 

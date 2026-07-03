@@ -121,6 +121,11 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
             encoding: .utf8)
         let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
+        let chatMessageViews = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
+            encoding: .utf8)
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("Text(primaryActionTitle)"))
@@ -181,6 +186,34 @@ struct OpenClawTypographyTests {
         for source in [agentDestinations, dreaming, instances, channels, docs] {
             #expect(source.contains(".font(OpenClawType.body)"))
         }
+
+        #expect(chatMessageViews.contains("font: OpenClawChatTypography.body"))
+        #expect(chatMessageViews.contains("OpenClawChatTypography.callout.italic()"))
+        #expect(!chatMessageViews.contains("font: .body"))
+        #expect(!chatMessageViews.contains("Font.body"))
+        #expect(!chatMessageViews.contains("Font.callout"))
+    }
+
+    @Test func `iOS app text and control calls keep branded font boundaries`() throws {
+        let offenders = try Self.unbrandedTextCallOffenders()
+        #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
+    }
+
+    @Test func `secure fields do not use platform placeholder text`() throws {
+        let offenders = try Self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
+            let source = try String(contentsOf: url, encoding: .utf8)
+            return source
+                .components(separatedBy: .newlines)
+                .enumerated()
+                .compactMap { offset, line in
+                    guard line.range(
+                        of: #"\bSecureField\("[^"]+""#,
+                        options: .regularExpression) != nil
+                    else { return nil }
+                    return "\(Self.relativePath(url)):\(offset + 1): \(line.trimmingCharacters(in: .whitespaces))"
+                }
+        }
+        #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
     }
 
     private static let bundledFontFiles = [
@@ -214,6 +247,84 @@ struct OpenClawTypographyTests {
 
     private static func sourceURL(_ relativePath: String) -> URL {
         self.iosRootURL().appendingPathComponent("Sources/\(relativePath)")
+    }
+
+    private static func swiftSourcesForTypographyAudit() throws -> [URL] {
+        let roots = [
+            self.sourceURL(""),
+            self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI"),
+        ]
+        return roots.flatMap { root -> [URL] in
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: nil)
+            else { return [] }
+            return enumerator.compactMap { item -> URL? in
+                guard let url = item as? URL, url.pathExtension == "swift" else { return nil }
+                return url
+            }
+        }
+        .sorted { $0.path < $1.path }
+    }
+
+    private static func unbrandedTextCallOffenders() throws -> [String] {
+        let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
+        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
+        return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
+            let source = try String(contentsOf: url, encoding: .utf8)
+            let lines = source.components(separatedBy: .newlines)
+            return lines.indices.compactMap { idx -> String? in
+                let rawLine = lines[idx]
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                guard !line.hasPrefix("//") else { return nil }
+                guard !allowedFragments.contains(where: rawLine.contains) else { return nil }
+
+                let window = lines[idx..<min(lines.count, idx + 12)].joined(separator: "\n")
+                let hasLocalFont = fontTokens.contains { window.contains($0) }
+                    || self.hasAllowedBrandedFontParameter(window, in: url)
+
+                if self.isTextOrLabelCall(rawLine), !hasLocalFont {
+                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
+                }
+
+                if self.isShorthandControlCall(rawLine), !hasLocalFont {
+                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
+                }
+
+                return nil
+            }
+        }
+    }
+
+    private static func isTextOrLabelCall(_ line: String) -> Bool {
+        line.range(of: #"\b(Text|Label)\s*\("#, options: .regularExpression) != nil
+    }
+
+    private static func isShorthandControlCall(_ line: String) -> Bool {
+        line.range(
+            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup)\s*\(""#,
+            options: .regularExpression) != nil
+    }
+
+    private static func hasAllowedBrandedFontParameter(_ window: String, in url: URL) -> Bool {
+        switch self.relativePath(url) {
+        case "apps/ios/Sources/Design/OpenClawProComponents.swift":
+            window.contains(".font(self.titleFont)") || window.contains(".font(self.subtitleFont)")
+        case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
+            window.contains(".font(self.font)")
+        default:
+            false
+        }
+    }
+
+    private static func relativePath(_ url: URL) -> String {
+        let rootPath = self.iosRootURL()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .path + "/"
+        return url.path.hasPrefix(rootPath) ? String(url.path.dropFirst(rootPath.count)) : url.path
     }
 
     private static func iosRootURL() -> URL {
