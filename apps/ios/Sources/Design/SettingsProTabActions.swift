@@ -427,11 +427,7 @@ extension SettingsProTab {
         } else {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
-            if mode == .always {
-                self.locationStatusText = "Always Allow was not granted. Open iOS Settings → OpenClaw → Location to enable it."
-            } else {
-                self.locationStatusText = "Location permission was not granted. Check iOS Settings → OpenClaw → Location."
-            }
+            self.locationStatusText = "Location permission was not granted. Check iOS Settings > OpenClaw > Location."
             self.refreshLocationPermissionSummary(
                 desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }

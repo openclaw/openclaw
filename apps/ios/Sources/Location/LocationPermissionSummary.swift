@@ -49,7 +49,8 @@ struct LocationPermissionSummary: Equatable {
     }
 
     var detailText: String {
-        switch (
+        let alwaysSettingsHint = "Change it in iOS Settings > OpenClaw > Location."
+        return switch (
             self.desiredMode,
             self.locationServicesEnabled,
             self.authorizationStatus,
@@ -84,11 +85,13 @@ struct LocationPermissionSummary: Equatable {
         case (.always, true, .authorizedAlways, _):
             "Background location requests and significant-change updates are allowed."
         case (.always, true, .authorizedWhenInUse, .fullAccuracy):
-            "Always is selected, but iOS currently allows location only while using the app. Precise Location is on."
+            "Always is selected, but iOS currently allows location only while using the app. " +
+                "\(alwaysSettingsHint) Precise Location is on."
         case (.always, true, .authorizedWhenInUse, .reducedAccuracy):
-            "Always is selected, but iOS currently allows location only while using the app. Precise Location is off."
+            "Always is selected, but iOS currently allows location only while using the app. " +
+                "\(alwaysSettingsHint) Precise Location is off."
         case (.always, true, .authorizedWhenInUse, _):
-            "Always is selected, but iOS currently allows location only while using the app."
+            "Always is selected, but iOS currently allows location only while using the app. \(alwaysSettingsHint)"
         case (_, true, .denied, _):
             "Location permission is denied in iOS Settings."
         case (_, true, .restricted, _):

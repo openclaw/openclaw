@@ -1,4 +1,3 @@
-import CoreLocation
 import OpenClawKit
 import SwiftUI
 
@@ -787,10 +786,6 @@ extension SettingsProTab {
                     .foregroundStyle(
                         self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
 
-                if self.locationModeRaw == OpenClawLocationMode.always.rawValue {
-                    self.locationAlwaysGuidance
-                }
-
                 if let locationPermissionWarningText {
                     Text(locationPermissionWarningText)
                         .font(OpenClawType.caption2)
@@ -799,57 +794,6 @@ extension SettingsProTab {
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    @ViewBuilder
-    private var locationAlwaysGuidance: some View {
-        let osStatus = CLLocationManager().authorizationStatus
-        switch osStatus {
-        case .authorizedAlways:
-            Label {
-                Text("Always Allow is active.")
-            } icon: {
-                Image(systemName: "checkmark.circle")
-            }
-            .font(OpenClawType.caption)
-            .foregroundStyle(OpenClawBrand.ok)
-        case .authorizedWhenInUse:
-            VStack(alignment: .leading, spacing: 6) {
-                Label {
-                    Text("iOS is set to While Using.")
-                        + Text(" Change to Always in Settings for reliable background automations.")
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle")
-                }
-                .font(OpenClawType.caption)
-                .foregroundStyle(OpenClawBrand.warn)
-                self.openSettingsButton
-            }
-        case .denied, .restricted:
-            VStack(alignment: .leading, spacing: 6) {
-                Label {
-                    Text("Location access is denied.")
-                        + Text(" Enable it in Settings.")
-                } icon: {
-                    Image(systemName: "xmark.circle")
-                }
-                .font(OpenClawType.caption)
-                .foregroundStyle(OpenClawBrand.danger)
-                self.openSettingsButton
-            }
-        default:
-            EmptyView()
-        }
-    }
-
-    private var openSettingsButton: some View {
-        Button("Open Settings") {
-            guard let url = URL(
-                string: UIApplication.openSettingsURLString) else { return }
-            UIApplication.shared.open(url)
-        }
-        .font(OpenClawType.caption)
-        .buttonStyle(.bordered)
     }
 
     var agentSelectionCard: some View {
