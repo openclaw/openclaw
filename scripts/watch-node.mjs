@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, BUILD_STAMP_FILE } from "./lib/local-build-metadata.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
@@ -70,6 +71,45 @@ const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
     }
   }
   return !isRestartRelevantRunNodePath(repoPath);
+};
+
+/**
+ * Checks whether the current build output is ready for a hot-reload restart.
+ * The build is considered ready when:
+ *   1. dist/entry.js exists, AND
+ *   2. The build stamp's git HEAD matches the current checkout HEAD
+ *      (so run-node won't need to rebuild and potentially wipe dist/).
+ *
+ * When git is unavailable or the stamp is unreadable, falls back to just
+ * checking entry.js existence (conservative — allows restart when there's
+ * no way to know the build is stale).
+ *
+ * @param {string} cwd
+ * @param {{ existsSync: (p: string) => boolean; readFileSync?: (p: string, e?: string) => string }} fsModule
+ * @param {(opts: { cwd: string }) => string | null} [resolveHead]
+ * @returns {boolean}
+ */
+export const isBuildReadyForRestart = (cwd, fsModule, resolveHead) => {
+  const entryPath = path.join(cwd, "dist", "entry.js");
+  if (!fsModule.existsSync(entryPath)) return false;
+
+  // If readFileSync is not available (e.g. mock in tests), just check entry
+  if (typeof fsModule.readFileSync !== "function") {
+    return true;
+  }
+
+  try {
+    const stampPath = path.join(cwd, "dist", BUILD_STAMP_FILE);
+    if (!fsModule.existsSync(stampPath)) return false;
+    const raw = fsModule.readFileSync(stampPath, "utf8");
+    const stamp = JSON.parse(raw);
+    const currentHead = (resolveHead ?? resolveGitHead)({ cwd });
+    if (currentHead && stamp.head && currentHead !== stamp.head) return false;
+  } catch {
+    return false;
+  }
+
+  return true;
 };
 
 const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
@@ -301,7 +341,6 @@ export async function runWatchMain(params = {}) {
     let shutdownKillTimer = null;
     let pendingRestartCheckTimer = null;
     let restartDeferred = false;
-    let knownEntryMtime = null;
 
     const signalWatchProcess = (child, signal) => {
       if (!child || typeof child.kill !== "function") {
@@ -333,35 +372,12 @@ export async function runWatchMain(params = {}) {
       }
     };
 
-    /** Checks whether the build output entrypoint is present and has fresh mtime. */
-    const isDistEntryFresh = () => {
-      const entryPath = path.join(deps.cwd, "dist", "entry.js");
-      try {
-        const stat = fs.statSync(entryPath);
-        if (!stat.isFile()) {
-          return false;
-        }
-        const currentMtime = stat.mtimeMs;
-        // First check: record mtime and accept. Subsequent checks: mtime must
-        // be newer than the recorded value, otherwise the build output is stale
-        // and restarting would crash-loop into a half-rebuilt dist/.
-        if (knownEntryMtime === null || currentMtime > knownEntryMtime) {
-          knownEntryMtime = currentMtime;
-          return true;
-        }
-        return false;
-      } catch {
-        return false;
-      }
-    };
-
     const clearPendingRestartTimer = () => {
       if (pendingRestartCheckTimer !== null) {
         clearTimeout(pendingRestartCheckTimer);
         pendingRestartCheckTimer = null;
       }
       restartDeferred = false;
-      knownEntryMtime = null;
     };
 
     const settle = (code) => {
@@ -432,6 +448,18 @@ export async function runWatchMain(params = {}) {
           return;
         }
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
+          // Guard: verify build readiness before restarting after child exit.
+          // Without this check, the watcher could crash-loop when the build
+          // is stale for the current checkout (issue #99603).
+          if (!isBuildReadyForRestart(deps.cwd, fs)) {
+            logWatcher(
+              "Build not ready after child exit — settling to avoid crash-loop; " +
+                "supervisor will restart the watcher cleanly",
+              deps,
+            );
+            settle(exitCode ?? 1);
+            return;
+          }
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
           startRunner();
@@ -525,21 +553,21 @@ export async function runWatchMain(params = {}) {
         return;
       }
       if (!watchProcess) {
-        if (isDistEntryFresh()) {
+        if (isBuildReadyForRestart(deps.cwd, fs)) {
           startRunner();
         }
         return;
       }
       // Guard: do not restart into a half-built dist/. If the entrypoint is
-      // missing (mid-rebuild) or stale (mtime unchanged since last restart
-      // request), defer the restart and poll for fresh build output. Without
-      // this check, killing the current healthy process and restarting into
-      // an absent entry causes a crash-loop.
-      if (!isDistEntryFresh()) {
+      // missing (mid-rebuild) or the build stamp git HEAD doesn't match the
+      // current checkout (new git pull), defer the restart and poll for fresh
+      // build output. Without this check, killing the current healthy process
+      // and restarting into an absent/outdated entry causes a crash-loop.
+      if (!isBuildReadyForRestart(deps.cwd, fs)) {
         if (!restartDeferred) {
           restartDeferred = true;
           logWatcher(
-            "Build output missing or stale; deferring restart until fresh build completes.",
+            "Build output missing or stale for current checkout; deferring restart until fresh build completes.",
             deps,
           );
           pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
@@ -560,11 +588,11 @@ export async function runWatchMain(params = {}) {
         return;
       }
       pendingRestartCheckTimer = null;
-      if (!isDistEntryFresh()) {
+      if (!isBuildReadyForRestart(deps.cwd, fs)) {
         pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
         return;
       }
-      logWatcher("dist/entry.js is now ready; triggering deferred restart.", deps);
+      logWatcher("Build output is now ready; triggering deferred restart.", deps);
       restartDeferred = false;
       if (!watchProcess) {
         startRunner();

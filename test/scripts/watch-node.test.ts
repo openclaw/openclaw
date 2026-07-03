@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runWatchMain } from "../../scripts/watch-node.mjs";
+import { isBuildReadyForRestart, runWatchMain } from "../../scripts/watch-node.mjs";
 
 class FakeProcess extends EventEmitter {
   execPath = process.execPath;
@@ -160,10 +160,15 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     });
   };
 
-  it("proceeds with restart when dist/entry.js exists", () => {
+  it("proceeds with restart when dist/entry.js exists and build stamp is present", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
     fs.mkdirSync(path.join(tmpDir, "dist"), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, "dist", "entry.js"), "// test entry");
+    // Build stamp must exist so isBuildReadyForRestart checks pass
+    fs.writeFileSync(
+      path.join(tmpDir, "dist", ".buildstamp"),
+      JSON.stringify({ head: "test-head", builtAt: Date.now() }) + "\n",
+    );
 
     startWatch();
     expect(child.signals).toEqual([]);
@@ -202,7 +207,7 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     expect(child.signals).toEqual([]); // still deferred, no restart
   });
 
-  it("triggers deferred restart when entry.js appears", async () => {
+  it("triggers deferred restart when entry.js and build stamp appear", async () => {
     vi.useFakeTimers();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
 
@@ -210,9 +215,13 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     watcher.emit("change", "src/some-file.ts");
     expect(child.signals).toEqual([]); // deferred
 
-    // Create entry.js now
+    // Create entry.js and build stamp now
     fs.mkdirSync(path.join(tmpDir, "dist"), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, "dist", "entry.js"), "// test entry");
+    fs.writeFileSync(
+      path.join(tmpDir, "dist", ".buildstamp"),
+      JSON.stringify({ head: "test-head", builtAt: Date.now() }) + "\n",
+    );
 
     // Advance past poll interval
     await vi.advanceTimersByTimeAsync(2_001);
@@ -274,5 +283,122 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     // Emit change — should NOT call startRunner() again
     watcher.emit("change", "src/some-file.ts");
     expect(spawnCalls).toHaveLength(1); // still 1, no new spawn
+  });
+
+  // ── isBuildReadyForRestart pure function tests ─────────────────────
+
+  it("isBuildReadyForRestart returns false when entry.js does not exist", () => {
+    const mockFs = { existsSync: vi.fn().mockReturnValue(false) };
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs)).toBe(false);
+    expect(mockFs.existsSync).toHaveBeenCalledWith("/tmp/test-cwd/dist/entry.js");
+  });
+
+  it("isBuildReadyForRestart returns true when entry exists and no readFileSync (fallback)", () => {
+    const mockFs = { existsSync: vi.fn().mockReturnValue(true) };
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs)).toBe(true);
+  });
+
+  it("isBuildReadyForRestart returns false when build stamp HEAD mismatches git HEAD", () => {
+    const readFileSync = vi
+      .fn()
+      .mockReturnValue(
+        JSON.stringify({ head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", builtAt: Date.now() }),
+      );
+    const mockFs = {
+      existsSync: vi.fn((p: string) => p.includes("entry.js") || p.includes(".buildstamp")),
+      readFileSync,
+    };
+    const mockResolveHead = vi.fn().mockReturnValue("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs, mockResolveHead)).toBe(false);
+    expect(mockResolveHead).toHaveBeenCalledWith({ cwd: "/tmp/test-cwd" });
+  });
+
+  it("isBuildReadyForRestart returns true when build stamp HEAD matches git HEAD", () => {
+    const sharedHead = "cccccccccccccccccccccccccccccccccccccccc";
+    const readFileSync = vi
+      .fn()
+      .mockReturnValue(JSON.stringify({ head: sharedHead, builtAt: Date.now() }));
+    const mockFs = {
+      existsSync: vi.fn((p: string) => p.includes("entry.js") || p.includes(".buildstamp")),
+      readFileSync,
+    };
+    const mockResolveHead = vi.fn().mockReturnValue(sharedHead);
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs, mockResolveHead)).toBe(true);
+  });
+
+  it("isBuildReadyForRestart returns false when build stamp file is missing (with readFileSync available)", () => {
+    const readFileSync = vi.fn();
+    const mockFs = {
+      // entry.js exists, .buildstamp does NOT exist
+      existsSync: vi.fn((p: string) => p.includes("entry.js") && !p.includes(".buildstamp")),
+      readFileSync,
+    };
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs)).toBe(false);
+  });
+
+  // ── Exit handler guard tests ──────────────────────────────────────
+
+  it("does not restart after child SIGTERM exit when build not ready", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
+
+    const spawnCalls: number[] = [];
+    child = new FakeChild();
+    fakeProcess = new FakeProcess();
+    watcher = new FakeWatcher();
+
+    void runWatchMain({
+      args: ["gateway"],
+      cwd: tmpDir,
+      createWatcher: () => watcher as never,
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0" },
+      lockDisabled: true,
+      process: fakeProcess as unknown as NodeJS.Process,
+      spawn: () => {
+        spawnCalls.push(1);
+        return child as never;
+      },
+    });
+
+    expect(spawnCalls).toHaveLength(1); // initial startRunner
+
+    // Child exits with SIGTERM (restartable code 143) but build not ready (no entry.js)
+    child.emit("exit", 143, null);
+
+    // Should NOT spawn a new child — exit handler guard settles
+    expect(spawnCalls).toHaveLength(1);
+  });
+
+  it("restarts after child SIGTERM exit when build is ready (guard does not block)", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
+    fs.mkdirSync(path.join(tmpDir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "dist", "entry.js"), "// test entry");
+    fs.writeFileSync(
+      path.join(tmpDir, "dist", ".buildstamp"),
+      JSON.stringify({ head: "test-head", builtAt: Date.now() }) + "\n",
+    );
+
+    const spawnCalls: number[] = [];
+    child = new FakeChild();
+    fakeProcess = new FakeProcess();
+    watcher = new FakeWatcher();
+
+    void runWatchMain({
+      args: ["gateway"],
+      cwd: tmpDir,
+      createWatcher: () => watcher as never,
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0" },
+      lockDisabled: true,
+      process: fakeProcess as unknown as NodeJS.Process,
+      spawn: () => {
+        spawnCalls.push(1);
+        return child as never;
+      },
+    });
+
+    expect(spawnCalls).toHaveLength(1); // initial startRunner
+
+    // Child exits with SIGTERM but build IS ready — should restart
+    child.emit("exit", 143, null);
+    expect(spawnCalls).toHaveLength(2); // restart spawned
   });
 });
