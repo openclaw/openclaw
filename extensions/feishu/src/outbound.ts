@@ -387,13 +387,31 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  // Normalize post-md newlines before routing so chunk/limit decisions
-  // and payload builders see the expanded length. Card mode keeps text
-  // unmodified to preserve structured card formatting.
-  const normalizedText = renderMode === "card" ? text : normalizeFeishuPostMarkdownNewlines(text);
-
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(normalizedText))) {
+  // Decide card routing on the original text so card content is never
+  // modified by post-md newline normalization. Only the post path below
+  // upgrades single newlines to paragraph breaks for Feishu rendering.
+  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
     return sendMarkdownCardFeishu({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+    });
+  }
+
+  // Post-md path: upgrade single newlines to paragraph breaks. Feishu
+  // post messages ignore single \n, so we expand them to \n\n.
+  const normalizedText = normalizeFeishuPostMarkdownNewlines(text);
+
+  // The outbound chunker measures raw text before expansion, so a chunk
+  // that was within the 4000-character boundary can exceed it after
+  // normalization. Re-chunk expanded text before sending so every post
+  // payload stays inside Feishu's content limit.
+  const postLimit = 4000;
+  if (normalizedText.length <= postLimit) {
+    return sendMessageFeishu({
       cfg,
       to,
       text: normalizedText,
@@ -403,14 +421,19 @@ async function sendOutboundText(params: {
     });
   }
 
-  return sendMessageFeishu({
-    cfg,
-    to,
-    text: normalizedText,
-    accountId,
-    replyToMessageId,
-    replyInThread,
-  });
+  const subChunks = chunkTextForOutbound(normalizedText, postLimit);
+  let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
+  for (const chunk of subChunks) {
+    lastResult = await sendMessageFeishu({
+      cfg,
+      to,
+      text: chunk,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+    });
+  }
+  return lastResult!;
 }
 
 async function sendFeishuFallbackPayload(params: {

@@ -736,10 +736,18 @@ export async function editMessageFeishu(params: {
     channel: "feishu",
   });
   const messageText = convertMarkdownTables(text!, tableMode);
-  // Normalize before building the post payload so expanded text length
-  // is visible to Feishu's implicit post-content limit on patch.
+  const normalizedText = normalizeFeishuPostMarkdownNewlines(messageText);
+  // Guard expanded post content against Feishu's implicit content limit
+  // on im.message.patch so a near-limit edit that grows past 4000 chars
+  // after normalization is rejected locally with a clear error.
+  const postLimit = 4000;
+  if (normalizedText.length > postLimit) {
+    throw new Error(
+      `Feishu message edit failed: normalized post content (${normalizedText.length} characters) exceeds ${postLimit}-character limit`,
+    );
+  }
   const payload = buildFeishuPostMessagePayload({
-    messageText: normalizeFeishuPostMarkdownNewlines(messageText),
+    messageText: normalizedText,
   });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
