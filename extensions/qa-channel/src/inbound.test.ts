@@ -190,6 +190,48 @@ describe("handleQaInbound", () => {
     });
   });
 
+  it("escapes control characters in dispatch error logs", async () => {
+    const runtime = createPluginRuntimeMock();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const c1Control = String.fromCharCode(0x9b);
+    const lineSeparator = String.fromCodePoint(0x2028);
+    const paragraphSeparator = String.fromCodePoint(0x2029);
+    vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(
+      new Error(`cleanup\nforged\u001b[31m${c1Control}32m${lineSeparator}next`),
+    );
+    setQaChannelRuntime(runtime);
+
+    try {
+      await handleQaInbound(createQaInboundParams());
+
+      const assembled = firstRunAssembledParams(runtime);
+      await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
+      assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
+        kind: "final",
+      });
+
+      await vi.waitFor(() => {
+        expect(warn).toHaveBeenCalledTimes(2);
+      });
+      assembled.delivery.onError?.(undefined, { kind: "final" });
+      await vi.waitFor(() => {
+        expect(warn).toHaveBeenCalledTimes(3);
+      });
+      const output = warn.mock.calls.flat().join(" ");
+      expect(output).not.toContain("\r");
+      expect(output).not.toContain("\n");
+      expect(output).not.toContain(String.fromCharCode(0x1b));
+      expect(output).not.toContain(c1Control);
+      expect(output).not.toContain(lineSeparator);
+      expect(output).not.toContain(paragraphSeparator);
+      expect(output).toContain("dispatch\\u000d\\u000aforged\\u2029next");
+      expect(output).toContain("cleanup\\u000aforged\\u001b[31m\\u009b32m\\u2028next");
+      expect(output).toContain("[object Undefined]");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("marks group messages that match configured mention patterns", async () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);

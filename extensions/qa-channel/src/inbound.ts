@@ -2,6 +2,7 @@
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   buildAgentMediaPayload,
@@ -95,6 +96,19 @@ function resolveQaGroupConfig(params: {
 }) {
   const groups = params.account.config.groups;
   return groups?.[params.conversationId] ?? groups?.[params.target] ?? groups?.["*"];
+}
+
+function formatQaErrorForLog(error: unknown): string {
+  let escaped = "";
+  const message = formatErrorMessage(error) || Object.prototype.toString.call(error);
+  for (const character of message) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    const isLineSeparator = codePoint === 0x2028 || codePoint === 0x2029;
+    escaped +=
+      isControl || isLineSeparator ? `\\u${codePoint.toString(16).padStart(4, "0")}` : character;
+  }
+  return escaped;
 }
 
 function createQaReplyPreview(params: {
@@ -363,10 +377,10 @@ export async function handleQaInbound(params: {
       onError: (error) => {
         void preview.clear().catch((clearError: unknown) => {
           console.warn(
-            `[qa-channel] failed to clear reply preview after dispatch error: ${String(clearError)}`,
+            `[qa-channel] failed to clear reply preview after dispatch error: ${formatQaErrorForLog(clearError)}`,
           );
         });
-        console.warn(`[qa-channel] reply dispatch failed: ${String(error)}`);
+        console.warn(`[qa-channel] reply dispatch failed: ${formatQaErrorForLog(error)}`);
       },
     },
     replyOptions: {
