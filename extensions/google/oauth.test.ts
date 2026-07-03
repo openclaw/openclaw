@@ -1083,3 +1083,207 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
 });
+
+describe("importOfficialGeminiCliOAuthCredentials", () => {
+  const ENV_KEYS = ["GEMINI_CLI_HOME", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"] as const;
+
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let importOfficialGeminiCliOAuthCredentials: typeof import("./oauth.official-cache.js").importOfficialGeminiCliOAuthCredentials;
+  let requireOfficialGeminiCliOAuthCredentials: typeof import("./oauth.official-cache.js").requireOfficialGeminiCliOAuthCredentials;
+  let setOfficialGeminiCliOAuthCacheFsForTest: typeof import("./oauth.official-cache.js").setOfficialGeminiCliOAuthCacheFsForTest;
+  let clearOfficialGeminiCliOAuthCacheImportForTest: typeof import("./oauth.official-cache.js").clearOfficialGeminiCliOAuthCacheImportForTest;
+
+  beforeAll(async () => {
+    ({
+      importOfficialGeminiCliOAuthCredentials,
+      requireOfficialGeminiCliOAuthCredentials,
+      setOfficialGeminiCliOAuthCacheFsForTest,
+      clearOfficialGeminiCliOAuthCacheImportForTest,
+    } = await import("./oauth.official-cache.js"));
+  });
+
+  beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    for (const key of ENV_KEYS) {
+      delete process.env[key];
+    }
+    clearOfficialGeminiCliOAuthCacheImportForTest();
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    setOfficialGeminiCliOAuthCacheFsForTest();
+  });
+
+  it("imports the official Gemini CLI oauth_creds.json cache", () => {
+    process.env.GEMINI_CLI_HOME = "/mock/gemini-home";
+    process.env.GOOGLE_CLOUD_PROJECT = "proof-project";
+
+    const oauthPath = join("/mock/gemini-home", ".gemini", "oauth_creds.json");
+    const accountsPath = join("/mock/gemini-home", ".gemini", "google_accounts.json");
+
+    setOfficialGeminiCliOAuthCacheFsForTest({
+      homedir: () => "/mock/home",
+      existsSync: (path) => {
+        const value = String(path);
+        return value === oauthPath || value === accountsPath;
+      },
+      readFileSync: (path) => {
+        const value = String(path);
+        if (value === oauthPath) {
+          return JSON.stringify({
+            access_token: "official-access-token",
+            refresh_token: "official-refresh-token",
+            expiry_date: 123456789,
+            id_token: "official-id-token",
+          });
+        }
+        if (value === accountsPath) {
+          return JSON.stringify({ active: "proof@example.test", old: [] });
+        }
+        throw new Error(`unexpected read: ${value}`);
+      },
+    });
+
+    expect(importOfficialGeminiCliOAuthCredentials()).toEqual({
+      access: "official-access-token",
+      refresh: "official-refresh-token",
+      expires: 123456789,
+      idToken: "official-id-token",
+      email: "proof@example.test",
+      projectId: "proof-project",
+      sourcePath: oauthPath,
+    });
+  });
+
+  it("fails with official Gemini CLI login guidance when the cache is absent", () => {
+    process.env.GEMINI_CLI_HOME = "/mock/gemini-home";
+    setOfficialGeminiCliOAuthCacheFsForTest({
+      homedir: () => "/mock/home",
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    });
+
+    expect(() => requireOfficialGeminiCliOAuthCredentials()).toThrow(
+      /Run `gemini`, choose Sign in with Google/,
+    );
+    expect(() => requireOfficialGeminiCliOAuthCredentials()).toThrow(
+      /For headless use, configure GEMINI_API_KEY/,
+    );
+  });
+});
+
+describe("google-gemini-cli provider auth setup", () => {
+  const ENV_KEYS = ["GEMINI_CLI_HOME", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"] as const;
+
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let buildGoogleGeminiCliProvider: typeof import("./gemini-cli-provider.js").buildGoogleGeminiCliProvider;
+  let setOfficialGeminiCliOAuthCacheFsForTest: typeof import("./oauth.official-cache.js").setOfficialGeminiCliOAuthCacheFsForTest;
+  let clearOfficialGeminiCliOAuthCacheImportForTest: typeof import("./oauth.official-cache.js").clearOfficialGeminiCliOAuthCacheImportForTest;
+
+  beforeAll(async () => {
+    ({ buildGoogleGeminiCliProvider } = await import("./gemini-cli-provider.js"));
+    ({ setOfficialGeminiCliOAuthCacheFsForTest, clearOfficialGeminiCliOAuthCacheImportForTest } =
+      await import("./oauth.official-cache.js"));
+  });
+
+  beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    for (const key of ENV_KEYS) {
+      delete process.env[key];
+    }
+    clearOfficialGeminiCliOAuthCacheImportForTest();
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    setOfficialGeminiCliOAuthCacheFsForTest();
+  });
+
+  it("imports the official Gemini CLI cache during provider setup without starting OpenClaw OAuth", async () => {
+    process.env.GEMINI_CLI_HOME = "/mock/gemini-home";
+    process.env.GOOGLE_CLOUD_PROJECT = "proof-project";
+
+    const oauthPath = join("/mock/gemini-home", ".gemini", "oauth_creds.json");
+    const accountsPath = join("/mock/gemini-home", ".gemini", "google_accounts.json");
+
+    setOfficialGeminiCliOAuthCacheFsForTest({
+      homedir: () => "/mock/home",
+      existsSync: (path) => {
+        const value = String(path);
+        return value === oauthPath || value === accountsPath;
+      },
+      readFileSync: (path) => {
+        const value = String(path);
+        if (value === oauthPath) {
+          return JSON.stringify({
+            access_token: "provider-access-token",
+            refresh_token: "provider-refresh-token",
+            expiry_date: 123456789,
+          });
+        }
+        if (value === accountsPath) {
+          return JSON.stringify({ active: "provider@example.test", old: [] });
+        }
+        throw new Error(`unexpected read: ${value}`);
+      },
+    });
+
+    const provider = buildGoogleGeminiCliProvider();
+    const method = provider.auth?.find((auth) => auth.id === "oauth");
+    if (!method) {
+      throw new Error("missing google-gemini-cli OAuth auth method");
+    }
+
+    const result = await method.run({
+      config: {},
+      isRemote: false,
+      openUrl: async () => {
+        throw new Error("provider setup must not open OpenClaw-owned OAuth URL");
+      },
+      runtime: {
+        log: () => {
+          throw new Error("provider setup must not log OpenClaw-owned OAuth URL");
+        },
+      },
+      prompter: {
+        note: async () => {},
+        confirm: async () => true,
+        progress: () => ({
+          update: () => {},
+          stop: () => {},
+        }),
+        text: async () => {
+          throw new Error("provider setup must not prompt for an OpenClaw OAuth redirect URL");
+        },
+      },
+    } as Parameters<typeof method.run>[0]);
+
+    expect(result.profiles).toHaveLength(1);
+    expect(result.profiles[0]?.credential).toMatchObject({
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "provider-access-token",
+      refresh: "provider-refresh-token",
+      expires: 123456789,
+      email: "provider@example.test",
+      projectId: "proof-project",
+    });
+  });
+});

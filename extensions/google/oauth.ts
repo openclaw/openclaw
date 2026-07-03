@@ -9,8 +9,9 @@ import {
   shouldUseManualOAuthFlow,
   waitForLocalCallback,
 } from "./oauth.flow.js";
+import { importOfficialGeminiCliOAuthCredentials } from "./oauth.official-cache.js";
 import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
-import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
+import { exchangeCodeForTokens } from "./oauth.token.js";
 
 export { clearCredentialsCache, extractGeminiCliCredentials };
 export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
@@ -97,7 +98,19 @@ async function manualFlow(
 export async function refreshGeminiCliOAuthToken(
   credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
 ): Promise<OAuthCredential> {
-  const refreshed = await refreshTokensForGeminiCli(credentials);
+  const imported = importOfficialGeminiCliOAuthCredentials();
+  const refreshed = imported ?? {
+    access: "",
+    refresh: credentials.refresh,
+    expires: 0,
+    email: credentials.email,
+    projectId: credentials.projectId,
+  };
+  if (!refreshed.access) {
+    throw new Error(
+      "Gemini CLI OAuth refresh now uses the official Gemini CLI credential cache. Run `gemini`, choose Sign in with Google, then retry.",
+    );
+  }
   return {
     type: "oauth",
     provider: "google-gemini-cli",

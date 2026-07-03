@@ -6,6 +6,7 @@ import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { buildGoogleGeminiCliBackend } from "../extensions/google/cli-backend.js";
 import { resolveGeminiCliProfileHome } from "../extensions/google/gemini-cli-auth-home.js";
 import { buildGoogleGeminiCliProvider } from "../extensions/google/gemini-cli-provider.js";
+import { importOfficialGeminiCliOAuthCredentials } from "../extensions/google/oauth.official-cache.js";
 import { buildGoogleProvider } from "../extensions/google/provider-registration.js";
 import { saveAuthProfileStore } from "../src/agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../src/agents/auth-profiles/types.js";
@@ -83,7 +84,11 @@ function installGoogleProofRegistry(stateDir: string) {
 async function main() {
   const previousRegistry = getActivePluginRegistry();
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousGeminiCliHome = process.env.GEMINI_CLI_HOME;
+  const previousGoogleCloudProject = process.env.GOOGLE_CLOUD_PROJECT;
+  const previousGoogleCloudProjectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-auth-proof-"));
+  const officialGeminiHome = path.join(stateDir, "official-gemini-home");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const sessionFile = await createSessionFile(stateDir);
   const googleProfileId = "google:proof-api-key";
@@ -113,6 +118,80 @@ async function main() {
 
   try {
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.GEMINI_CLI_HOME = officialGeminiHome;
+    process.env.GOOGLE_CLOUD_PROJECT = "proof-project";
+    delete process.env.GOOGLE_CLOUD_PROJECT_ID;
+    await fs.mkdir(path.join(officialGeminiHome, ".gemini"), { recursive: true });
+    await fs.writeFile(
+      path.join(officialGeminiHome, ".gemini", "oauth_creds.json"),
+      JSON.stringify(
+        {
+          access_token: secretSentinels.accessToken,
+          refresh_token: secretSentinels.refreshToken,
+          expiry_date: Date.now() + 3_600_000,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(officialGeminiHome, ".gemini", "google_accounts.json"),
+      JSON.stringify({ active: "proof-oauth@example.test", old: [] }, null, 2),
+      "utf8",
+    );
+
+    const importedOfficialGeminiCliCache = importOfficialGeminiCliOAuthCredentials();
+    if (
+      importedOfficialGeminiCliCache?.access !== secretSentinels.accessToken ||
+      importedOfficialGeminiCliCache.refresh !== secretSentinels.refreshToken
+    ) {
+      throw new Error("official Gemini CLI OAuth cache import did not resolve expected tokens");
+    }
+
+    const providerForSetupProof = buildGoogleGeminiCliProvider();
+    const authMethodForSetupProof = providerForSetupProof.auth?.find((auth) => auth.id === "oauth");
+    if (!authMethodForSetupProof) {
+      throw new Error("google-gemini-cli provider did not expose OAuth setup method");
+    }
+    const providerSetupAuthResult = await authMethodForSetupProof.run({
+      config: {},
+      env: process.env,
+      agentDir,
+      workspaceDir: stateDir,
+      isRemote: false,
+      openUrl: async () => {
+        throw new Error("provider setup unexpectedly opened an OpenClaw-owned OAuth URL");
+      },
+      runtime: {
+        log: () => {
+          throw new Error("provider setup unexpectedly logged an OpenClaw-owned OAuth URL");
+        },
+      },
+      prompter: {
+        note: async () => {},
+        confirm: async () => true,
+        progress: () => ({
+          update: () => {},
+          stop: () => {},
+        }),
+        text: async () => {
+          throw new Error(
+            "provider setup unexpectedly prompted for an OpenClaw OAuth callback URL",
+          );
+        },
+      },
+    } as Parameters<typeof authMethodForSetupProof.run>[0]);
+    const providerSetupCredential = providerSetupAuthResult.profiles[0]?.credential;
+    if (
+      providerSetupCredential?.type !== "oauth" ||
+      providerSetupCredential.provider !== "google-gemini-cli" ||
+      providerSetupCredential.access !== secretSentinels.accessToken ||
+      providerSetupCredential.refresh !== secretSentinels.refreshToken
+    ) {
+      throw new Error("google-gemini-cli provider setup did not import official OAuth cache");
+    }
+
     installGoogleProofRegistry(stateDir);
     await fs.mkdir(agentDir, { recursive: true });
     saveAuthProfileStore(store, agentDir);
@@ -214,6 +293,17 @@ async function main() {
         apiKeyPrepared.env?.GEMINI_API_KEY === secretSentinels.apiKey,
       apiKeyProfileSelectedForGoogle: apiKeyContext.effectiveAuthProfileId === googleProfileId,
       oauthProfileSelectedForGeminiCli: oauthContext.effectiveAuthProfileId === oauthProfileId,
+      geminiCliOfficialOAuthCacheImported:
+        importedOfficialGeminiCliCache.access === secretSentinels.accessToken &&
+        importedOfficialGeminiCliCache.refresh === secretSentinels.refreshToken,
+      geminiCliOfficialOAuthAccountImported:
+        importedOfficialGeminiCliCache.email === "proof-oauth@example.test",
+      geminiCliOfficialOAuthProjectImported:
+        importedOfficialGeminiCliCache.projectId === "proof-project",
+      geminiCliProviderSetupImportsOfficialCache:
+        providerSetupCredential.access === secretSentinels.accessToken &&
+        providerSetupCredential.refresh === secretSentinels.refreshToken,
+      geminiCliProviderSetupDoesNotUseOpenClawOAuth: true,
       geminiCliUsesIsolatedAuthHome: oauthGeminiHome === expectedHome,
       inheritedGoogleAuthEnvCleared: [
         "GOOGLE_API_KEY",
@@ -250,6 +340,21 @@ async function main() {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (previousGeminiCliHome === undefined) {
+      delete process.env.GEMINI_CLI_HOME;
+    } else {
+      process.env.GEMINI_CLI_HOME = previousGeminiCliHome;
+    }
+    if (previousGoogleCloudProject === undefined) {
+      delete process.env.GOOGLE_CLOUD_PROJECT;
+    } else {
+      process.env.GOOGLE_CLOUD_PROJECT = previousGoogleCloudProject;
+    }
+    if (previousGoogleCloudProjectId === undefined) {
+      delete process.env.GOOGLE_CLOUD_PROJECT_ID;
+    } else {
+      process.env.GOOGLE_CLOUD_PROJECT_ID = previousGoogleCloudProjectId;
     }
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
     await fs.rm(stateDir, { recursive: true, force: true });

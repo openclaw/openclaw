@@ -18,10 +18,10 @@ const PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const PROVIDER_LABEL = "Gemini CLI OAuth";
 const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ENV_VARS = [
-  "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
-  "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
-  "GEMINI_CLI_OAUTH_CLIENT_ID",
-  "GEMINI_CLI_OAUTH_CLIENT_SECRET",
+  "GEMINI_CLI_HOME",
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_PROJECT_ID",
+  "GEMINI_API_KEY",
 ] as const;
 
 let oauthRuntimeModulePromise: Promise<typeof import("./oauth.runtime.js")> | null = null;
@@ -71,21 +71,10 @@ async function resolveGeminiCliBackendAuthCredential(
     return null;
   }
 
-  const expires = ctx.credential.expires;
-  const expiryIsUsable =
-    typeof expires !== "number" || !Number.isFinite(expires) || expires > Date.now();
-  if (expiryIsUsable) {
-    return buildGeminiCliOAuthCredential(ctx.credential, ctx.profileId);
-  }
-
-  if (!normalizeString(ctx.credential.refresh)) {
-    return null;
-  }
-  const { refreshGeminiCliOAuthToken } = await loadOauthRuntimeModule();
-  return buildGeminiCliOAuthCredential(
-    await refreshGeminiCliOAuthToken(ctx.credential),
-    ctx.profileId,
-  );
+  // Do not refresh with OpenClaw-owned Google OAuth machinery. The Gemini CLI
+  // owns its official OAuth client and can refresh from the staged OAuth cache.
+  // OpenClaw only forwards the selected cached credential envelope.
+  return buildGeminiCliOAuthCredential(ctx.credential, ctx.profileId);
 }
 
 export function buildGoogleGeminiCliProvider(): ProviderPlugin {
@@ -104,35 +93,28 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
         run: async (ctx: ProviderAuthContext) => {
           await ctx.prompter.note(
             [
-              "This is an unofficial integration and is not endorsed by Google.",
-              "Some users have reported account restrictions or suspensions after using third-party Gemini CLI and Antigravity OAuth clients.",
-              "Proceed only if you understand and accept this risk.",
+              "OpenClaw will import credentials created by the official Gemini CLI login.",
+              "It will not start its own Google OAuth client.",
+              "If you have not signed in yet, run `gemini`, choose Sign in with Google, complete login, then return here.",
             ].join("\n"),
-            "Google Gemini CLI caution",
+            "Gemini CLI OAuth import",
           );
 
           const proceed = await ctx.prompter.confirm({
-            message: "Continue with Google Gemini CLI OAuth?",
-            initialValue: false,
+            message: "Import the official Gemini CLI OAuth cache now?",
+            initialValue: true,
           });
           if (!proceed) {
             await ctx.prompter.note("Skipped Google Gemini CLI OAuth setup.", "Setup skipped");
             return { profiles: [] };
           }
 
-          const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
+          const spin = ctx.prompter.progress("Importing Gemini CLI OAuth cache...");
           try {
-            const { loginGeminiCliOAuth } = await loadOauthRuntimeModule();
-            const result = await loginGeminiCliOAuth({
-              isRemote: ctx.isRemote,
-              openUrl: ctx.openUrl,
-              log: (msg) => ctx.runtime.log(msg),
-              note: ctx.prompter.note,
-              prompt: async (message) => ctx.prompter.text({ message }),
-              progress: spin,
-            });
+            const { requireOfficialGeminiCliOAuthCredentials } = await loadOauthRuntimeModule();
+            const result = requireOfficialGeminiCliOAuthCredentials();
 
-            spin.stop("Gemini CLI OAuth complete");
+            spin.stop("Gemini CLI OAuth cache imported");
             return buildOauthProviderAuthResult({
               providerId: PROVIDER_ID,
               defaultModel: DEFAULT_MODEL,
@@ -159,10 +141,10 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
                 : {}),
             });
           } catch (err) {
-            spin.stop("Gemini CLI OAuth failed");
+            spin.stop("Gemini CLI OAuth import failed");
             await ctx.prompter.note(
-              "Trouble with OAuth? Ensure your Google account has Gemini CLI access.",
-              "OAuth help",
+              "Run the official Gemini CLI first: `gemini`, then choose Sign in with Google. For headless setups, use GEMINI_API_KEY with the `google` provider instead.",
+              "Gemini CLI OAuth help",
             );
             throw err;
           }
