@@ -52,6 +52,16 @@ type QaCrablineTransportState = QaTransportState & {
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
 
+function readRecorderLines(text: string, options: { allowIncompleteTail: boolean }): string[] {
+  // Crabline appends each JSONL record asynchronously, so a concurrent read can end mid-record.
+  // Defer only the unterminated tail; newline-terminated malformed records must still fail parsing.
+  const lines = text.split(/\r?\n/u);
+  if (options.allowIncompleteTail && !text.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines.filter((line) => line.trim().length > 0);
+}
+
 function readTelegramLifecycleEvent(params: {
   cursor: number;
   event: unknown;
@@ -217,43 +227,45 @@ function createCrablineState(params: {
   let recorderLineCursor = 0;
   let syncPromise: Promise<void> | null = null;
 
+  const syncRecorderSnapshot = async (options: { allowIncompleteTail: boolean }) => {
+    const text = await fs
+      .readFile(params.adapter.manifest.recorderPath, "utf8")
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return "";
+        }
+        throw error;
+      });
+    const lines = readRecorderLines(text, options);
+    for (const line of lines.slice(recorderLineCursor)) {
+      const parsed = JSON.parse(line) as unknown;
+      if (params.adapter.channel === "telegram") {
+        const lifecycle = readTelegramLifecycleEvent({
+          cursor: outboundEvents.length + 1,
+          event: parsed,
+          messageByProviderId: telegramMessageByProviderId,
+          pendingByChat: pendingTelegramMessagesByChat,
+        });
+        if (lifecycle) {
+          outboundEvents.push(lifecycle);
+        }
+      }
+      const outbound = params.adapter.createOutboundFromRecorderEvent({
+        event: parsed,
+        targetByProviderTarget,
+      }) as QaBusOutboundMessageInput | null;
+      if (outbound) {
+        baseState.addOutboundMessage(outbound);
+      }
+    }
+    recorderLineCursor = lines.length;
+  };
+
   const syncRecorder = async () => {
     if (syncPromise) {
       return await syncPromise;
     }
-    syncPromise = (async () => {
-      const text = await fs
-        .readFile(params.adapter.manifest.recorderPath, "utf8")
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return "";
-          }
-          throw error;
-        });
-      const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-      for (const line of lines.slice(recorderLineCursor)) {
-        const parsed = JSON.parse(line) as unknown;
-        if (params.adapter.channel === "telegram") {
-          const lifecycle = readTelegramLifecycleEvent({
-            cursor: outboundEvents.length + 1,
-            event: parsed,
-            messageByProviderId: telegramMessageByProviderId,
-            pendingByChat: pendingTelegramMessagesByChat,
-          });
-          if (lifecycle) {
-            outboundEvents.push(lifecycle);
-          }
-        }
-        const outbound = params.adapter.createOutboundFromRecorderEvent({
-          event: parsed,
-          targetByProviderTarget,
-        }) as QaBusOutboundMessageInput | null;
-        if (outbound) {
-          baseState.addOutboundMessage(outbound);
-        }
-      }
-      recorderLineCursor = lines.length;
-    })();
+    syncPromise = syncRecorderSnapshot({ allowIncompleteTail: true });
     try {
       await syncPromise;
     } finally {
@@ -276,7 +288,7 @@ function createCrablineState(params: {
       outboundEvents.length = 0;
       recorderLineCursor = await fs
         .readFile(params.adapter.manifest.recorderPath, "utf8")
-        .then((text) => text.split(/\r?\n/u).filter((line) => line.trim().length > 0).length)
+        .then((text) => readRecorderLines(text, { allowIncompleteTail: true }).length)
         .catch(() => 0);
     },
     getSnapshot: baseState.getSnapshot.bind(baseState),
@@ -313,8 +325,11 @@ function createCrablineState(params: {
     },
     async cleanup() {
       clearInterval(interval);
-      await syncRecorder();
       await params.adapter.close();
+      if (syncPromise) {
+        await syncPromise;
+      }
+      await syncRecorderSnapshot({ allowIncompleteTail: false });
     },
   };
 }
