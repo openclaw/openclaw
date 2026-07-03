@@ -1336,8 +1336,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   it("omits JSON-unsupported non-partial chunk fields without reading partial", async () => {
     let partialReads = 0;
     const chunk: Record<string, unknown> = {
-      type: "response.output_text.delta",
-      delta: "hello",
+      type: "metadata",
+      value: "kept",
       ignoredUndefined: undefined,
       ignoredFunction: () => "nope",
     };
@@ -1348,31 +1348,28 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         throw new Error("partial snapshot should not be read");
       },
     });
-
-    const events: unknown[] = [];
+    async function* stream() {
+      yield chunk;
+    }
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      async function* () {
-        yield chunk;
-      },
+      (() => stream()) as unknown as StreamFn,
       {
         runId: "run-json-unsupported",
-        emit: (event) => events.push(event),
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-json-unsupported",
       },
     );
 
-    for await (const _ of wrapped()) {
-      // drain stream
-    }
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
 
-    const completed = events.find(
-      (event): event is { responseStreamBytes: number } =>
-        isRecord(event) && event.type === "model_call.completed",
-    );
-    expect(completed?.responseStreamBytes).toBe(
-      Buffer.byteLength(
-        JSON.stringify({ type: "response.output_text.delta", delta: "hello" }),
-        "utf8",
-      ),
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(
+      Buffer.byteLength(JSON.stringify({ type: "metadata", value: "kept" }), "utf8"),
     );
     expect(partialReads).toBe(0);
   });
