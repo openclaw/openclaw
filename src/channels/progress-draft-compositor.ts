@@ -528,19 +528,21 @@ function mergeReasoningProgressText(
   if (normalizedIncoming === normalizedCurrent) {
     return current;
   }
-  if (normalizedCurrent && normalizedCurrent.startsWith(normalizedIncoming)) {
-    // Incoming is a sub-string of current (partial resend / reconnected retry).
-    // Keep the longer buffer; the missing suffix arrives in the next delta.
-    return current;
-  }
   if (
     options?.snapshot === true ||
     isReasoningSnapshotText(incoming) ||
     (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
     // Snapshot-style providers resend the full reasoning text. Replace the
-    // buffer instead of duplicating the already-seen prefix.
+    // buffer instead of duplicating the already-seen prefix. Must run before
+    // the substring guard below: a snapshot that happens to be a prefix of
+    // the current buffer must still replace it.
     return incoming;
+  }
+  if (normalizedCurrent && normalizedCurrent.startsWith(normalizedIncoming)) {
+    // Incoming is a sub-string of current (partial resend / reconnected retry).
+    // Keep the longer buffer; the missing suffix arrives in the next delta.
+    return current;
   }
   return `${current}${incoming}`;
 }
