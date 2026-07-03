@@ -45,8 +45,8 @@ export function buildGoogleAntigravityCliBackend(): CliBackendPlugin {
       };
     },
     config: {
-      command: "antigravity",
-      args: ["chat", "--mode", "agent", "{prompt}"],
+      command: "agy",
+      args: ["--print", "{prompt}", "--print-timeout", "5m0s"],
       output: "text",
       input: "arg",
       maxPromptArgChars: 8000,
