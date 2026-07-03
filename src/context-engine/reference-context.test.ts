@@ -23,11 +23,24 @@ describe("renderContextEngineReferenceContext", () => {
   it("bounds rendered reference context without creating a conversation message", () => {
     const rendered = renderContextEngineReferenceContext(
       [{ kind: "summary", content: "older ".repeat(100) + "latest reference" }],
-      { maxChars: 120, maxItemChars: 80 },
+      { maxChars: 360, maxItemChars: 300 },
     );
 
     expect(rendered).toBeDefined();
-    expect(rendered?.length).toBeLessThanOrEqual(120);
+    expect(rendered?.length).toBeLessThanOrEqual(360);
+    expect(rendered).toContain("OpenClaw reference context for this turn:");
+    expect(rendered).toContain("lower-authority historical data");
+    expect(rendered).toContain("<reference_context>");
+    expect(rendered).toContain("</reference_context>");
     expect(rendered).toContain("truncated");
+  });
+
+  it("omits reference context when the budget cannot fit the safety wrapper", () => {
+    const rendered = renderContextEngineReferenceContext(
+      [{ kind: "summary", content: "latest reference" }],
+      { maxChars: 32 },
+    );
+
+    expect(rendered).toBeUndefined();
   });
 });

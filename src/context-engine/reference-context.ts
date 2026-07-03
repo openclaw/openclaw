@@ -24,15 +24,19 @@ export function renderContextEngineReferenceContext(
   if (renderedItems.length === 0) {
     return undefined;
   }
-  const rendered = [
+  const prefix = [
     REFERENCE_CONTEXT_HEADER,
     REFERENCE_CONTEXT_SAFETY_NOTE,
     "",
     REFERENCE_CONTEXT_OPEN,
-    renderedItems.join("\n\n"),
-    REFERENCE_CONTEXT_CLOSE,
+    "",
   ].join("\n");
-  return truncateOlderReferenceContext(rendered, maxChars);
+  return truncateOlderReferenceContext({
+    prefix,
+    body: renderedItems.join("\n\n"),
+    suffix: `\n${REFERENCE_CONTEXT_CLOSE}`,
+    maxChars,
+  });
 }
 
 function renderReferenceContextItem(
@@ -87,17 +91,29 @@ function truncateText(text: string, maxChars: number): string {
     : text;
 }
 
-function truncateOlderReferenceContext(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
+function truncateOlderReferenceContext(params: {
+  prefix: string;
+  body: string;
+  suffix: string;
+  maxChars: number;
+}): string | undefined {
+  const frameLength = params.prefix.length + params.suffix.length;
+  if (frameLength > params.maxChars) {
+    return undefined;
   }
-  if (maxChars <= 0) {
-    return "";
+
+  const bodyMaxChars = params.maxChars - frameLength;
+  if (params.body.length <= bodyMaxChars) {
+    return `${params.prefix}${params.body}${params.suffix}`;
   }
-  const marker = `[truncated ${text.length - maxChars} chars from older reference context]\n`;
-  const tailChars = Math.max(0, maxChars - marker.length);
+
+  const marker = `[truncated ${
+    params.body.length - bodyMaxChars
+  } chars from older reference context]\n`;
+  const tailChars = Math.max(0, bodyMaxChars - marker.length);
   if (tailChars <= 0) {
-    return marker.slice(0, maxChars);
+    return `${params.prefix}${marker.slice(0, bodyMaxChars)}${params.suffix}`;
   }
-  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
+  const tail = params.body.slice(params.body.length - tailChars).trimStart();
+  return `${params.prefix}${marker}${tail}${params.suffix}`;
 }
