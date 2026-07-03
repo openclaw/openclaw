@@ -1104,7 +1104,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
       expect(prompt).toContain(
-        "Group/channel etiquette: message-tool-only delivery does not require visible output",
+        "Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private.",
       );
       expect(prompt).toContain("The target defaults to the current source channel");
       expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -1131,7 +1131,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
     expect(prompt).toContain(
-      "Group/channel etiquette: message-tool-only delivery does not require visible output",
+      "Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private.",
     );
     expect(prompt).not.toContain("The target defaults to the current source channel");
   });
