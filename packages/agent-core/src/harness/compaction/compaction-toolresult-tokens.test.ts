@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { estimateTokens } from "./compaction.js";
+import { serializeConversation } from "./utils.js";
 
 const TOOL_OUTPUT = "x".repeat(4000);
 
@@ -8,7 +9,7 @@ const TOOL_OUTPUT = "x".repeat(4000);
 // content block carrying the payload in both `text` and `content` (see
 // extensions/codex/src/app-server/event-projector.ts#createToolResultMessage),
 // rather than as a plain "text" block.
-function codexToolResult(timestamp: number): AgentMessage {
+function codexToolResult(timestamp: number, payload: string = TOOL_OUTPUT): AgentMessage {
   return {
     role: "toolResult",
     toolCallId: "call-1",
@@ -21,8 +22,8 @@ function codexToolResult(timestamp: number): AgentMessage {
         name: "exec",
         toolName: "exec",
         toolCallId: "call-1",
-        content: TOOL_OUTPUT,
-        text: TOOL_OUTPUT,
+        content: payload,
+        text: payload,
       },
     ],
     timestamp,
@@ -44,5 +45,17 @@ describe("estimateTokens tool-result accounting", () => {
     // Payload lives in both `text` and `content`; it must be counted once, so
     // the estimate matches an equivalent plain-text message rather than double.
     expect(tokens).toBe(estimateTokens(userText(TOOL_OUTPUT, 1)));
+  });
+
+  it("renders nested toolResult payloads into the summarization prompt", () => {
+    // The estimator counting these blocks means compaction can drop them, so the
+    // summary prompt must also include their payload or that history is lost
+    // (issue #99375). Serialize a short codex-shaped tool result (under the
+    // summary truncation cap) and assert the payload survives, exactly once.
+    const marker = "codex-tool-output-marker";
+    const serialized = serializeConversation([codexToolResult(1, marker)]);
+
+    expect(serialized).toContain(marker);
+    expect(serialized.split(marker).length - 1).toBe(1);
   });
 });

@@ -109,6 +109,35 @@ function truncateForSummary(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
+/**
+ * Extract tool-result text for the summarization prompt. Mirrors the token
+ * estimator in compaction.ts: besides plain "text" blocks, render the payload of
+ * nested "toolResult" blocks (used by runtimes like the codex app-server, which
+ * store it in `text`/`content`). Without this the summary would omit tool output
+ * that compaction is about to drop, losing that history (issue #99375).
+ */
+function extractToolResultSummaryText(
+  content: Array<{ type: string; text?: string; content?: unknown }>,
+): string {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text" && typeof block.text === "string") {
+      parts.push(block.text);
+    } else if (block.type === "toolResult") {
+      if (typeof block.text === "string" && block.text.length > 0) {
+        parts.push(block.text);
+      } else if (typeof block.content === "string") {
+        parts.push(block.content);
+      } else if (Array.isArray(block.content)) {
+        parts.push(
+          extractToolResultSummaryText(block.content as Array<{ type: string; text?: string }>),
+        );
+      }
+    }
+  }
+  return parts.join("");
+}
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
@@ -154,10 +183,7 @@ export function serializeConversation(messages: Message[]): string {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     } else if (msg.role === "toolResult") {
-      const content = msg.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
+      const content = extractToolResultSummaryText(msg.content);
       if (content) {
         parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }
