@@ -1225,7 +1225,6 @@ export async function runReplyAgent(replyParams: {
     shouldFollowup,
     isActive,
     isRunActive,
-    isStreaming,
     opts,
     typing,
     sessionEntry,
@@ -1312,7 +1311,7 @@ export async function runReplyAgent(replyParams: {
     }
   };
 
-  if (effectiveShouldSteer && isStreaming) {
+  if (effectiveShouldSteer && isActive) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;

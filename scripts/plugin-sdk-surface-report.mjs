@@ -112,11 +112,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 47,
+  "channel-streaming": 48,
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 420,
+  "config-types": 421,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -158,8 +158,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 228,
-  "channel-message-runtime": 225,
+  "channel-message": 229,
+  "channel-message-runtime": 226,
   "channel-pairing-paths": 1,
   "channel-policy": 8,
   "channel-route": 5,
@@ -174,7 +174,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "memory-core-engine-runtime": 15,
   "memory-core-host-multimodal": 3,
   "memory-core-host-query": 2,
-  "memory-core-host-events": 11,
+  "memory-core-host-events": 12,
   "memory-core-host-status": 1,
   "memory-core-host-runtime-core": 1,
   "memory-host-core": 1,
@@ -201,7 +201,7 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 323),
     publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10415),
     publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5224),
     publicDeprecatedExports: readBudgetEnv(

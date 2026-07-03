@@ -316,6 +316,7 @@ type FollowupQueueSummaryState = {
     count: number;
     source: FollowupRun;
     sourceRefs: WeakSet<FollowupRun>;
+    allRoomEvents: boolean;
   }>;
   evictedSummaryCount: number;
 };
@@ -515,12 +516,23 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
+    ...(source.currentInboundEventKind === "room_event"
+      ? { currentInboundEventKind: "room_event" }
+      : {}),
     run: source.run,
   };
 }
 
+function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
+  return sources.length > 0 &&
+    sources.every((source) => source.currentInboundEventKind === "room_event")
+    ? "room_event"
+    : undefined;
+}
+
 async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
+  sources: FollowupRun[];
   prompt: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<void> {
@@ -581,6 +593,7 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
+  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   await params.runFollowup({
     prompt: params.prompt,
     transcriptPrompt: params.prompt,
@@ -589,6 +602,7 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     ...resolveOriginRoutingMetadata([params.source]),
+    ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
 }
 
@@ -631,6 +645,7 @@ async function drainElidedOverflowSummary(params: {
     async () => {
       await runSyntheticOverflowSummary({
         source,
+        sources: entry.allRoomEvents ? [entry.source, ...retainedSources] : [],
         prompt,
         runFollowup: params.runFollowup,
       });
@@ -680,6 +695,7 @@ async function drainOverflowSummaryGroup(params: {
   await runQueueSummaryDelivery(params.queue, delivery, async () => {
     await runSyntheticOverflowSummary({
       source,
+      sources: delivery.sources,
       prompt: delivery.prompt,
       runFollowup: params.runFollowup,
     });

@@ -108,16 +108,16 @@ describe("Ollama provider", () => {
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
 
-  const jsonResponse = (body: unknown, init?: ResponseInit) =>
+  const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
+      status,
       headers: { "content-type": "application/json" },
-      ...init,
     });
 
   const tagsResponse = (names: string[]) =>
     jsonResponse({ models: names.map((name) => createTagModel(name)) });
 
-  const notFoundJsonResponse = () => jsonResponse({}, { status: 404 });
+  const notFoundJsonResponse = () => jsonResponse({}, 404);
 
   const stubTagsFetch = (names: string[] = []) => {
     const fetchMock = vi.fn(async (input: unknown) => {
@@ -327,7 +327,7 @@ describe("Ollama provider", () => {
         return tagsResponse(["qwen3:32b"]);
       }
       if (url.endsWith("/api/show")) {
-        return jsonResponse({}, { status: 500 });
+        return jsonResponse({}, 500);
       }
       return notFoundJsonResponse();
     });

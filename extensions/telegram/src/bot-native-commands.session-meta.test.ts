@@ -233,6 +233,7 @@ type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 type TelegramPluginCommandSpecs = ReturnType<
   NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]>
 >;
+type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLoginFlow"]>;
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
@@ -275,6 +276,7 @@ function registerAndResolveCommandHandlerBase(params: {
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
+  runModelsAuthLoginFlow?: TelegramLoginFlow;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -289,6 +291,7 @@ function registerAndResolveCommandHandlerBase(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -299,6 +302,7 @@ function registerAndResolveCommandHandlerBase(params: {
     getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
+    ...(runModelsAuthLoginFlow ? { runModelsAuthLoginFlow } : {}),
   };
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
@@ -338,6 +342,7 @@ function registerAndResolveCommandHandler(params: {
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
+  runModelsAuthLoginFlow?: TelegramLoginFlow;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -352,6 +357,7 @@ function registerAndResolveCommandHandler(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   } = params;
   return registerAndResolveCommandHandlerBase({
     commandName,
@@ -363,6 +369,7 @@ function registerAndResolveCommandHandler(params: {
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
+    runModelsAuthLoginFlow,
   });
 }
 
@@ -1486,6 +1493,47 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         messageThreadId: 42,
       },
       "plugin command params",
+    );
+  });
+
+  it("passes the target session auth profile to Telegram /login codex", async () => {
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        authProfileOverride: "openai:owner@example.com",
+        sessionId: "sess-main",
+        updatedAt: 1,
+      },
+    });
+    const runModelsAuthLoginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
+      await opts.prompter.note?.(
+        "URL: https://auth.openai.com/codex/device\nCode: ABCD-EFGH",
+        "OpenAI Codex device code",
+      );
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [{ profileId: "openai:owner@example.com", provider: "openai", mode: "oauth" }],
+      };
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "login",
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+      } as OpenClawConfig,
+      allowFrom: ["200"],
+      runModelsAuthLoginFlow,
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "codex", userId: 200 }));
+
+    expect(runModelsAuthLoginFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        method: "device-code",
+        agent: "main",
+        profileId: "openai:owner@example.com",
+      }),
     );
   });
 

@@ -188,7 +188,7 @@ Room events stay strict even when other group requests use automatic replies. Un
 
 Set `historyLimit: 0` to disable group history context.
 
-Supported room-event channels keep recent ambient room messages as context. Discord keeps room-event history until a visible Discord send succeeds, so quiet context is not lost before message-tool delivery.
+Supported room-event channels keep recent ambient room messages as context. Telegram keeps an always-on rolling per-group window bounded by `historyLimit`; user-request turns select entries after the bot's last recorded reply, while room-event turns receive the full recent window so the model can see its own recent posts. The retired Telegram `includeGroupHistoryContext` mode key is removed by `openclaw doctor --fix`.
 
 ## Troubleshooting
 

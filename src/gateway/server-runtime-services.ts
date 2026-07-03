@@ -26,10 +26,12 @@ export type GatewayMaintenanceHandles = NonNullable<
 /** Starts cron without making gateway startup wait for cron initialization. */
 export function startGatewayCronWithLogging(params: {
   cron: { start: () => Promise<void> };
+  afterStart?: () => Promise<void>;
   logCron: { error: (message: string) => void };
 }): void {
   void params.cron
     .start()
+    .then(() => params.afterStart?.())
     .catch((err: unknown) => params.logCron.error(`failed to start: ${String(err)}`));
 }
 

@@ -3851,6 +3851,15 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
+                  replyTarget: state.chatReplyTarget ?? null,
+                  onClearReply: () => {
+                    state.chatReplyTarget = null;
+                    requestHostUpdate?.();
+                  },
+                  onSetReply: (target) => {
+                    state.chatReplyTarget = target;
+                    requestHostUpdate?.();
+                  },
                   onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
@@ -3867,6 +3876,7 @@ export function renderApp(state: AppViewState) {
                         sessionKey: state.sessionKey,
                       });
                       state.chatSideResult = null;
+                      state.chatReplyTarget = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
                         {

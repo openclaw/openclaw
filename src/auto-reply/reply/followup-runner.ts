@@ -495,6 +495,10 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
+      if (queued.currentInboundEventKind === "room_event") {
+        logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+        return;
+      }
       await sendDispatcherPayload({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
@@ -573,6 +577,7 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -666,6 +671,10 @@ export function createFollowupRunner(params: {
           modelId: fallbackModel,
         },
       ) => {
+        if (isRoomEventFollowup()) {
+          logVerbose("followup queue: compaction notice suppressed for room_event");
+          return;
+        }
         const noticePayloads = resolveFollowupDeliveryPayloads({
           cfg: runtimeConfig,
           payloads: [payload],
@@ -756,6 +765,12 @@ export function createFollowupRunner(params: {
           includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
         });
         if (preflightCompactionFailureText) {
+          if (isRoomEventFollowup()) {
+            logVerbose(
+              "followup queue: preflight compaction failure notice suppressed for room_event",
+            );
+            return;
+          }
           await sendFollowupPayloads(
             [
               markReplyPayloadForSourceSuppressionDelivery({
@@ -972,6 +987,11 @@ export function createFollowupRunner(params: {
             // summary tracker so both runners deliver identical durable summaries.
             const deliverFollowupToolSummary = (payload: ReplyPayload) =>
               enqueueProgressDelivery(async () => {
+                // room_event turns are ambient; only an explicit message tool call
+                // may post back into the source chat.
+                if (isRoomEventFollowup()) {
+                  return;
+                }
                 if (
                   run.sourceReplyDeliveryMode === "message_tool_only" &&
                   !shouldEmitToolResultProgress()
@@ -1053,6 +1073,11 @@ export function createFollowupRunner(params: {
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await enqueueProgressDelivery(async () => {
+                      // Mirrors direct dispatch progress suppression: ambient
+                      // room events never get automatic fast-mode notices.
+                      if (isRoomEventFollowup()) {
+                        return;
+                      }
                       await sendFollowupPayloads(
                         [payload],
                         effectiveQueued,

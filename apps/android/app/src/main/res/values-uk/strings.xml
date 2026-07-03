@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Підключення до шлюзу</string>
+    <string name="connect_gateway">Підключити шлюз</string>
+    <string name="disconnect">Відключити</string>
+    <string name="trust_this_gateway">Довіряти цьому шлюзу?</string>
+    <string name="trust_and_continue">Довіряти й продовжити</string>
+    <string name="cancel">Скасувати</string>
+    <string name="endpoint">Кінцева точка</string>
+    <string name="status">Стан</string>
+    <string name="connected_gateway_ready">Ваш шлюз активний і готовий.</string>
+    <string name="connect_gateway_get_started">Підключіться до свого шлюзу, щоб почати.</string>
+    <string name="copy_report_for_claw">Скопіювати звіт для Claw</string>
+    <string name="advanced_controls">Розширені елементи керування</string>
+    <string name="connection_method">Спосіб підключення</string>
+    <string name="setup_code">Код налаштування</string>
+    <string name="manual">Вручну</string>
+    <string name="paste_setup_code">Вставте код налаштування</string>
+    <string name="host">Хост</string>
+    <string name="use_tls">Використовувати TLS</string>
+    <string name="token_optional">Токен (необов’язково)</string>
+    <string name="password">Пароль</string>
+    <string name="run_onboarding_again">Запустити адаптацію знову</string>
+    <string name="resolved_endpoint">Визначена кінцева точка</string>
+    <string name="gateway_setup">Налаштування шлюзу</string>
+    <string name="connect_to_gateway">Підключіться до свого шлюзу</string>
+    <string name="scan_setup_code">Сканувати код налаштування</string>
+    <string name="use_gateway_qr">Використайте QR-код свого шлюзу або код налаштування</string>
+    <string name="nearby_gateway">Шлюз поблизу</string>
+    <string name="enter_gateway_url">Введіть URL-адресу шлюзу</string>
+    <string name="connect_manual_url">Підключитися за допомогою URL-адреси вручну</string>
+    <string name="permissions">Дозволи</string>
+    <string name="done">Готово</string>
+    <string name="gateway_trust_first_seen">Перевірте відбиток сертифіката, перш ніж довіряти цьому шлюзу.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Сертифікат шлюзу змінився. Продовжуйте, лише якщо ви очікували цю зміну.\n\nСтарий SHA-256:\n%1$s\n\nНовий SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Відновлення шлюзу</string>
+</resources>

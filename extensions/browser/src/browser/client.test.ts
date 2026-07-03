@@ -69,14 +69,7 @@ describe("browser client", () => {
   });
 
   it("surfaces non-2xx responses with body text", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 409,
-        text: async () => "conflict",
-      } as unknown as Response),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", { status: 409 })));
 
     await expect(
       browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),

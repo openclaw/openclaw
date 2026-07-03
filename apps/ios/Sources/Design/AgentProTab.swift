@@ -3,7 +3,6 @@ import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
-    @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
@@ -13,7 +12,6 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
-    @State var overviewRefreshNonce: Int = 0
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -81,26 +79,25 @@ struct AgentProTab: View {
             case .ready: "Ready"
             }
         }
+
+        var systemImage: String {
+            switch self {
+            case .all: "person.2"
+            case .online: "antenna.radiowaves.left.and.right"
+            case .ready: "checkmark.circle"
+            }
+        }
     }
 
     enum AgentLayout {
-        static let cardRadius: CGFloat = 12
+        static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
-        static let rowMinHeight: CGFloat = 104
         static let metricTileHeight: CGFloat = 94
-        static let actionButtonSize: CGFloat = 34
     }
 
     enum AgentRosterState: Equatable {
         case online
         case ready
-
-        var title: String {
-            switch self {
-            case .online: "Online"
-            case .ready: "Ready"
-            }
-        }
 
         var color: Color {
             switch self {
@@ -185,7 +182,7 @@ struct AgentProTab: View {
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
     }
 }

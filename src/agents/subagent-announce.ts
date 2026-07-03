@@ -25,6 +25,7 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "../config/sessions.js";
+import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -667,6 +668,9 @@ async function wakeSubagentRunAfterDescendants(params: {
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     preserveFrozenResultFallback: true,
+    // Persist the wake message as the replacement run's task so that any
+    // post-restart redispatch reconstructs the correct prompt.
+    task: wakeMessage,
   });
 }
 
@@ -959,10 +963,24 @@ export async function runSubagentAnnounceFlow(params: {
         if (fallbackReply && !fallbackIsSilent) {
           const cleaned = stripAndClassifyReply(fallbackReply);
           if (cleaned === null) {
+            if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+              logWarn(
+                `cron job completion for session=${targetRequesterSessionKey} ` +
+                  `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                  `the agent replied with the skip sentinel instead of delivering a result`,
+              );
+            }
             return true;
           }
           reply = cleaned;
         } else {
+          if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+            logWarn(
+              `cron job completion for session=${targetRequesterSessionKey} ` +
+                `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
+                `the agent replied with the skip sentinel instead of delivering a result`,
+            );
+          }
           // Do NOT early-return here — fall through to chain-hop accounting
           // below so that token accumulation, chain guards, and tool-delegate
           // consumption still run for silent/skip replies. Without this,
@@ -1661,7 +1679,7 @@ export async function runSubagentAnnounceFlow(params: {
       ...(completionTrace.traceparent ? { traceparent: completionTrace.traceparent } : {}),
     });
     params.onDeliveryResult?.(delivery);
-    didAnnounce = delivery.delivered;
+    didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

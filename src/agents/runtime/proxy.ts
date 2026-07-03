@@ -409,7 +409,10 @@ export function streamProxy(
     } finally {
       try {
         reader?.releaseLock();
-      } catch {}
+      } catch {
+        // Stream handling above already pushed the terminal proxy event;
+        // cleanup failures must not replace it with a secondary release error.
+      }
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }

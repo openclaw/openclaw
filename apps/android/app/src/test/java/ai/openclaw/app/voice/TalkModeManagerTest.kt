@@ -60,6 +60,29 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun beginPushToTalkRejectsNewCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+
+      val error =
+        runCatching { manager.beginPushToTalk(allowNewCapture = false) }
+          .exceptionOrNull()
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
+    }
+
+  @Test
+  fun beginPushToTalkReturnsActiveCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+      setPrivateField(manager, "activePttCaptureId", "capture-1")
+
+      val payload = manager.beginPushToTalk(allowNewCapture = false)
+
+      assertEquals("capture-1", payload.captureId)
+    }
+
+  @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {
     val manager = createManager()
     val final = CompletableDeferred<Boolean>()

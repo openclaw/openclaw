@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { start } from "./service/ops.js";
+import { start, status } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
+import { onTimer } from "./service/timer.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -44,6 +45,7 @@ describe("CronService startup catch-up repair scoping", () => {
   it("keeps the overflow daily-cron catch-up deferral after start()'s maintenance pass", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
     const tomorrowNaturalSlot = Date.parse("2025-12-14T09:00:00.000Z");
 
     await saveCronStore(store.storePath, {
@@ -62,7 +64,7 @@ describe("CronService startup catch-up repair scoping", () => {
       cronEnabled: true,
       storePath: store.storePath,
       log: noopLogger,
-      nowMs: () => startNow,
+      nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -74,6 +76,18 @@ describe("CronService startup catch-up repair scoping", () => {
 
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
     expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
+    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+
+    await status(state);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
+
+    now = startNow + 5_005;
+    await onTimer(state);
+
+    const completed = state.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(completed?.state.lastRunStatus).toBe("ok");
+    expect(completed?.state.nextRunAtMs).toBe(tomorrowNaturalSlot);
+    expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(false);
 
     state.stopped = true;
     await store.cleanup();

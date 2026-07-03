@@ -6,6 +6,8 @@ import {
   buildRelayWebSocketOptions,
   buildRelayWebSocketUrl,
   monitorSlackRelaySource,
+  parseRelayFrame,
+  SlackRelayMalformedFrameError,
   SLACK_RELAY_MAX_PAYLOAD_BYTES,
   type SlackRelayIdentity,
 } from "./relay-source.js";
@@ -18,6 +20,10 @@ function deferred<T>() {
     reject = nextReject;
   });
   return { promise, reject, resolve };
+}
+
+function relayFrame(text: string): Buffer {
+  return Buffer.from(text, "utf8");
 }
 
 describe("Slack relay source", () => {
@@ -196,6 +202,41 @@ describe("Slack relay source", () => {
         }
         resolve();
       });
+    });
+  });
+
+  describe("parseRelayFrame", () => {
+    it("parses valid JSON frames", () => {
+      const frame = parseRelayFrame(
+        relayFrame(JSON.stringify({ type: "slack_event", data: { text: "hello" } })),
+      );
+      expect(frame).toEqual({ type: "slack_event", data: { text: "hello" } });
+    });
+
+    it("throws SlackRelayMalformedFrameError for malformed JSON", () => {
+      expect(() => parseRelayFrame(relayFrame("NOT JSON {{{"))).toThrow(
+        SlackRelayMalformedFrameError,
+      );
+    });
+
+    it("wraps the original SyntaxError as the cause", () => {
+      let error: unknown;
+      try {
+        parseRelayFrame(relayFrame("NOT JSON {{{"));
+      } catch (err: unknown) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
+      expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
+      expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+    });
+
+    it("parses empty object frames", () => {
+      expect(parseRelayFrame(relayFrame("{}"))).toEqual({});
+    });
+
+    it("parses array frames", () => {
+      expect(parseRelayFrame(relayFrame("[1, 2, 3]"))).toEqual([1, 2, 3]);
     });
   });
 });
