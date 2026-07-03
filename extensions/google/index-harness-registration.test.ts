@@ -5,7 +5,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import googlePlugin from "./index.js";
 
-describe("google plugin Gemini CLI harness registration", () => {
+describe("google plugin CLI harness registration", () => {
   function collectGooglePluginRegistrations() {
     const providerIds: string[] = [];
     const cliBackendIds: string[] = [];
@@ -24,25 +24,26 @@ describe("google plugin Gemini CLI harness registration", () => {
     return { providerIds, cliBackendIds };
   }
 
-  it("preserves shipped default Gemini CLI provider and backend registration", () => {
+  it("preserves shipped Google CLI provider and backend registration", () => {
     expect(collectGooglePluginRegistrations()).toEqual({
-      providerIds: ["google-gemini-cli", "google"],
+      providerIds: ["google-gemini-cli", "google-antigravity", "google"],
       cliBackendIds: ["google-gemini-cli"],
     });
   });
 
-  it("keeps default Gemini CLI registration deterministic", () => {
+  it("keeps Google CLI registration deterministic", () => {
     expect(collectGooglePluginRegistrations()).toEqual({
-      providerIds: ["google-gemini-cli", "google"],
+      providerIds: ["google-gemini-cli", "google-antigravity", "google"],
       cliBackendIds: ["google-gemini-cli"],
     });
   });
 
-  it("registers the API-backed Google provider alongside the Gemini CLI runtime", () => {
+  it("registers the API-backed Google provider alongside CLI runtimes", () => {
     const registrations = collectGooglePluginRegistrations();
 
     expect(registrations.providerIds).toContain("google");
     expect(registrations.providerIds).toContain("google-gemini-cli");
+    expect(registrations.providerIds).toContain("google-antigravity");
     expect(registrations.cliBackendIds).toContain("google-gemini-cli");
   });
 });

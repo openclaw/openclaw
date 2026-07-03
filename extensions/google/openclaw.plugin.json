@@ -5,9 +5,9 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["google", "google-gemini-cli", "google-vertex"],
+  "providers": ["google", "google-gemini-cli", "google-antigravity", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google-gemini-cli", "google-antigravity"],
   "modelIdNormalization": {
     "providers": {
       "google": {
