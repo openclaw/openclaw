@@ -199,44 +199,45 @@ struct SettingsProTab: View {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
                 }
             }
-            .sheet(isPresented: self.$showQRScanner) {
-                NavigationStack {
-                    QRScannerView(
-                        onGatewayLink: { link in
-                            self.queueScannedGatewayLink(link)
-                        },
-                        onSetupCode: { code in
-                            self.queueScannedSetupCode(code)
-                        },
-                        onError: { error in
-                            self.showQRScanner = false
-                            self.setupStatusText = "Scanner error: \(error)"
-                            self.scannerError = error
-                        },
-                        onDismiss: {
-                            self.showQRScanner = false
-                        })
-                        .ignoresSafeArea()
-                        .navigationTitle("Scan QR Code")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .font(OpenClawType.body)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    self.showQRScanner = false
-                                } label: {
-                                    Text("Cancel")
-                                        .font(OpenClawType.subheadSemiBold)
+            .sheet(
+                isPresented: self.$showQRScanner,
+                onDismiss: {
+                    self.processQueuedScannerResult()
+                },
+                content: {
+                    NavigationStack {
+                        QRScannerView(
+                            onGatewayLink: { link in
+                                self.queueScannedGatewayLink(link)
+                            },
+                            onSetupCode: { code in
+                                self.queueScannedSetupCode(code)
+                            },
+                            onError: { error in
+                                self.showQRScanner = false
+                                self.setupStatusText = "Scanner error: \(error)"
+                                self.scannerError = error
+                            },
+                            onDismiss: {
+                                self.showQRScanner = false
+                            })
+                            .ignoresSafeArea()
+                            .navigationTitle("Scan QR Code")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .font(OpenClawType.body)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button {
+                                        self.showQRScanner = false
+                                    } label: {
+                                        Text("Cancel")
+                                            .font(OpenClawType.subheadSemiBold)
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
                                 }
-                                .font(OpenClawType.subheadSemiBold)
                             }
-                        }
-                }
-            }
-            .onChange(of: self.showQRScanner) { _, isPresented in
-                guard !isPresented else { return }
-                self.processQueuedScannerResult()
-            }
+                    }
+                })
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,

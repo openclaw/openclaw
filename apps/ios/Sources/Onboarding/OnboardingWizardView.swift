@@ -190,73 +190,77 @@ struct OnboardingWizardView: View {
             Text(self.scannerError ?? "")
                 .font(OpenClawType.subhead)
         }
-        .sheet(isPresented: self.$showQRScanner) {
-                NavigationStack {
-                    QRScannerView(
-                        onGatewayLink: { link in
-                            self.queueScannedLink(link)
-                        },
-                        onSetupCode: { code in
-                            self.queueScannedSetupCode(code)
-                        },
-                        onError: { error in
-                            self.showQRScanner = false
-                            self.statusLine = "Scanner error: \(error)"
-                            self.scannerError = error
-                        },
-                        onDismiss: {
-                            self.showQRScanner = false
-                        })
-                        .ignoresSafeArea()
-                        .navigationTitle("Scan QR Code")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .principal) {
-                                Text("Scan QR Code")
-                                    .font(OpenClawType.headline)
-                            }
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    self.showQRScanner = false
-                                } label: {
-                                    Text("Cancel")
-                                        .font(OpenClawType.subheadSemiBold)
-                                }
-                                .font(OpenClawType.subheadSemiBold)
-                            }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
-                                    Label("Photos", systemImage: "photo")
-                                        .font(OpenClawType.subheadSemiBold)
-                                }
-                                .font(OpenClawType.subheadSemiBold)
-                            }
-                        }
-                }
-                .onChange(of: self.selectedPhoto) { _, newValue in
-                    guard let item = newValue else { return }
-                    self.selectedPhoto = nil
-                    Task {
-                        guard let data = try? await item.loadTransferable(type: Data.self) else {
-                            self.showQRScanner = false
-                            self.scannerError = "Could not load the selected image."
-                            return
-                        }
-                        if let message = self.detectQRCode(from: data) {
-                            if let link = GatewayConnectDeepLink.fromSetupInput(message) {
+        .sheet(
+                isPresented: self.$showQRScanner,
+                onDismiss: {
+                    self.processQueuedScannerResult()
+                },
+                content: {
+                    NavigationStack {
+                        QRScannerView(
+                            onGatewayLink: { link in
                                 self.queueScannedLink(link)
-                                return
+                            },
+                            onSetupCode: { code in
+                                self.queueScannedSetupCode(code)
+                            },
+                            onError: { error in
+                                self.showQRScanner = false
+                                self.statusLine = "Scanner error: \(error)"
+                                self.scannerError = error
+                            },
+                            onDismiss: {
+                                self.showQRScanner = false
+                            })
+                            .ignoresSafeArea()
+                            .navigationTitle("Scan QR Code")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .principal) {
+                                    Text("Scan QR Code")
+                                        .font(OpenClawType.headline)
+                                }
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button {
+                                        self.showQRScanner = false
+                                    } label: {
+                                        Text("Cancel")
+                                            .font(OpenClawType.subheadSemiBold)
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
+                                }
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
+                                        Label("Photos", systemImage: "photo")
+                                            .font(OpenClawType.subheadSemiBold)
+                                    }
+                                }
                             }
-                            if AppleReviewDemoMode.isSetupCode(message) {
-                                self.queueScannedSetupCode(message)
-                                return
-                            }
-                        }
-                        self.showQRScanner = false
-                        self.scannerError = "No valid QR code found in the selected image."
                     }
-                }
-            }
+                    .onChange(of: self.selectedPhoto) { _, newValue in
+                        guard let item = newValue else { return }
+                        self.selectedPhoto = nil
+                        Task {
+                            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                                self.showQRScanner = false
+                                self.scannerError = "Could not load the selected image."
+                                return
+                            }
+                            if let message = self.detectQRCode(from: data) {
+                                if let link = GatewayConnectDeepLink.fromSetupInput(message) {
+                                    self.queueScannedLink(link)
+                                    return
+                                }
+                                if AppleReviewDemoMode.isSetupCode(message) {
+                                    self.queueScannedSetupCode(message)
+                                    return
+                                }
+                            }
+                            self.showQRScanner = false
+                            self.scannerError = "No valid QR code found in the selected image."
+                        }
+                    }
+                })
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let currentProblem = self.currentProblem {
                     GatewayProblemDetailsSheet(
@@ -279,10 +283,6 @@ struct OnboardingWizardView: View {
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
-            }
-            .onChange(of: self.showQRScanner) { _, isPresented in
-                guard !isPresented else { return }
-                self.processQueuedScannerResult()
             }
             .onChange(of: self.manualPortText) { _, newValue in
                 let digits = newValue.filter(\.isNumber)

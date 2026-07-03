@@ -8699,7 +8699,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 220,
+      "line": 225,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -8707,7 +8707,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 245,
+      "line": 246,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset Onboarding?",
       "surface": "apple",
@@ -8715,7 +8715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 249,
+      "line": 250,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset",
       "surface": "apple",
@@ -8723,7 +8723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 253,
+      "line": 254,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -8731,7 +8731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 257,
+      "line": 258,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This disconnects, clears saved gateway credentials, and reopens onboarding.",
       "surface": "apple",
@@ -8739,7 +8739,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 260,
+      "line": 261,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -8747,7 +8747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 267,
+      "line": 268,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -8755,7 +8755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 315,
+      "line": 316,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -8763,7 +8763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 329,
+      "line": 330,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -8771,7 +8771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 337,
+      "line": 338,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -11283,7 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 215,
+      "line": 220,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -11291,7 +11291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 222,
+      "line": 227,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -11299,7 +11299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 229,
+      "line": 234,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Photos",
       "surface": "apple",

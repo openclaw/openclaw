@@ -830,6 +830,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(settingsSource.contains("QRScannerView("))
+        #expect(settingsSource.contains("onDismiss: {\n                    self.processQueuedScannerResult()"))
+        #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
@@ -859,6 +861,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
         #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains("onDismiss: {\n                    self.processQueuedScannerResult()"))
+        #expect(!onboardingSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource
             .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
