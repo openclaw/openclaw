@@ -7,6 +7,10 @@ const PROVIDER_ID = "opencode-go";
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
 
+type ProviderRuntimeModelWithThinkingLevelMap = ProviderRuntimeModel & {
+  thinkingLevelMap?: Record<string, string>;
+};
+
 const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
   [
     {
@@ -30,6 +34,14 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
         supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       },
+      thinkingLevelMap: {
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "max",
+        xhigh: "max",
+        max: "max",
+      },
     },
     {
       id: "deepseek-v4-flash",
@@ -52,8 +64,16 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
         supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       },
+      thinkingLevelMap: {
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "max",
+        xhigh: "max",
+        max: "max",
+      },
     },
-  ] satisfies ProviderRuntimeModel[]
+  ] satisfies ProviderRuntimeModelWithThinkingLevelMap[]
 ).map((model) => normalizeModelCompat(model));
 
 export function listOpencodeGoSupplementalModelCatalogEntries(): ModelCatalogEntry[] {
