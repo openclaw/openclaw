@@ -10,12 +10,13 @@ import type {
   SkillWorkshopActionNotice,
   SkillWorkshopMode,
   SkillWorkshopProposal,
+  SkillWorkshopProposalStatus,
   SkillWorkshopStatusFilter,
-} from "./view.ts";
+} from "../../lib/skill-workshop/index.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
-type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
+type SkillProposalStatus = SkillWorkshopProposalStatus;
 type SkillProposalKind = "create" | "update";
 type SkillProposalScanState = "pending" | "clean" | "failed" | "quarantined";
 

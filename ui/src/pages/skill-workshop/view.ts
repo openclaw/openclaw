@@ -4,56 +4,15 @@ import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal.ts";
 import "../../components/tooltip.ts";
-
-export type SkillWorkshopProposalStatus =
-  | "pending"
-  | "applied"
-  | "rejected"
-  | "quarantined"
-  | "stale";
-
-export type SkillWorkshopFile = {
-  path: string;
-  size: string;
-  contents: string;
-};
-
-export type SkillWorkshopProposal = {
-  key: string;
-  slug: string;
-  name: string;
-  oneLine: string;
-  body: string;
-  status: SkillWorkshopProposalStatus;
-  origin?: {
-    agentId?: string;
-    sessionKey?: string;
-    runId?: string;
-    messageId?: string;
-  };
-  version: number;
-  createdAt: number;
-  updatedAt?: number;
-  recencyGroup: "today" | "yesterday" | "earlier";
-  ageLabel: string;
-  supportFiles: SkillWorkshopFile[];
-  isNew: boolean;
-};
-
-export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
-export type SkillWorkshopAction = "apply" | "revise" | "reject";
-export type SkillWorkshopMode = "board" | "today";
-
-export type SkillWorkshopActionBusy = {
-  key: string;
-  action: SkillWorkshopAction;
-};
-
-export type SkillWorkshopActionNotice = {
-  key: string;
-  label: string;
-  slug: string;
-};
+import {
+  filterSkillWorkshopProposals,
+  type SkillWorkshopAction,
+  type SkillWorkshopActionBusy,
+  type SkillWorkshopActionNotice,
+  type SkillWorkshopMode,
+  type SkillWorkshopProposal,
+  type SkillWorkshopStatusFilter,
+} from "../../lib/skill-workshop/index.ts";
 
 type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
 
@@ -140,7 +99,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
     ? renderWorkshopEmptyState(props)
     : props.mode === "today"
       ? renderToday(props, todayHero, allPending)
-      : renderBoard(props, filtered, groups, selected);
+      : renderBoard(props, groups, selected);
 
   return html`
     <section class="skill-workshop sw-mode-${props.mode}">
@@ -242,11 +201,9 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
 
 function renderBoard(
   props: SkillWorkshopProps,
-  filtered: SkillWorkshopProposal[],
   groups: Array<{ label: string; items: SkillWorkshopProposal[] }>,
   selected: SkillWorkshopProposal | undefined,
 ) {
-  void filtered;
   return html`
     ${renderLifecycleTabs(props)}
     <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
@@ -1072,26 +1029,6 @@ function renderInline(text: string): unknown {
     parts.push(text.slice(last));
   }
   return parts;
-}
-
-export function filterSkillWorkshopProposals(
-  proposals: SkillWorkshopProposal[],
-  statusFilter: SkillWorkshopStatusFilter,
-  query: string,
-): SkillWorkshopProposal[] {
-  const q = query.trim().toLowerCase();
-  return proposals.filter((p) => {
-    if (statusFilter !== "all" && p.status !== statusFilter) {
-      return false;
-    }
-    if (q) {
-      const hay = `${p.name} ${p.oneLine} ${p.slug}`.toLowerCase();
-      if (!hay.includes(q)) {
-        return false;
-      }
-    }
-    return true;
-  });
 }
 
 function groupByRecency(

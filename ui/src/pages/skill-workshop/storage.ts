@@ -1,10 +1,11 @@
+import type { SkillWorkshopMode } from "../../lib/skill-workshop/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
 const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
   "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
 
-export function loadSkillWorkshopMode(): "board" | "today" {
+export function loadSkillWorkshopMode(): SkillWorkshopMode {
   try {
     return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY) === "board" ? "board" : "today";
   } catch {
@@ -12,7 +13,7 @@ export function loadSkillWorkshopMode(): "board" | "today" {
   }
 }
 
-export function saveSkillWorkshopMode(mode: "board" | "today"): void {
+export function saveSkillWorkshopMode(mode: SkillWorkshopMode): void {
   try {
     getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_MODE_KEY, mode);
   } catch {

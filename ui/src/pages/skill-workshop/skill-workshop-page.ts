@@ -9,6 +9,7 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -27,7 +28,6 @@ import {
   saveSkillWorkshopUseCurrentChatForRevisions,
 } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
-import { filterSkillWorkshopProposals } from "./view.ts";
 
 export type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
 
