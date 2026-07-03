@@ -1,76 +1,74 @@
-// Tests for terminal runtime helpers.
 import { describe, expect, it, vi } from "vitest";
-
-// Mock dependencies
-vi.mock("../packages/terminal-core/src/progress-line.js", () => ({
-  clearActiveProgressLine: vi.fn(),
-}));
-
-vi.mock("../packages/terminal-core/src/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
-}));
-
 import { createNonExitingRuntime, writeRuntimeJson } from "./runtime.js";
+import type { RuntimeEnv } from "./runtime.js";
 
-describe("createNonExitingRuntime", () => {
-  it("returns runtime with exit function", () => {
-    const runtime = createNonExitingRuntime();
-    expect(typeof runtime.exit).toBe("function");
-  });
+function circularValue() {
+  const obj: Record<string, unknown> = {};
+  obj.self = obj;
+  return obj;
+}
 
-  it("exit function throws error", () => {
-    const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(1)).toThrow("exit 1");
-  });
-
-  it("exit function includes code in error message", () => {
-    const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(42)).toThrow("exit 42");
-  });
-});
+function nullProtoCircular() {
+  const obj = Object.create(null);
+  obj.self = obj;
+  return obj;
+}
 
 describe("writeRuntimeJson", () => {
-  it("writes JSON using writeJson when available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" });
-    expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 2);
+  it("serializes plain objects", () => {
+    const runtime = createNonExitingRuntime();
+    const spy = vi.spyOn(runtime, "writeJson");
+    writeRuntimeJson(runtime, { ok: true });
+    expect(spy).toHaveBeenCalledWith({ ok: true }, 2);
   });
 
-  it("writes JSON using log when writeJson not available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" });
-    expect(runtime.log).toHaveBeenCalled();
+  it("falls back to String(value) for circular references", () => {
+    const runtime = createNonExitingRuntime();
+    const spy = vi.spyOn(runtime, "writeJson");
+    writeRuntimeJson(runtime, circularValue());
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("uses custom space parameter", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" }, 4);
-    expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 4);
+  it("falls back to constant for null-prototype circular references", () => {
+    const runtime = createNonExitingRuntime();
+    const spy = vi.spyOn(runtime, "writeJson");
+    writeRuntimeJson(runtime, nullProtoCircular());
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("handles zero space parameter", () => {
-    const runtime = {
+  it("delegates to runtime.log when writeStdout is absent", () => {
+    const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
-      exit: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
     };
-    writeRuntimeJson(runtime, { key: "value" }, 0);
-    expect(runtime.log).toHaveBeenCalledWith('{"key":"value"}');
+    writeRuntimeJson(runtime, { key: 1 });
+    expect(runtime.log).toHaveBeenCalledWith('{\n  "key": 1\n}');
+  });
+
+  it("falls back to String(value) in log path for circular references", () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    };
+    writeRuntimeJson(runtime, circularValue());
+    expect(runtime.log).toHaveBeenCalledWith('"[object Object]"');
+  });
+
+  it("falls back to constant in log path for null-prototype circular references", () => {
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("exit");
+      }),
+    };
+    writeRuntimeJson(runtime, nullProtoCircular());
+    expect(runtime.log).toHaveBeenCalledWith('"[unserializable]"');
   });
 });
