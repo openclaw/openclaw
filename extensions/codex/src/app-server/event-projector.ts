@@ -148,6 +148,12 @@ type ToolTranscriptResultInput = {
   isError: boolean;
 };
 
+type ToolProgressEchoSignature = {
+  displayText?: string;
+  rawLength?: number;
+  rawPrefix?: string;
+};
+
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
@@ -169,9 +175,7 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
-  private readonly toolProgressTexts = new Set<string>();
-  private readonly toolProgressEchoTexts = new Set<string>();
-  private readonly toolProgressEchoPrefixes = new Set<string>();
+  private readonly toolProgressEchoesByItem = new Map<string, ToolProgressEchoSignature>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -181,6 +185,7 @@ export class CodexAppServerEventProjector {
     string,
     { chars: number; messages: number; truncated: boolean }
   >();
+  private readonly toolResultOutputPrefixByItem = new Map<string, string>();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
   private readonly toolResultOutputTextOriginalLengthByItem = new Map<string, number>();
   private readonly toolResultOutputTextTruncatedItemIds = new Set<string>();
@@ -1002,12 +1007,17 @@ export class CodexAppServerEventProjector {
     }
     const storedOutput = appendToolOutputDeltaText(
       this.toolResultOutputTextByItem,
+      this.toolResultOutputPrefixByItem,
       this.toolResultOutputTextOriginalLengthByItem,
       this.toolResultOutputTextTruncatedItemIds,
       itemId,
       delta,
     );
-    this.rememberToolProgressEcho(storedOutput.text);
+    this.rememberToolProgressEcho(itemId, {
+      displayText: storedOutput.text,
+      rawLength: storedOutput.originalLength,
+      rawPrefix: storedOutput.rawPrefix,
+    });
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -1648,8 +1658,7 @@ export class CodexAppServerEventProjector {
     if (!text) {
       return;
     }
-    this.toolProgressTexts.add(text);
-    this.rememberToolProgressEcho(rawText);
+    this.rememberToolProgressEcho(params.itemId, { displayText: text, rawText });
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
@@ -2027,27 +2036,54 @@ export class CodexAppServerEventProjector {
   }
 
   private isToolProgressEchoText(text: string): boolean {
-    if (this.toolProgressTexts.has(text) || this.toolProgressEchoTexts.has(text)) {
-      return true;
-    }
-    for (const prefix of this.toolProgressEchoPrefixes) {
-      if (text.startsWith(prefix)) {
+    for (const signature of this.toolProgressEchoesByItem.values()) {
+      if (signature.displayText === text) {
+        return true;
+      }
+      if (
+        signature.rawPrefix &&
+        signature.rawLength !== undefined &&
+        text.length === signature.rawLength &&
+        text.startsWith(signature.rawPrefix)
+      ) {
         return true;
       }
     }
     return false;
   }
 
-  private rememberToolProgressEcho(text: string): void {
-    const normalized = text.trim();
-    if (!normalized) {
+  private rememberToolProgressEcho(
+    itemId: string,
+    signature: {
+      displayText?: string;
+      rawText?: string;
+      rawLength?: number;
+      rawPrefix?: string;
+    },
+  ): void {
+    if (!itemId) {
       return;
     }
-    this.toolProgressEchoTexts.add(normalized);
-    const rawPrefix = rawToolTranscriptPrefix(normalized).trim();
-    if (rawPrefix.length >= TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS) {
-      this.toolProgressEchoPrefixes.add(rawPrefix);
+    const existing = this.toolProgressEchoesByItem.get(itemId) ?? {};
+    const displayText = signature.displayText?.trim();
+    if (displayText) {
+      existing.displayText = displayText;
     }
+    const rawText = signature.rawText?.trim();
+    const rawLength = signature.rawLength ?? rawText?.length;
+    const rawPrefix = signature.rawPrefix?.trim() ?? rawText;
+    const hasExplicitRawSignature =
+      signature.rawLength !== undefined || signature.rawPrefix !== undefined;
+    if (
+      rawLength !== undefined &&
+      rawPrefix &&
+      rawPrefix.length >= TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS &&
+      (hasExplicitRawSignature ? rawLength >= (existing.rawLength ?? 0) : !existing.rawPrefix)
+    ) {
+      existing.rawLength = rawLength;
+      existing.rawPrefix = rawPrefix.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+    }
+    this.toolProgressEchoesByItem.set(itemId, existing);
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
@@ -2756,22 +2792,24 @@ function itemTranscriptResultText(
 
 function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
+  outputPrefixByItem: Map<string, string>,
   originalLengthByItem: Map<string, number>,
   truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
-): { text: string } {
+): { text: string; originalLength: number; rawPrefix: string } {
   const previousOriginalLength =
     originalLengthByItem.get(itemId) ?? outputTextByItem.get(itemId)?.length ?? 0;
   const originalLength = previousOriginalLength + delta.length;
   originalLengthByItem.set(itemId, originalLength);
-  const current = outputTextByItem.get(itemId) ?? "";
-  const next = appendBoundedToolTranscriptText(current, delta, originalLength);
-  outputTextByItem.set(itemId, next);
+  const currentPrefix = outputPrefixByItem.get(itemId) ?? outputTextByItem.get(itemId) ?? "";
+  const next = appendBoundedToolTranscriptText(currentPrefix, delta, originalLength);
+  outputPrefixByItem.set(itemId, next.rawPrefix);
+  outputTextByItem.set(itemId, next.text);
   if (originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     truncatedItemIds.add(itemId);
   }
-  return { text: next };
+  return { text: next.text, originalLength, rawPrefix: next.rawPrefix };
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
@@ -2797,27 +2835,23 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
 }
 
 function appendBoundedToolTranscriptText(
-  current: string,
+  currentPrefix: string,
   delta: string,
   originalLength: number,
-): string {
+): { text: string; rawPrefix: string } {
   if (originalLength <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
-    return current + delta;
+    const rawPrefix = currentPrefix + delta;
+    return { text: rawPrefix, rawPrefix };
   }
   const notice = toolTranscriptTruncationNotice(originalLength);
   if (notice.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
-    return notice.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+    return { text: notice.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS), rawPrefix: "" };
   }
   const textBudget = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - notice.length;
-  const currentPrefix = rawToolTranscriptPrefix(current);
   const remaining = Math.max(0, textBudget - currentPrefix.length);
   const prefix = remaining > 0 ? `${currentPrefix}${delta.slice(0, remaining)}` : currentPrefix;
-  return `${prefix.slice(0, textBudget)}${notice}`;
-}
-
-function rawToolTranscriptPrefix(text: string): string {
-  const noticeIndex = text.lastIndexOf(`\n${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original `);
-  return noticeIndex === -1 ? text : text.slice(0, noticeIndex);
+  const rawPrefix = prefix.slice(0, textBudget);
+  return { text: `${rawPrefix}${notice}`, rawPrefix };
 }
 
 function toolTranscriptTruncationNotice(originalLength: number): string {

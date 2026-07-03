@@ -1018,6 +1018,85 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).not.toContain("tail-should-not-appear");
   });
 
+  it("bounds streamed output echo signatures per tool item", async () => {
+    const projector = await createProjector();
+    const chunks = ["s".repeat(6_000), "t".repeat(6_000), "u".repeat(6_000)];
+    const rawOutput = chunks.join("");
+
+    for (const delta of chunks) {
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-streamed-echo",
+          delta,
+        }),
+      );
+    }
+
+    const echoState = projector as unknown as {
+      toolProgressEchoesByItem: Map<string, { rawLength?: number; rawPrefix?: string }>;
+    };
+    expect(echoState.toolProgressEchoesByItem.size).toBe(1);
+    const signature = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    expect(signature?.rawLength).toBe(rawOutput.length);
+    expect(signature?.rawPrefix?.length).toBeLessThanOrEqual(10_000);
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-streamed-full-output",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-streamed-echo",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+  });
+
+  it("keeps final answers that only start with a streamed tool-output prefix", async () => {
+    const projector = await createProjector();
+    const rawOutput = "s".repeat(12_345);
+    const finalAnswer = `${rawOutput.slice(0, 1_500)}\n\nHere is the explanation after the quoted output.`;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-streamed-prefix",
+        delta: rawOutput,
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-final", text: finalAnswer }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([finalAnswer]);
+    expect(result.lastAssistant).toBeDefined();
+    expect(result.currentAttemptAssistant).toBeDefined();
+  });
+
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
     const projector = await createProjector();
 
@@ -2472,6 +2551,60 @@ describe("CodexAppServerEventProjector", () => {
         output: `${userOutputWithNotice}second line must survive`,
       }),
     );
+  });
+
+  it("does not parse user output as a prior truncation notice when streaming crosses the cap", async () => {
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(await createParams(), {
+      trajectoryRecorder,
+    });
+    const userOutputWithNotice =
+      "before user marker\n...(OpenClaw truncated Codex native tool output: original literal process text)\nsecond line must survive\n";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-user-notice-prefix",
+        delta: userOutputWithNotice,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-user-notice-prefix",
+        delta: "x".repeat(12_000),
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-user-notice-prefix",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const output = (
+      trajectoryRecorder.recordEvent.mock.calls.find(([type]) => type === "tool.result")?.[1] as
+        | { output?: string }
+        | undefined
+    )?.output;
+    expect(output).toHaveLength(10_000);
+    expect(output).toContain("OpenClaw truncated Codex native tool output");
+    expect(output).toContain("original 12124 chars");
+    expect(output).toContain("before user marker");
+    expect(output).toContain("second line must survive");
   });
 
   it("caps streamed command output used for replay when snapshots omit aggregated output", async () => {
