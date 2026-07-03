@@ -98,6 +98,15 @@ function buildSseResponse(events: unknown[]): Response {
   return buildRawSseResponse(sse);
 }
 
+function buildRateLimitResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" },
+    }),
+    { status: 429, headers: { "content-type": "application/json" } },
+  );
+}
+
 function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -479,25 +488,13 @@ describe("google transport stream", () => {
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
-    guardedFetchMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            error: {
-              message: "quota exceeded",
-              status: "RESOURCE_EXHAUSTED",
-            },
-          }),
-          { status: 429, headers: { "content-type": "application/json" } },
-        ),
-      )
-      .mockResolvedValueOnce(
-        buildSseResponse([
-          {
-            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-          },
-        ]),
-      );
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse()).mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
 
     const streamFn = createGoogleGenerativeAiTransportStreamFn();
     const stream = await Promise.resolve(
@@ -527,17 +524,7 @@ describe("google transport stream", () => {
   it("does not rotate OAuth JSON credentials through configured Gemini API keys", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
-    guardedFetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: {
-            message: "quota exceeded",
-            status: "RESOURCE_EXHAUSTED",
-          },
-        }),
-        { status: 429, headers: { "content-type": "application/json" } },
-      ),
-    );
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
 
     const streamFn = createGoogleGenerativeAiTransportStreamFn();
     const stream = await Promise.resolve(
@@ -566,20 +553,38 @@ describe("google transport stream", () => {
     expect(new Headers(init.headers).has("x-goog-api-key")).toBe(false);
   });
 
+  it("does not rotate when request headers override Gemini authentication", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "explicit-option-key",
+          headers: { "x-goog-api-key": "header-key" },
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "header-key" },
+    );
+  });
+
   it("does not rotate global Gemini API keys into custom Gemini endpoints", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
-    guardedFetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: {
-            message: "quota exceeded",
-            status: "RESOURCE_EXHAUSTED",
-          },
-        }),
-        { status: 429, headers: { "content-type": "application/json" } },
-      ),
-    );
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
 
     const streamFn = createGoogleGenerativeAiTransportStreamFn();
     const stream = await Promise.resolve(
@@ -610,17 +615,7 @@ describe("google transport stream", () => {
   it("does not rotate global Gemini API keys into non-TLS Gemini endpoints", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
-    guardedFetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: {
-            message: "quota exceeded",
-            status: "RESOURCE_EXHAUSTED",
-          },
-        }),
-        { status: 429, headers: { "content-type": "application/json" } },
-      ),
-    );
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
 
     const streamFn = createGoogleGenerativeAiTransportStreamFn();
     const stream = await Promise.resolve(

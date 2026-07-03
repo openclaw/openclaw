@@ -800,21 +800,30 @@ function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
   );
 }
 
+function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized === "authorization" || normalized === "x-goog-api-key";
+  });
+}
+
 function collectGoogleTransportApiKeys(params: {
-  baseUrl: string | undefined;
   kind: CanonicalGoogleTransportApi;
-  provider: string;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
   primaryApiKey: string | undefined;
 }): string[] {
   if (
     params.kind !== "google-generative-ai" ||
-    !isOfficialGoogleGenerativeAiBaseUrl(params.baseUrl) ||
-    isGoogleOauthApiKey(params.primaryApiKey)
+    !isOfficialGoogleGenerativeAiBaseUrl(params.model.baseUrl) ||
+    isGoogleOauthApiKey(params.primaryApiKey) ||
+    hasGoogleAuthHeader(params.model.headers) ||
+    hasGoogleAuthHeader(params.options?.headers)
   ) {
     return [];
   }
   return collectProviderApiKeysForExecution({
-    provider: params.provider,
+    provider: params.model.provider,
     primaryApiKey: params.primaryApiKey,
   });
 }
@@ -1296,9 +1305,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           });
         };
         const apiKeys = collectGoogleTransportApiKeys({
-          baseUrl: model.baseUrl,
           kind,
-          provider: model.provider,
+          model,
+          options,
           primaryApiKey: apiKey,
         });
         const sse =
