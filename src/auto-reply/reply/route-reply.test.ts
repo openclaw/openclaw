@@ -11,6 +11,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { formatReasoningMessage } from "../../agents/embedded-agent-utils.js";
+import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
@@ -267,8 +269,43 @@ describe("routeReply", () => {
     await expectSlackNoDelivery({});
   });
 
-  it("suppresses reasoning payloads", async () => {
+  it("suppresses reasoning payloads by default", async () => {
     await expectSlackNoDelivery({ text: "step", isReasoning: true });
+  });
+
+  it("keeps suppressing reasoning payloads when reasoning delivery is disabled", async () => {
+    await expectSlackNoDelivery(
+      { text: "step", isReasoning: true },
+      { reasoningPayloadsEnabled: false },
+    );
+  });
+
+  it("delivers reasoning payloads when reasoning delivery is enabled", async () => {
+    mocks.deliverOutboundPayloads.mockClear();
+    const res = await routeReply({
+      payload: { text: "step", isReasoning: true },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+      reasoningPayloadsEnabled: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    // Converted to a normal renderable message (isReasoning dropped) so it is not
+    // re-suppressed by outbound planning downstream.
+    const delivered = lastDeliveryPayload();
+    expect(delivered.isReasoning).toBeUndefined();
+    expect(String(delivered.text)).toContain("step");
+  });
+
+  it("keeps converted reasoning through the real outbound planner", () => {
+    // Second suppression point (createOutboundPayloadPlan): a payload still marked
+    // isReasoning is dropped, but the converted (formatted, flag-stripped) payload
+    // the enabled route produces is retained.
+    expect(createOutboundPayloadPlan([{ text: "step", isReasoning: true }])).toHaveLength(0);
+    const converted = createOutboundPayloadPlan([{ text: formatReasoningMessage("step") }]);
+    expect(converted.length).toBeGreaterThan(0);
+    expect(String(converted[0]?.payload.text)).toContain("step");
   });
 
   it("drops silent token payloads", async () => {

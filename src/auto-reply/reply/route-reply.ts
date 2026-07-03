@@ -31,6 +31,7 @@ import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
+import { formatReasoningMessage } from "../../agents/embedded-agent-utils.js";
 
 const messageRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/message/runtime.js"),
@@ -103,6 +104,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Whether durable reasoning payloads may be delivered (tri-state /reasoning opt-in). */
+  reasoningPayloadsEnabled?: boolean;
 };
 
 type RouteReplyResult = {
@@ -119,6 +122,22 @@ type RouteReplyResult = {
 };
 
 /**
+ * Converts an opted-in durable reasoning payload into a normal renderable
+ * message: formats the text as reasoning and drops the isReasoning flag. Mirrors
+ * the per-channel conversion the direct-dispatch path applies (e.g.
+ * formatDiscordReasoningPayload) so the payload survives outbound planning, which
+ * otherwise suppresses anything still marked isReasoning.
+ */
+function toRoutedReasoningDeliveryPayload(payload: ReplyPayload): ReplyPayload {
+  const next: ReplyPayload = {
+    ...payload,
+    text: formatReasoningMessage(typeof payload.text === "string" ? payload.text.trim() : ""),
+  };
+  delete next.isReasoning;
+  return next;
+}
+
+/**
  * Routes a reply payload to the specified channel.
  *
  * This function provides a unified interface for sending messages to any
@@ -127,7 +146,18 @@ type RouteReplyResult = {
  * are set.
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  // Durable reasoning is a channel-owned lane. When the session opted in
+  // (reasoningPayloadsEnabled), convert the reasoning payload into a normal
+  // renderable message the same way the direct-dispatch path does per channel
+  // (e.g. formatDiscordReasoningPayload): format the text and drop the isReasoning
+  // flag so it survives outbound planning, which otherwise suppresses any payload
+  // still marked isReasoning (createOutboundPayloadPlan -> shouldSuppressReasoningPayload).
+  // Without the opt-in, keep the historical suppression.
+  const payload =
+    params.reasoningPayloadsEnabled === true && params.payload.isReasoning === true
+      ? toRoutedReasoningDeliveryPayload(params.payload)
+      : params.payload;
   if (shouldSuppressReasoningPayload(payload)) {
     return { ok: true };
   }

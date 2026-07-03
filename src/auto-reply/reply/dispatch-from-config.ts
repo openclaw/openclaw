@@ -1825,6 +1825,7 @@ export async function dispatchReplyFromConfig(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      reasoningPayloadsEnabled: params.replyOptions?.reasoningPayloadsEnabled === true,
     });
   };
 
