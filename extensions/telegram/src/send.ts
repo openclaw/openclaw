@@ -22,7 +22,11 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
-import { buildTypingThreadParams } from "./bot/helpers.js";
+import {
+  buildTypingThreadParams,
+  shouldAllowTelegramThreadlessFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
@@ -84,6 +88,7 @@ import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
+  resolveTelegramTargetChatType,
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
@@ -365,6 +370,7 @@ const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the me
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
@@ -563,6 +569,53 @@ function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
+function isTelegramThreadNotFoundError(err: unknown): boolean {
+  return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+}
+
+function hasMessageThreadIdParam(params?: TelegramThreadScopedParams): boolean {
+  if (!params) {
+    return false;
+  }
+  const value = params.message_thread_id;
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  return false;
+}
+
+function removeMessageThreadIdParam<TParams extends TelegramThreadScopedParams | undefined>(
+  params: TParams,
+): TParams {
+  if (!params || !hasMessageThreadIdParam(params)) {
+    return params;
+  }
+  const next = { ...params };
+  delete next.message_thread_id;
+  return (Object.keys(next).length > 0 ? next : undefined) as TParams;
+}
+
+function resolveTelegramThreadlessFallbackSpec(params: {
+  chatType?: "direct" | "group" | "unknown";
+  resolvedChatId?: string;
+  targetMessageThreadId?: number;
+  messageThreadId?: number;
+}): TelegramThreadSpec {
+  const chatType =
+    params.chatType === "unknown" && params.resolvedChatId
+      ? resolveTelegramTargetChatType(params.resolvedChatId)
+      : params.chatType;
+  const messageThreadId =
+    params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
+  if (chatType === "direct") {
+    return messageThreadId == null ? { scope: "dm" } : { id: messageThreadId, scope: "dm" };
+  }
+  if (chatType === "group") {
+    return messageThreadId == null ? { scope: "none" } : { id: messageThreadId, scope: "forum" };
+  }
+  return messageThreadId == null ? { scope: "none" } : { id: messageThreadId, scope: "none" };
+}
+
 async function withTelegramHtmlParseFallback<T>(params: {
   label: string;
   verbose?: boolean;
@@ -727,6 +780,38 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   );
 }
 
+async function withTelegramThreadFallback<
+  T,
+  TParams extends TelegramThreadScopedParams | undefined,
+>(
+  params: TParams,
+  label: string,
+  verbose: boolean | undefined,
+  allowThreadlessFallback: boolean,
+  attempt: (effectiveParams: TParams, effectiveLabel: string) => Promise<T>,
+): Promise<T> {
+  try {
+    return await attempt(params, label);
+  } catch (err) {
+    // Do not widen this fallback to cover "chat not found".
+    // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
+    if (
+      !allowThreadlessFallback ||
+      !hasMessageThreadIdParam(params) ||
+      !isTelegramThreadNotFoundError(err)
+    ) {
+      throw err;
+    }
+    if (verbose) {
+      sendLogger.warn(
+        `telegram ${label} failed with message_thread_id, retrying without thread: ${formatErrorMessage(err)}`,
+      );
+    }
+    const retriedParams = removeMessageThreadIdParam(params);
+    return await attempt(retriedParams, `${label}-threadless`);
+  }
+}
+
 function createRequestWithChatNotFound(params: {
   requestWithDiag: TelegramRequestWithDiag;
   chatId: string;
@@ -801,6 +886,14 @@ export async function sendMessageTelegram(
           }
         : {}),
     });
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+  );
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
@@ -836,51 +929,58 @@ export async function sendMessageTelegram(
   const sendTelegramTextChunk = async (
     chunk: TelegramTextChunk,
     params?: TelegramSendMessageParams,
-  ) => {
-    const baseParams = params ? { ...params } : {};
-    if (linkPreviewOptions) {
-      baseParams.link_preview_options = linkPreviewOptions;
-    }
-    const plainParams: TelegramSendMessageParams = {
-      ...baseParams,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
-    };
-    const requestSendMessage = (
-      label: string,
-      messageText: string,
-      requestParams: Record<string, unknown>,
-    ) =>
-      withTelegramNativeQuoteFallback({
-        label,
-        requestParams,
-        request: (effectiveParams, retryLabel) =>
-          requestWithChatNotFound(
-            () =>
-              Object.keys(effectiveParams).length > 0
-                ? api.sendMessage(chatId, messageText, effectiveParams)
-                : api.sendMessage(chatId, messageText),
-            retryLabel,
-          ),
-      });
-    const requestPlain = (label: string) =>
-      requestSendMessage(label, chunk.plainText, plainParams ?? {});
-    const result = !chunk.htmlText
-      ? await requestPlain("message")
-      : await withTelegramHtmlParseFallback({
-          label: "message",
-          verbose: opts.verbose,
-          requestHtml: (label) =>
-            requestSendMessage(label, chunk.htmlText ?? chunk.plainText, {
-              parse_mode: "HTML" as const,
-              ...plainParams,
-            }),
-          requestPlain,
-        });
-    return {
-      result: result.result,
-      acceptedParams: toAcceptedThreadScopedParams(result.acceptedParams),
-    };
-  };
+  ) =>
+    withTelegramThreadFallback(
+      params,
+      "message",
+      opts.verbose,
+      allowThreadlessFallback,
+      async (effectiveParams, label) => {
+        const baseParams = effectiveParams ? { ...effectiveParams } : {};
+        if (linkPreviewOptions) {
+          baseParams.link_preview_options = linkPreviewOptions;
+        }
+        const plainParams: TelegramSendMessageParams = {
+          ...baseParams,
+          ...(opts.silent === true ? { disable_notification: true } : {}),
+        };
+        const requestSendMessage = (
+          sendMessageLabel: string,
+          messageText: string,
+          requestParams: Record<string, unknown>,
+        ) =>
+          withTelegramNativeQuoteFallback({
+            label: sendMessageLabel,
+            requestParams,
+            request: (nativeQuoteParams, nativeQuoteLabel) =>
+              requestWithChatNotFound(
+                () =>
+                  Object.keys(nativeQuoteParams).length > 0
+                    ? api.sendMessage(chatId, messageText, nativeQuoteParams)
+                    : api.sendMessage(chatId, messageText),
+                nativeQuoteLabel,
+              ),
+          });
+        const requestPlain = (plainLabel: string) =>
+          requestSendMessage(plainLabel, chunk.plainText, plainParams ?? {});
+        const result = !chunk.htmlText
+          ? await requestPlain(label)
+          : await withTelegramHtmlParseFallback({
+              label,
+              verbose: opts.verbose,
+              requestHtml: (htmlLabel) =>
+                requestSendMessage(htmlLabel, chunk.htmlText ?? chunk.plainText, {
+                  parse_mode: "HTML" as const,
+                  ...plainParams,
+                }),
+              requestPlain,
+            });
+        return {
+          result: result.result,
+          acceptedParams: toAcceptedThreadScopedParams(result.acceptedParams),
+        };
+      },
+    );
 
   const shouldIncludeReplyForChunk = (
     index: number,
@@ -1302,18 +1402,21 @@ export async function sendMessageTelegram(
       sender: (
         effectiveParams: TelegramThreadScopedParams | undefined,
       ) => Promise<TelegramMessageLike>,
+      effectiveMediaParams: TelegramThreadScopedParams = mediaParams,
+      effectivePlainMediaParams: TelegramThreadScopedParams = plainMediaParams,
     ) => {
       if (!htmlCaption || !plainCaption) {
-        return await requestWithChatNotFound(() => sender(mediaParams), label);
+        return await requestWithChatNotFound(() => sender(effectiveMediaParams), label);
       }
       // Same contract as text sends: Telegram HTML parse failures retry once
       // with the already visible plain caption so final media replies survive.
       return await withTelegramHtmlParseFallback({
         label,
         verbose: opts.verbose,
-        requestHtml: (retryLabel) => requestWithChatNotFound(() => sender(mediaParams), retryLabel),
+        requestHtml: (retryLabel) =>
+          requestWithChatNotFound(() => sender(effectiveMediaParams), retryLabel),
         requestPlain: (retryLabel) =>
-          requestWithChatNotFound(() => sender(plainMediaParams), retryLabel),
+          requestWithChatNotFound(() => sender(effectivePlainMediaParams), retryLabel),
       });
     };
 
@@ -1403,7 +1506,27 @@ export async function sendMessageTelegram(
       };
     })();
 
-    const result = await sendMedia(mediaSender.label, mediaSender.sender);
+    const result = await withTelegramThreadFallback(
+      mediaParams,
+      mediaSender.label,
+      opts.verbose,
+      allowThreadlessFallback,
+      async (effectiveParams, retryLabel) => {
+        // Keep message_thread_id on the caption parse fallback so topic-scoped
+        // media stays in the forum topic. withTelegramThreadFallback already
+        // strips the thread for the thread-not-found retry via effectiveParams;
+        // mirror that state onto the plain-caption fallback.
+        const effectivePlainMediaParams = hasMessageThreadIdParam(effectiveParams)
+          ? plainMediaParams
+          : removeMessageThreadIdParam(plainMediaParams);
+        return await sendMedia(
+          retryLabel,
+          mediaSender.sender,
+          effectiveParams,
+          effectivePlainMediaParams,
+        );
+      },
+    );
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
@@ -2080,6 +2203,14 @@ export async function sendStickerTelegram(
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+  );
 
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
@@ -2096,9 +2227,13 @@ export async function sendStickerTelegram(
 
   const stickerParams = hasThreadParams ? threadParams : undefined;
 
-  const result = await requestWithChatNotFound(
-    () => api.sendSticker(chatId, fileId.trim(), stickerParams),
+  const result = await withTelegramThreadFallback(
+    stickerParams,
     "sticker",
+    opts.verbose,
+    allowThreadlessFallback,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(() => api.sendSticker(chatId, fileId.trim(), effectiveParams), label),
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
@@ -2199,10 +2334,25 @@ export async function sendPollTelegram(
     ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+  );
 
-  const result = await requestWithChatNotFound(
-    () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, pollParams),
+  const result = await withTelegramThreadFallback(
+    pollParams,
     "poll",
+    opts.verbose,
+    allowThreadlessFallback,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(
+        () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),
+        label,
+      ),
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");

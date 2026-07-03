@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  shouldAllowTelegramThreadlessFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -44,6 +48,19 @@ const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
 // the first verbose commentary). The delete is scheduled DETACHED so the turn is
 // never stalled waiting on the dwell.
 const MIN_PREVIEW_DWELL_MS = 4_000;
+const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+
+type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+
+function hasNumericMessageThreadId(
+  params: TelegramSendMessageParams | undefined,
+): params is TelegramSendMessageParams & { message_thread_id: number } {
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
+  );
+}
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -265,30 +282,66 @@ export function createTelegramDraftStream(params: {
     preview: TelegramDraftPreview;
     sendGeneration: number;
   };
-  const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
+  const sendRenderedMessage = async (
+    preview: TelegramDraftPreview,
+    overrideSendMessageParams?: typeof sendMessageParams,
+    overrideRichMessageParams?: typeof richMessageParams,
+  ) => {
+    const effectiveSendMessageParams = overrideSendMessageParams ?? sendMessageParams;
+    const effectiveRichMessageParams = overrideRichMessageParams ?? richMessageParams;
     if (richMessages) {
       return await getTelegramRichRawApi(params.api).sendRichMessage({
         chat_id: chatId,
         rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        ...richMessageParams,
+        ...effectiveRichMessageParams,
       });
     }
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
-      await params.api.sendMessage(chatId, transportPreview.plainText, sendMessageParams);
+      await params.api.sendMessage(chatId, transportPreview.plainText, effectiveSendMessageParams);
     if (transportPreview.parseMode !== "HTML") {
       return await sendPlain();
     }
     try {
       return await params.api.sendMessage(chatId, transportPreview.text, {
         parse_mode: "HTML" as const,
-        ...sendMessageParams,
+        ...effectiveSendMessageParams,
       });
     } catch (err) {
       if (!isTelegramHtmlParseError(err)) {
         throw err;
       }
       return await sendPlain();
+    }
+  };
+  // Stale forum topic threads fail closed unless policy allows threadless
+  // fallback (General topic id=1 or DM). Wrong-surface success is worse than
+  // a loud Telegram error for explicit non-General forum topics.
+  const sendRenderedMessageWithThreadFallback = async (
+    preview: TelegramDraftPreview,
+  ): Promise<Awaited<ReturnType<typeof sendRenderedMessage>>> => {
+    const usedThreadParams = hasNumericMessageThreadId(
+      richMessages ? richMessageParams : sendMessageParams,
+    );
+    try {
+      return await sendRenderedMessage(preview);
+    } catch (err) {
+      if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(formatErrorMessage(err))) {
+        throw err;
+      }
+      if (!shouldAllowTelegramThreadlessFallback(params.thread)) {
+        throw err;
+      }
+      const threadlessSendMessageParams = { ...sendMessageParams };
+      delete (threadlessSendMessageParams as { message_thread_id?: number }).message_thread_id;
+      const threadlessRichMessageParams = { ...richMessageParams };
+      delete (threadlessRichMessageParams as { message_thread_id?: number }).message_thread_id;
+      params.warn?.("telegram stream preview message_thread_id not found, retrying without thread");
+      return await sendRenderedMessage(
+        preview,
+        threadlessSendMessageParams,
+        threadlessRichMessageParams,
+      );
     }
   };
   const sendMessageTransportPreview = async ({
@@ -325,7 +378,7 @@ export function createTelegramDraftStream(params: {
     messageSendAttempted = true;
     let sent: Awaited<ReturnType<typeof sendRenderedMessage>>;
     try {
-      sent = await sendRenderedMessage(preview);
+      sent = await sendRenderedMessageWithThreadFallback(preview);
     } catch (err) {
       if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;
@@ -632,7 +685,11 @@ export function createTelegramDraftStream(params: {
     // Rewind WITHOUT deleting; the old id is captured above.
     resetStreamToNewMessage();
     if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
-      scheduleDetachedDelete(supersededMessageId, supersededVisibleSince, REPOSITION_DELETE_DELAY_MS);
+      scheduleDetachedDelete(
+        supersededMessageId,
+        supersededVisibleSince,
+        REPOSITION_DELETE_DELAY_MS,
+      );
       return supersededMessageId;
     }
     return undefined;
@@ -651,9 +708,7 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
-  const finalizeToPreview = async (
-    preview: TelegramDraftPreview,
-  ): Promise<number | undefined> => {
+  const finalizeToPreview = async (preview: TelegramDraftPreview): Promise<number | undefined> => {
     const text = preview.text.trimEnd();
     if (!text) {
       return undefined;

@@ -29,6 +29,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import {
   resolveSourceDeliveryOutcome,
   type SourceDeliveryOutcome,
@@ -42,6 +43,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -323,6 +325,36 @@ function buildCronDeliveryTrace(params: {
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
+}
+
+function applyExplicitCronDeliveryRouteToSession(params: {
+  cfg: OpenClawConfig;
+  cronSession: MutableCronSession;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+}) {
+  if (!params.resolvedDelivery.ok || params.resolvedDelivery.mode !== "explicit") {
+    return;
+  }
+  const deliveryFields = normalizeSessionDeliveryFields({
+    deliveryContext: {
+      channel: params.resolvedDelivery.channel,
+      to: params.resolvedDelivery.to,
+      accountId: params.resolvedDelivery.accountId,
+      threadId: params.resolvedDelivery.threadId,
+    },
+  });
+  if (!deliveryFields.deliveryContext) {
+    return;
+  }
+  Object.assign(params.cronSession.sessionEntry, deliveryFields);
+
+  const inferredChatType = resolveOutboundChannelPlugin({
+    channel: params.resolvedDelivery.channel,
+    cfg: params.cfg,
+  })?.messaging?.inferTargetChatType?.({ to: params.resolvedDelivery.to });
+  if (inferredChatType === "direct" || inferredChatType === "group") {
+    params.cronSession.sessionEntry.chatType = inferredChatType;
+  }
 }
 
 function canPromptForMessageTool(params: {
@@ -846,6 +878,11 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+  applyExplicitCronDeliveryRouteToSession({
+    cfg: cfgWithAgentDefaults,
+    cronSession,
+    resolvedDelivery,
+  });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const message = resolveCronAgentTurnMessage(input);
