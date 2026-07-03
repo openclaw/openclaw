@@ -53,4 +53,26 @@ describe("readLastGatewayErrorLine", () => {
       "failed to bind gateway socket EADDRINUSE",
     );
   });
+
+  it("ignores stale stdout errors outside the bounded diagnostic tail", async () => {
+    const stateDir = makeTempStateDir();
+    const homeDir = makeTempStateDir();
+    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
+    const stateLogs = resolveGatewayLogPaths(env);
+    fs.mkdirSync(stateLogs.logDir, { recursive: true });
+    fs.writeFileSync(
+      stateLogs.stdoutPath,
+      [
+        "gateway start blocked: stale prior reason",
+        "non-error filler line\n".repeat(20_000),
+        "gateway stdout current",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
+      "gateway stdout current",
+    );
+  });
 });

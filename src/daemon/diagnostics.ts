@@ -11,9 +11,27 @@ const GATEWAY_LOG_ERROR_PATTERNS = [
   /tailscale .* requires/i,
 ];
 
+const GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES = 256 * 1024;
+
+async function readLogTail(filePath: string): Promise<string> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0) {
+      return "";
+    }
+    const bytesToRead = Math.min(stat.size, GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, stat.size - bytesToRead);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readLastLogLine(filePath: string): Promise<string | null> {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
+    const raw = await readLogTail(filePath);
     const lines = raw.split(/\r?\n/).map((line) => line.trim());
     for (let i = lines.length - 1; i >= 0; i -= 1) {
       if (lines[i]) {
@@ -38,8 +56,8 @@ export async function readLastGatewayErrorLine(
     platform === "darwin"
       ? resolveGatewaySupervisorLogPaths(env, { platform })
       : resolveGatewayLogPaths(env);
-  const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
-  const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
+  const stderrRaw = readStderr ? await readLogTail(stderrPath).catch(() => "") : "";
+  const stdoutRaw = await readLogTail(stdoutPath).catch(() => "");
   // stderr is the strongest failure signal on non-darwin platforms, so place it
   // last and scan from the end: the most recent stderr error line then wins over
   // any (possibly stale) stdout match, matching the stderr-first fallback below.
