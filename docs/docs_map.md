@@ -6592,6 +6592,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/sherpa-onnx-tts.md
+
+- Route: /plugins/reference/sherpa-onnx-tts
+- Headings:
+  - H1: Sherpa Onnx TTS plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/signal.md
 
 - Route: /plugins/reference/signal
@@ -8019,7 +8027,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tools and skills
   - H2: Backup tip (recommended)
   - H2: What OpenClaw does
-  - H2: Core skills (enable in Settings → Skills)
+  - H2: Bundled and plugin skills (enable in Settings → Skills)
   - H2: Usage notes
   - H2: Related
 
