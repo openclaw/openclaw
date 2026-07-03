@@ -27,14 +27,14 @@ describe("google plugin CLI harness registration", () => {
   it("preserves shipped Google CLI provider and backend registration", () => {
     expect(collectGooglePluginRegistrations()).toEqual({
       providerIds: ["google-gemini-cli", "google-antigravity", "google"],
-      cliBackendIds: ["google-gemini-cli"],
+      cliBackendIds: ["google-antigravity", "google-gemini-cli"],
     });
   });
 
   it("keeps Google CLI registration deterministic", () => {
     expect(collectGooglePluginRegistrations()).toEqual({
       providerIds: ["google-gemini-cli", "google-antigravity", "google"],
-      cliBackendIds: ["google-gemini-cli"],
+      cliBackendIds: ["google-antigravity", "google-gemini-cli"],
     });
   });
 
