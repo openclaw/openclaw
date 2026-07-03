@@ -160,6 +160,15 @@
     "type": "function"
   },
   {
+    "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "agents_list",
+    "type": "function"
+  },
+  {
     "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
     "inputSchema": {
       "properties": {
@@ -1123,16 +1132,6 @@
           "type": "object"
         },
         "name": "gateway",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
-        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
-        "inputSchema": {
-          "properties": {},
-          "type": "object"
-        },
-        "name": "agents_list",
         "type": "function"
       },
       {

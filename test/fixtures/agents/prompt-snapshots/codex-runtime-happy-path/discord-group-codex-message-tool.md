@@ -88,13 +88,13 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
     "message",
+    "agents_list",
     "sessions_spawn",
     "sessions_yield",
     "nodes",
     "cron",
     "tts",
     "gateway",
-    "agents_list",
     "sessions_list",
     "sessions_history",
     "sessions_send",
@@ -227,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50461,
-    "roughTokens": 12616
+    "chars": 50395,
+    "roughTokens": 12599
   },
   "openClawDeveloperInstructions": {
-    "chars": 3058,
-    "roughTokens": 765
+    "chars": 3045,
+    "roughTokens": 762
   },
   "totalTextOnly": {
-    "chars": 27676,
-    "roughTokens": 6919
+    "chars": 27663,
+    "roughTokens": 6916
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78139,
-    "roughTokens": 19535
+    "chars": 78060,
+    "roughTokens": 19515
   },
   "userInputText": {
     "chars": 1535,
@@ -427,7 +427,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
@@ -560,13 +560,13 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 ```json
 [
   "message",
+  "agents_list",
   "sessions_spawn",
   "sessions_yield",
   "nodes",
   "cron",
   "tts",
   "gateway",
-  "agents_list",
   "sessions_list",
   "sessions_history",
   "sessions_send",

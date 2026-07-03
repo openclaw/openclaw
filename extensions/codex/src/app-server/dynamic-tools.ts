@@ -357,7 +357,7 @@ export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 // is unavailable or resolves a connector-only universe. Developer instructions
 // still steer normal Codex subagents to native spawn_agent.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
-  HEARTBEAT_RESPONSE_TOOL_NAME,
+  "agents_list",
   "sessions_spawn",
   "sessions_yield",
 ]);
@@ -435,6 +435,9 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
+  if (availableTools.some((entry) => entry.name === HEARTBEAT_RESPONSE_TOOL_NAME)) {
+    directToolNames.add(HEARTBEAT_RESPONSE_TOOL_NAME);
+  }
   return {
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
