@@ -63,5 +63,11 @@ export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 export { withTempDir } from "../test-utils/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 export { withServer } from "./test-helpers/http-test-server.js";
+export {
+  startLoopbackByteStreamServer,
+  type LoopbackByteStreamServer,
+  type LoopbackByteStreamOptions,
+  type LoopbackByteStreamStats,
+} from "./test-helpers/stream-byte-guard-loopback-server.js";
 export { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
 export { withTempHome } from "./test-helpers/temp-home.js";

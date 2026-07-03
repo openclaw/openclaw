@@ -121,6 +121,7 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `setActivePluginRegistry`                            | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`   |
 | `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                                                     |
 | `withServer`                                         | Run tests against a disposable local HTTP server. Import from `plugin-sdk/test-env`                                                      |
+| `startLoopbackByteStreamServer`                      | Stream a chunked byte loopback body for bounded-reader proof tests. Import from `plugin-sdk/test-env`                                    |
 | `createMockIncomingRequest`                          | Build a minimal incoming HTTP request object. Import from `plugin-sdk/test-env`                                                          |
 | `withFetchPreconnect`                                | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                       |
 | `withEnv` / `withEnvAsync`                           | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                                               |
