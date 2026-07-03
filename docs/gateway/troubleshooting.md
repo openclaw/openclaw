@@ -458,6 +458,81 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## reply session initialization conflicted (concurrent gateway processes)
+
+Use this when a turn fails with `reply session initialization conflicted for <sessionKey>`, or the TUI shows `gateway disconnected: closed | idle` right after a `run error`, while `openclaw gateway status` still reports the runtime as running. This is an optimistic-concurrency conflict in the session store, almost always caused by two gateway processes sharing one state directory and port.
+
+The reply flow reads a session entry, computes a revision, runs the turn, then commits. If another writer mutates the session store between read and commit, the commit returns `stale-snapshot`, retries once, and if it is still stale it throws `reply session initialization conflicted`. The second writer is typically a second gateway process: an orphaned instance, a duplicate launchd/systemd KeepAlive job, or a separate supervisor (for example a `hermes` `gateway run --replace` job) that keeps restarting OpenClaw.
+
+```bash
+launchctl list | grep -i gateway          # macOS; Linux: systemctl --user list-units | grep gateway
+lsof -nP -iTCP:18789 | grep LISTEN        # default loopback gateway port
+ps aux | grep openclaw | grep gateway | grep -v grep
+ls -lt ~/.openclaw/tmp/*/gateway.*.lock    # lock claims a pid; compare to running pids
+tail -5 ~/.openclaw/logs/gateway-restart.log
+openclaw logs --follow
+```
+
+Look for:
+
+- Two or more `openclaw ... gateway` processes at once. Often one has `PPID 1` (an orphan no longer tracked by launchd/systemd) while a freshly launched supervisor instance sits beside it.
+- The supervisor PID, the PID owning port `18789`, and the PID inside the gateway lock file do **not** match. That split is the direct cause of the concurrent writes.
+- A gateway lock file whose claimed PID is dead (stale lock), or a PID that keeps changing every few seconds.
+- A second KeepAlive supervisor managing a gateway, such as an `ai.hermes.gateway` job running `gateway run --replace`, whose last exit is `-15` (SIGTERM) in a restart loop.
+- Repeated startup banners in the gateway log and frequent entries in `gateway-restart.log` even when you did not run an update.
+
+Common signatures:
+
+- `reply session initialization conflicted for <sessionKey>` as a `run error` in the TUI, followed by `gateway disconnected: closed | idle`.
+- `stale-snapshot` in the session commit path (gateway log at higher verbosity) after a restart mid-turn.
+- `another gateway instance is already listening` or `EADDRINUSE` in the gateway log from instances that spawned while the port was held.
+- `Other gateway-like services detected (best effort)` from `openclaw doctor --deep`.
+
+<Steps>
+  <Step title="Decide which supervisor owns the gateway">
+    Keep exactly one supervisor (for example `ai.openclaw.gateway`) and one state directory per machine. If you run a separate gateway system such as `hermes`, it must not manage the OpenClaw process.
+  </Step>
+  <Step title="Disable the redundant supervisor">
+    On macOS:
+
+    ```bash
+    launchctl bootout gui/$UID/ai.hermes.gateway
+    mv ~/Library/LaunchAgents/ai.hermes.gateway.plist ~/Library/LaunchAgents/ai.hermes.gateway.plist.disabled
+    launchctl list | grep -i gateway
+    ```
+
+    On Linux, `systemctl --user disable --now <unit>` and mask it. Then confirm the competing process is gone with `ps aux | grep gateway`.
+  </Step>
+  <Step title="Free the port from any orphan">
+    If `lsof -nP -iTCP:18789` shows a PID the supervisor does not track, it is an orphan. Send `SIGTERM`, then `SIGKILL` if needed, and confirm the port is free (`lsof` returns no LISTEN) before restarting.
+  </Step>
+  <Step title="Restart the intended gateway and verify identity consistency">
+    ```bash
+    launchctl kickstart -k gui/$UID/ai.openclaw.gateway   # or: openclaw gateway restart
+    sleep 10
+    launchctl list | grep ai.openclaw.gateway
+    lsof -nP -iTCP:18789 | grep LISTEN
+    cat ~/.openclaw/tmp/*/gateway.*.lock
+    ```
+
+    All three should report the same PID: the supervisor-tracked PID, the port owner, and the lock-file PID. Wait long enough for startup to finish binding, since plugin and model pre-warm can take several seconds before the port binds.
+  </Step>
+  <Step title="Recover the affected session">
+    In the TUI (or over a channel), start a fresh session with `/new` to drop the conflicted store entry, then retry the turn. The store now has a single writer, so new turns commit cleanly.
+  </Step>
+</Steps>
+
+<Note>
+A single transient `stale-snapshot` is normal — the reply flow retries and succeeds. Treat it as a defect only when it throws repeatedly, which points to a persistent concurrent writer.
+</Note>
+
+Related:
+
+- [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running)
+- [Multiple gateways on the same host](/gateway#multiple-gateways-same-host)
+- [Doctor](/gateway/doctor)
+- [Sessions](/cli/sessions)
+
 ## macOS gateway silently stops responding, then resumes when you touch the dashboard
 
 Use this when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
