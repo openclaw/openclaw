@@ -77,7 +77,12 @@ async function flushPendingDelivery(): Promise<void> {
 }
 
 type DeliveryArgs = {
-  payloads?: Array<{ text?: string; presentation?: unknown; interactive?: unknown }>;
+  payloads?: Array<{
+    text?: string;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  }>;
 };
 
 function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
@@ -211,6 +216,12 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Session: agent:main:main");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
+      // The rendered session identity must also travel on the metadata
+      // envelope so text and channelData never diverge.
+      const meta = (payload?.channelData as { execApproval?: Record<string, unknown> })
+        ?.execApproval;
+      expect(meta?.sessionKey).toBe("agent:main:main");
+      expect(meta?.agentId).toBe("main");
       expect(payload?.presentation).toEqual({
         blocks: [
           {
