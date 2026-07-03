@@ -1921,7 +1921,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.visibleReplies":
     'Controls visible source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for visible output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.strandedReplyRecovery":
-    "Opt-in recovery for a substantive message_tool_only final the model produced without calling message(action=send). Default false preserves the documented contract: no message call means no source reply and the final text stays private. Set true to enqueue a single retry that asks the model to deliver via message(action=send); the private text is replayed into a synthetic prompt with persistence suppressed.",
+    "Opt-in recovery for a substantive message_tool_only final the model produced without calling message(action=send). Default false preserves the documented contract: no message call means no source reply and the final text stays private. Set true to enqueue a single retry that asks the model to deliver via message(action=send); the private text is replayed into a synthetic prompt whose persistence is suppressed, but a successful retry delivers via message(action=send) and the delivered reply text persists normally through the message-tool transcript path.",
   "messages.responsePrefix":
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.usageTemplate":
