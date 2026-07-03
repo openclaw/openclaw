@@ -8,6 +8,7 @@ import type { UsageBarTemplate } from "./translator.js";
 export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
+const MAX_FILE_CACHE_SIZE = 64;
 const fileCache = new Map<string, CacheEntry>();
 const warnedTemplateOverrides = new Set<string>();
 const usageTemplateLog = createSubsystemLogger("usage-template");
@@ -141,6 +142,16 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
       entry.watcher = watcher;
     } catch {
       // Cache remains valid without live refresh.
+    }
+  }
+  // Evict oldest entry when cache exceeds the limit so the Map and its live
+  // fs.watch watchers do not grow without bound across long-running gateways.
+  if (fileCache.size >= MAX_FILE_CACHE_SIZE) {
+    const oldestKey = fileCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldest = fileCache.get(oldestKey);
+      oldest?.watcher?.close();
+      fileCache.delete(oldestKey);
     }
   }
   fileCache.set(path, entry);
