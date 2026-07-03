@@ -259,6 +259,46 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   return { ...message, content: sanitizedContent } as AgentMessage;
 }
 
+/**
+ * Returns true when `next` is a byte-identical adjacent assistant duplicate of
+ * the last entry in `out`. Delivery-mirror entries survive the metadata-only
+ * filter when session rebuild/merge strips provider/model identity. Adjacent
+ * dedup prevents the model from seeing "the assistant said everything twice"
+ * (#99470).
+ *
+ * Tool-call-bearing turns are never treated as duplicates: a model never emits
+ * two identical consecutive tool-call sequences, and delivery-mirror receipts
+ * are text-only with no tool calls. A user turn resets adjacency, so legitimate
+ * "say that again" flows are unaffected.
+ */
+function isAdjacentAssistantDuplicate(out: AgentMessage[], next: AgentMessage): boolean {
+  if (out.length === 0) {
+    return false;
+  }
+  const prev = out[out.length - 1];
+  if (prev.role !== "assistant") {
+    return false;
+  }
+  const prevCalls = extractToolCallsFromAssistant(prev);
+  const nextCalls = extractToolCallsFromAssistant(
+    next as Extract<AgentMessage, { role: "assistant" }>,
+  );
+  if (prevCalls.length > 0 || nextCalls.length > 0) {
+    return false;
+  }
+  const prevRaw = (prev as { content?: unknown }).content;
+  const nextRaw = (next as { content?: unknown }).content;
+  const prevText = typeof prevRaw === "string" ? prevRaw : JSON.stringify(prevRaw);
+  const nextText = typeof nextRaw === "string" ? nextRaw : JSON.stringify(nextRaw);
+  // Empty content is a legitimate provider state (toolUse/length stop reasons,
+  // silent replies), not a delivery-mirror artifact. Delivery mirrors always
+  // carry text content so the duplicate check is still effective.
+  if (!prevText || prevText === "[]") {
+    return false;
+  }
+  return prevText === nextText;
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -288,7 +328,9 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
-        out.push(normalized);
+        if (!isAdjacentAssistantDuplicate(out, normalized)) {
+          out.push(normalized);
+        }
       }
       touched = true;
       continue;
@@ -343,7 +385,11 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         continue;
       }
     }
-    out.push(assistantMessage);
+    if (!isAdjacentAssistantDuplicate(out, assistantMessage)) {
+      out.push(assistantMessage);
+    } else {
+      touched = true;
+    }
   }
 
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The

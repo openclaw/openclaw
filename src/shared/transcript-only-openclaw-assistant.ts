@@ -19,15 +19,38 @@ export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model:
   );
 }
 
+/**
+ * Returns true when the message is an OpenClaw-authored transcript artifact
+ * that must not be replayed to providers.
+ *
+ * Primary check: provider="openclaw" + model in known transcript-only set.
+ * Fallback: openclawDeliveryMirror field present — catches stripped-metadata
+ * survivors from session rebuild / side-branch merge (#99470).
+ */
 export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return false;
   }
-  const entry = message as { role?: unknown; provider?: unknown; model?: unknown };
-  return (
-    entry.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantModel(entry.provider, entry.model)
-  );
+  const entry = message as {
+    role?: unknown;
+    provider?: unknown;
+    model?: unknown;
+    openclawDeliveryMirror?: unknown;
+  };
+  if (entry.role !== "assistant") {
+    return false;
+  }
+  if (isTranscriptOnlyOpenClawAssistantModel(entry.provider, entry.model)) {
+    return true;
+  }
+  // Session rebuild / side-branch merge can strip provider/model from
+  // delivery-mirror entries while leaving openclawDeliveryMirror intact.
+  // Treat any assistant message carrying that marker as transcript-only
+  // so it never leaks into a provider prompt (#99470).
+  if (entry.openclawDeliveryMirror != null) {
+    return true;
+  }
+  return false;
 }
 
 export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): boolean {

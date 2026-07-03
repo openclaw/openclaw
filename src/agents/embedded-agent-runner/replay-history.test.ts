@@ -67,6 +67,58 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
   } as unknown as AgentMessage;
 }
 
+function strippedDeliveryMirrorAssistant(text = "channel mirror"): AgentMessage {
+  // Simulates a delivery-mirror entry whose provider/model metadata was
+  // stripped by session rebuild / side-branch merge (#99470). The
+  // openclawDeliveryMirror field survives serialization and identifies
+  // the message as transcript-only even without provider/model.
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    openclawDeliveryMirror: { kind: "channel-final" },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+  } as unknown as AgentMessage;
+}
+
+function nativeToolUseAssistant(text: string, toolUseId = "toolu_001", toolName = "read"): AgentMessage {
+  // Simulates an assistant turn carrying native Anthropic tool_use blocks.
+  // extractToolCallsFromAssistant must recognize the snake_case "tool_use"
+  // type — otherwise isAdjacentAssistantDuplicate may incorrectly collapse
+  // a tool-call-bearing turn as a delivery-mirror duplicate (#99470).
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "tool_use", id: toolUseId, name: toolName, input: {} },
+    ],
+    usage: { input: 50, output: 30, totalTokens: 80 },
+    stopReason: "tool_use",
+    timestamp: 0,
+  } as unknown as AgentMessage;
+}
+
+function plainAssistant(content: unknown): AgentMessage {
+  // Simulates a normal assistant reply whose provider/model/usage
+  // metadata was stripped during session rebuild — the message survives
+  // the metadata-only filter but should NOT be filtered.
+  return {
+    role: "assistant",
+    content,
+    usage: { input: 1, output: 1, totalTokens: 2 },
+    stopReason: "stop",
+    timestamp: 0,
+  } as unknown as AgentMessage;
+}
+
 describe("normalizeAssistantReplayContent", () => {
   it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
     // Mid-turn failure sentinels preserve request turn ordering without
@@ -329,6 +381,148 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out).toHaveLength(2);
     expect((out[0] as { role: string }).role).toBe("user");
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
+  });
+
+  it("filters stripped-metadata delivery-mirror messages via openclawDeliveryMirror field (#99470)", () => {
+    // Session rebuild / side-branch merge can strip provider/model from
+    // delivery-mirror entries. The openclawDeliveryMirror field survives
+    // serialization and must still identify the message as transcript-only.
+    const messages = [
+      userMessage("hello"),
+      strippedDeliveryMirrorAssistant("mirror text"),
+      plainAssistant([{ type: "text", text: "real reply" }]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(2);
+    expect((out[0] as { role: string }).role).toBe("user");
+    expect((out[1] as { role: string }).role).toBe("assistant");
+    const realReply = out[1] as { content: Array<{ text: string }> };
+    expect(realReply.content[0].text).toBe("real reply");
+  });
+
+  it("collapses adjacent byte-identical no-tool assistant duplicates from replay (#99470)", () => {
+    // When metadata-stripped delivery-mirror entries survive the
+    // metadata filter, adjacent byte-identical pairs must be collapsed
+    // so the model never sees "the assistant said everything twice".
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([{ type: "text", text: "Hello! How can I help?" }]),
+      strippedDeliveryMirrorAssistant("Hello! How can I help?"),
+      userMessage("thanks"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+    expect((out[0] as { role: string }).role).toBe("user");
+    expect((out[1] as { role: string }).role).toBe("assistant");
+    expect((out[2] as { role: string }).role).toBe("user");
+  });
+
+  it("collapses bare no-marker adjacent duplicates via content dedup alone (#99470)", () => {
+    // When ALL markers (provider, model, openclawDeliveryMirror) are stripped,
+    // the survivor is { role, content, usage } — indistinguishable from a real
+    // reply to any metadata filter. Only byte-identical adjacent content dedup
+    // can collapse it. plainAssistant() has no delivery-mirror marker.
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([{ type: "text", text: "Hello! How can I help?" }]),
+      plainAssistant([{ type: "text", text: "Hello! How can I help?" }]),
+      userMessage("thanks"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+    expect((out[0] as { role: string }).role).toBe("user");
+    expect((out[1] as { role: string }).role).toBe("assistant");
+    expect((out[2] as { role: string }).role).toBe("user");
+  });
+
+  it("does not collapse adjacent duplicates separated by a user turn (#99470)", () => {
+    // A user turn resets adjacency. Legitimate "say that again" flows
+    // where the model naturally repeats content must be preserved.
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([{ type: "text", text: "Hello!" }]),
+      userMessage("say that again"),
+      plainAssistant([{ type: "text", text: "Hello!" }]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(4);
+  });
+
+  it("does not collapse tool-call-bearing adjacent messages (#99470)", () => {
+    // Tool-call-bearing turns are never delivery-mirror duplicates.
+    // Delivery mirrors are text-only receipts; a model never emits
+    // two identical consecutive tool-call sequences.
+    const textOnly = plainAssistant([{ type: "text", text: "Hello!" }]);
+    const withToolCall = plainAssistant([
+      { type: "text", text: "Hello!" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+    ]);
+    const messages = [userMessage("hi"), withToolCall, textOnly];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+  });
+
+  it("does not collapse adjacent messages carrying native tool_use blocks (#99470)", () => {
+    // Native Anthropic tool_use blocks (snake_case type) must be recognized
+    // by extractToolCallsFromAssistant. Without this, a tool-call-bearing
+    // assistant turn could be incorrectly collapsed as a duplicate when the
+    // preceding text matches a delivery-mirror receipt.
+    const text = "Let me check that for you.";
+    const withNativeToolUse = nativeToolUseAssistant(text, "toolu_001", "read");
+    const duplicateTextNoTools = plainAssistant([{ type: "text", text }]);
+    const messages = [userMessage("hi"), withNativeToolUse, duplicateTextNoTools];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+    // The tool_use-bearing turn must survive.
+    const firstAssistant = out[1] as { content: Array<{ type: string }> };
+    expect(firstAssistant.content.some((b) => b.type === "tool_use")).toBe(true);
+  });
+
+  it("filters stripped delivery-mirror and collapses adjacent duplicate via both layers (#99470)", () => {
+    // Layer 1 (adjacent dedup) + Layer 2 (openclawDeliveryMirror fallback)
+    // working together on the same replay pass. The stripped mirror entry
+    // that survives the metadata-only filter is caught by adjacent dedup.
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([{ type: "text", text: "Hello! How can I help?" }]),
+      // Metadata-stripped delivery-mirror — Layer 2 catches this via
+      // openclawDeliveryMirror field when its content doesn't match prev.
+      strippedDeliveryMirrorAssistant("Different mirror text"),
+      // Another stripped mirror that matches prev real assistant —
+      // Layer 1 adjacent dedup catches this.
+      plainAssistant([{ type: "text", text: "Hello! How can I help?" }]),
+      strippedDeliveryMirrorAssistant("Hello! How can I help?"),
+      userMessage("thanks"),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    // Expected: user(hi), real assistant, user(thanks) = 3 messages
+    expect(out).toHaveLength(3);
+    expect((out[0] as { role: string }).role).toBe("user");
+    expect((out[1] as { role: string }).role).toBe("assistant");
+    expect((out[2] as { role: string }).role).toBe("user");
+  });
+
+  it("does not collapse distinct adjacent assistant messages (#99470)", () => {
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([{ type: "text", text: "First reply" }]),
+      plainAssistant([{ type: "text", text: "Second reply" }]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
+  });
+
+  it("does not collapse empty-content adjacent messages (#99470)", () => {
+    // Empty content is a legitimate provider state (toolUse/length
+    // stop reasons, silent replies), never a delivery-mirror artifact.
+    // Delivery mirrors always carry text content.
+    const messages = [
+      userMessage("hi"),
+      plainAssistant([]),
+      plainAssistant([]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(3);
   });
 
   it("returns the original array reference when nothing needs to change", () => {
