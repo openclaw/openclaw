@@ -528,24 +528,29 @@ function isSidebarSessionForSelectedAgent(
   return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
 }
 
-function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+export function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
   const selectedAgentId = resolveSidebarSelectedAgentId(state);
   const shouldFilterByAgent =
     normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
-  return (state.sessionsResult?.sessions ?? [])
-    .filter(
-      (row) =>
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 5);
+  return (
+    (state.sessionsResult?.sessions ?? [])
+      .filter(
+        (row) =>
+          !row.archived &&
+          row.kind !== "global" &&
+          row.kind !== "unknown" &&
+          row.kind !== "cron" &&
+          !isCronSessionKey(row.key) &&
+          !isSubagentSessionKey(row.key) &&
+          !row.spawnedBy &&
+          (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
+      )
+      .slice()
+      // Keep this dashboard path working on browsers without Array.prototype.toSorted (e.g. Chrome < 110).
+      // oxlint-disable-next-line unicorn/no-array-sort
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, 5)
+  );
 }
 
 function renderSidebarSessions(state: AppViewState) {
