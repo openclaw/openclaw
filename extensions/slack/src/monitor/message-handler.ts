@@ -45,9 +45,12 @@ type SlackDispatchCompletion = {
   reject: (error: unknown) => void;
 };
 
-type QueuedSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
-  dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
+type IngressSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
   retryAttempt?: number;
+};
+
+type QueuedSlackMessageOptions = IngressSlackMessageOptions & {
+  dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
 };
 
 function createSlackDispatchCompletion(): SlackDispatchCompletion {
@@ -115,21 +118,25 @@ export function createSlackMessageHandler(params: {
     shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
       const retryEntries = (sourceError: unknown): boolean => {
-        const retryable = isRetryableSlackInboundError(sourceError);
-        if (!retryable) {
+        if (!isRetryableSlackInboundError(sourceError)) {
           return false;
         }
         const nextEntries = entries
           .map((entry) => {
+            // Relay delivery owns retry until its dispatch completion is acknowledged.
+            // Scheduling here as well can race the router redelivery and duplicate a reply.
+            if (entry.opts.dispatchCompletion) {
+              return null;
+            }
             const retryAttempt = entry.opts.retryAttempt ?? 0;
             if (retryAttempt >= RETRYABLE_FLUSH_MAX_ATTEMPTS) {
               return null;
             }
+            const { dispatchCompletion: _dispatchCompletion, ...retryOpts } = entry.opts;
             return {
               ...entry,
               opts: {
-                ...entry.opts,
-                dispatchCompletion: undefined,
+                ...retryOpts,
                 retryAttempt: retryAttempt + 1,
               },
             };
@@ -138,13 +145,16 @@ export function createSlackMessageHandler(params: {
         if (nextEntries.length === 0) {
           return false;
         }
-        setTimeout(() => {
+        const retryTimer = setTimeout(() => {
           for (const entry of nextEntries) {
-            void debouncer.enqueue(entry).catch((err: unknown) => {
+            // Re-enter ingress so a relay replay or another successful attempt wins
+            // through the normal delivery and seen-message gates before dispatch.
+            void enqueueSlackMessage(entry.message, entry.opts).catch((err: unknown) => {
               ctx.runtime.error?.(`slack inbound retry enqueue failed: ${formatErrorMessage(err)}`);
             });
           }
         }, RETRYABLE_FLUSH_RETRY_DELAY_MS);
+        retryTimer.unref?.();
         return true;
       };
       const completions = entries
@@ -243,10 +253,15 @@ export function createSlackMessageHandler(params: {
             }
           } catch (error) {
             if (isRetryableSlackInboundError(error)) {
-              if (seenMessageKey) {
-                appMentionDispatchedKeys.delete(seenMessageKey);
+              // Every buffered event passed the seen gate before this combined dispatch.
+              // Release all of them so the retry can rebuild the same batch.
+              for (const entry of entries) {
+                const entrySeenKey = buildSeenMessageKey(entry.message.channel, entry.message.ts);
+                if (entrySeenKey) {
+                  appMentionDispatchedKeys.delete(entrySeenKey);
+                }
+                ctx.releaseSeenMessage(entry.message.channel, entry.message.ts);
               }
-              ctx.releaseSeenMessage(last.message.channel, last.message.ts);
             }
             throw error;
           }
@@ -318,7 +333,10 @@ export function createSlackMessageHandler(params: {
     return true;
   };
 
-  return async (message, opts) => {
+  async function enqueueSlackMessage(
+    message: SlackMessageEvent,
+    opts: IngressSlackMessageOptions,
+  ): Promise<SlackDispatchCompletion | undefined> {
     if (opts.source === "message" && message.type !== "message") {
       return;
     }
@@ -389,6 +407,11 @@ export function createSlackMessageHandler(params: {
           : {}),
       },
     });
+    return dispatchCompletion;
+  }
+
+  return async (message, opts) => {
+    const dispatchCompletion = await enqueueSlackMessage(message, opts);
     await dispatchCompletion?.promise;
   };
 }
