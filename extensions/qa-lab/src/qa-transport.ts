@@ -3,6 +3,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { QaProviderMode } from "./model-selection.js";
+import {
+  createQaTransportUnsupportedOperationError,
+  type QaTransportOperation,
+} from "./qa-transport-contracts.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusEvent,
@@ -206,6 +210,7 @@ export type QaTransportAdapter = {
   accountId: string;
   requiredPluginIds: readonly string[];
   supportedActions: readonly QaTransportActionName[];
+  supportedOperations: readonly QaTransportOperation[];
   state: QaTransportState;
   capabilities: QaTransportCapabilities;
   reset: () => Promise<void>;
@@ -245,6 +250,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   readonly accountId: string;
   readonly requiredPluginIds: readonly string[];
   readonly supportedActions: readonly QaTransportActionName[];
+  readonly supportedOperations: readonly QaTransportOperation[];
   readonly state: QaTransportState;
   readonly capabilities: QaTransportCapabilities;
 
@@ -254,6 +260,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     accountId: string;
     requiredPluginIds: readonly string[];
     supportedActions?: readonly QaTransportActionName[];
+    supportsNativeCommands?: boolean;
     state: QaTransportState;
   }) {
     this.id = params.id;
@@ -261,6 +268,21 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     this.accountId = params.accountId;
     this.requiredPluginIds = params.requiredPluginIds;
     this.supportedActions = params.supportedActions ?? [];
+    const actionOperations = this.supportedActions.map(
+      (action): QaTransportOperation => `action.${action}`,
+    );
+    this.supportedOperations = (
+      [
+        "message.send-inbound",
+        "message.wait-for-none",
+        "message.wait-for-outbound",
+        "message.wait-for-outbound-sequence",
+        "state.read",
+        "state.reset",
+        ...(params.supportsNativeCommands ? (["message.send-native-command"] as const) : []),
+        ...actionOperations,
+      ] satisfies QaTransportOperation[]
+    ).toSorted();
     this.state = params.state;
     this.capabilities = {
       sendInboundMessage: this.state.addInboundMessage.bind(this.state),
@@ -309,7 +331,11 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }
 
   async sendNativeCommand(_input: QaTransportNativeCommandInput): Promise<void> {
-    throw new Error(`${this.label} does not support native commands.`);
+    throw createQaTransportUnsupportedOperationError({
+      operation: "message.send-native-command",
+      supportedOperations: this.supportedOperations,
+      transportId: this.id,
+    });
   }
 
   async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {

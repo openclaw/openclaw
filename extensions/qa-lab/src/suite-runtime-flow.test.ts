@@ -177,6 +177,7 @@ describe("qa suite runtime flow", () => {
         buildAgentDelivery: vi.fn(),
         requiredPluginIds: [],
         supportedActions: [],
+        supportedOperations: [],
         handleAction: vi.fn(),
         createReportNotes: vi.fn(),
         reset: vi.fn(),

@@ -41,10 +41,19 @@ export async function runQaSelfCheckAgainstState(params: {
   waitTimeoutMs?: number;
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
-  const transport = createQaTransportAdapter({
-    id: params.transportId ?? "qa-channel",
+  const transportFactoryResult = await createQaTransportAdapter({
+    channelId: params.transportId ?? "qa-channel",
+    driver: params.transportId ?? "qa-channel",
+    outputDir: path.dirname(resolveQaSelfCheckOutputPath(params)),
+    provider: {
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      mode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+    },
+    requestedCapabilities: [],
     state: params.state,
   });
+  const transport = transportFactoryResult.adapter;
   params.state.reset();
   const scenarioResult = await runQaScenario(
     createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
@@ -104,6 +113,7 @@ export async function runQaSelfCheckAgainstState(params: {
   });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
+  await transportFactoryResult.cleanup();
 
   return {
     outputPath,

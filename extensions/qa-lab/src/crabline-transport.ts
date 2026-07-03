@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
+import { createQaTransportUnsupportedOperationError } from "./qa-transport-contracts.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -349,6 +350,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
+      supportsNativeCommands: params.selection.channel === "telegram",
       state: params.state,
     });
     this.#adapter = params.adapter;
@@ -380,9 +382,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
     if (this.#selection.channel !== "telegram") {
-      throw new Error(
-        `Crabline ${this.#selection.channel} does not support native command injection.`,
-      );
+      throw createQaTransportUnsupportedOperationError({
+        operation: "message.send-native-command",
+        supportedOperations: this.supportedOperations,
+        transportId: this.id,
+      });
     }
     const { command, ...message } = input;
     await this.sendInbound({
@@ -405,7 +409,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
+    throw createQaTransportUnsupportedOperationError({
+      operation: `action.${_params.action}`,
+      supportedOperations: this.supportedOperations,
+      transportId: this.id,
+    });
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
