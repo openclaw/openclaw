@@ -52,10 +52,14 @@ function isAmbientTranscriptWatermarkAfter(
 }
 
 export function readAmbientTranscriptWatermark(
-  entry: Pick<SessionEntry, "ambientTranscriptWatermarks"> | undefined,
+  entry: Pick<SessionEntry, "ambientTranscriptWatermarks" | "sessionId"> | undefined,
   key: string,
 ): AmbientTranscriptWatermark | undefined {
-  return entry?.ambientTranscriptWatermarks?.[key];
+  const watermark = entry?.ambientTranscriptWatermarks?.[key];
+  // A watermark only vouches for rows in the transcript it was written against.
+  // After a session reset those rows live in an archived file the model never
+  // reads, so a cross-session (or legacy sessionId-less) watermark must not hide them.
+  return watermark?.sessionId === entry?.sessionId ? watermark : undefined;
 }
 
 export async function updateAmbientTranscriptWatermark(params: {
@@ -64,6 +68,7 @@ export async function updateAmbientTranscriptWatermark(params: {
   key: string;
   messageId: string;
   timestampMs?: number;
+  expectedSessionId?: string;
 }): Promise<SessionEntry | null> {
   return await updateSessionEntry(
     {
@@ -71,6 +76,15 @@ export async function updateAmbientTranscriptWatermark(params: {
       sessionKey: params.sessionKey,
     },
     (entry) => {
+      // onMessagePersisted fires after the durable row write; if the session was
+      // reset in between, stamping the new sessionId would hide rows that only
+      // exist in the archived transcript. Skip the advance instead.
+      if (!entry.sessionId) {
+        return null;
+      }
+      if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
+        return null;
+      }
       const current = readAmbientTranscriptWatermark(entry, params.key);
       if (
         !isAmbientTranscriptWatermarkAfter(
@@ -84,6 +98,7 @@ export async function updateAmbientTranscriptWatermark(params: {
         ambientTranscriptWatermarks: {
           ...entry.ambientTranscriptWatermarks,
           [params.key]: {
+            sessionId: entry.sessionId,
             messageId: params.messageId,
             ...(params.timestampMs !== undefined ? { timestampMs: params.timestampMs } : {}),
             updatedAt: Date.now(),

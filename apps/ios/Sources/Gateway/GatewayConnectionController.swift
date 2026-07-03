@@ -1121,8 +1121,7 @@ extension GatewayConnectionController {
             status: locationStatus)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
-        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
+        permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())
         let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 

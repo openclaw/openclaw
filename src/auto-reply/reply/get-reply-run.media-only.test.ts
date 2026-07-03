@@ -10,6 +10,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -512,6 +513,56 @@ describe("runPreparedReply media-only handling", () => {
       },
       expect.anything(),
     );
+  });
+
+  it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "message_tool_only" },
+        ctx: {
+          Body: "@bot please answer here",
+          RawBody: "@bot please answer here",
+          CommandBody: "please answer here",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot please answer here",
+          BodyStripped: "please answer here",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
+          ChatType: "group",
+          InboundEventKind: "user_request",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.commandBody).toBe("please answer here");
+    expect(call.transcriptCommandBody).toBe("please answer here");
+    expect(call.followupRun.prompt).toBe("please answer here");
+    expect(call.followupRun.transcriptPrompt).toBe("please answer here");
+    expect(call.followupRun.currentInboundContext?.text).toBe(
+      [
+        "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
+        MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+      ].join("\n\n"),
+    );
+    const persistedUserMessage = call.followupRun.userTurnTranscriptRecorder?.message;
+    if (!persistedUserMessage) {
+      throw new Error("persisted user turn message missing");
+    }
+    expect(persistedUserMessage).toMatchObject({
+      role: "user",
+      content: "please answer here",
+    });
+    expect(persistedUserMessage.content).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
   });
 
   it.each(["direct", "dm"] as const)(
@@ -2055,6 +2106,7 @@ describe("runPreparedReply media-only handling", () => {
       key: '["telegram","","-100123",""]',
       messageId: "35676",
       timestampMs: 1_710_000_000_000,
+      expectedSessionId: expect.any(String),
     });
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",

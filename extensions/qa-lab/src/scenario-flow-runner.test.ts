@@ -74,6 +74,9 @@ async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
     },
+    waitForOutboundSequence: async () => {
+      throw new Error("outbound sequence not configured for this fixture");
+    },
   };
   const api = {
     env: {},

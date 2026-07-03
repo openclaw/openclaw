@@ -792,6 +792,15 @@ describe("qa scenario catalog", () => {
     expect(flow).toContain("String(memoryAfter) === config.seededMemory");
   });
 
+  it("enables Telegram previews for channel streaming evidence", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(scenario.coverage?.primary).toContain("channels.streaming");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      channels: { telegram: { streaming: { mode: "partial" } } },
+    });
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({
