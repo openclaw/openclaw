@@ -59,6 +59,10 @@ describe("iconForTab", () => {
     const unknownTab = "unknown" as Tab;
     expect(iconForTab(unknownTab)).toBe("folder");
   });
+
+  it("returns a stable icon for the voice route", () => {
+    expect(iconForTab("voice")).toBe("mic");
+  });
 });
 
 describe("titleForTab", () => {
@@ -162,6 +166,7 @@ describe("normalizePath", () => {
 describe("pathForTab", () => {
   it("returns correct path without base", () => {
     expect(pathForTab("chat")).toBe("/chat");
+    expect(pathForTab("voice")).toBe("/voice");
     expect(pathForTab("overview")).toBe("/overview");
   });
 
@@ -177,6 +182,7 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/activity")).toBe("activity");
     expect(tabFromPath("/sessions")).toBe("sessions");
+    expect(tabFromPath("/voice")).toBe("voice");
     expect(tabFromPath("/dreaming")).toBe("dreams");
     expect(tabFromPath("/dreams")).toBe("dreams");
   });
@@ -187,6 +193,7 @@ describe("tabFromPath", () => {
 
   it("handles base paths", () => {
     expect(tabFromPath("/ui/chat", "/ui")).toBe("chat");
+    expect(tabFromPath("/ui/voice", "/ui")).toBe("voice");
     expect(tabFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
   });
 
@@ -207,6 +214,7 @@ describe("inferBasePathFromPathname", () => {
 
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
+    expect(inferBasePathFromPathname("/voice")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
     expect(inferBasePathFromPathname("/dreams")).toBe("");

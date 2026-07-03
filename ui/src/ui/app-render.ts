@@ -223,6 +223,7 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderMcp } from "./views/mcp.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderVoice } from "./views/voice.ts";
 
 let pendingUpdate: (() => void) | undefined;
 
@@ -1491,6 +1492,8 @@ export function renderApp(state: AppViewState) {
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
+  const isVoice = state.tab === "voice";
+  const isChatSurface = isChat || isVoice;
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
@@ -2562,7 +2565,7 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${navCollapsed
+      class="shell ${isChatSurface ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
         : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding
         ? "shell--onboarding"
@@ -2753,7 +2756,7 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main
-        class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
+        class="content ${isChatSurface ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
           : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
         "skillWorkshop"
@@ -2794,7 +2797,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config" || isChat
+        ${state.tab === "config" || isChatSurface
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -4035,6 +4038,43 @@ export function renderApp(state: AppViewState) {
                   allowExternalEmbedUrls: state.allowExternalEmbedUrls,
                   assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
                   basePath: state.basePath ?? "",
+                }),
+            )
+          : nothing}
+        ${state.tab === "voice"
+          ? renderMeasured(
+              state,
+              "voice",
+              {
+                sessionKey: state.sessionKey,
+                talkStatus: state.realtimeTalkStatus,
+                turnCount: state.realtimeTalkConversation.length,
+              },
+              () =>
+                renderVoice({
+                  assistantName: state.assistantName,
+                  userName: state.userName ?? null,
+                  sessionKey: state.sessionKey,
+                  connected: state.connected,
+                  realtimeTalkActive: state.realtimeTalkActive,
+                  realtimeTalkStatus: state.realtimeTalkStatus,
+                  realtimeTalkDetail: state.realtimeTalkDetail,
+                  realtimeTalkTranscript: state.realtimeTalkTranscript,
+                  realtimeTalkConversation: state.realtimeTalkConversation,
+                  realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
+                  realtimeTalkOptions: state.realtimeTalkOptions,
+                  onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+                  onToggleRealtimeTalkOptions: () => {
+                    state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
+                    if (state.realtimeTalkOptionsOpen) {
+                      void state.fetchRealtimeTalkCatalog();
+                    }
+                  },
+                  onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
+                  onDismissRealtimeTalkError: () => dismissRealtimeTalkError(state),
+                  onOpenChat: () => {
+                    state.setTab("chat" as import("./navigation.ts").Tab);
+                  },
                 }),
             )
           : nothing}

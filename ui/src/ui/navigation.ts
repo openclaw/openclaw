@@ -30,6 +30,7 @@ export type Tab =
   | "skillWorkshop"
   | "nodes"
   | "chat"
+  | "voice"
   | "config"
   | "communications"
   | "appearance"
@@ -68,6 +69,7 @@ const TAB_PATHS: Record<Tab, string> = {
   skillWorkshop: "/skills/workshop",
   nodes: "/nodes",
   chat: "/chat",
+  voice: "/voice",
   config: "/config",
   communications: "/communications",
   appearance: "/appearance",
@@ -185,6 +187,8 @@ export function iconForTab(tab: Tab): IconName {
       return "folder";
     case "chat":
       return "messageSquare";
+    case "voice":
+      return "mic";
     case "overview":
       return "barChart";
     case "activity":

@@ -761,7 +761,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   const currentPath = normalizePath(pathname);
   const url = new URL(href);
 
-  if (tab === "chat" && host.sessionKey) {
+  if ((tab === "chat" || tab === "voice") && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
   } else {
     url.searchParams.delete("session");

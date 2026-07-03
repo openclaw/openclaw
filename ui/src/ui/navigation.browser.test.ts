@@ -171,6 +171,17 @@ describe("control UI routing", () => {
     expectElement(app, ".dreams__lobster", HTMLElement);
   });
 
+  it("renders the voice view on the /voice route and keeps the session query", async () => {
+    const app = mountApp("/voice?session=main");
+    await app.updateComplete;
+
+    expect(app.tab).toBe("voice");
+    expect(window.location.pathname).toBe("/voice");
+    expect(window.location.search).toBe("?session=main");
+    expectElement(app, ".red-voice", HTMLElement);
+    expectElement(app, 'button[aria-label="Start Talk"]', HTMLButtonElement);
+  });
+
   it("requires confirmation before sending dreaming restart patch", async () => {
     const app = mountApp("/dreaming");
     const request = vi.fn(async (method: string) => {

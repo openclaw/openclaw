@@ -1,0 +1,364 @@
+/* Mobile-first Red voice surface. */
+.red-voice {
+  display: grid;
+  grid-template-rows: auto auto minmax(220px, 38vh) auto minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: clamp(14px, 3vw, 28px);
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 90%, transparent), var(--bg)),
+    radial-gradient(circle at 50% 18%, var(--accent-subtle), transparent 34%);
+}
+
+.red-voice__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.red-voice__identity {
+  min-width: 0;
+}
+
+.red-voice__eyebrow {
+  display: block;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.red-voice h1 {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: 28px;
+  font-weight: 720;
+  line-height: 1.08;
+}
+
+.red-voice__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.red-voice__icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.red-voice__icon-button:hover:not(:disabled),
+.red-voice__icon-button--active {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.red-voice__icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.red-voice__icon-button:focus-visible,
+.red-voice__talk-button:focus-visible,
+.red-voice__dismiss:focus-visible,
+.red-voice__field input:focus-visible,
+.red-voice__field select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.red-voice__icon-button svg,
+.red-voice__talk-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.red-voice__status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel-strong) 70%, transparent);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.red-voice__status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.red-voice--listening .red-voice__status-dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 5px var(--ok-subtle);
+}
+
+.red-voice--connecting .red-voice__status-dot,
+.red-voice--thinking .red-voice__status-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 5px var(--warn-subtle);
+}
+
+.red-voice--error .red-voice__status-dot,
+.red-voice--disconnected .red-voice__status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 5px var(--danger-subtle);
+}
+
+.red-voice__status-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.red-voice__session {
+  margin-left: auto;
+  max-width: 42%;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.red-voice__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 0;
+}
+
+.red-voice__talk-button {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: clamp(168px, 48vw, 240px);
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: var(--radius-full);
+  background:
+    radial-gradient(circle at 50% 34%, color-mix(in srgb, white 10%, transparent), transparent 28%),
+    color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+  color: var(--text-strong);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
+    0 20px 48px color-mix(in srgb, var(--accent) 16%, transparent);
+  cursor: pointer;
+}
+
+.red-voice__talk-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background:
+    radial-gradient(circle at 50% 34%, color-mix(in srgb, white 12%, transparent), transparent 28%),
+    color-mix(in srgb, var(--accent) 22%, var(--bg-elevated));
+}
+
+.red-voice__talk-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.red-voice__talk-button--active {
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--border));
+  background: color-mix(in srgb, var(--danger) 20%, var(--bg-elevated));
+}
+
+.red-voice__talk-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg) 48%, transparent);
+  color: var(--accent);
+}
+
+.red-voice__talk-button--active .red-voice__talk-icon {
+  color: var(--danger);
+}
+
+.red-voice__talk-icon svg {
+  width: 30px;
+  height: 30px;
+  stroke-width: 1.65;
+}
+
+.red-voice__talk-label {
+  max-width: 90%;
+  overflow: hidden;
+  font-size: var(--control-ui-text-lg);
+  font-weight: 720;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.red-voice__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.red-voice__options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel-strong) 78%, transparent);
+}
+
+.red-voice__field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.red-voice__field input,
+.red-voice__field select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-input-text-size);
+}
+
+.red-voice__transcript {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+}
+
+.red-voice__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: 18px;
+  border: 1px dashed color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: var(--control-ui-text-md);
+  text-align: center;
+}
+
+.red-voice__turns {
+  display: grid;
+  gap: 10px;
+}
+
+.red-voice__turn {
+  display: grid;
+  gap: 5px;
+  max-width: min(92%, 760px);
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel-strong) 70%, transparent);
+}
+
+.red-voice__turn--user {
+  justify-self: end;
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.red-voice__turn--assistant {
+  justify-self: start;
+}
+
+.red-voice__speaker {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.red-voice__text {
+  color: var(--text);
+  font-size: var(--chat-text-size);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.red-voice__streaming {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .red-voice {
+    grid-template-rows: auto auto minmax(180px, 34vh) auto minmax(0, 1fr);
+    gap: 13px;
+    padding: 12px;
+  }
+
+  .red-voice h1 {
+    font-size: 24px;
+  }
+
+  .red-voice__options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .red-voice__talk-button {
+    width: min(62vw, 210px);
+  }
+}
