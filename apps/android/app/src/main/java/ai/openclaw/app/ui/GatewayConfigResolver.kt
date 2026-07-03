@@ -92,7 +92,7 @@ internal fun resolveGatewayConnectConfig(
   passwordInput: String,
 ): GatewayConnectConfig? {
   if (useSetupCode) {
-    val setup = decodeGatewaySetupCode(setupCode) ?: return null
+    val setup = resolveSetupCodeCandidate(setupCode)?.let(::decodeGatewaySetupCode) ?: return null
     val parsed = parseGatewayEndpointResult(setup.url).config ?: return null
     val setupBootstrapToken =
       setup.bootstrapToken
@@ -263,6 +263,8 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     null
   }
 }
+
+internal fun manualTokenLooksLikeSetupCode(rawInput: String): Boolean = resolveSetupCodeCandidate(rawInput)?.let(::decodeGatewaySetupCode) != null
 
 /** Resolves QR scanner text to setup-code or validation error for UI copy. */
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {

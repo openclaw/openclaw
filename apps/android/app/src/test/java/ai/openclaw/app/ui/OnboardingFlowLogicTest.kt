@@ -2,6 +2,8 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.LocationMode
+import ai.openclaw.app.gateway.GatewayEndpoint
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
@@ -15,7 +17,291 @@ import java.util.Base64
 
 class OnboardingFlowLogicTest {
   @Test
-  fun blocksFinishWhenOnlyOperatorIsConnected() {
+  fun onboardingBackDestinationsMatchTheVisibleFlow() {
+    assertEquals(null, onboardingBackDestination(OnboardingStep.Welcome))
+    assertEquals(OnboardingBackDestination(OnboardingStep.Welcome), onboardingBackDestination(OnboardingStep.Gateway))
+    assertEquals(OnboardingBackDestination(OnboardingStep.Gateway), onboardingBackDestination(OnboardingStep.SetupCode))
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.SetupCode),
+      onboardingBackDestination(OnboardingStep.EnterSetupCode),
+    )
+    assertEquals(OnboardingBackDestination(OnboardingStep.Gateway), onboardingBackDestination(OnboardingStep.Manual))
+    assertEquals(OnboardingBackDestination(OnboardingStep.Recovery), onboardingBackDestination(OnboardingStep.NodeApproval))
+    assertEquals(OnboardingBackDestination(OnboardingStep.NodeApproval), onboardingBackDestination(OnboardingStep.Permissions))
+  }
+
+  @Test
+  fun permissionsBackCanReturnToRecoveryWhenNodeApprovalWasSkipped() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.Recovery),
+      onboardingBackDestination(
+        step = OnboardingStep.Permissions,
+        permissionsBackStep = OnboardingStep.Recovery,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        permissionsBackStep = OnboardingStep.Recovery,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalBackCanReturnToPermissionsDuringPermissionReapproval() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.Permissions),
+      onboardingBackDestination(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = OnboardingStep.Permissions,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Permissions),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = OnboardingStep.Permissions,
+      ),
+    )
+  }
+
+  @Test
+  fun permissionReapprovalBackStepsReturnThroughPermissionsWithoutLooping() {
+    val reapprovalBackSteps =
+      permissionReapprovalBackSteps(
+        currentNodeApprovalBackStep = OnboardingStep.Recovery,
+        currentPermissionsBackStep = OnboardingStep.NodeApproval,
+      )
+
+    assertEquals(OnboardingStep.Permissions, reapprovalBackSteps.nodeApprovalBackStep)
+    assertEquals(OnboardingStep.Recovery, reapprovalBackSteps.permissionsBackStep)
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Permissions),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.NodeApproval,
+        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+
+    val repeatedReapprovalBackSteps =
+      permissionReapprovalBackSteps(
+        currentNodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
+        currentPermissionsBackStep = reapprovalBackSteps.permissionsBackStep,
+      )
+
+    assertEquals(OnboardingStep.Permissions, repeatedReapprovalBackSteps.nodeApprovalBackStep)
+    assertEquals(OnboardingStep.Recovery, repeatedReapprovalBackSteps.permissionsBackStep)
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        nodeApprovalBackStep = repeatedReapprovalBackSteps.nodeApprovalBackStep,
+        permissionsBackStep = repeatedReapprovalBackSteps.permissionsBackStep,
+      ),
+    )
+  }
+
+  @Test
+  fun setupCodeEntryBackRestoresInlineScannerOnlyWhenOpenedFromScanner() {
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.EnterSetupCode,
+        setupCodeEntryOpenedFromScanner = true,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = false),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.EnterSetupCode,
+        setupCodeEntryOpenedFromScanner = false,
+      ),
+    )
+  }
+
+  @Test
+  fun onboardingBackStateClearsScannerOriginAfterBack() {
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.SetupCode, inlineQrScannerActive = true, setupCodeEntryOpenedFromScanner = false),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.EnterSetupCode,
+        setupCodeEntryOpenedFromScanner = true,
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryBackRestoresInlineScannerOnlyForScannerConnections() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = true),
+      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupScanner),
+    )
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = false),
+      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupGallery),
+    )
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.SetupCode, inlineQrScannerActive = false),
+      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.SetupEntry),
+    )
+  }
+
+  @Test
+  fun recoveryBackReturnsToManualFormAfterManualConnection() {
+    assertEquals(
+      OnboardingBackDestination(OnboardingStep.Manual),
+      onboardingBackDestination(OnboardingStep.Recovery, lastGatewayInputSource = OnboardingGatewayInputSource.Manual),
+    )
+  }
+
+  @Test
+  fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false))
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true))
+    assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = false))
+    assertTrue(initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = true))
+  }
+
+  @Test
+  fun cameraPermissionRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
+    assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false))
+    assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true))
+    assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true))
+  }
+
+  @Test
+  fun cameraPermissionRowTogglesCapabilityWhenAndroidPermissionAlreadyGranted() {
+    assertNull(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = false))
+    assertTrue(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = true)!!)
+    assertFalse(cameraCapabilityAfterRowTap(currentCapabilityEnabled = true, androidCameraPermissionGranted = true)!!)
+  }
+
+  @Test
+  fun permissionChangesRequireNodeApprovalWhenAdvertisedSurfaceChanges() {
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Off,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
+      ),
+    )
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = false,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.WhileUsing,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
+      ),
+    )
+    assertTrue(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = false,
+        requestedCameraEnabled = false,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Off,
+        currentSmsGranted = false,
+        requestedSmsGranted = true,
+      ),
+    )
+    assertFalse(
+      permissionChangesRequireNodeApproval(
+        currentCameraEnabled = true,
+        requestedCameraEnabled = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.WhileUsing,
+        currentSmsGranted = true,
+        requestedSmsGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun nearbyGatewayManualPortUsesResolvedDiscoveryEndpointPort() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Home",
+        name = "Home",
+        host = "192.168.1.12",
+        port = 53122,
+        gatewayPort = 18789,
+      )
+
+    assertEquals("53122", nearbyGatewayManualPort(endpoint))
+  }
+
+  @Test
+  fun nearbyGatewayManualTlsPreservesDiscoverySecurityPolicy() {
+    assertFalse(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Lan",
+          name = "Lan",
+          host = "192.168.1.12",
+          port = 18789,
+        ),
+      ),
+    )
+    assertTrue(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Tls",
+          name = "Tls",
+          host = "192.168.1.12",
+          port = 18789,
+          tlsEnabled = true,
+        ),
+      ),
+    )
+    assertTrue(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Pinned",
+          name = "Pinned",
+          host = "127.0.0.1",
+          port = 18789,
+          tlsFingerprintSha256 = "abc123",
+        ),
+      ),
+    )
+    assertTrue(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Remote",
+          name = "Remote",
+          host = "gateway.example.com",
+          port = 443,
+        ),
+      ),
+    )
+    assertFalse(
+      nearbyGatewayManualTls(
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Loopback",
+          name = "Loopback",
+          host = "127.0.0.1",
+          port = 18789,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun blocksFinishWhenGatewayHasNotReportedNodeConnected() {
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
@@ -31,20 +317,8 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
-    assertFalse(
-      canFinishOnboarding(
-        isConnected = true,
-        isNodeConnected = true,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
-      ),
-    )
-    assertFalse(
-      canFinishOnboarding(
-        isConnected = true,
-        isNodeConnected = true,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(requestId = "request-2"),
-      ),
-    )
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null)))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null)))
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unapproved))
   }
 
@@ -62,7 +336,7 @@ class OnboardingFlowLogicTest {
 
       assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
 
-      delayedNodeList.complete(GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"))
+      delayedNodeList.complete(GatewayNodeCapabilityApproval.PendingApproval(null))
       refresh.join()
       assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
     }
@@ -70,6 +344,11 @@ class OnboardingFlowLogicTest {
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
+  }
+
+  @Test
+  fun blocksFinishForLegacyNodeListUntilNodeConnects() {
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
   }
 
   @Test
@@ -129,46 +408,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun nearbyGatewayFoundStateIsConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Studio Gateway", status = "Found", canConnect = true),
-      nearbyGatewayUiState(nearbyGatewayName = "Studio Gateway", discoveryStatusText = "Searching…", discoveryStarted = false),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayBeforeDiscoveryStartsIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Starting discovery...", status = "Starting", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching…", discoveryStarted = false, searchTimedOut = true),
-    )
-  }
-
-  @Test
-  fun nearbyGatewaySearchingStateIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "Searching for gateways...", status = "Searching", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching for gateways…"),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayTimedOutSearchShowsEmptyState() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Searching for gateways…", searchTimedOut = true),
-    )
-  }
-
-  @Test
-  fun nearbyGatewayEmptyResultStateIsNotConnectable() {
-    assertEquals(
-      NearbyGatewayUiState(subtitle = "No gateway found", status = "Not found", canConnect = false),
-      nearbyGatewayUiState(nearbyGatewayName = null, discoveryStatusText = "Local: 0 • Wide: 0"),
-    )
-  }
-
-  @Test
   fun recoveryGatewayNamePrefersServerThenAttemptedGateway() {
     assertEquals("Server Gateway", recoveryGatewayName(serverName = "Server Gateway", attemptedGatewayName = "Discovered Gateway"))
     assertEquals("Discovered Gateway", recoveryGatewayName(serverName = null, attemptedGatewayName = "Discovered Gateway"))
@@ -176,66 +415,282 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun showsPairingStateForPairingRequiredGatewayStatus() {
-    assertEquals(
-      GatewayRecoveryUiState.Pairing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Gateway error: pairing required; approval in progress",
-        connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-      ),
-    )
+  fun recoveryNodeApprovalCommandUsesRequestIdWhenAvailable() {
+    assertEquals("openclaw nodes approve request-1", recoveryNodeApprovalCommand(" request-1 "))
+    assertEquals("openclaw nodes approve REQUEST_ID", recoveryNodeApprovalCommand(null))
+    assertEquals("openclaw nodes approve REQUEST_ID", recoveryNodeApprovalCommand(" "))
   }
 
   @Test
-  fun showsConnectedStateWhenGatewayBecomesReady() {
+  fun nodeCapabilityApprovalNeedsUserActionOnlyForPendingStates() {
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.PendingApproval(null)))
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.PendingReapproval(null)))
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Unapproved))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Approved))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Loading))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Unsupported))
+  }
+
+  @Test
+  fun gatewayPairingContinueOnlyRoutesToNodeApprovalWhenApprovalNeedsUserAction() {
     assertEquals(
-      GatewayRecoveryUiState.Connected,
-      gatewayRecoveryUiState(
+      OnboardingStep.Permissions,
+      gatewayPairingContinueDestination(
         ready = true,
-        statusText = "Gateway error: pairing required",
-        connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
       ),
     )
-  }
-
-  @Test
-  fun showsNodeApprovalStateWhenCapabilityApprovalIsPending() {
     assertEquals(
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending,
-      gatewayRecoveryUiState(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
         ready = false,
-        statusText = "Connected",
-        connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
       ),
     )
-  }
-
-  @Test
-  fun showsFinishingStateWhileNodeApprovalLoads() {
     assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
         ready = false,
-        statusText = "Connected",
-        connectSettling = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null),
+      ),
+    )
+    assertEquals(
+      OnboardingStep.NodeApproval,
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unapproved,
+      ),
+    )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
         nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
       ),
     )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+      ),
+    )
+    assertNull(
+      gatewayPairingContinueDestination(
+        ready = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported,
+      ),
+    )
   }
 
   @Test
-  fun showsApprovalRequiredForPausedPairingProblem() {
-    assertEquals(
-      GatewayRecoveryUiState.ApprovalRequired,
-      gatewayRecoveryUiState(
+  fun permissionContinueReturnsToNodeApprovalWhenApprovalIsStillPending() {
+    assertTrue(
+      permissionContinueNeedsNodeApproval(
         ready = false,
-        statusText = "Connecting…",
-        connectSettling = false,
+        requiresNodeApprovalAfterApply = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null),
+      ),
+    )
+    assertTrue(
+      permissionContinueNeedsNodeApproval(
+        ready = false,
+        requiresNodeApprovalAfterApply = true,
         nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+      ),
+    )
+    assertTrue(
+      permissionContinueNeedsNodeApproval(
+        ready = true,
+        requiresNodeApprovalAfterApply = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+      ),
+    )
+    assertFalse(
+      permissionContinueNeedsNodeApproval(
+        ready = true,
+        requiresNodeApprovalAfterApply = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported,
+      ),
+    )
+    assertFalse(
+      permissionContinueNeedsNodeApproval(
+        ready = true,
+        requiresNodeApprovalAfterApply = false,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalCheckingOnlyTracksActiveRefresh() {
+    assertTrue(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertTrue(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckingInProgress(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckingInProgress(
+        checkRequested = false,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalCheckClearsUnobservedRefreshOnlyOnApprovalScreen() {
+    assertTrue(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.NodeApproval,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckShouldClearUnobservedRefresh(
+        step = OnboardingStep.Permissions,
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalCheckContinuesWhenRequestedCheckFindsGatewayReady() {
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = false,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = false,
+        nodesDevicesRefreshing = true,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = true,
+        ready = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+        ready = false,
+      ),
+    )
+    assertTrue(
+      nodeApprovalCheckCanContinue(
+        checkRequested = true,
+        refreshStarted = true,
+        nodesDevicesRefreshing = false,
+        ready = true,
+      ),
+    )
+  }
+
+  @Test
+  fun nodeApprovalAutoContinuesWhenGatewayReportsReady() {
+    assertTrue(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
+        ready = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+        autoContinueEnabled = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
+        ready = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
+        autoContinueEnabled = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.Permissions,
+        ready = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+        autoContinueEnabled = true,
+      ),
+    )
+    assertFalse(
+      nodeApprovalShouldAutoContinue(
+        step = OnboardingStep.NodeApproval,
+        ready = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
+        autoContinueEnabled = false,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingStopsAtConnectedEvenWhenNodeApprovalIsStillPending() {
+    assertEquals(
+      GatewayRecoveryUiState.Connected,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = true,
+        statusText = "Waiting for node approval",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingContinueWinsOverStaleNodePairingRequiredProblem() {
+    assertEquals(
+      GatewayRecoveryUiState.Connected,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = true,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -251,14 +706,37 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun showsPairingForRetryablePairingProblem() {
+  fun gatewayPairingPrefersManualApprovalErrorOverPartialOperatorConnect() {
+    assertEquals(
+      GatewayRecoveryUiState.ApprovalRequired,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required: device approval is required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingPrefersRetryableApprovalErrorOverPartialOperatorConnect() {
     assertEquals(
       GatewayRecoveryUiState.Pairing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Connecting…",
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
         connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -269,6 +747,88 @@ class OnboardingFlowLogicTest {
             pauseReconnect = false,
             retryable = true,
           ),
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingWaitsWhenOperatorConnectedButNoContinueDestinationExists() {
+    assertEquals(
+      GatewayRecoveryUiState.Finishing,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        connectTimedOut = false,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.TakingLonger,
+      gatewayPairingUiState(
+        gatewayPaired = true,
+        gatewayPairingCanContinue = false,
+        statusText = "Connected (node offline)",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingShowsSlowConnectionWhenGatewayNeverPairs() {
+    assertEquals(
+      GatewayRecoveryUiState.Finishing,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Connecting…",
+        connectSettling = false,
+        connectTimedOut = false,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.TakingLonger,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Connecting…",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+  }
+
+  @Test
+  fun gatewayPairingPreservesExplicitFailureStatusText() {
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+        connectSettling = false,
+        connectTimedOut = false,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+        connectSettling = false,
+        connectTimedOut = true,
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryUiState.Failed,
+      gatewayPairingUiState(
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        statusText = "Gateway error: unauthorized: gateway token missing",
+        connectSettling = false,
+        connectTimedOut = false,
       ),
     )
   }
@@ -346,10 +906,8 @@ class OnboardingFlowLogicTest {
   fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
     val cases =
       listOf(
-        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
+        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "The code may have expired or been generated for another Gateway.",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
-        "AUTH_SCOPE_MISMATCH" to "Gateway access needs review. Check gateway authentication scopes, then retry.",
         "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
         "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
         "DEVICE_IDENTITY_REQUIRED" to "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
@@ -374,118 +932,9 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun authFailuresStopShowingAConnectingState() {
-    val cases =
-      listOf(
-        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "scan_fresh_setup_code",
-        "AUTH_DEVICE_TOKEN_MISMATCH" to "update_auth_credentials",
-        "AUTH_TOKEN_NOT_CONFIGURED" to "update_auth_configuration",
-        "AUTH_SCOPE_MISMATCH" to "review_auth_configuration",
-      )
-
-    for ((code, nextStep) in cases) {
-      assertEquals(
-        GatewayRecoveryUiState.AuthenticationRequired,
-        gatewayRecoveryUiState(
-          ready = false,
-          statusText = "Connecting…",
-          connectSettling = true,
-          nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
-          gatewayConnectionProblem = authProblem(code = code, recommendedNextStep = nextStep),
-        ),
-      )
-    }
-  }
-
-  @Test
-  fun recoveryPrimaryActionRepairsTheStructuredAuthFailure() {
+  fun recoveryGatewayAuthDetailPreservesProtocolMismatchGuidance() {
     assertEquals(
-      GatewayRecoveryPrimaryAction.ScanFreshSetupCode,
-      gatewayRecoveryPrimaryAction(
-        ready = false,
-        problem = authProblem(code = "AUTH_BOOTSTRAP_TOKEN_INVALID"),
-      ),
-    )
-    assertEquals(
-      GatewayRecoveryPrimaryAction.EditConnection,
-      gatewayRecoveryPrimaryAction(
-        ready = false,
-        problem = authProblem(code = "AUTH_DEVICE_TOKEN_MISMATCH", recommendedNextStep = "update_auth_credentials"),
-      ),
-    )
-    assertEquals(
-      GatewayRecoveryPrimaryAction.RetryConnection,
-      gatewayRecoveryPrimaryAction(
-        ready = false,
-        problem = authProblem(code = "AUTH_TOKEN_NOT_CONFIGURED"),
-      ),
-    )
-    assertEquals(
-      GatewayRecoveryPrimaryAction.EditConnection,
-      gatewayRecoveryPrimaryAction(
-        ready = false,
-        problem = authProblem(code = "AUTH_SCOPE_MISMATCH", recommendedNextStep = "review_auth_configuration"),
-      ),
-    )
-    assertEquals(
-      GatewayRecoveryPrimaryAction.RetryConnection,
-      gatewayRecoveryPrimaryAction(ready = false, problem = null),
-    )
-  }
-
-  @Test
-  fun recoveryPrimaryActionLabelsDescribeTheirActualAction() {
-    val expected =
-      mapOf(
-        GatewayRecoveryPrimaryAction.Continue to "Continue",
-        GatewayRecoveryPrimaryAction.ScanFreshSetupCode to "Scan fresh setup code",
-        GatewayRecoveryPrimaryAction.EditConnection to "Edit connection",
-        GatewayRecoveryPrimaryAction.RetryConnection to "Retry connection",
-      )
-
-    for ((action, label) in expected) {
-      assertEquals(label, gatewayRecoveryPrimaryActionLabel(action))
-    }
-  }
-
-  @Test
-  fun recoveryApprovalCommandPrefersTheExactNodeRequestId() {
-    assertEquals(
-      "openclaw nodes approve request-1",
-      recoveryGatewayApprovalCommand(
-        GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
-        gatewayConnectionProblem = null,
-      ),
-    )
-    assertEquals(
-      "openclaw nodes status",
-      recoveryGatewayApprovalCommand(
-        GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1; unsafe"),
-        gatewayConnectionProblem = null,
-      ),
-    )
-    assertEquals(
-      "openclaw devices list",
-      recoveryGatewayApprovalCommand(
-        GatewayNodeCapabilityApproval.Approved,
-        gatewayConnectionProblem =
-          GatewayConnectionProblem(
-            code = "PAIRING_REQUIRED",
-            message = "pairing required",
-            reason = "not-paired",
-            requestId = "request-1; unsafe",
-            recommendedNextStep = null,
-            pauseReconnect = true,
-            retryable = false,
-          ),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayAuthDetailIdentifiesOlderAppProtocolMismatch() {
-    assertEquals(
-      "This app is older than the gateway. Update OpenClaw on this device, then retry. (app protocol v4, gateway protocol v5).",
+      "This app is older than the Gateway. Update OpenClaw on this device, then retry. (app protocol v4, gateway protocol v5).",
       recoveryGatewayAuthDetail(
         GatewayConnectionProblem(
           code = "PROTOCOL_MISMATCH",
@@ -498,16 +947,36 @@ class OnboardingFlowLogicTest {
           clientMinProtocol = 4,
           clientMaxProtocol = 4,
           expectedProtocol = 5,
-          minimumProbeProtocol = 4,
         ),
       ),
     )
   }
 
   @Test
-  fun recoveryGatewayAuthDetailIdentifiesOlderGatewayProtocolMismatch() {
+  fun recoveryGatewayAuthDetailExplainsOlderGatewayProtocolMismatch() {
     assertEquals(
-      "The gateway is older than this app. Update OpenClaw on the gateway host, then retry. (app protocol v4, gateway protocol v3).",
+      "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry. (app protocol v6, gateway protocol v5).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 6,
+          clientMaxProtocol = 6,
+          expectedProtocol = 5,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailExplainsIncompatibleProtocolMismatch() {
+    assertEquals(
+      "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry. (app protocols v4-v6).",
       recoveryGatewayAuthDetail(
         GatewayConnectionProblem(
           code = "PROTOCOL_MISMATCH",
@@ -518,27 +987,8 @@ class OnboardingFlowLogicTest {
           pauseReconnect = true,
           retryable = false,
           clientMinProtocol = 4,
-          clientMaxProtocol = 4,
-          expectedProtocol = 3,
-          minimumProbeProtocol = 3,
-        ),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayAuthDetailKeepsProtocolMismatchFallbackActionable() {
-    assertEquals(
-      "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
-      recoveryGatewayAuthDetail(
-        GatewayConnectionProblem(
-          code = "PROTOCOL_MISMATCH",
-          message = "protocol mismatch",
-          reason = null,
-          requestId = null,
-          recommendedNextStep = null,
-          pauseReconnect = true,
-          retryable = false,
+          clientMaxProtocol = 6,
+          expectedProtocol = null,
         ),
       ),
     )
@@ -547,7 +997,7 @@ class OnboardingFlowLogicTest {
   @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
-      "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "Gateway authentication is not configured. Edit this connection and try again.",
       recoveryGatewayAuthDetail(
         GatewayConnectionProblem(
           code = "UNKNOWN",
@@ -577,57 +1027,122 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun showsFinishingStateWhileGatewayConnectionSettles() {
-    assertEquals(
+  fun recoveryPrimaryActionOnlyAppearsForCompleteFailureOrSlowConnectionStates() {
+    assertEquals(GatewayRecoveryPrimaryAction.Finish, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Connected))
+    assertEquals(GatewayRecoveryPrimaryAction.Back, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.Failed))
+    assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.TakingLonger))
+    assertEquals(GatewayRecoveryPrimaryAction.Retry, gatewayRecoveryPrimaryAction(GatewayRecoveryUiState.ApprovalRequired))
+
+    listOf(
+      GatewayRecoveryUiState.NodeCapabilityApprovalPending,
+      GatewayRecoveryUiState.Pairing,
       GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Offline",
+    ).forEach { state ->
+      assertEquals(null, gatewayRecoveryPrimaryAction(state))
+    }
+  }
+
+  @Test
+  fun recoveryDiagnosticActionAppearsForFailuresSlowStatesAndGatewayProblems() {
+    assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Failed, gatewayConnectionProblem = null))
+    assertTrue(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.TakingLonger, gatewayConnectionProblem = null))
+    assertTrue(
+      gatewayRecoveryShowsDiagnosticAction(
+        GatewayRecoveryUiState.Pairing,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required",
+            reason = "not-paired",
+            requestId = "request-1",
+            recommendedNextStep = "wait_then_retry",
+            pauseReconnect = false,
+            retryable = true,
+          ),
+      ),
+    )
+    assertFalse(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Finishing, gatewayConnectionProblem = null))
+    assertFalse(gatewayRecoveryShowsDiagnosticAction(GatewayRecoveryUiState.Connected, gatewayConnectionProblem = null))
+  }
+
+  @Test
+  fun recoveryDiagnosticTextIncludesRecoveryStateWithoutCredentials() {
+    val diagnostic =
+      gatewayRecoveryDiagnosticText(
+        statusText = "Gateway closed: token mismatch",
+        gatewayName = "Home Gateway",
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "AUTH_TOKEN_MISMATCH",
+            message = "token mismatch",
+            reason = "bad-token",
+            requestId = "request-1",
+            recommendedNextStep = "update_auth_credentials",
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      )
+
+    assertTrue(diagnostic.contains("OpenClaw Android gateway diagnostic"))
+    assertTrue(diagnostic.contains("Gateway: Home Gateway"))
+    assertTrue(diagnostic.contains("Status: Gateway closed: token mismatch"))
+    assertTrue(diagnostic.contains("Gateway paired: false"))
+    assertTrue(diagnostic.contains("Ready to continue: false"))
+    assertTrue(diagnostic.contains("Error code: AUTH_TOKEN_MISMATCH"))
+    assertTrue(diagnostic.contains("Reason: bad-token"))
+    assertTrue(diagnostic.contains("Request ID: request-1"))
+    assertTrue(diagnostic.contains("Next step: update_auth_credentials"))
+    assertFalse(diagnostic.contains("secret"))
+  }
+
+  @Test
+  fun recoveryProgressStartsAtGatewayEndpointWhileConnecting() {
+    assertEquals(
+      listOf(
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+      ),
+      gatewayRecoveryProgressItems(
+        state = GatewayRecoveryUiState.Finishing,
+        statusText = "Connecting…",
         connectSettling = true,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
 
   @Test
-  fun showsFinishingStateForPartialGatewayConnection() {
+  fun recoveryProgressDoesNotAdvanceToGatewayAccessJustBecauseSettlingEnds() {
     assertEquals(
-      GatewayRecoveryUiState.Finishing,
-      gatewayRecoveryUiState(
-        ready = false,
+      listOf(
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+      ),
+      gatewayRecoveryProgressItems(
+        state = GatewayRecoveryUiState.Finishing,
+        statusText = "Connecting…",
+        connectSettling = false,
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryProgressMovesDownToNodeAccessAfterGatewayConnects() {
+    assertEquals(
+      listOf(
+        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Current),
+      ),
+      gatewayRecoveryProgressItems(
+        state = GatewayRecoveryUiState.Finishing,
         statusText = "Connected (node offline)",
-        connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
-
-  @Test
-  fun showsConnectionIssueForNonPairingFailure() {
-    assertEquals(
-      GatewayRecoveryUiState.Failed,
-      gatewayRecoveryUiState(
-        ready = false,
-        statusText = "Gateway error: connection refused",
-        connectSettling = false,
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-      ),
-    )
-  }
-
-  private fun authProblem(
-    code: String,
-    recommendedNextStep: String? = null,
-  ): GatewayConnectionProblem =
-    GatewayConnectionProblem(
-      code = code,
-      message = "authentication needed",
-      reason = null,
-      requestId = null,
-      recommendedNextStep = recommendedNextStep,
-      pauseReconnect = true,
-      retryable = false,
-    )
 
   @Test
   fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {

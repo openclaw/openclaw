@@ -249,6 +249,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun resolveScannedSetupCodeResultAcceptsEmulatorSetupCode() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
+  }
+
+  @Test
   fun resolveScannedSetupCodeResultAcceptsQrJsonPayload() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
@@ -405,6 +416,18 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun manualTokenDetectsSetupCodePayloads() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    assertEquals(true, manualTokenLooksLikeSetupCode(setupCode))
+    assertEquals(true, manualTokenLooksLikeSetupCode(qrPayload))
+    assertEquals(false, manualTokenLooksLikeSetupCode("local-mobile-test"))
+    assertEquals(false, manualTokenLooksLikeSetupCode(""))
+  }
+
+  @Test
   fun resolveGatewayConnectConfigPrefersBootstrapTokenFromSetupCode() {
     val setupCode =
       encodeSetupCode(
@@ -415,6 +438,32 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = false,
+        bootstrapTokenInput = "",
+        tokenInput = "shared-token",
+        passwordInput = "shared-password",
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAcceptsQrJsonSetupCodePayload() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = qrPayload,
         manualHostInput = "",
         manualPortInput = "",
         manualTlsInput = false,

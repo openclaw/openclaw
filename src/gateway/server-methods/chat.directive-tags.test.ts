@@ -84,6 +84,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
+  lastDispatchThinkingLevelOverride: undefined as string | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -239,11 +240,13 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         };
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
+        thinkingLevelOverride?: string;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
+      mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -831,6 +834,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
+    mockState.lastDispatchThinkingLevelOverride = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -3611,6 +3615,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       BodyForCommands: "/codex status",
       CommandSource: "text",
     });
+  });
+
+  it("chat.send keeps thinking metadata out of command text for normal messages", async () => {
+    createTranscriptFixture("openclaw-chat-send-thinking-normal-message-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-thinking-normal-message",
+      message: "hello from phone",
+      requestParams: {
+        thinking: "low",
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.BodyForCommands).toBe("hello from phone");
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("hello from phone");
+    expect(mockState.lastDispatchCtx?.CommandTurn).toEqual({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+      body: "hello from phone",
+    });
+    const userTurnInput = mockState.lastDispatchUserTurnInput as
+      | {
+          content?: unknown;
+        }
+      | undefined;
+    expect(userTurnInput?.content).toBe("hello from phone");
+    expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
   });
 
   it("chat.send keeps explicit delivery routes for Feishu channel-scoped sessions", async () => {

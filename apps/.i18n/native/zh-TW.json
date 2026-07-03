@@ -1044,14 +1044,44 @@
       "translated": "線上"
     },
     {
-      "id": "native.android.d42fe72f8e76b450",
-      "source": "OPENCLAW",
-      "translated": "OPENCLAW"
+      "id": "native.android.9ac2d4498b17d478",
+      "source": "Trust",
+      "translated": "信任"
     },
     {
-      "id": "native.android.a5c2d7f27576f0c4",
-      "source": "Your personal AI assistant.\nExfoliate! Exfoliate!",
-      "translated": "您的個人 AI 助理。\nExfoliate! Exfoliate!"
+      "id": "native.android.e26ee07a1d1911be",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
+      "id": "native.android.64c8db13ef91513c",
+      "source": "Welcome to OpenClaw",
+      "translated": "歡迎使用 OpenClaw"
+    },
+    {
+      "id": "native.android.cc878f72a6b70b23",
+      "source": "Connect to your Gateway",
+      "translated": "連線到您的 Gateway"
+    },
+    {
+      "id": "native.android.bf3750bf264f0063",
+      "source": "Choose device permissions",
+      "translated": "選擇裝置權限"
+    },
+    {
+      "id": "native.android.3bfe29d4d13d3c3e",
+      "source": "Use OpenClaw from your phone",
+      "translated": "從您的手機使用 OpenClaw"
+    },
+    {
+      "id": "native.android.c0b539eeb4612f5d",
+      "source": "Security notice",
+      "translated": "安全性通知"
+    },
+    {
+      "id": "native.android.5aed4b5c8d6b246d",
+      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "已連線的 OpenClaw 代理程式可以使用您啟用的裝置功能。請僅在您信任所連線的 Gateway 和代理程式時繼續。"
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -1059,19 +1089,134 @@
       "translated": "連線 Gateway"
     },
     {
-      "id": "native.android.afdd3e2c10f56b75",
-      "source": "Setup code issue",
-      "translated": "設定代碼問題"
+      "id": "native.android.58d80589d9d4b7ff",
+      "source": "Could not open setup guide.",
+      "translated": "無法開啟設定指南。"
     },
     {
-      "id": "native.android.084eda7046e91737",
-      "source": "Advanced",
-      "translated": "進階"
+      "id": "native.android.18d6dd32cfcc1c9a",
+      "source": "Scan QR or setup code",
+      "translated": "掃描 QR 或設定碼"
+    },
+    {
+      "id": "native.android.8b8acc5b98b8c99f",
+      "source": "Set up manually",
+      "translated": "手動設定"
+    },
+    {
+      "id": "native.android.debd7b3e59db6ab2",
+      "source": "Before you start",
+      "translated": "開始之前"
+    },
+    {
+      "id": "native.android.9cfcf68aae2c05c6",
+      "source": "Access to the Gateway device",
+      "translated": "存取 Gateway 裝置"
+    },
+    {
+      "id": "native.android.71ce00f359981a0b",
+      "source": "Phone can reach the Gateway",
+      "translated": "手機可以連線到 Gateway"
+    },
+    {
+      "id": "native.android.68a31cee94a9db86",
+      "source": "Android setup guide",
+      "translated": "Android 設定指南"
+    },
+    {
+      "id": "native.android.d514a981f80779e9",
+      "source": "Setup Gateway",
+      "translated": "設定 Gateway"
+    },
+    {
+      "id": "native.android.6a45e2dae35ab5a7",
+      "source": "Start your Gateway.",
+      "translated": "啟動您的 Gateway。"
+    },
+    {
+      "id": "native.android.c6f9da7008df05a6",
+      "source": "Generate a QR code.",
+      "translated": "產生 QR 碼。"
+    },
+    {
+      "id": "native.android.96d40475de2885d6",
+      "source": "Choose from gallery",
+      "translated": "從相簿選擇"
+    },
+    {
+      "id": "native.android.fd83bd36419ef526",
+      "source": "QR code not accepted",
+      "translated": "不接受此 QR 碼"
+    },
+    {
+      "id": "native.android.4dde43318559c65d",
+      "source": "Choose another image",
+      "translated": "選擇其他圖片"
+    },
+    {
+      "id": "native.android.54bab6e4054484d0",
+      "source": "Scan QR code",
+      "translated": "掃描 QR 碼"
+    },
+    {
+      "id": "native.android.05987e822ac102ec",
+      "source": "Open the camera and frame the code from openclaw qr.",
+      "translated": "開啟相機並對準 openclaw qr 的代碼。"
+    },
+    {
+      "id": "native.android.90fa932d2e0adbd9",
+      "source": "Align the QR code inside the square.",
+      "translated": "將 QR 碼對齊在方框內。"
+    },
+    {
+      "id": "native.android.7a817ddf54373dbf",
+      "source": "Camera access is needed to scan the setup QR.",
+      "translated": "需要相機存取權限才能掃描設定 QR 碼。"
+    },
+    {
+      "id": "native.android.c8d5f12cb28f3853",
+      "source": "Allow camera",
+      "translated": "允許相機"
+    },
+    {
+      "id": "native.android.7efba153567b1232",
+      "source": "Close scanner",
+      "translated": "關閉掃描器"
+    },
+    {
+      "id": "native.android.b8d5431e1e441f74",
+      "source": "Enter setup code",
+      "translated": "輸入設定代碼"
     },
     {
       "id": "native.android.41e3fbccb2ad5a4c",
       "source": "Setup code",
       "translated": "設定代碼"
+    },
+    {
+      "id": "native.android.06a2214da1eee841",
+      "source": "Paste setup code",
+      "translated": "貼上設定代碼"
+    },
+    {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "設定代碼未被接受"
+    },
+    {
+      "id": "native.android.9aaee5a05de93dbe",
+      "source": "Use setup code",
+      "translated": "使用設定代碼"
+    },
+    {
+      "id": "native.android.073c93545602b198",
+      "source": "Manual setup",
+      "translated": "手動設定"
+    },
+    {
+      "id": "native.android.46d58ca58c32ad52",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
     },
     {
       "id": "native.android.d54b9e3433ffd809",
@@ -1084,24 +1229,29 @@
       "translated": "連接埠"
     },
     {
-      "id": "native.android.20d94e1cedd3f319",
-      "source": "TLS off",
-      "translated": "TLS 關閉"
+      "id": "native.android.1b0d9893ae4c0682",
+      "source": "Use the Gateway computer's LAN address or secure remote hostname.",
+      "translated": "使用 Gateway 電腦的 LAN 位址或安全的遠端主機名稱。"
     },
     {
-      "id": "native.android.a3a158b4a10d34ba",
-      "source": "TLS on",
-      "translated": "TLS 開啟"
+      "id": "native.android.bfc48711d6deed92",
+      "source": "Token",
+      "translated": "Token"
     },
     {
-      "id": "native.android.a02f48c59c8b7b9d",
-      "source": "Local",
-      "translated": "本機"
+      "id": "native.android.7ac2b9aec9d78cda",
+      "source": "Paste token",
+      "translated": "貼上 token"
     },
     {
-      "id": "native.android.aae4212f2ff4df98",
-      "source": "Token optional",
-      "translated": "Token 選填"
+      "id": "native.android.96ba0e3919c3955a",
+      "source": "Paste a shared Gateway token or operator-issued token.",
+      "translated": "貼上共用的 Gateway token 或操作員核發的 token。"
+    },
+    {
+      "id": "native.android.4a5a1702f0130328",
+      "source": "Password",
+      "translated": "密碼"
     },
     {
       "id": "native.android.e7045d344dd32ddc",
@@ -1109,24 +1259,99 @@
       "translated": "密碼選填"
     },
     {
-      "id": "native.android.369ee061f6d7881f",
-      "source": "Pair with Gateway",
-      "translated": "與 Gateway 配對"
+      "id": "native.android.1259d0d0d1671ed7",
+      "source": "Connection type",
+      "translated": "連線類型"
     },
     {
-      "id": "native.android.82b296ed39647687",
-      "source": "Last gateway",
-      "translated": "上一個 gateway"
+      "id": "native.android.278d9abb3abc12e6",
+      "source": "Local network",
+      "translated": "本機網路"
     },
     {
-      "id": "native.android.e0e5d2bb055863fb",
-      "source": "Edit connection",
-      "translated": "編輯連線"
+      "id": "native.android.4aa2b8be11a971eb",
+      "source": "Secure remote",
+      "translated": "安全遠端"
     },
     {
-      "id": "native.android.ea2f18dad7749613",
-      "source": "Copy diagnostic",
-      "translated": "複製診斷資訊"
+      "id": "native.android.8c31e2762b496d61",
+      "source": "Local works for LAN or emulator hosts. Secure remote is for wss:// or Tailscale Serve/Funnel.",
+      "translated": "本機適用於 LAN 或模擬器主機。安全遠端適用於 wss:// 或 Tailscale Serve/Funnel。"
+    },
+    {
+      "id": "native.android.24a0a4819f223b87",
+      "source": "Could not test connection",
+      "translated": "無法測試連線"
+    },
+    {
+      "id": "native.android.9a8f8ba539d4dd68",
+      "source": "Test connection",
+      "translated": "測試連線"
+    },
+    {
+      "id": "native.android.a1c6ad798cdb4e32",
+      "source": "View details",
+      "translated": "檢視詳細資料"
+    },
+    {
+      "id": "native.android.ebdc41fd34eab0a5",
+      "source": "Connection details",
+      "translated": "連線詳細資料"
+    },
+    {
+      "id": "native.android.f982d1f6ad7b3e5d",
+      "source": "Copy",
+      "translated": "複製"
+    },
+    {
+      "id": "native.android.fa2a2369f23aa195",
+      "source": "Close",
+      "translated": "關閉"
+    },
+    {
+      "id": "native.android.50cca1e186823cd6",
+      "source": "Details copied",
+      "translated": "詳細資料已複製"
+    },
+    {
+      "id": "native.android.31a4bf3ed4071f7c",
+      "source": "Approve node access",
+      "translated": "核准節點存取權"
+    },
+    {
+      "id": "native.android.f43cb6ed03dc6766",
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
+      "translated": "Gateway 配對已完成。請將這支手機核准為節點，讓 OpenClaw 可以使用你啟用的裝置功能。"
+    },
+    {
+      "id": "native.android.8e49feba12c350ac",
+      "source": "On the Gateway computer, run:",
+      "translated": "在 Gateway 電腦上執行："
+    },
+    {
+      "id": "native.android.6189b5e2af7cc793",
+      "source": "Use the requestId from the pending command in the approve command.",
+      "translated": "在 approve 命令中使用待處理命令的 requestId。"
+    },
+    {
+      "id": "native.android.53bcd45eeb574d74",
+      "source": "I have approved",
+      "translated": "我已核准"
+    },
+    {
+      "id": "native.android.cdc44aaeb8bd6e4a",
+      "source": "Still waiting for approval",
+      "translated": "仍在等待核准"
+    },
+    {
+      "id": "native.android.df5cc00eb95c21ad",
+      "source": "Run the approve command on the Gateway computer, then check again.",
+      "translated": "在 Gateway 電腦上執行 approve 命令，然後再次檢查。"
+    },
+    {
+      "id": "native.android.f579f91c216dd6c4",
+      "source": "OK",
+      "translated": "確定"
     },
     {
       "id": "native.android.b80462122abbe312",
@@ -1134,44 +1359,9 @@
       "translated": "複製核准命令"
     },
     {
-      "id": "native.android.a31f2beb68298aa8",
-      "source": "Allow permissions",
-      "translated": "允許權限"
-    },
-    {
-      "id": "native.android.b82104d8df1d4b4a",
-      "source": "These permissions keep OpenClaw secure\nand useful.",
-      "translated": "這些權限可讓 OpenClaw 保持安全\n且實用。"
-    },
-    {
-      "id": "native.android.03b95088ba72bd8e",
-      "source": "Open $title",
-      "translated": "開啟 $title"
-    },
-    {
-      "id": "native.android.f38ca3445453a6bb",
-      "source": "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
-      "translated": "選擇這支手機可以與 OpenClaw 分享的內容。您稍後可以在「設定」中變更。"
-    },
-    {
-      "id": "native.android.44549cfd7e6a1ab8",
-      "source": "Back",
-      "translated": "返回"
-    },
-    {
-      "id": "native.android.4b54af42d17dec84",
-      "source": "Permission Setup",
-      "translated": "權限設定"
-    },
-    {
-      "id": "native.android.437599c024df158e",
-      "source": "Granted",
-      "translated": "已授予"
-    },
-    {
-      "id": "native.android.cf8344d3562e28e3",
-      "source": "Not granted",
-      "translated": "未授予"
+      "id": "native.android.d4c3bcf880727fb3",
+      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "只啟用你願意讓 OpenClaw 在此手機連線期間使用的存取權。你之後可以在 Android 設定中變更這些權限。"
     },
     {
       "id": "native.android.d7ea800cc2475013",
@@ -1179,24 +1369,19 @@
       "translated": "繼續"
     },
     {
-      "id": "native.android.547f11a819721ffb",
-      "source": "Scan fresh setup code",
-      "translated": "掃描新的設定代碼"
+      "id": "native.android.44549cfd7e6a1ab8",
+      "source": "Back",
+      "translated": "返回"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "重試連線"
+      "id": "native.android.f3f0527db434d756",
+      "source": "Permissions",
+      "translated": "權限"
     },
     {
-      "id": "native.android.e44224ed4df1700f",
-      "source": "Setup code expired. Scan a fresh setup QR.",
-      "translated": "設定代碼已過期。請掃描新的設定 QR 碼。"
-    },
-    {
-      "id": "native.android.e03bb4ea463ba7a5",
-      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
-      "translated": "Gateway 存取需要審查。請檢查 Gateway 驗證範圍，然後重試。"
+      "id": "native.android.29732759e050c874",
+      "source": "The code may have expired or been generated for another Gateway.",
+      "translated": "代碼可能已過期，或是為另一個 Gateway 產生。"
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1224,9 +1409,9 @@
       "translated": "已儲存的驗證無效。請重新驗證，或重設此 gateway 連線。"
     },
     {
-      "id": "native.android.3f61f2c34784ed0f",
-      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
-      "translated": "尚未設定 Gateway 驗證。請在 Gateway 主機上設定，然後重試。"
+      "id": "native.android.214b03b4cd2199b1",
+      "source": "Gateway authentication is not configured. Edit this connection and try again.",
+      "translated": "未設定 Gateway 驗證。請編輯此連線後再試一次。"
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1244,9 +1429,14 @@
       "translated": "已複製核准指令"
     },
     {
-      "id": "native.android.bc9715de99c769c7",
-      "source": "Diagnostic copied",
-      "translated": "已複製診斷資訊"
+      "id": "native.android.437599c024df158e",
+      "source": "Granted",
+      "translated": "已授予"
+    },
+    {
+      "id": "native.android.cf8344d3562e28e3",
+      "source": "Not granted",
+      "translated": "未授予"
     },
     {
       "id": "native.android.561d07951dc36959",
@@ -2459,6 +2649,11 @@
       "translated": "需要注意"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "開啟 ${row.title}"
+    },
+    {
       "id": "native.android.a65477861c7203aa",
       "source": "Open session",
       "translated": "開啟工作階段"
@@ -2567,11 +2762,6 @@
       "id": "native.android.45005deba537cc59",
       "source": "Open profile",
       "translated": "開啟個人檔案"
-    },
-    {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "開啟 ${row.title}"
     },
     {
       "id": "native.android.22d755834386db07",
@@ -3404,51 +3594,6 @@
       "translated": "已解析端點"
     },
     {
-      "id": "native.android.3d9d01cc0af8727d",
-      "source": "Gateway Setup",
-      "translated": "Gateway 設定"
-    },
-    {
-      "id": "native.android.fff6a6f130e88354",
-      "source": "Connect to your Gateway",
-      "translated": "連線到你的 Gateway"
-    },
-    {
-      "id": "native.android.77a54beda22bfeb7",
-      "source": "Scan setup code",
-      "translated": "掃描設定碼"
-    },
-    {
-      "id": "native.android.8f525f9218215b42",
-      "source": "Use your Gateway QR or setup code",
-      "translated": "使用你的 Gateway QR 或設定碼"
-    },
-    {
-      "id": "native.android.40da32c36971b959",
-      "source": "Nearby gateway",
-      "translated": "附近的 Gateway"
-    },
-    {
-      "id": "native.android.7423bd0086e6897e",
-      "source": "Enter gateway URL",
-      "translated": "輸入 Gateway URL"
-    },
-    {
-      "id": "native.android.c9420b6801f5a76f",
-      "source": "Connect using a manual URL",
-      "translated": "使用手動 URL 連線"
-    },
-    {
-      "id": "native.android.4b55356d9bf6e444",
-      "source": "Permissions",
-      "translated": "權限"
-    },
-    {
-      "id": "native.android.c49a911b95af5d5d",
-      "source": "Done",
-      "translated": "完成"
-    },
-    {
       "id": "native.android.288b83f93172c633",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "translated": "信任此 Gateway 前，請先驗證憑證指紋。\n\n%1$s"
@@ -3457,11 +3602,6 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Gateway 憑證已變更。僅在這是你預期的情況下繼續。\n\n舊 SHA-256:\n%1$s\n\n新 SHA-256:\n%2$s"
-    },
-    {
-      "id": "native.android.6ffa3d752514836d",
-      "source": "Gateway Recovery",
-      "translated": "Gateway 復原"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
