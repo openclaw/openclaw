@@ -63,6 +63,21 @@ Observed results:
 Review follow-up validation after restoring the pairing QR sensitive-display
 path:
 
+- Reviewer follow-up validation after restoring default `sessions_spawn`
+  prompt guidance, rerun on 2026-07-03:
+  - Addressed reviewer P2: ordinary durable-disabled prompts again include the
+    current-main line ``Larger work: use `sessions_spawn`; completion is
+push-based.``
+  - Durable-specific `Sub-agent orchestration` wording remains gated behind an
+    explicit durable orchestration policy or durable runtime enablement.
+  - Regression proof: `src/agents/system-prompt.test.ts` asserts the default
+    prompt contains the larger-work `sessions_spawn` guidance, while existing
+    tests continue to assert durable orchestration guidance appears only for the
+    enabled paths.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents-core.config.ts src/agents/system-prompt.test.ts`
+    - 1 file, 92 tests passed.
+  - `git diff --check`
+    - passed.
 - Reviewer follow-up validation after restoring current-main ACP task ownership
   and terminal session cleanup invariants, rerun on 2026-07-02:
   - Addressed reviewer P1: confirmed backend ACP manual-spawn child turns no
