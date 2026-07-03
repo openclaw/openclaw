@@ -29,6 +29,7 @@ function toSessionTranscriptPromptMessage(
     sender: entry.sourceChannel ? `${sender} (${entry.sourceChannel})` : sender,
     ...(entry.timestamp !== undefined ? { timestamp_ms: entry.timestamp } : {}),
     body: entry.text,
+    role: entry.role,
     ...(entry.sourceChannel ? { source_channel: entry.sourceChannel } : {}),
   };
 }

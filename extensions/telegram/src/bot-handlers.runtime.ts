@@ -47,6 +47,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -180,9 +181,10 @@ import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcri
 type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
   timestamp_ms?: unknown;
+  role?: unknown;
 };
 
-function resolvePromptContextTextDedupeKey(
+export function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
   if (typeof message.body !== "string" || !message.body.trim()) {
@@ -191,7 +193,21 @@ function resolvePromptContextTextDedupeKey(
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  return `${message.timestamp_ms}:${message.body.trim()}`;
+  // Strip inline directive tags (e.g. `[[reply_to_current]]`) so
+  // session-transcript rows and Telegram cache rows with the same visible
+  // text produce the same dedupe key (#99117).
+  const stripped = stripInlineDirectiveTagsForDelivery(message.body).text.trim();
+  if (!stripped) {
+    return undefined;
+  }
+  // Bot-owned rows (role === "assistant" from session transcript or cache)
+  // may have timestamps that drift by several seconds for the same physical
+  // reply. Use only stripped text as the key so they still dedupe.
+  // User rows keep timestamp to preserve real repeated messages (#99546).
+  if (message.role === "assistant") {
+    return stripped;
+  }
+  return `${message.timestamp_ms}:${stripped}`;
 }
 
 export const registerTelegramHandlers = ({
@@ -1262,6 +1278,8 @@ export const registerTelegramHandlers = ({
     media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,
     is_reply_target: flags?.replyTarget === true ? true : undefined,
+    role:
+      String(node.senderId) === String(bot.botInfo.id) ? ("assistant" as const) : ("user" as const),
   });
 
   const buildPromptContextForMessage = async (
