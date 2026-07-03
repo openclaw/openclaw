@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setBundledPluginsDirOverrideForTest } from "./bundled-dir.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -18,6 +19,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
+  setBundledPluginsDirOverrideForTest(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -810,5 +812,50 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
     // Only the scoped pluginId should appear
     expect(registry.plugins.map((p) => p.id)).toEqual(["installed"]);
+  });
+
+  it("ignores bundled plugin load paths on installed-index (P2 regression)", () => {
+    const installedRoot = makeTempDir();
+    const workspaceRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(workspaceRoot, "workspace-plugin", "workspace-");
+
+    // Create a temp dir that mimics a bundled dist/extensions directory so
+    // findPackagedBundledRoot resolves it and the alias guard fires.
+    // The real resolveBundledPluginsDir returns undefined under VITEST, so we
+    // override it via setBundledPluginsDirOverrideForTest so the bundled-root
+    // path appears in resolvePluginSourceRoots.
+    const bundledBase = makeTempDir();
+    const bundledRoot = path.join(bundledBase, "dist", "extensions");
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    setBundledPluginsDirOverrideForTest(bundledRoot);
+
+    // Write a dummy plugin inside the bundled dir; it must NOT appear in the
+    // result if the alias guard correctly skips bundled paths.
+    writePlugin(bundledRoot, "bundled-lookalike", "bundled-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [bundledRoot, workspaceRoot],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins.map((p) => p.id)).toEqual(
+      expect.arrayContaining(["installed", "workspace-plugin"]),
+    );
+    // Bundled lookalike should NOT appear in the result entries
+    expect(registry.plugins.map((p) => p.id)).not.toContain("bundled-lookalike");
+    // Only the 2 valid plugins should be present
+    expect(registry.plugins).toHaveLength(2);
   });
 });

@@ -1653,10 +1653,32 @@ export function discoverFromConfigPaths(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
   const result = createDiscoveryResult();
   const seen = new Set<string>();
   const realpathCache = new Map<string, string>();
   for (const loadPath of params.loadPaths) {
+    const resolved = resolveUserPath(loadPath, env);
+    // Preserve the bundled-load-path alias guard used by normal discovery:
+    // if the path points at OpenClaw's current or legacy bundled plugin
+    // directory, skip it and warn rather than adding it as a config-origin
+    // candidate. Without this check, the installed-index fallback would treat
+    // bundled directories as explicit config candidates and override or
+    // duplicate bundled plugins.
+    const bundledAlias = resolvePackagedBundledLoadPathAlias({
+      bundledRoot: roots.stock,
+      loadPath: resolved,
+    });
+    if (bundledAlias) {
+      result.diagnostics.push({
+        level: "warn",
+        source: loadPath,
+        message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
+      });
+      continue;
+    }
     discoverFromPath({
       rawPath: loadPath,
       origin: "config",
