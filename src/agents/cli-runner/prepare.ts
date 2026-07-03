@@ -601,14 +601,16 @@ export async function prepareCliRunContext(
             sessionKey: params.sessionKey ?? "",
             messageProvider: params.messageChannel ?? params.messageProvider,
             currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            currentInboundAudio: params.currentInboundAudio,
+            // CLI binding hashes must use session-stable prompt facts. Per-sender
+            // and per-message scope stays in the runtime MCP env/list-call path.
+            currentThreadTs: undefined,
+            currentMessageId: undefined,
+            currentInboundAudio: undefined,
             accountId: params.agentAccountId,
-            inboundEventKind: params.currentInboundEventKind,
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget,
-            senderIsOwner: params.senderIsOwner,
+            inboundEventKind: undefined,
+            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+            senderIsOwner: undefined,
           }).tools
         : [];
     const promptToolNamesHash =

@@ -2117,6 +2117,131 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     },
   );
 
+  it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      }));
+      const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a message",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+          ...(scope.senderIsOwner === false
+            ? []
+            : [
+                {
+                  name: "gateway",
+                  label: "Gateway",
+                  description: "Manage the gateway",
+                  parameters: { type: "object", properties: {} },
+                  execute: vi.fn(),
+                },
+              ]),
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const cliSessionBindingFacts = {
+        extraSystemPromptStatic: "group:telegram:group:message_tool_only",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      };
+      const first = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "first ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-tool-scope-a",
+        extraSystemPrompt: "volatile owner turn",
+        currentMessageId: "owner-message",
+        senderIsOwner: true,
+        cliSessionBindingFacts,
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+      const second = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "second ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-tool-scope-b",
+        extraSystemPrompt: "volatile non-owner turn",
+        currentMessageId: "non-owner-message",
+        senderIsOwner: false,
+        cliSessionBindingFacts,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          promptToolNamesHash: first.promptToolNamesHash,
+          cwdHash: hashCliSessionText(dir),
+          mcpConfigHash: first.preparedBackend.mcpConfigHash,
+          mcpResumeHash: first.preparedBackend.mcpResumeHash,
+        },
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(2);
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          senderIsOwner: undefined,
+          currentMessageId: undefined,
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      );
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          senderIsOwner: undefined,
+          currentMessageId: undefined,
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      );
+      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+      expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {
