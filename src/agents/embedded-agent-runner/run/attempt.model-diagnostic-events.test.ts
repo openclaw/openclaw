@@ -1332,5 +1332,49 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "durationMs");
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
+
+  it("omits JSON-unsupported non-partial chunk fields without reading partial", async () => {
+    let partialReads = 0;
+    const chunk: Record<string, unknown> = {
+      type: "response.output_text.delta",
+      delta: "hello",
+      ignoredUndefined: undefined,
+      ignoredFunction: () => "nope",
+    };
+    Object.defineProperty(chunk, "partial", {
+      enumerable: true,
+      get() {
+        partialReads += 1;
+        throw new Error("partial snapshot should not be read");
+      },
+    });
+
+    const events: unknown[] = [];
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      async function* () {
+        yield chunk;
+      },
+      {
+        runId: "run-json-unsupported",
+        emit: (event) => events.push(event),
+      },
+    );
+
+    for await (const _ of wrapped()) {
+      // drain stream
+    }
+
+    const completed = events.find(
+      (event): event is { responseStreamBytes: number } =>
+        isRecord(event) && event.type === "model_call.completed",
+    );
+    expect(completed?.responseStreamBytes).toBe(
+      Buffer.byteLength(
+        JSON.stringify({ type: "response.output_text.delta", delta: "hello" }),
+        "utf8",
+      ),
+    );
+    expect(partialReads).toBe(0);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

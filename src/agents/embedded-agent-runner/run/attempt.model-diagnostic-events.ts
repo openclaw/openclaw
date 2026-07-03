@@ -142,29 +142,28 @@ function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefin
   return undefined;
 }
 
+function utf8JsonObjectByteLengthWithoutOwnKey(
+  object: Record<string, unknown>,
+  excludedKey: string,
+): number {
+  let json = "{";
+  let hasEntry = false;
+  for (const key of Object.keys(object)) {
+    if (key === excludedKey) continue;
+    const valueJson = JSON.stringify(object[key]);
+    if (valueJson === undefined) continue;
+    if (hasEntry) json += ",";
+    json += `${JSON.stringify(key)}:${valueJson}`;
+    hasEntry = true;
+  }
+  json += "}";
+  return Buffer.byteLength(json, "utf8");
+}
+
 function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {
-  if (!isRecord(chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  const deltaBytes = streamDeltaByteLength(chunk);
-  if (deltaBytes !== undefined) {
-    return deltaBytes;
-  }
-  if (!("partial" in chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
-  // count the new stream payload, not the answer-so-far replay.
-  // Avoid object rest on this stream hot path while preserving own __proto__
-  // chunk fields as data keys instead of hitting Object.prototype's setter.
-  const snapshotlessChunk = Object.create(null) as Record<string, unknown>;
-  for (const key of Object.keys(chunk)) {
-    if (key === "partial") {
-      continue;
-    }
-    snapshotlessChunk[key] = chunk[key];
-  }
-  return utf8JsonByteLength(snapshotlessChunk);
+  if (!isRecord(chunk)) return utf8JsonByteLength(chunk);
+  if (!("partial" in chunk)) return utf8JsonByteLength(chunk);
+  return utf8JsonObjectByteLengthWithoutOwnKey(chunk, "partial");
 }
 
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
@@ -398,15 +397,30 @@ function baseModelCallEvent(
     model: ctx.model,
     trace,
   };
-  if (ctx.sessionKey) event.sessionKey = ctx.sessionKey;
-  if (ctx.sessionId) event.sessionId = ctx.sessionId;
-  if (ctx.api) event.api = ctx.api;
-  if (ctx.transport) event.transport = ctx.transport;
-  if (ctx.contextTokenBudget) event.contextTokenBudget = ctx.contextTokenBudget;
-  if (ctx.contextWindowSource) event.contextWindowSource = ctx.contextWindowSource;
-  if (ctx.contextWindowReferenceTokens)
+  if (ctx.sessionKey) {
+    event.sessionKey = ctx.sessionKey;
+  }
+  if (ctx.sessionId) {
+    event.sessionId = ctx.sessionId;
+  }
+  if (ctx.api) {
+    event.api = ctx.api;
+  }
+  if (ctx.transport) {
+    event.transport = ctx.transport;
+  }
+  if (ctx.contextTokenBudget) {
+    event.contextTokenBudget = ctx.contextTokenBudget;
+  }
+  if (ctx.contextWindowSource) {
+    event.contextWindowSource = ctx.contextWindowSource;
+  }
+  if (ctx.contextWindowReferenceTokens) {
     event.contextWindowReferenceTokens = ctx.contextWindowReferenceTokens;
-  if (promptStats) event.promptStats = promptStats;
+  }
+  if (promptStats) {
+    event.promptStats = promptStats;
+  }
   return event;
 }
 
