@@ -2951,7 +2951,7 @@ export async function runCodexAppServerAttempt(
       });
     }
 
-    const createdSteeringQueue = createCodexSteeringQueue({
+    activeSteeringQueue = createCodexSteeringQueue({
       client,
       threadId: thread.threadId,
       turnId: activeTurnId,
@@ -2959,12 +2959,11 @@ export async function runCodexAppServerAttempt(
         userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
       signal: runAbortController.signal,
     });
-    activeSteeringQueue = createdSteeringQueue;
-    steeringQueueRef.current = createdSteeringQueue;
+    steeringQueueRef.current = activeSteeringQueue;
     handle = {
       kind: "embedded" as const,
       queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
-        createdSteeringQueue.queue(text, optionsLocal),
+        activeSteeringQueue.queue(text, optionsLocal),
       isStreaming: () => !completed && !runAbortController.signal.aborted,
       isStopped: () => completed || timedOut || runAbortController.signal.aborted,
       isCompacting: () => projectorRef.current?.isCompacting() ?? false,
