@@ -3,7 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
@@ -47,6 +47,7 @@ type SlackDispatchCompletion = {
 
 type QueuedSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
   dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
+  retryAttempt?: number;
 };
 
 function createSlackDispatchCompletion(): SlackDispatchCompletion {
@@ -60,12 +61,24 @@ function createSlackDispatchCompletion(): SlackDispatchCompletion {
 }
 
 const APP_MENTION_RETRY_TTL_MS = 60_000;
+const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
+const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 export class SlackRetryableInboundError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "SlackRetryableInboundError";
   }
+}
+
+function isRetryableSlackInboundError(error: unknown): boolean {
+  if (error instanceof SlackRetryableInboundError) {
+    return true;
+  }
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
 }
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
@@ -101,6 +114,39 @@ export function createSlackMessageHandler(params: {
     buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
     shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
+      const retryEntries = (sourceError: unknown): boolean => {
+        const retryable = isRetryableSlackInboundError(sourceError);
+        if (!retryable) {
+          return false;
+        }
+        const nextEntries = entries
+          .map((entry) => {
+            const retryAttempt = entry.opts.retryAttempt ?? 0;
+            if (retryAttempt >= RETRYABLE_FLUSH_MAX_ATTEMPTS) {
+              return null;
+            }
+            return {
+              ...entry,
+              opts: {
+                ...entry.opts,
+                dispatchCompletion: undefined,
+                retryAttempt: retryAttempt + 1,
+              },
+            };
+          })
+          .filter((entry) => entry !== null);
+        if (nextEntries.length === 0) {
+          return false;
+        }
+        setTimeout(() => {
+          for (const entry of nextEntries) {
+            void debouncer.enqueue(entry).catch((err: unknown) => {
+              ctx.runtime.error?.(`slack inbound retry enqueue failed: ${formatErrorMessage(err)}`);
+            });
+          }
+        }, RETRYABLE_FLUSH_RETRY_DELAY_MS);
+        return true;
+      };
       const completions = entries
         .map((entry) => entry.opts.dispatchCompletion)
         .filter((completion) => completion !== undefined);
@@ -187,7 +233,7 @@ export function createSlackMessageHandler(params: {
                 messages: entries.map((entry) => entry.message),
               });
             } catch (error) {
-              if (!(error instanceof SlackRetryableInboundError)) {
+              if (!isRetryableSlackInboundError(error)) {
                 await recordSlackInboundMessageDeliveries({
                   accountId: ctx.accountId,
                   messages: entries.map((entry) => entry.message),
@@ -196,7 +242,7 @@ export function createSlackMessageHandler(params: {
               throw error;
             }
           } catch (error) {
-            if (error instanceof SlackRetryableInboundError) {
+            if (isRetryableSlackInboundError(error)) {
               if (seenMessageKey) {
                 appMentionDispatchedKeys.delete(seenMessageKey);
               }
@@ -209,6 +255,7 @@ export function createSlackMessageHandler(params: {
           completion.resolve();
         }
       } catch (error) {
+        retryEntries(error);
         for (const completion of completions) {
           completion.reject(error);
         }
