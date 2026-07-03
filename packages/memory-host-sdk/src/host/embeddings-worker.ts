@@ -300,6 +300,13 @@ class LocalEmbeddingWorkerClient {
     // Resolve a stable Node executable path so the worker fork survives
     // Homebrew upgrades that delete old Cellar binaries from under the process.
     const execPath = await resolveStableWorkerExecPath();
+
+    // Re-check after the async yield — a concurrent restart request may
+    // have already forked a new child while we resolved the executable path.
+    if (this.child?.connected) {
+      return this.child;
+    }
+
     const child = fork(this.scriptPath, [], {
       execPath,
       execArgv: resolveWorkerExecArgv(),
