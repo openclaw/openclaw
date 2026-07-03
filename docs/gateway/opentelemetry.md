@@ -216,7 +216,7 @@ on the public diagnostic event bus.
 - `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; no raw response content)
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
-- `openclaw.auth_profile.fallback` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.auth_profile.from_hash`, `openclaw.auth_profile.to_hash`, `openclaw.auth_profile.reason`)
+- `openclaw.auth_profile.fallback` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.auth_profile.reason`; profile hashes are exported on the corresponding span attributes)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
 ### Message flow

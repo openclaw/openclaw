@@ -1811,7 +1811,7 @@ async function runWithModelFallbackInternal<T>(
           fromModel: candidate.model,
           toProvider: nextCandidate.provider,
           toModel: nextCandidate.model,
-          reason: failure.reason,
+          reason: failure.reason ?? "unknown",
           suspended: normalized instanceof FailoverError ? Boolean(normalized.suspend) : false,
         });
       }
