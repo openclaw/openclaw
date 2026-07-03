@@ -1,17 +1,23 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPrimaryButton
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
+import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -32,15 +38,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
@@ -63,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -82,12 +91,14 @@ fun ChatScreen(
   viewModel: MainViewModel,
   onVoice: () -> Unit,
   onOpenSessions: () -> Unit,
+  onOpenGatewaySettings: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -96,7 +107,15 @@ fun ChatScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val manualHost by viewModel.manualHost.collectAsState()
+  val manualPort by viewModel.manualPort.collectAsState()
+  val manualTls by viewModel.manualTls.collectAsState()
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
+  val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
+  val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
+  val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
+  val gatewayOffline = !gatewayConnectionDisplay.isConnected
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -153,12 +172,11 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 18.dp, vertical = 6.dp),
-    verticalArrangement = Arrangement.spacedBy(5.dp),
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
-      thinkingLevel = thinkingLevel,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onMore = {
@@ -179,16 +197,21 @@ fun ChatScreen(
     )
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
-      ChatNotice(title = "Chat needs attention", body = userFacingChatError(error))
+      ChatNotice(
+        title = "Chat needs attention",
+        body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
+      )
     }
 
     ChatMessageList(
+      sessionKey = sessionKey,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
       onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
@@ -200,11 +223,22 @@ fun ChatScreen(
       thinkingLevel = thinkingLevel,
       contextUsage = contextUsage,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
+      offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       onVoice = onVoice,
+      onFixConnection = onOpenGatewaySettings,
+      onCopyDiagnostics = {
+        copyGatewayDiagnosticsReport(
+          context = context,
+          screen = "chat composer",
+          gatewayAddress = gatewayAddress,
+          statusText = offlineStatus,
+        )
+      },
       onAbort = viewModel::abortChat,
       onSend = {
         val message = input.trim()
@@ -261,11 +295,11 @@ private fun ChatSessionSwitcher(
     if (sessions.size > choices.size) {
       Surface(
         onClick = onOpenSessions,
-        modifier = Modifier.heightIn(min = 36.dp),
+        modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
         shape = RoundedCornerShape(ClawTheme.radii.pill),
-        color = ClawTheme.colors.canvas,
+        color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
         contentColor = ClawTheme.colors.textMuted,
-        border = BorderStroke(1.dp, ClawTheme.colors.border),
+        border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
       ) {
         Row(
           modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -288,11 +322,11 @@ private fun ChatSessionChip(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.heightIn(min = 36.dp),
+    modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = if (active) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
-    contentColor = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.text,
-    border = BorderStroke(1.dp, if (active) ClawTheme.colors.primary else ClawTheme.colors.border),
+    color = if (active) ClawTheme.colors.surfacePressed.copy(alpha = 0.9f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.7f)),
   ) {
     Text(
       text = text,
@@ -307,48 +341,56 @@ private fun ChatSessionChip(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
-  thinkingLevel: String,
   healthOk: Boolean,
   pendingRunCount: Int,
   onMore: () -> Unit,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget))
-
-    Column(
-      modifier = Modifier.weight(1f),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(3.dp),
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      Icon(
+        painter = painterResource(id = R.drawable.openclaw_logo),
+        contentDescription = null,
+        modifier = Modifier.size(25.dp),
+        tint = ClawTheme.colors.text,
+      )
       Text(
-        text = sessionTitle,
-        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        text = "OpenClaw",
+        style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
         color = ClawTheme.colors.text,
+        modifier = Modifier.weight(1f),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        textAlign = TextAlign.Center,
       )
       ModelPill(
         text =
           when {
             pendingRunCount > 0 -> "Working"
-            healthOk -> "auto"
-            else -> "offline"
+            healthOk -> "Ready"
+            else -> "Offline"
           },
         status =
           when {
             pendingRunCount > 0 -> ClawStatus.Warning
-            healthOk -> ClawStatus.Neutral
+            healthOk -> ClawStatus.Success
             else -> ClawStatus.Danger
           },
       )
+      HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
-
-    HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Text(text = "Chat", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(
+        text = sessionTitle,
+        style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -365,7 +407,13 @@ private fun ModelPill(
     }
   Surface(
     shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = ClawTheme.colors.surfaceRaised,
+    color =
+      when (status) {
+        ClawStatus.Success -> ClawTheme.colors.successSoft
+        ClawStatus.Warning -> ClawTheme.colors.warningSoft
+        ClawStatus.Danger -> ClawTheme.colors.dangerSoft
+        ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
+      },
     contentColor = ClawTheme.colors.textMuted,
     border = BorderStroke(1.dp, borderColor),
   ) {
@@ -399,16 +447,17 @@ private fun HeaderIcon(
 
 @Composable
 private fun ChatMessageList(
+  sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val listState = rememberLazyListState()
   val timeline =
     remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
       buildChatTimeline(
@@ -418,17 +467,17 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
       )
     }
-
-  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
-    timeline.scrollTargetIndex?.let { index ->
-      listState.animateScrollToItem(index = index)
-    }
-  }
+  val readerScroll =
+    rememberChatReaderScrollController(
+      sessionKey = sessionKey,
+      timeline = timeline,
+      historyLoading = historyLoading,
+    )
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      state = listState,
+      state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
@@ -459,7 +508,33 @@ private fun ChatMessageList(
       if (historyLoading) {
         ClawLoadingState(title = "Loading session", modifier = Modifier.align(Alignment.Center))
       } else {
-        EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
+        EmptyChatHint(
+          healthOk = healthOk,
+          gatewayOffline = gatewayOffline,
+          onStarterPrompt = onStarterPrompt,
+          modifier = Modifier.align(Alignment.Center),
+        )
+      }
+    }
+
+    if (readerScroll.showJumpToLatest) {
+      Surface(
+        onClick = readerScroll.jumpToLatest,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = ClawTheme.colors.surfaceRaised,
+        contentColor = ClawTheme.colors.text,
+        shadowElevation = 6.dp,
+        border = BorderStroke(1.dp, ClawTheme.colors.border),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+          Text(text = "Jump to latest", style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+        }
       }
     }
   }
@@ -468,6 +543,7 @@ private fun ChatMessageList(
 @Composable
 private fun EmptyChatHint(
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -482,8 +558,10 @@ private fun EmptyChatHint(
         text =
           if (healthOk) {
             "Start with a prompt, or use voice."
+          } else if (gatewayOffline) {
+            "Use the recovery options below to reconnect."
           } else {
-            "Reconnect from Settings to send messages."
+            "Chat is checking Gateway health."
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
@@ -493,6 +571,21 @@ private fun EmptyChatHint(
     if (healthOk) {
       StarterPromptList(onStarterPrompt = onStarterPrompt)
     }
+  }
+}
+
+@Composable
+private fun ChatOfflineActions(
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    ClawPrimaryButton(text = "Fix connection", icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
+    ClawSecondaryButton(text = "Copy diagnostics", icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
   }
 }
 
@@ -577,13 +670,15 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.56f),
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
       shape = RoundedCornerShape(7.dp),
-      color = ClawTheme.colors.surfaceRaised,
+      color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
       contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
+      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+      tonalElevation = 1.dp,
+      shadowElevation = 2.dp,
     ) {
-      Column(modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
           text =
             when {
@@ -620,15 +715,7 @@ private fun ChatText(
   text: String,
   textColor: Color,
 ) {
-  if (text.hasMarkdownSyntax()) {
-    ChatMarkdown(text = text, textColor = textColor)
-  } else {
-    Text(
-      text = text,
-      style = ClawTheme.type.body,
-      color = textColor,
-    )
-  }
+  ChatMarkdown(text = text, textColor = textColor)
 }
 
 @Composable
@@ -690,11 +777,15 @@ private fun ChatComposer(
   thinkingLevel: String,
   contextUsage: ChatContextUsage,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
+  offlineStatus: String,
   pendingRunCount: Int,
   onThinkingLevelChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   onVoice: () -> Unit,
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
@@ -717,6 +808,14 @@ private fun ChatComposer(
       )
     }
 
+    if (!healthOk && gatewayOffline) {
+      ChatOfflineNotice(
+        status = offlineStatus,
+        onFixConnection = onFixConnection,
+        onCopyDiagnostics = onCopyDiagnostics,
+      )
+    }
+
     if (pendingRunCount > 0) {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
@@ -736,6 +835,31 @@ private fun ChatComposer(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatOfflineNotice(
+  status: String,
+  onFixConnection: () -> Unit,
+  onCopyDiagnostics: () -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(
+        text = "Gateway offline",
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = ClawTheme.colors.warning,
+      )
+      Text(
+        text = status,
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = ClawTheme.colors.textMuted,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      ChatOfflineActions(onFixConnection = onFixConnection, onCopyDiagnostics = onCopyDiagnostics)
     }
   }
 }
@@ -764,7 +888,7 @@ private fun ChatContextMeter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textSubtle)
+        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
         Text(
           text = contextMeterLabel(contextUsage, thinkingLevel),
           style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
@@ -936,7 +1060,7 @@ internal fun resolveChatContextUsage(
         sessionKey = sessionKey,
         mainSessionKey = mainSessionKey,
       )
-  }
+    }
   return ChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
@@ -964,32 +1088,18 @@ private fun SendButton(
   }
 }
 
-private fun userFacingChatError(error: String): String {
+internal fun userFacingChatError(
+  error: String,
+  gatewayConnected: Boolean,
+): String {
   val lower = error.lowercase(Locale.US)
   return when {
-    lower.contains("not connected") -> "Gateway is offline. Open Settings to reconnect."
+    lower.contains("not connected") && gatewayConnected -> "Chat is still checking Gateway health."
+    lower.contains("not connected") -> "Gateway is offline. Fix the connection below or copy diagnostics."
     lower.contains("unauthorized") || lower.contains("auth") -> "Gateway authentication needs attention."
     else -> error
   }
 }
-
-/** Normalizes persisted thinking values into compact UI labels. */
-private fun thinkingDisplay(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "low" -> "Low"
-    "medium" -> "Medium"
-    "high" -> "High"
-    else -> "Off"
-  }
-
-/** Converts displayed thinking labels back to gateway request values. */
-private fun thinkingValue(display: String): String =
-  when (display.lowercase(Locale.US)) {
-    "low" -> "low"
-    "medium" -> "medium"
-    "high" -> "high"
-    else -> "off"
-  }
 
 /** Cycles through context budget presets from the compact composer control. */
 private fun nextThinkingValue(value: String): String =
@@ -1024,9 +1134,3 @@ internal fun contextMeterThinkingLabel(value: String): String =
   }
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
-
-/** Quick markdown detector used to avoid routing plain chat text through the markdown renderer. */
-private fun String.hasMarkdownSyntax(): Boolean =
-  any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||
-    contains("\n- ") ||
-    contains("\n1. ")

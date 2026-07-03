@@ -117,6 +117,25 @@ async function closeOpenBrowserContexts(): Promise<void> {
   await Promise.all([...openBrowserContexts].map((context) => closeBrowserContext(context)));
 }
 
+async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
+  return page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    const viewport = thread.getBoundingClientRect();
+    return Array.from(thread.querySelectorAll(".chat-bubble"))
+      .filter((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return (
+          rect.height > 0 &&
+          rect.width > 0 &&
+          rect.bottom > viewport.top &&
+          rect.top < viewport.bottom
+        );
+      })
+      .map((candidate) => candidate.textContent?.trim() ?? "")
+      .filter(Boolean);
+  });
+}
+
 async function controlUiEventPayloads(
   page: Page,
   event: string,
@@ -247,6 +266,101 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a targetless message-tool source reply beside the automatic final reply", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "send progress through the message tool and then finish";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      expect(params).toMatchObject({ sessionKey: "main", message: prompt, deliver: false });
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await gateway.emitChatFinal({
+        runId,
+        text: "Visible progress from the targetless message tool.",
+      });
+      await page
+        .getByText("Visible progress from the targetless message tool.")
+        .waitFor({ timeout: 10_000 });
+
+      await gateway.emitChatFinal({ runId, text: "Visible automatic final reply." });
+      await page.getByText("Visible automatic final reply.").waitFor({ timeout: 10_000 });
+      const bubbleTexts = await page.locator(".chat-thread .chat-bubble").allTextContents();
+      for (const expectedText of [
+        prompt,
+        "Visible progress from the targetless message tool.",
+        "Visible automatic final reply.",
+      ]) {
+        expect(bubbleTexts.some((text) => text.includes(expectedText))).toBe(true);
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for stale replay check.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
+
+      const prompt = "submitted message";
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      expect(await composer.inputValue()).toBe("");
+
+      const afterReplay = await composer.evaluate((element, submitted) => {
+        const textarea = element as HTMLTextAreaElement;
+        textarea.value = submitted;
+        textarea.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: submitted,
+            inputType: "insertText",
+          }),
+        );
+        return textarea.value;
+      }, prompt);
+
+      expect(afterReplay).toBe("");
+      expect(await composer.inputValue()).toBe("");
+
+      await composer.pressSequentially(prompt);
+      expect(await composer.inputValue()).toBe(prompt);
     } finally {
       await closeBrowserContext(context);
     }
@@ -407,6 +521,82 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps long workspace file sections scrollable inside the rail", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const browserEntries = Array.from({ length: 60 }, (_, index) => ({
+      kind: "file" as const,
+      name: `file-${String(index + 1).padStart(2, "0")}.ts`,
+      path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
+      size: 2048 + index,
+    }));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.files.list": {
+          browser: {
+            entries: browserEntries,
+            path: "",
+          },
+          files: [],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+
+      const browserSection = page.locator(".chat-workspace-rail__section", {
+        hasText: "Project files",
+      });
+      await expect
+        .poll(
+          () =>
+            browserSection.evaluate((section) => {
+              const element = section as HTMLElement;
+              const scroll = element.closest(".chat-workspace-rail__scroll") as HTMLElement | null;
+              if (!scroll) {
+                throw new Error("Expected workspace rail scroll container");
+              }
+              const sectionRect = element.getBoundingClientRect();
+              const scrollRect = scroll.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return {
+                bottomWithinRail: Math.ceil(sectionRect.bottom) <= Math.ceil(scrollRect.bottom),
+                clientHeight: element.clientHeight,
+                overflowY: style.overflowY,
+                scrollHeight: element.scrollHeight,
+              };
+            }),
+          { timeout: 10_000 },
+        )
+        .toMatchObject({
+          bottomWithinRail: true,
+          overflowY: "auto",
+        });
+      const sectionMetrics = await browserSection.evaluate((section) => {
+        const element = section as HTMLElement;
+        return {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      expect(sectionMetrics.scrollHeight).toBeGreaterThan(sectionMetrics.clientHeight);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -496,23 +686,25 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
-      await page.getByRole("button", { name: "Chat session" }).click();
-      const sessionsList = await gateway.waitForRequest("sessions.list");
-      expect(requireRecord(sessionsList.params)).toMatchObject({
-        includeGlobal: true,
-        includeUnknown: true,
-        limit: 50,
-      });
+      // The chat boot hydrates the sidebar session list; that request stays
+      // deferred here while the composer must remain fully usable.
+      await gateway.waitForRequest("sessions.list");
 
       await composer.fill("draft while sessions load");
       expect(await composer.inputValue()).toBe("draft while sessions load");
       await composer.fill("");
 
+      // The background hydrate must not take the shared sessions loading
+      // flag, which would disable New Session for the whole request.
+      expect(await page.getByRole("button", { name: "New session" }).first().isEnabled()).toBe(
+        true,
+      );
+
       await gateway.resolveDeferred("sessions.list");
-      await page.getByRole("option", { name: /Main/ }).waitFor({
-        state: "visible",
-        timeout: 10_000,
-      });
+      await page
+        .locator(".sidebar-recent-session", { hasText: "Main" })
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
@@ -822,6 +1014,116 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("shows persisted user messages after opening History and scrolling mixed history", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const currentSessionMessages = [
+      {
+        content: [{ text: "Current session placeholder", type: "text" }],
+        role: "assistant",
+        timestamp: baseTs - 1,
+      },
+    ];
+    const historyMessages = Array.from({ length: 70 }, (_, index) => ({
+      content: [
+        {
+          text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
+          type: index % 2 === 0 ? "input_text" : "output_text",
+        },
+      ],
+      role: index % 2 === 0 ? "user" : "assistant",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, {
+      historyMessages: currentSessionMessages,
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                messages: historyMessages,
+                sessionId: "control-ui-e2e-history-session-b",
+                thinkingLevel: null,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-a" },
+              response: {
+                messages: currentSessionMessages,
+                sessionId: "control-ui-e2e-history-session-a",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
+
+      await page
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .click();
+      const historyRequest = await gateway.waitForRequest("chat.history");
+      expect(requireRecord(historyRequest.params)).toMatchObject({
+        sessionKey: "agent:main:session-b",
+      });
+      await page.locator(".chat-thread").getByText("User history question 68").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".chat-thread").getByText("Assistant history answer 69").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(
+          async () => {
+            const texts = await visibleChatBubbleTexts(page);
+            return (
+              texts.some((text) => text.includes("User history question 68")) &&
+              texts.some((text) => text.includes("Assistant history answer 69"))
+            );
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+
+      await waitForChatScrollIdle(page);
+      await scrollChatThreadToTop(page);
+      await page.locator(".chat-thread").getByText("User history question 10").waitFor({
+        timeout: 10_000,
+      });
+      await scrollChatThreadToTop(page);
+      await page.locator(".chat-thread").getByText("User history question 0").waitFor({
+        timeout: 10_000,
+      });
+      await scrollChatThreadToTop(page);
+      await expect
+        .poll(
+          async () => {
+            const texts = await visibleChatBubbleTexts(page);
+            return (
+              texts.some((text) => text.includes("User history question 0")) &&
+              texts.some((text) => text.includes("Assistant history answer 1"))
+            );
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
     } finally {
       await closeBrowserContext(context);
     }

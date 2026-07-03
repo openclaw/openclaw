@@ -1,11 +1,14 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -22,7 +25,9 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -124,6 +129,65 @@ class GatewaySessionInvokeTest {
         shutdownHarness(harness, server)
       }
     }
+
+  @Test
+  fun disconnectCancelsPendingRpcWithoutWaitingForRequestTimeout() {
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val slowRequestSeen = CompletableDeferred<Unit>()
+      val requestResult = CompletableDeferred<Result<GatewaySession.RpcResult>>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "slow.method" -> {
+              if (!slowRequestSeen.isCompleted) slowRequestSeen.complete(Unit)
+            }
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+      var requestJob: Job? = null
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        requestJob =
+          launch {
+            requestResult.complete(
+              runCatching {
+                harness.session.requestDetailed("slow.method", null, timeoutMs = 30_000)
+              },
+            )
+          }
+        withTimeout(TEST_TIMEOUT_MS) { slowRequestSeen.await() }
+
+        harness.session.disconnect()
+
+        val result = withTimeout(2_000) { requestResult.await() }
+        assertEquals(true, result.exceptionOrNull() is CancellationException)
+        serverWebSocket.get()?.close(1000, "done")
+        withTimeoutOrNull(2_000) {
+          while (lastDisconnect.get().isEmpty()) delay(10)
+        }
+      } finally {
+        requestJob?.cancelAndJoin()
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
+        harness.session.disconnect()
+        harness.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+  }
 
   @Test
   fun eventsAreDispatchedInWebSocketFrameOrder() =
@@ -359,6 +423,7 @@ class GatewaySessionInvokeTest {
               "operator.approvals",
               "operator.pairing",
               "operator.read",
+              "operator.talk.secrets",
               "operator.write",
             ),
         )
@@ -377,6 +442,7 @@ class GatewaySessionInvokeTest {
           listOf(
             "operator.approvals",
             "operator.read",
+            "operator.talk.secrets",
             "operator.write",
           ),
           params.scopes(),
@@ -538,7 +604,10 @@ class GatewaySessionInvokeTest {
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
-        assertEquals(listOf("operator.approvals", "operator.read", "operator.write"), operatorEntry?.scopes)
+        assertEquals(
+          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          operatorEntry?.scopes,
+        )
       } finally {
         shutdownHarness(harness, server)
       }
@@ -794,6 +863,77 @@ class GatewaySessionInvokeTest {
         assertEquals(true, sent)
         assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
       } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sendNodeEvent_waitsForCompletedConnectHandshake() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectRequestSeen = CompletableDeferred<Unit>()
+      val releaseConnectResponse = CompletableDeferred<Unit>()
+      val nodeEvents = CopyOnWriteArrayList<String>()
+      val eventAfterConnect = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> {
+              connectRequestSeen.complete(Unit)
+              launch(Dispatchers.Default) {
+                releaseConnectResponse.await()
+                webSocket.send(connectResponseFrame(id))
+              }
+            }
+            "node.event" -> {
+              val event =
+                frame["params"]
+                  ?.jsonObject
+                  ?.get("event")
+                  ?.jsonPrimitive
+                  ?.content
+                  .orEmpty()
+              nodeEvents += event
+              eventAfterConnect.complete(Unit)
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":true,"payload":{"ok":true}}""",
+              )
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(TEST_TIMEOUT_MS) { connectRequestSeen.await() }
+
+        assertFalse(
+          harness.session.sendNodeEvent(
+            event = "notifications.changed",
+            payloadJson = """{"change":"posted","key":"before"}""",
+          ),
+        )
+        assertTrue(nodeEvents.isEmpty())
+
+        releaseConnectResponse.complete(Unit)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        assertTrue(
+          harness.session.sendNodeEvent(
+            event = "notifications.changed",
+            payloadJson = """{"change":"posted","key":"after"}""",
+          ),
+        )
+        withTimeout(TEST_TIMEOUT_MS) { eventAfterConnect.await() }
+        assertEquals(listOf("notifications.changed"), nodeEvents.toList())
+      } finally {
+        releaseConnectResponse.complete(Unit)
         shutdownHarness(harness, server)
       }
     }

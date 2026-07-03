@@ -122,7 +122,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         message: params.message,
         deliver: true,
         channel: delivery.channel,
-        to: "dm:qa-operator",
+        to: delivery.to ?? "dm:qa-operator",
         replyChannel: delivery.replyChannel,
         replyTo: delivery.replyTo,
       },

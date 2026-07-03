@@ -9,6 +9,8 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -36,6 +38,11 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
+const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+
+vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
+  updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
+}));
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
@@ -133,6 +140,7 @@ let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let applySessionHints: typeof import("./body.js").applySessionHints;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
@@ -154,6 +162,9 @@ async function loadFreshGetReplyRunModuleForTest() {
     `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
   );
 }
+
+const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
+  "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -279,6 +290,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ applySessionHints } = await import("./body.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
@@ -290,6 +302,7 @@ describe("runPreparedReply media-only handling", () => {
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
+    updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
   });
@@ -371,6 +384,39 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+  });
+
+  it("reports unsupported explicit one-turn thinking overrides", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "xhigh",
+        opts: { thinkingLevelOverride: "xhigh" },
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog: async () => [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              reasoning: false,
+            },
+          ],
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(Array.isArray(result) ? undefined : result?.text).toContain(
+      'Thinking level "xhigh" is not supported',
+    );
+    expect(runReplyAgent).not.toHaveBeenCalled();
   });
 
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
@@ -499,8 +545,57 @@ describe("runPreparedReply media-only handling", () => {
         ThreadStarterBody: undefined,
       },
       expect.anything(),
-      { sourceReplyDeliveryMode: "message_tool_only" },
     );
+  });
+
+  it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "message_tool_only" },
+        ctx: {
+          Body: "@bot please answer here",
+          RawBody: "@bot please answer here",
+          CommandBody: "please answer here",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot please answer here",
+          BodyStripped: "please answer here",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
+          ChatType: "group",
+          InboundEventKind: "user_request",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.commandBody).toBe("please answer here");
+    expect(call.transcriptCommandBody).toBe("please answer here");
+    expect(call.followupRun.prompt).toBe("please answer here");
+    expect(call.followupRun.transcriptPrompt).toBe("please answer here");
+    expect(call.followupRun.currentInboundContext?.text).toBe(
+      [
+        "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
+        MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+      ].join("\n\n"),
+    );
+    const persistedUserMessage = call.followupRun.userTurnTranscriptRecorder?.message;
+    if (!persistedUserMessage) {
+      throw new Error("persisted user turn message missing");
+    }
+    expect(persistedUserMessage).toMatchObject({
+      role: "user",
+      content: "please answer here",
+    });
+    expect(persistedUserMessage.content).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
   });
 
   it.each(["direct", "dm"] as const)(
@@ -1622,6 +1717,33 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it("rebinds a queued pre-dispatch reply operation after session rollover", async () => {
+    const operation = createReplyOperation({
+      sessionId: "session-before-rollover",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: true,
+            sessionId: "session-after-rollover",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(operation.sessionId).toBe("session-after-rollover");
+      expect(call.replyOperation).toBe(operation);
+      expect(call.followupRun.run.sessionId).toBe("session-after-rollover");
+    } finally {
+      operation.complete();
+    }
+  });
+
   it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
@@ -1982,26 +2104,51 @@ describe("runPreparedReply media-only handling", () => {
           MediaType: "audio/ogg",
           MessageSid: "35676",
           SenderName: "Keśava",
+          AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
+          AmbientTranscriptMessageId: "35676",
+          AmbientTranscriptTimestampMs: 1_710_000_000_000,
         },
+        storePath: "/tmp/openclaw-session-store.json",
       }),
     );
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toBe("[OpenClaw room event]");
-    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
-    expect(call?.followupRun.transcriptPrompt).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("#35676 Keśava: No wtf");
     expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.currentInboundAudio).toBe(true);
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
+    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
+    expect(call?.followupRun.run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
+      role: "user",
+      content: "#35676 Keśava: No wtf",
+      timestamp: expect.any(Number),
+      __openclaw: { senderIsOwner: false },
+    });
+    call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
+      role: "user",
+      content: "#35676 Keśava: No wtf",
+      timestamp: 1_710_000_000_000,
+    });
+    expect(updateAmbientTranscriptWatermarkMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "session-key",
+      key: '["telegram","","-100123",""]',
+      messageId: "35676",
+      timestampMs: 1_710_000_000_000,
+      expectedSessionId: expect.any(String),
+    });
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
     );
     expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "visible_reply_contract: message_tool_only",
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "Current event:\n#35676 Keśava: No wtf",
     );
@@ -2241,8 +2388,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "visible_reply_contract: message_tool_only",
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
   });
 
   it("keeps webchat room events on automatic source delivery", async () => {
@@ -2307,8 +2455,9 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "visible_reply_contract: message_tool_only",
+      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
   });
 
   it("keeps webchat direct replies automatic when message-tool mode is requested", async () => {
@@ -2339,10 +2488,8 @@ describe("runPreparedReply media-only handling", () => {
       vi.mocked(buildDirectChatContext),
       "direct chat context",
     ) as { sourceReplyDeliveryMode?: string };
-    const inboundPrefixCall = vi.mocked(buildInboundUserContextPrefix).mock.calls.at(-1);
     const call = requireLastRunReplyAgentCall();
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "message_tool_only" });
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
@@ -2796,6 +2943,21 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
+  it("does not drain queued system events for commitment-only heartbeat runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        abortedLastRun: true,
+        opts: {
+          isHeartbeat: true,
+          [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+        },
+      }),
+    );
+
+    expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
+    expect(applySessionHints).not.toHaveBeenCalled();
+  });
+
   it("keeps sender ownership when queued system events are prepended", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System: [t] External webhook payload.",
@@ -2806,6 +2968,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: { senderIsOwner: true },
+    });
   });
 
   it("keeps sender ownership when drained system events are present", async () => {
@@ -2852,6 +3017,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.commandBody).not.toMatch(/^low\b/);
     // System events are still present in the body.
     expect(call.commandBody).toContain("System: [t] Node connected.");
+  });
+
+  it("forwards resolved fast-mode override into the followup run", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedFastMode: "auto",
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.fastMode).toBe("auto");
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {

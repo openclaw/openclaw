@@ -17,7 +17,7 @@ scenario:
   successCriteria:
     - The npm Kitchen Sink package installs, enables, and inspects as loaded.
     - Kitchen Sink command inventory, MCP tool, and channel status work after gateway restart.
-    - A live OpenAI turn still completes while the Kitchen Sink plugin is installed.
+    - A live OpenAI turn either completes or surfaces the Kitchen Sink plugin's before-agent-run block without hanging.
     - Gateway logs and process metrics are captured and stay under broad anomaly thresholds.
   docsRefs:
     - docs/concepts/qa-e2e-automation.md
@@ -29,7 +29,9 @@ scenario:
     - scripts/e2e/kitchen-sink-plugin-docker.sh
   execution:
     kind: flow
-    summary: Install @openclaw/kitchen-sink, restart the gateway, exercise command inventory/tool/channel/OpenAI paths, and record CPU/RSS/log evidence.
+    suiteIsolation: isolated
+    isolationReason: Mutates gateway plugin/channel/tool config across gateway restarts.
+    summary: Install @openclaw/kitchen-sink, restart the gateway, exercise command inventory/tool/channel/OpenAI-or-block paths, and record CPU/RSS/log evidence.
     config:
       requiredProviderMode: live-frontier
       requiredProvider: openai
@@ -84,6 +86,7 @@ scenario:
       agentTurnTimeoutMs: 120000
       outboundTimeoutMs: 60000
       livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
+      blockedReplyNeedle: "blocked by openclaw-kitchen-sink-fixture"
       expectedAdversarialDiagnostics:
         - agent event subscription registration requires id and handle
         - agent tool result middleware must be a function
@@ -93,7 +96,6 @@ scenario:
         - only bundled plugins can register Codex app-server extension factories
         - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
         - context engine registration missing id
-        - control UI descriptor registration requires id, surface, label, and valid optional fields
         - hosted media resolver registration missing resolver
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
@@ -388,8 +390,15 @@ flow:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes('KITCHEN-SINK-OPENAI-OK')"
+                expr: "candidate.conversation.id === 'qa-operator' && (candidate.text.includes('KITCHEN-SINK-OPENAI-OK') || normalizeLowercaseStringOrEmpty(candidate.text).includes(config.blockedReplyNeedle))"
             - expr: liveTurnTimeoutMs(env, config.outboundTimeoutMs)
+        - set: normalizedOpenAiReply
+          value:
+            expr: "normalizeLowercaseStringOrEmpty(openaiReply.text)"
+        - assert:
+            expr: "openaiReply.text.includes('KITCHEN-SINK-OPENAI-OK') || normalizedOpenAiReply.includes(config.blockedReplyNeedle)"
+            message:
+              expr: "`Kitchen Sink live turn neither completed nor surfaced the plugin block: ${openaiReply.text}`"
       detailsExpr: "{ openaiReply: openaiReply.text }"
 
     - name: records gateway CPU RSS and log anomaly evidence

@@ -63,7 +63,6 @@ export const vi: TranslationMap = {
     docs: "Tài liệu",
     theme: "Giao diện",
     colorMode: "Chế độ màu",
-    colorModeOption: "Chế độ màu: {mode}",
     resources: "Tài nguyên",
     search: "Tìm kiếm",
     save: "Lưu",
@@ -201,6 +200,7 @@ export const vi: TranslationMap = {
     inherit: "kế thừa",
     defaultOption: "Mặc định ({value})",
     offExplicit: "tắt (rõ ràng)",
+    auto: "auto",
     on: "bật",
     off: "tắt",
     full: "đầy đủ",
@@ -1321,6 +1321,8 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
+    commentaryToggle: "Giữ lại bình luận sau câu trả lời cuối cùng",
+    commentaryLabel: "Bình luận",
     autoScrollMode: "Chế độ tự động cuộn",
     autoScrollAlways: "Luôn luôn",
     autoScrollNearBottom: "Gần cuối",
@@ -1339,6 +1341,9 @@ export const vi: TranslationMap = {
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
+    sidebar: {
+      allSessions: "Tất cả phiên",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1365,6 +1370,11 @@ export const vi: TranslationMap = {
       retry: "Thử lại",
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
+    },
+    pairingQrExpired: {
+      title: "Mã QR ghép nối đã hết hạn",
+      reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",
+      badge: "Đã hết hạn",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1432,6 +1442,7 @@ export const vi: TranslationMap = {
     jaJP: "日本語 (Tiếng Nhật)",
     ko: "한국어 (Tiếng Hàn)",
     fr: "Français (Tiếng Pháp)",
+    hi: "हिन्दी (Tiếng Hindi)",
     ar: "العربية (Tiếng Ả Rập)",
     it: "Italiano (Tiếng Ý)",
     tr: "Türkçe (Tiếng Thổ Nhĩ Kỳ)",
@@ -1442,6 +1453,7 @@ export const vi: TranslationMap = {
     vi: "Tiếng Việt (Tiếng Việt)",
     nl: "Nederlands (Tiếng Hà Lan)",
     fa: "فارسی (Tiếng Ba Tư)",
+    ru: "Русский (Tiếng Nga)",
   },
   cron: {
     quickCreate: {
@@ -1610,6 +1622,7 @@ export const vi: TranslationMap = {
       nextHeartbeat: "Nhịp tiếp theo",
       wakeModeHelp: "Ngay sẽ kích hoạt lập tức. Nhịp tiếp theo đợi đến chu kỳ tiếp theo.",
       payloadKind: "Cần chạy gì?",
+      command: "Command",
       systemEvent: "Đăng tin nhắn lên dòng thời gian chính",
       agentTurn: "Chạy tác vụ trợ lý (tách biệt)",
       systemEventHelp:

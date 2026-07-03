@@ -272,6 +272,7 @@ describe("user turn transcript persistence", () => {
           text: "What is in this image?",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
+          senderIsOwner: true,
           provenance,
         },
         updateMode: "none",
@@ -287,6 +288,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
+          __openclaw: { senderIsOwner: true },
           provenance,
           MediaType: "image/png",
         }),
@@ -398,6 +400,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -407,6 +410,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          senderIsOwner: true,
           provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -417,6 +421,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
+          __openclaw: { senderIsOwner: true },
           provenance,
         }),
       ]);
@@ -493,6 +498,45 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "hello from fallback",
           idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("notifies once after fallback user-turn persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-notify-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const persistedMessages: unknown[] = [];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "#35676 Keśava: No wtf",
+          timestamp: 123,
+          idempotencyKey: "chat-run-ambient:user",
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
+      });
+
+      await recorder.persistFallback();
+      await recorder.persistFallback();
+
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
+        }),
+      ]);
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
         }),
       ]);
     });

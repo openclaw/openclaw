@@ -557,6 +557,12 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "channels.slack.accounts.*.signingSecret") {
     setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "http");
   }
+  if (entry.id === "channels.slack.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "mode"], "relay");
+  }
+  if (entry.id === "channels.slack.accounts.*.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "relay");
+  }
   if (entry.id === "channels.zalo.webhookSecret") {
     setPathCreateStrict(config, ["channels", "zalo", "webhookUrl"], "https://example.com/hook");
   }

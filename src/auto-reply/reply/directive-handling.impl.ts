@@ -3,7 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+  formatFastModeValue,
+  resolveFastModeState,
+} from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -152,8 +157,8 @@ export async function handleDirectiveOnly(
   });
   const effectiveFastMode =
     directives.fastMode ??
-    (directives.clearFastMode ? fastModeState.enabled : currentFastMode) ??
-    fastModeState.enabled;
+    (directives.clearFastMode ? fastModeState.mode : currentFastMode) ??
+    fastModeState.mode;
   const effectiveFastModeSource =
     directives.fastMode !== undefined ? "session" : fastModeState.source;
 
@@ -203,21 +208,25 @@ export async function handleDirectiveOnly(
       !directives.rawFastMode ||
       normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status"
     ) {
-      const sourceSuffix =
-        effectiveFastModeSource === "config"
-          ? " (config)"
-          : effectiveFastModeSource === "default"
-            ? " (default)"
-            : "";
+      const statusText = formatFastModeCurrentStatus({
+        mode: effectiveFastMode,
+        source: effectiveFastModeSource,
+        fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+      });
+      if (normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status") {
+        return { text: statusText };
+      }
       return {
         text: withOptions(
-          `Current fast mode: ${effectiveFastMode ? "on" : "off"}${sourceSuffix}.`,
-          "status, on, off, default",
+          statusText,
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+          }),
         ),
       };
     }
     return {
-      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: status, on, off, default.`,
+      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, auto, default, status.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
@@ -382,7 +391,7 @@ export async function handleDirectiveOnly(
     (directives.hasFastDirective &&
       directives.fastMode !== undefined &&
       directives.fastMode !== currentFastMode) ||
-    (directives.clearFastMode && currentFastMode !== fastModeState.enabled);
+    (directives.clearFastMode && currentFastMode !== fastModeState.mode);
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (shouldPersistSessionEntry) {
@@ -539,9 +548,11 @@ export async function handleDirectiveOnly(
     parts.push(formatDirectiveAck("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
     parts.push(
-      directives.fastMode
-        ? formatDirectiveAck("Fast mode enabled.")
-        : formatDirectiveAck("Fast mode disabled."),
+      directives.fastMode === "auto"
+        ? formatDirectiveAck("Fast mode set to auto.")
+        : directives.fastMode
+          ? formatDirectiveAck("Fast mode enabled.")
+          : formatDirectiveAck("Fast mode disabled."),
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
@@ -653,10 +664,14 @@ export async function handleDirectiveOnly(
     parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
   }
   if (fastModeChanged) {
-    const nextFastMode = directives.clearFastMode ? fastModeState.enabled : sessionEntry.fastMode;
-    enqueueSystemEvent(`Fast mode ${nextFastMode ? "enabled" : "disabled"}.`, {
+    const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
+    const nextFastModeText =
+      nextFastMode === "auto"
+        ? "Fast mode set to auto."
+        : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
+    enqueueSystemEvent(nextFastModeText, {
       sessionKey,
-      contextKey: `fast:${nextFastMode ? "on" : "off"}`,
+      contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });
   }
   const ack = parts.join(" ").trim();

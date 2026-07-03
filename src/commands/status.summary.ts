@@ -85,7 +85,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (typeof entry?.fastMode === "boolean") {
+  if (entry?.fastMode === "auto") {
+    flags.push("fast:auto");
+  } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
@@ -178,6 +180,27 @@ function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: Sess
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
 }
 
+function selectRecentSessionCandidates(
+  candidates: SessionCandidate[],
+  limit: number,
+): SessionCandidate[] {
+  const selected: SessionCandidate[] = [];
+  for (const candidate of candidates) {
+    const insertAt = selected.findIndex(
+      (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
+    );
+    if (insertAt >= 0) {
+      selected.splice(insertAt, 0, candidate);
+      if (selected.length > limit) {
+        selected.pop();
+      }
+    } else if (selected.length < limit) {
+      selected.push(candidate);
+    }
+  }
+  return selected;
+}
+
 function listSessionCandidates(storePath: string, agentId?: string) {
   return (
     listSessionEntries({
@@ -191,7 +214,6 @@ function listSessionCandidates(storePath: string, agentId?: string) {
         entry,
         updatedAt: entry?.updatedAt ?? null,
       }))
-      .toSorted(compareSessionCandidatesByUpdatedAt)
   );
 }
 
@@ -232,8 +254,12 @@ export async function getStatusSummary(
     resolveContextTokensForModel,
     resolveSessionRuntimeLabel,
     resolveSessionModelRef,
+    resolveStatusModelComparisonLabel,
+    resolveStatusModelLookupRef,
+    waitForContextWindowCacheLoad,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
+  await waitForContextWindowCacheLoad();
   const contextSourceConfig =
     options.sourceConfig !== undefined
       ? options.sourceConfig
@@ -375,29 +401,50 @@ export async function getStatusSummary(
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const lookupModel =
+          resolveStatusModelLookupRef({
+            provider: resolvedModel.provider,
+            model,
+            defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+          }) ?? resolvedModel;
+        const lookupModelId = lookupModel.model ?? model;
         const modelContext = await resolveStaticModelContext(
-          resolvedModel.provider,
-          model ?? undefined,
+          lookupModel.provider,
+          lookupModelId ?? undefined,
         );
         const selectedModelLabel =
           resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+        const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
+          provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+          model: configuredSessionModel,
+          defaultProvider: DEFAULT_PROVIDER,
+        });
+        const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+          provider: resolvedModel.provider,
+          model,
+          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        });
         const modelSelectionDiffers =
-          selectedModelLabel != null &&
-          selectedModelLabel !== configuredSessionModelLabel &&
-          !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
+          !areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+          ) &&
           hasUserPinnedModelSelection(entry);
         // Session rows show the live selected model but warn only for user-pinned differences.
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
             sourceCfg: contextSourceConfig,
-            provider: resolvedModel.provider,
-            model,
+            provider: lookupModel.provider,
+            model: lookupModelId,
             ...modelContext,
             contextTokensOverride: resolveTrustedSessionContextTokens({
               entry,
-              provider: resolvedModel.provider,
-              model,
+              provider: lookupModel.provider,
+              model: lookupModelId,
             }),
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
@@ -414,8 +461,8 @@ export async function getStatusSummary(
         const runtime = resolveSessionRuntimeLabel({
           cfg,
           entry,
-          provider: resolvedModel.provider,
-          model: model ?? "",
+          provider: lookupModel.provider,
+          model: lookupModelId ?? "",
           agentId,
           sessionKey: key,
         });
@@ -469,9 +516,10 @@ export async function getStatusSummary(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
-      const sessions = await buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
-        agentIdOverride: agent.id,
-      });
+      const sessions = await buildSessionRows(
+        selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
+        { agentIdOverride: agent.id },
+      );
       return {
         agentId: agent.id,
         path: storePath,
@@ -490,9 +538,10 @@ export async function getStatusSummary(
         source.storePath,
         pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
       ),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const recent = await buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
+    );
+  const recent = await buildSessionRows(
+    selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
+  );
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {

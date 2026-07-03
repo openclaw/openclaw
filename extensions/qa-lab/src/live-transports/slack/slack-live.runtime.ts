@@ -9,6 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
@@ -31,6 +32,7 @@ import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
 } from "../shared/live-artifacts.js";
+import { inferQaCredentialSource as inferSlackCredentialSource } from "../shared/live-credential-source.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -508,15 +510,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)
     throw new Error(`Missing ${key}.`);
   }
   return value;
-}
-
-function inferSlackCredentialSource(
-  value: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): "convex" | "env" {
-  const normalized =
-    value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
-  return normalized === "convex" ? "convex" : "env";
 }
 
 function normalizeSlackId(value: string, label: string) {
@@ -1719,7 +1712,7 @@ export async function runSlackQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `slack-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `slack-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -2044,6 +2037,7 @@ export async function runSlackQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "slack",
   });
   await fs.writeFile(

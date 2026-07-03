@@ -563,8 +563,6 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
-export { getRawSessionAppendMessage };
-
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -728,7 +726,9 @@ export function installSessionToolResultGuard(
             capToolResultForPersistence(flushed.message, maxToolResultChars, redactionConfig),
             {
               invalidateSerializedPrefixCache:
-                persistedSynthetic !== synthetic || toolResultTransformerMayMutate || flushed.changed,
+                persistedSynthetic !== synthetic ||
+                toolResultTransformerMayMutate ||
+                flushed.changed,
             },
           );
         }

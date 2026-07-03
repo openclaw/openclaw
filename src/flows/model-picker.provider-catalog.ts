@@ -16,6 +16,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  providerMatchesFilter,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
@@ -24,17 +25,6 @@ import type { ProviderPlugin } from "../plugins/types.js";
 // Loads live provider model catalogs for the preferred-provider model picker.
 const log = createSubsystemLogger("model-picker-provider-catalog");
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
-
-function providerMatchesFilter(params: {
-  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
-  providerFilter: string;
-}): boolean {
-  return [
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-    ...(params.provider.hookAliases ?? []),
-  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
-}
 
 function positiveNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;

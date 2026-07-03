@@ -11,6 +11,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import {
   QA_EVIDENCE_FILENAME,
   buildLiveTransportEvidenceSummary,
@@ -39,6 +40,7 @@ import {
   redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { assertLiveScenarioReply as assertTelegramScenarioReply } from "../shared/live-scenario-reply.js";
 import type { LiveTransportCheckResult } from "../shared/live-transport-result.js";
 import {
   normalizeLiveTransportRttOptions,
@@ -935,6 +937,7 @@ async function callTelegramApi<T>(
     timeoutMs: requestTimeoutMs,
     policy: { hostnameAllowlist: ["api.telegram.org"] },
     auditContext: "qa-lab-telegram-live",
+    capture: false,
   });
   try {
     const payload = (await response.json()) as TelegramApiEnvelope<T>;
@@ -1442,22 +1445,6 @@ function matchesTelegramScenarioReply(params: {
   );
 }
 
-function assertTelegramScenarioReply(params: {
-  expectedTextIncludes?: string[];
-  message: TelegramObservedMessage;
-}) {
-  if (!params.message.text.trim()) {
-    throw new Error(`reply message ${params.message.messageId} was empty`);
-  }
-  for (const expected of params.expectedTextIncludes ?? []) {
-    if (!params.message.text.includes(expected)) {
-      throw new Error(
-        `reply message ${params.message.messageId} missing expected text: ${expected}`,
-      );
-    }
-  }
-}
-
 function assertTelegramCanaryPresenceReply(message: TelegramObservedMessage) {
   if (!message.senderIsBot) {
     throw new Error(`canary reply message ${message.messageId} was not sent by a bot`);
@@ -1819,7 +1806,7 @@ export async function runTelegramQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `telegram-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `telegram-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -2201,6 +2188,7 @@ export async function runTelegramQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     checks: scenarioResults,
     transportId: "telegram",
   });

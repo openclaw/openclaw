@@ -10,6 +10,7 @@ import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
   QaTransportGatewayClient,
+  QaTransportNativeCommandInput,
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
@@ -91,6 +92,7 @@ export function createQaChannelGatewayConfig(params: {
       },
     },
     messages: {
+      visibleReplies: "automatic",
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
         visibleReplies: "automatic",
@@ -134,6 +136,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       label: "qa-channel + qa-lab bus",
       accountId: QA_CHANNEL_ACCOUNT_ID,
       requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
   }
@@ -145,6 +148,14 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     replyChannel: QA_CHANNEL_ID,
     replyTo: target,
   });
+  override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
+    const { command, ...message } = input;
+    await this.sendInbound({
+      ...message,
+      text: `/${command}`,
+      nativeCommand: { name: command },
+    });
+  }
   handleAction = handleQaChannelAction;
   createReportNotes = createQaChannelReportNotes;
 }

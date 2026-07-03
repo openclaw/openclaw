@@ -21,6 +21,22 @@ async function listShellScripts(dir: string): Promise<string[]> {
   return scripts;
 }
 
+async function extractClawhubSkillInstallVerifier(): Promise<string> {
+  const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
+  const marker =
+    'node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" <<\'NODE\'\n';
+  const start = script.indexOf(marker);
+  if (start === -1) {
+    throw new Error("ClawHub skill install verifier heredoc was not found");
+  }
+  const verifierStart = start + marker.length;
+  const verifierEnd = script.indexOf("\nNODE", verifierStart);
+  if (verifierEnd === -1) {
+    throw new Error("ClawHub skill install verifier heredoc was not terminated");
+  }
+  return script.slice(verifierStart, verifierEnd);
+}
+
 describe("e2e shell tempfile hygiene", () => {
   it("does not allocate FIFO paths with mktemp -u", async () => {
     const offenders: string[] = [];
@@ -250,6 +266,58 @@ exit 42
       expect(
         scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
       ).toEqual([]);
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ClawHub skill info paths that only share a resolved prefix", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-info-path-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const slug = "demo";
+    const skillDir = path.join(workspaceDir, "skills", slug);
+    const escapedInfoPath = path.join(workspaceDir, "skills", `${slug}-escape`, "SKILL.md");
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const originPath = path.join(skillDir, ".clawhub", "origin.json");
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const infoPath = path.join(tempRoot, "info.json");
+
+    try {
+      await mkdir(path.dirname(originPath), { recursive: true });
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(path.join(skillDir, "SKILL.md"), `---\nname: Demo\n---\n`);
+      await writeFile(
+        configPath,
+        `${JSON.stringify({ skills: { install: { allowUploadedArchives: false } } })}\n`,
+      );
+      await writeFile(
+        originPath,
+        `${JSON.stringify({
+          installedVersion: "1.0.0",
+          registry: "https://clawhub.ai",
+          slug,
+        })}\n`,
+      );
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({ skills: { [slug]: { version: "1.0.0" } } })}\n`,
+      );
+      await writeFile(
+        infoPath,
+        `${JSON.stringify({ filePath: escapedInfoPath, skillKey: "wrong-skill" })}\n`,
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", configPath, skillDir, originPath, lockPath, infoPath, slug],
+        {
+          encoding: "utf8",
+          input: await extractClawhubSkillInstallVerifier(),
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("skills info did not report installed skill demo");
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

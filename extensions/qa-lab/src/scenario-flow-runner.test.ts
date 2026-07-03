@@ -33,8 +33,54 @@ async function runLoadedScenarioFlow(
 
   const state = createQaBusState();
   let waitCount = 0;
+  const transport = {
+    state,
+    reset: async () => {
+      state.reset();
+    },
+    sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+      state.addInboundMessage(input),
+    sendNativeCommand: async (
+      input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+        command: string;
+      },
+    ) => {
+      const { command, ...message } = input;
+      state.addInboundMessage({
+        ...message,
+        text: `/${command}`,
+        nativeCommand: { name: command },
+      });
+    },
+    waitForNoOutbound: async () => undefined,
+    waitForOutbound: async (input: {
+      conversation?: { id: string; kind: string };
+      textIncludes?: string;
+      timeoutMs?: number;
+    }) => {
+      waitCount += 1;
+      params.onWaitForOutboundMessage?.({ waitCount, state });
+      const match = state
+        .getSnapshot()
+        .messages.find(
+          (candidate) =>
+            candidate.direction === "outbound" &&
+            (!input.conversation || candidate.conversation.id === input.conversation.id) &&
+            (!input.conversation || candidate.conversation.kind === input.conversation.kind) &&
+            (!input.textIncludes || candidate.text.includes(input.textIncludes)),
+        );
+      if (match) {
+        return match;
+      }
+      throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
+    },
+    waitForOutboundSequence: async () => {
+      throw new Error("outbound sequence not configured for this fixture");
+    },
+  };
   const api = {
     env: {},
+    transport,
     state,
     scenario,
     config: scenario.execution.config ?? {},

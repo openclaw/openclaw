@@ -73,10 +73,16 @@ struct OnboardingWizardView: View {
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
 
-    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+    init(
+        allowSkip: Bool,
+        onRequestLocalNetworkAccess: @escaping (String) -> Void,
+        onClose: @escaping () -> Void)
+    {
         self.allowSkip = allowSkip
+        self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
@@ -231,6 +237,7 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
+                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
@@ -378,7 +385,7 @@ struct OnboardingWizardView: View {
 
     private func onboardingSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
@@ -575,7 +582,7 @@ struct OnboardingWizardView: View {
 
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 64))
-                .foregroundStyle(.green)
+                .foregroundStyle(OpenClawBrand.ok)
                 .padding(.bottom, 20)
 
             Text("Connected")
@@ -723,6 +730,7 @@ extension OnboardingWizardView {
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
+        self.step = .connect
         Task { await self.connectManual() }
     }
 
@@ -864,8 +872,18 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
+        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
+    }
+
+    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
+        guard self.step != .intro else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        self.onRequestLocalNetworkAccess(reason)
     }
 
     private func navigateBack() {
@@ -996,6 +1014,10 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
+        await self.connectCurrentManualGateway(host: host, forceReconnect: false)
+    }
+
+    private func connectCurrentManualGateway(host: String, forceReconnect: Bool) async {
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: self.gatewayToken,
             pendingOverride: self.pendingManualAuthOverride,
@@ -1005,7 +1027,8 @@ extension OnboardingWizardView {
             host: host,
             port: self.manualPort,
             useTLS: self.manualTLS,
-            authOverride: authOverride)
+            authOverride: authOverride,
+            forceReconnect: forceReconnect)
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
@@ -1016,12 +1039,32 @@ extension OnboardingWizardView {
             self.statusLine = "Retrying last connection…"
         }
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectLastKnown()
+
+        switch GatewaySettingsStore.loadLastGatewayConnection() {
+        case .some(.discovered):
+            await self.gatewayController.connectLastKnown()
+        case .some(.manual), .none:
+            // connectLastKnown() replays the persisted endpoint and credentials,
+            // so token/host/port edits made on this screen would be ignored and
+            // a missing stored connection would silently do nothing. Manual
+            // retries must dial the current form input instead.
+            let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 {
+                await self.connectCurrentManualGateway(host: host, forceReconnect: true)
+                return
+            }
+            if !silent {
+                self.connectMessage = nil
+                self.statusLine = "No connection to retry. Check the gateway host and port."
+            }
+        }
     }
 
-    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Scan QR again" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            resetTitle: "Scan QR again")
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -1046,6 +1089,10 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         await self.retryLastAttempt()
     }
 }

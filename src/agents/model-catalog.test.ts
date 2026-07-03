@@ -13,6 +13,7 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
+let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
@@ -337,6 +338,7 @@ describe("loadModelCatalog", () => {
       loadManifestModelCatalog,
       loadModelCatalog,
       modelSupportsInput,
+      resetModelCatalogCache,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
@@ -510,6 +512,57 @@ describe("loadModelCatalog", () => {
       catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
     });
+  });
+
+  it("exposes only a fully loaded process catalog snapshot", async () => {
+    mockAgentDiscoveryModels([
+      { id: "runtime-reasoner", name: "Runtime Reasoner", provider: "ollama", reasoning: true },
+    ]);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(result);
+    resetModelCatalogCache();
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+    resetModelCatalogCacheForTest();
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
+  });
+
+  it("does not publish a catalog load from an invalidated generation", async () => {
+    let releaseStaleFingerprint:
+      | ((value: { agentDir: string; fingerprint: string; workspaceDir: string }) => void)
+      | undefined;
+    const staleFingerprint = new Promise<{
+      agentDir: string;
+      fingerprint: string;
+      workspaceDir: string;
+    }>((resolve) => {
+      releaseStaleFingerprint = resolve;
+    });
+    buildModelsJsonSourceFingerprintMock.mockReturnValueOnce(staleFingerprint).mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "fresh-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const freshCatalog = [{ id: "fresh", name: "Fresh", provider: "ollama", reasoning: true }];
+    const staleCatalog = [{ id: "stale", name: "Stale", provider: "ollama", reasoning: false }];
+    readCachedAgentModelCatalogMock
+      .mockReturnValueOnce(freshCatalog)
+      .mockReturnValueOnce(staleCatalog);
+
+    const staleLoad = loadModelCatalog({ config: {} as OpenClawConfig });
+    resetModelCatalogCache();
+    await expect(loadModelCatalog({ config: {} as OpenClawConfig })).resolves.toBe(freshCatalog);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(freshCatalog);
+
+    releaseStaleFingerprint?.({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "stale-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    await expect(staleLoad).resolves.toBe(staleCatalog);
+    await expect(loadModelCatalog({ cacheOnly: true })).resolves.toBe(freshCatalog);
   });
 
   it("preserves runtime model params in the internal catalog", async () => {
@@ -727,6 +780,7 @@ describe("loadModelCatalog", () => {
 
       const result = await loadModelCatalog({ config: {} as OpenClawConfig });
       expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+      await expect(loadModelCatalog({ cacheOnly: true })).resolves.toEqual([]);
     } finally {
       setLoggerOverride(null);
       resetLogger();

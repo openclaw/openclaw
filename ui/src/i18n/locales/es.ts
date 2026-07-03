@@ -63,7 +63,6 @@ export const es: TranslationMap = {
     docs: "Documentación",
     theme: "Tema",
     colorMode: "Modo de color",
-    colorModeOption: "Modo de color: {mode}",
     resources: "Recursos",
     search: "Buscar",
     save: "Guardar",
@@ -201,6 +200,7 @@ export const es: TranslationMap = {
     inherit: "heredar",
     defaultOption: "Predeterminado ({value})",
     offExplicit: "desactivado (explícito)",
+    auto: "auto",
     on: "activado",
     off: "apagado",
     full: "completo",
@@ -1337,6 +1337,8 @@ export const es: TranslationMap = {
     settings: "Configuración del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
+    commentaryToggle: "Mantener los comentarios después de la respuesta final",
+    commentaryLabel: "Comentarios",
     autoScrollMode: "Modo de desplazamiento automático",
     autoScrollAlways: "Siempre",
     autoScrollNearBottom: "Cerca del final",
@@ -1355,6 +1357,9 @@ export const es: TranslationMap = {
     updateNow: "Actualizar ahora",
     dismissUpdateBanner: "Descartar banner de actualización",
     switchedSession: "Se cambió a {session}",
+    sidebar: {
+      allSessions: "Todas las sesiones",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1381,6 +1386,11 @@ export const es: TranslationMap = {
       retry: "Reintentar",
       retrySend: "Reintentar envío",
       retryQueuedMessage: "Reintentar mensaje en cola",
+    },
+    pairingQrExpired: {
+      title: "Código QR de emparejamiento caducado",
+      reason: "Ejecuta /pair qr de nuevo para generar un código de configuración nuevo.",
+      badge: "Caducado",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1449,6 +1459,7 @@ export const es: TranslationMap = {
     jaJP: "日本語 (japonés)",
     ko: "한국어 (coreano)",
     fr: "Français (francés)",
+    hi: "हिन्दी (hindi)",
     ar: "العربية (árabe)",
     it: "Italiano (italiano)",
     tr: "Türkçe (turco)",
@@ -1459,6 +1470,7 @@ export const es: TranslationMap = {
     vi: "Tiếng Việt (vietnamita)",
     nl: "Nederlands (neerlandés)",
     fa: "فارسی (persa)",
+    ru: "Русский (ruso)",
   },
   cron: {
     quickCreate: {
@@ -1630,6 +1642,7 @@ export const es: TranslationMap = {
       nextHeartbeat: "Próximo latido",
       wakeModeHelp: "Ahora se activa inmediatamente. Próximo latido espera el siguiente ciclo.",
       payloadKind: "¿Qué debe ejecutarse?",
+      command: "Command",
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
       systemEventHelp:

@@ -2,6 +2,10 @@
 import { pathToFileURL } from "node:url";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
+const lifecyclePackageManagerLauncherAliases = new Map([
+  ["yarnpkg", "yarn"],
+  ["yarn-berry", "yarn"],
+]);
 
 function normalizeEnvValue(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -15,6 +19,31 @@ function normalizeLifecyclePackageManagerName(value) {
   return allowedLifecyclePackageManagers.has(normalized) ? normalized : null;
 }
 
+function detectLifecyclePackageManagerFromExecPath(value) {
+  const execPath = normalizeEnvValue(value).toLowerCase();
+  const executableName = execPath.split(/[\\/]/u).findLast((segment) => segment.length > 0) ?? "";
+  const launcherName = executableName.replace(/\.(?:c?js|mjs|cmd|ps1|exe)$/u, "");
+  const candidates = [launcherName, launcherName.replace(/-cli$/u, "")];
+
+  for (const candidate of candidates) {
+    if (/^yarn(?:pkg)?-\d/u.test(candidate)) {
+      return "yarn";
+    }
+
+    const aliasedPackageManager = lifecyclePackageManagerLauncherAliases.get(candidate);
+    if (aliasedPackageManager) {
+      return aliasedPackageManager;
+    }
+
+    const packageManager = normalizeLifecyclePackageManagerName(candidate);
+    if (packageManager) {
+      return packageManager;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Detects the package manager running the current lifecycle script.
  */
@@ -25,21 +54,7 @@ export function detectLifecyclePackageManager(env = process.env) {
     return normalizeLifecyclePackageManagerName(userAgentMatch[1]);
   }
 
-  const execPath = normalizeEnvValue(env.npm_execpath).toLowerCase();
-  if (execPath.includes("pnpm")) {
-    return "pnpm";
-  }
-  if (execPath.includes("npm")) {
-    return "npm";
-  }
-  if (execPath.includes("yarn")) {
-    return "yarn";
-  }
-  if (execPath.includes("bun")) {
-    return "bun";
-  }
-
-  return null;
+  return detectLifecyclePackageManagerFromExecPath(env.npm_execpath);
 }
 
 /**

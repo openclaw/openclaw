@@ -4,10 +4,10 @@
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {

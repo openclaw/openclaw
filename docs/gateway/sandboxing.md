@@ -415,7 +415,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
 
   </Step>
   <Step title="Optional: build the common image">
-    For a more functional sandbox image with common tooling (for example `curl`, `jq`, `nodejs`, `python3`, `git`):
+    For a more functional sandbox image with common tooling (for example `curl`, `jq`, Node 24, pnpm, `python3`, and `git`):
 
     From a source checkout:
 

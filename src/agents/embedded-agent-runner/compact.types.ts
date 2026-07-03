@@ -6,15 +6,19 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
   /** Caller-resolved owner agent for global session aliases. */
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
@@ -54,6 +58,8 @@ export type CompactEmbeddedAgentSessionParams = {
   senderIsOwner?: boolean;
   provider?: string;
   model?: string;
+  /** Caller-resolved model/provider shape used by native harness compactors. */
+  runtimeModel?: Model;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
@@ -104,6 +110,14 @@ export type CompactEmbeddedAgentSessionParams = {
   allowGatewaySubagentBinding?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+};
+
+export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
+  CompactEmbeddedAgentSessionParams,
+  "sessionFile"
+> & {
+  /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
+  sessionFile?: string;
 };
 
 export type CompactionMessageMetrics = {

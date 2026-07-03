@@ -78,13 +78,16 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
 };
 
 /** Reads mirrored Codex session history for harness hooks. */
-export async function readMirroredSessionHistoryMessages(
-  sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+export async function readMirroredSessionHistoryMessages(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(params);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
+      sessionFile: params.sessionFile,
     });
   }
   return messages;
@@ -584,6 +587,51 @@ export function prependCodexOpenClawPromptContext(
       ].join("\n")
     : undefined;
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Maps the surviving user-request portion of an input range after delivery
+ * metadata has been relocated before the request.
+ */
+export function resolveCodexDeliveryHintPreservedInputRange(params: {
+  prompt: string;
+  promptInputRange: { start: number; end: number } | undefined;
+  decoratedPrompt: string;
+}): { start: number; end: number } | undefined {
+  const { prompt, promptInputRange, decoratedPrompt } = params;
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
+  if (
+    !deliveryHint ||
+    !promptInputRange ||
+    promptInputRange.start < 0 ||
+    promptInputRange.end < promptInputRange.start ||
+    promptInputRange.end > prompt.length ||
+    !decoratedPrompt.endsWith(promptWithoutDeliveryHint)
+  ) {
+    return undefined;
+  }
+  const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
+  const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
+  const inputEnd = Math.max(
+    inputStart,
+    Math.min(
+      promptInputRange.end,
+      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
+    ),
+  );
+  const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
+  const requestHeader = "Current user request:\n";
+  const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;
+  // Delivery metadata moves outside the request, so retain the remaining input
+  // span rather than treating the original, now non-contiguous range as valid.
+  return {
+    start:
+      inputStart === promptWithoutDeliveryHintStart &&
+      decoratedPrompt.slice(requestHeaderStart, decoratedPromptSuffixStart) === requestHeader
+        ? requestHeaderStart
+        : decoratedPromptSuffixStart + inputStart - promptWithoutDeliveryHintStart,
+    end: decoratedPromptSuffixStart + inputEnd - promptWithoutDeliveryHintStart,
+  };
 }
 
 function splitLeadingCodexDeliveryHint(prompt: string): {

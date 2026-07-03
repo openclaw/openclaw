@@ -63,7 +63,6 @@ export const fa: TranslationMap = {
     docs: "مستندات",
     theme: "پوسته",
     colorMode: "حالت رنگ",
-    colorModeOption: "حالت رنگ: {mode}",
     resources: "منابع",
     search: "جستجو",
     save: "ذخیره",
@@ -202,6 +201,7 @@ export const fa: TranslationMap = {
     inherit: "ارث‌بری",
     defaultOption: "پیش‌فرض ({value})",
     offExplicit: "خاموش (صریح)",
+    auto: "auto",
     on: "روشن",
     off: "خاموش",
     full: "کامل",
@@ -1331,6 +1331,8 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
+    commentaryToggle: "حفظ توضیحات پس از پاسخ نهایی",
+    commentaryLabel: "توضیحات",
     autoScrollMode: "حالت پیمایش خودکار",
     autoScrollAlways: "همیشه",
     autoScrollNearBottom: "نزدیک پایین",
@@ -1349,6 +1351,9 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    sidebar: {
+      allSessions: "همهٔ نشست‌ها",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1375,6 +1380,11 @@ export const fa: TranslationMap = {
       retry: "تلاش دوباره",
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
+    },
+    pairingQrExpired: {
+      title: "کد QR جفت‌سازی منقضی شد",
+      reason: "برای ساخت کد راه‌اندازی جدید، دوباره /pair qr را اجرا کنید.",
+      badge: "منقضی‌شده",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1443,6 +1453,7 @@ export const fa: TranslationMap = {
     jaJP: "日本語 (ژاپنی)",
     ko: "한국어 (کره‌ای)",
     fr: "Français (فرانسوی)",
+    hi: "हिन्दी (هندی)",
     ar: "العربية (عربی)",
     it: "Italiano (ایتالیایی)",
     tr: "Türkçe (ترکی)",
@@ -1453,6 +1464,7 @@ export const fa: TranslationMap = {
     vi: "Tiếng Việt (ویتنامی)",
     nl: "Nederlands (هلندی)",
     fa: "فارسی",
+    ru: "Русский (روسی)",
   },
   cron: {
     quickCreate: {
@@ -1620,6 +1632,7 @@ export const fa: TranslationMap = {
       nextHeartbeat: "ضربان بعدی",
       wakeModeHelp: "اکنون بلافاصله فعال می‌کند. ضربان بعدی تا چرخه بعدی منتظر می‌ماند.",
       payloadKind: "چه چیزی باید اجرا شود؟",
+      command: "Command",
       systemEvent: "ارسال پیام به خط زمانی اصلی",
       agentTurn: "اجرای وظیفه دستیار (ایزوله)",
       systemEventHelp:

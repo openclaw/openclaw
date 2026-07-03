@@ -1,80 +1,33 @@
 // Ios Version script supports OpenClaw repository automation.
-import path from "node:path";
-import { resolveIosVersion } from "./lib/ios-version.ts";
-
-type CliOptions = {
-  field: string | null;
-  format: "json" | "shell";
-  help: boolean;
-  rootDir: string;
-};
-
-function parseArgs(argv: string[]): CliOptions {
-  let field: string | null = null;
-  let format: "json" | "shell" = "json";
-  let help = false;
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--field": {
-        field = readOptionValue(argv, index, "--field");
-        index += 1;
-        break;
-      }
-      case "--json": {
-        format = "json";
-        break;
-      }
-      case "--shell": {
-        format = "shell";
-        break;
-      }
-      case "--root": {
-        const value = readOptionValue(argv, index, "--root");
-        rootDir = path.resolve(value);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { field, format, help, rootDir };
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
-}
+import { renderIosReleaseNotesForVersion, resolveIosVersion } from "./lib/ios-version.ts";
+import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--root dir]\n\n",
+    "Usage: node --import tsx scripts/ios-version.ts [--json|--shell] [--field name] [--version YYYY.M.D] [--root dir]\n\n",
   );
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseArgs(argv);
+  const options = parseVersionQueryArgs(argv);
   if (options.help) {
     printUsage();
     return 0;
   }
 
-  const version = resolveIosVersion(options.rootDir);
+  const version = resolveIosVersion(options.rootDir, { releaseVersion: options.releaseVersion });
 
   if (options.field) {
+    if (options.field === "releaseNotes") {
+      process.stdout.write(
+        renderIosReleaseNotesForVersion({
+          releaseVersion: options.releaseVersion,
+          rootDir: options.rootDir,
+        }),
+      );
+      return 0;
+    }
+
     const value = version[options.field as keyof typeof version];
     if (value === undefined) {
       throw new Error(`Unknown iOS version field '${options.field}'.`);

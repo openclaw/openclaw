@@ -30,6 +30,7 @@ scenario:
     kind: flow
     summary: Verify a fake personal reminder roundtrip stays local to the QA channel.
     config:
+      requiredChannelDriver: qa-channel
       channelId: qa-personal-room
       channelTitle: QA Personal Room
       reminderPromptTemplate: "A local personal QA reminder fired. Reply in one short sentence containing this exact marker: {{marker}}"

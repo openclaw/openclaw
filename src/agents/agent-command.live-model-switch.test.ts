@@ -3,7 +3,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import { createAgentRunRestartAbortError } from "./run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "./run-termination.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -199,7 +202,6 @@ vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
 
 vi.mock("../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "low, medium, high",
-  formatXHighModelHint: () => "model-x",
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
   isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
@@ -1144,6 +1146,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation++;
+      const result = await params.run(params.provider, params.model);
+      if (invocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
+      fastModeStartedAtMs?: number;
+    };
+    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
+      fastModeStartedAtMs?: number;
+    };
+    expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
   });
 
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
@@ -2818,6 +2851,32 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           candidate.stream === "lifecycle" &&
           candidate.data?.phase === "error" &&
           candidate.data.aborted === true
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it("marks direct active-run cancellation aborted without a caller signal", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(createAgentRunDirectAbortError());
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+      }),
+    ).rejects.toThrow("agent run aborted");
+
+    expect(
+      state.emitAgentEventMock.mock.calls.some(([event]) => {
+        const candidate = event as {
+          stream?: string;
+          data?: { phase?: string; aborted?: boolean; stopReason?: string };
+        };
+        return (
+          candidate.stream === "lifecycle" &&
+          candidate.data?.phase === "error" &&
+          candidate.data.aborted === true &&
+          candidate.data.stopReason === "aborted"
         );
       }),
     ).toBe(true);

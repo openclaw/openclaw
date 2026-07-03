@@ -130,11 +130,11 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       const table =
         args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
       const key = String(value);
-      if (key in table) {
+      if (Object.hasOwn(table, key)) {
         return table[key];
       }
       const lower = key.toLowerCase();
-      return lower in table ? table[lower] : value;
+      return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
       const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
@@ -200,7 +200,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     const v = getPath(ctx, String(seg.map));
     const key = typeof v === "boolean" ? String(v) : String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
-    const hit = key in cases ? cases[key] : cases["_default"];
+    const hit = Object.hasOwn(cases, key) ? cases[key] : cases["_default"];
     return typeof hit === "string" ? hit : null;
   }
   if ("each" in seg) {

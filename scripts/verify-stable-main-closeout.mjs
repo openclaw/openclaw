@@ -13,7 +13,7 @@ function parseArgs(argv) {
       throw new Error(`unexpected argument: ${key}`);
     }
     const value = argv[index + 1];
-    if (!value || value.startsWith("--")) {
+    if (!value || value.startsWith("-")) {
       throw new Error(`${key} requires a value.`);
     }
     values.set(key.slice(2), value);

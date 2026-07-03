@@ -207,7 +207,16 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-const ModelApiSchema = z.enum(MODEL_APIS);
+const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CHATGPT_RESPONSES_API =
+  "openai-chatgpt-responses" satisfies (typeof MODEL_APIS)[number];
+
+const ModelApiSchema = z.enum(MODEL_APIS, {
+  error: (issue) =>
+    issue.input === LEGACY_OPENAI_CODEX_RESPONSES_API
+      ? `"${LEGACY_OPENAI_CODEX_RESPONSES_API}" is a removed api id; use "${OPENAI_CHATGPT_RESPONSES_API}"`
+      : undefined,
+});
 
 const ModelCompatSchema = z
   .object({
@@ -429,10 +438,12 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "anthropic",
   "anthropic-vertex",
   "arcee",
+  "azure-openai-responses",
   "byteplus",
   "byteplus-plan",
   "cerebras",
   "chutes",
+  "claude-cli",
   "cloudflare-ai-gateway",
   "codex",
   "comfy",
@@ -443,6 +454,9 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "fal",
   "fireworks",
   "github-copilot",
+  "gmi",
+  "gmi-cloud",
+  "gmicloud",
   "google",
   "google-antigravity",
   "google-gemini-cli",
@@ -460,15 +474,23 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "mistral",
   "modelstudio",
   "moonshot",
+  "moonshot-ai",
+  "moonshotai",
   "nvidia",
+  "novita",
+  "novita-ai",
+  "novitaai",
   "ollama",
-  "openai",
+  "ollama-cloud",
   "openai",
   "opencode",
   "opencode-go",
   "openrouter",
   "qianfan",
   "qwen",
+  "qwen-cli",
+  "qwen-oauth",
+  "qwen-portal",
   "qwencloud",
   "sglang",
   "stepfun",
@@ -485,6 +507,8 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "xai",
   "xiaomi",
   "xiaomi-token-plan",
+  "z.ai",
+  "z-ai",
   "zai",
 ]);
 

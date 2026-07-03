@@ -377,6 +377,36 @@ describe("gateway lock", () => {
     openSpy.mockRestore();
   });
 
+  it("closes handle and removes lock file when writeFile fails after open succeeds", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath } = resolveLockPath(env);
+
+    const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
+      code: "ENOSPC",
+    });
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const mockHandle = {
+      writeFile: vi.fn().mockImplementation(async () => {
+        await fs.writeFile(lockPath, "partial", "utf8");
+        throw writeError;
+      }),
+      close,
+    };
+
+    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(mockHandle as never);
+
+    await expect(acquireForTest(env)).rejects.toMatchObject({
+      name: "GatewayLockError",
+      cause: writeError,
+    });
+
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    openSpy.mockRestore();
+  });
+
   it("clears stale lock on win32 when process cmdline is not a gateway", async () => {
     vi.useRealTimers();
     const env = await makeEnv();

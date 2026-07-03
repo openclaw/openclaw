@@ -42,6 +42,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
+  approvalReviewerDeviceIds?: string[];
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
   consumedDecision?: ExecApprovalDecision;

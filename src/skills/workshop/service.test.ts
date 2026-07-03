@@ -25,11 +25,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import {
-  readSkillProposalManifest,
-  resolveProposalDraftPath,
-  updateSkillProposalRecord,
-} from "./store.js";
+import { readSkillProposalManifest, updateSkillProposalRecord } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -97,9 +93,7 @@ describe("skill workshop proposals", () => {
     expect(proposal.record.target.skillFile).toBe(
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );
-    await expect(
-      fs.readFile(resolveProposalDraftPath(proposal.record.id), "utf8"),
-    ).resolves.toContain("date: ");
+    expect(proposal.content).toContain("date: ");
 
     const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);

@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
@@ -44,14 +45,9 @@ const withLock = createAsyncLock();
 type WebPushRuntime = typeof import("web-push");
 type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
 
-let webPushRuntimePromise: Promise<WebPushRuntime> | undefined;
-
-async function loadWebPushRuntime(): Promise<WebPushRuntime> {
-  webPushRuntimePromise ??= import("web-push").then(
-    (mod: WebPushRuntimeModule) => mod.default ?? mod,
-  );
-  return await webPushRuntimePromise;
-}
+const loadWebPushRuntime = createLazyRuntimeModule(() =>
+  import("web-push").then((mod: WebPushRuntimeModule) => mod.default ?? mod),
+);
 
 // --- Helpers ---
 
@@ -223,18 +219,6 @@ type WebPushPayload = {
 
 function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
-
-export async function sendWebPushNotification(
-  subscription: WebPushSubscription,
-  payload: WebPushPayload,
-  vapidKeys?: VapidKeyPair,
-): Promise<WebPushSendResult> {
-  const keys = vapidKeys ?? (await resolveVapidKeys());
-  const webPush = await loadWebPushRuntime();
-  applyVapidDetails(webPush, keys);
-
-  return sendPreparedWebPushNotification(webPush, subscription, payload);
 }
 
 async function sendPreparedWebPushNotification(

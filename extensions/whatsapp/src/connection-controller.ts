@@ -1,5 +1,5 @@
 // Whatsapp plugin module implements connection controller behavior.
-import type { WASocket } from "baileys";
+import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -404,7 +404,7 @@ export class WhatsAppConnectionController {
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.transportTimeoutMs = params.transportTimeoutMs;
     this.messageTimeoutMs = params.messageTimeoutMs;
-    this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
+    this.appSilenceTimeoutMs = params.messageTimeoutMs * 4;
     this.watchdogCheckMs = params.watchdogCheckMs;
     this.reconnectPolicy = params.reconnectPolicy;
     this.abortSignal = params.abortSignal;
@@ -528,6 +528,8 @@ export class WhatsAppConnectionController {
     }) => Promise<ManagedWhatsAppListener>;
     onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
     onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
+    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
   }): Promise<WhatsAppLiveConnection> {
     if (this.current) {
       await this.closeCurrentConnection();
@@ -539,6 +541,8 @@ export class WhatsAppConnectionController {
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
         ...this.socketTiming,
+        ...(params.getMessage ? { getMessage: params.getMessage } : {}),
+        ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
       });
       await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
 

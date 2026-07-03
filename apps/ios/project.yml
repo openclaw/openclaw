@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.0"
 
 settings:
   base:
@@ -60,6 +60,11 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+      - path: Resources/Licenses
+        type: folder
+        buildPhase: resources
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -107,7 +112,7 @@ targets:
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
-        CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
+        CODE_SIGN_ENTITLEMENTS: "$(OPENCLAW_CODE_SIGN_ENTITLEMENTS)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
@@ -120,17 +125,15 @@ targets:
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
       configs:
         Debug:
+          OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
-          OPENCLAW_PUSH_TRANSPORT: direct
-          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_MODE: localSandbox
           OPENCLAW_PUSH_RELAY_BASE_URL: ""
-          OPENCLAW_PUSH_APNS_ENVIRONMENT: sandbox
         Release:
+          OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: production
-          OPENCLAW_PUSH_TRANSPORT: direct
-          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_MODE: localProduction
           OPENCLAW_PUSH_RELAY_BASE_URL: ""
-          OPENCLAW_PUSH_APNS_ENVIRONMENT: production
     info:
       path: Sources/Info.plist
       properties:
@@ -158,7 +161,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
         NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
@@ -167,15 +170,14 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
-        NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
+        NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
-        OpenClawPushTransport: "$(OPENCLAW_PUSH_TRANSPORT)"
-        OpenClawPushDistribution: "$(OPENCLAW_PUSH_DISTRIBUTION)"
+        OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
-        OpenClawPushAPNsEnvironment: "$(OPENCLAW_PUSH_APNS_ENVIRONMENT)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -189,6 +191,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -231,6 +235,8 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -263,6 +269,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
