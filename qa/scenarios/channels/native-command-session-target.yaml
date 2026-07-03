@@ -33,7 +33,7 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       conversationId: native-stop-target
-      senderId: qa-native-operator
+      senderId: native-stop-target
       delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
       abortReplyNeedle: Agent was aborted
       recoveryMarker: QA-NATIVE-STOP-RECOVERY-OK
@@ -54,6 +54,12 @@ flow:
             - ref: env
             - 60000
         - resetTransport: true
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
+        - set: targetSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - sendInbound:
             conversation:
               id:
@@ -69,8 +75,8 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
-            - 5000
+                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.key === targetSessionKey && session.hasActiveRun === true))"
+            - 15000
             - 100
         - set: startIndex
           value:
