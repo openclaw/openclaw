@@ -680,6 +680,17 @@ describe("loginGeminiCliOAuth", () => {
     });
   }
 
+  function responseTextBodyWithTextTrap(body: string, status = 500) {
+    const response = new Response(body, {
+      status,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const text = vi
+      .spyOn(response, "text")
+      .mockRejectedValue(new Error("unexpected response.text() call"));
+    return { response, text };
+  }
+
   function tokenResponse(): Response {
     return responseJson({
       access_token: "access-token",
@@ -925,6 +936,34 @@ describe("loginGeminiCliOAuth", () => {
       /loadCodeAssist failed/i,
     );
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+  });
+
+  it("bounds token exchange error bodies without using response.text()", async () => {
+    const { response, text } = responseTextBodyWithTextTrap("x".repeat(32 * 1024), 500);
+    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
+
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const error = await exchangeCodeForTokens("oauth-code", "pkce-verifier").catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Token exchange failed: ${"x".repeat(8 * 1024)}`);
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("bounds token refresh error bodies without using response.text()", async () => {
+    const { response, text } = responseTextBodyWithTextTrap("y".repeat(32 * 1024), 500);
+    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
+
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const error = await refreshTokensForGeminiCli({ refresh: "refresh-token" }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Token exchange failed: ${"y".repeat(8 * 1024)}`);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {
