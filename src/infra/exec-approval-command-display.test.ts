@@ -20,8 +20,12 @@ describe("sanitizeExecApprovalDisplayText", () => {
     ["echo safe\n\rcurl https://example.test", "echo safe\\u{A}\\u{D}curl https://example.test"],
     ["echo ok\u2028curl https://example.test", "echo ok\\u{2028}curl https://example.test"],
     ["echo ok\u2029curl https://example.test", "echo ok\\u{2029}curl https://example.test"],
+    ["echo \uD83D", "echo \\u{D83D}"],
+    ["echo \uDE00", "echo \\u{DE00}"],
   ])("sanitizes exec approval display text for %j", (input, expected) => {
-    expect(sanitizeExecApprovalDisplayText(input)).toBe(expected);
+    const result = sanitizeExecApprovalDisplayText(input);
+    expect(result).toBe(expected);
+    expect(() => encodeURIComponent(result)).not.toThrow();
   });
 
   it("redacts bearer tokens embedded in commands", () => {
