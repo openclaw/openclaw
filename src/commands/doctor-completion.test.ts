@@ -139,6 +139,10 @@ describe("doctorShellCompletion", () => {
       expect.stringContaining("Shell completion not upgraded"),
       "Shell completion",
     );
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("completion --install"),
+      "Shell completion",
+    );
 
     await fs.chmod(bashrcPath, 0o644);
   });

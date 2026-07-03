@@ -201,7 +201,7 @@ export async function doctorShellCompletion(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       note(
-        `Shell completion not upgraded: ${message} — run \`${cliName} completion install\` against a writable shell profile.`,
+        `Shell completion not upgraded: ${message} — run \`${cliName} completion --install\` against a writable shell profile.`,
         "Shell completion",
       );
     }
@@ -251,7 +251,7 @@ export async function doctorShellCompletion(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         note(
-          `Shell completion not installed: ${message} — run \`${cliName} completion install\` against a writable shell profile.`,
+          `Shell completion not installed: ${message} — run \`${cliName} completion --install\` against a writable shell profile.`,
           "Shell completion",
         );
       }
